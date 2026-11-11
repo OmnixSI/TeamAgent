@@ -48,6 +48,34 @@ export function validateTeamConfig(c) {
       c.scout.hours.every((x) => integer(x, 0, 23)),
     "scout.hours",
   );
+  if (c?.web !== undefined) {
+    check(
+      c.web &&
+        typeof c.web === "object" &&
+        !Array.isArray(c.web) &&
+        typeof c.web.jina === "boolean",
+      "web.jina",
+    );
+  }
+  if (c?.vision !== undefined) {
+    check(
+      c.vision &&
+        typeof c.vision === "object" &&
+        !Array.isArray(c.vision) &&
+        typeof c.vision.enabled === "boolean",
+      "vision.enabled",
+    );
+    check(integer(c?.vision?.daily_cap, 1, 10000), "vision.daily_cap");
+    check(integer(c?.vision?.turn_max, 1, 3), "vision.turn_max");
+    check(
+      integer(c?.vision?.turn_deadline_ms, 1000, 120000),
+      "vision.turn_deadline_ms",
+    );
+    check(
+      typeof c?.vision?.prompt === "string" && !!c.vision.prompt.trim(),
+      "vision.prompt",
+    );
+  }
   check(integer(c?.execution?.repair_rounds, 1, 5), "execution.repair_rounds");
   for (const key of [
     "code_timeout_seconds",

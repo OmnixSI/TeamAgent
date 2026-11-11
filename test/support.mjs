@@ -16,6 +16,7 @@ fixture.model.effort_by_kind = {
   research: "high",
   memory: "max",
   code: "max",
+  vision: "none",
 };
 fixture.memory = {
   timezone: "Australia/Sydney",

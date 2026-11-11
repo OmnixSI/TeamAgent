@@ -47,6 +47,7 @@ export async function model(
   effort: Effort,
   body: any,
   timeout = 90000,
+  signal?: AbortSignal,
 ) {
   const selected = modelSettings(kind, effort, timeout);
   effort = selected.effort;
@@ -54,6 +55,13 @@ export async function model(
   const start = Date.now();
   let usage: any = {},
     status = "failed";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
   try {
     const r = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
@@ -67,7 +75,7 @@ export async function model(
         reasoning_effort: effort,
         thinking: { type: effort === "none" ? "disabled" : "enabled" },
       }),
-      signal: AbortSignal.timeout(timeout),
+      signal: controller.signal,
     });
     if (!r.ok) {
       status = "http_" + r.status;
@@ -83,6 +91,8 @@ export async function model(
     status = "ok";
     return data;
   } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
     if (e.DB)
       await e.DB.batch([
         e.DB.prepare("INSERT INTO model_runs VALUES(?,?,?,?,?,?,?,?)").bind(
