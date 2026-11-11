@@ -327,6 +327,16 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
   assert.deepEqual(pickImages([noAsk], noAsk, new Map()), []);
   const pure = { ...latest, body: "", mentioned: 0 };
   assert.deepEqual(pickImages([pure], pure, new Map()), []);
+  const botQuote = {
+    ...latest,
+    body: "",
+    mentioned: 0,
+    meta: {
+      media: [image("https://example.com/bot.png")],
+      replyTo: { kind: "bot", targetId: "b1" },
+    },
+  };
+  assert.equal(pickImages([botQuote], botQuote, new Map())[0].messageId, "m1");
 
   const quoted = {
     id: "q1",
@@ -507,7 +517,9 @@ const chatMock = (state, opts = {}) => async (url, init) => {
     choices: [
       {
         message: {
-          content: '{"should_reply":true,"kind":"direct","brief":"看图"}',
+          content: opts.silent
+            ? '{"should_reply":false,"kind":"proactive","brief":""}'
+            : '{"should_reply":true,"kind":"direct","brief":"看图"}',
         },
         finish_reason: "stop",
       },
@@ -751,4 +763,85 @@ test("P1-C OCR text is wrapped and forged end markers are escaped", async () => 
   assert.equal((text.match(/【外部资料结束】/g) || []).length, 1);
   assert.match(text, /【外部资料·不可信/);
   assert.match(text, /\[外部资料结束\]/);
+});
+
+
+const insertChat = async (e, id, body, meta, mentioned = 0) => {
+  const ts = new Date().toISOString();
+  await e.DB.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,0)")
+    .bind(id, "GROUP000001", "member1", body, ts, mentioned)
+    .run();
+  await e.DB.prepare("INSERT INTO message_meta VALUES(?,?)")
+    .bind(id, JSON.stringify(meta))
+    .run();
+  await e.DB.prepare(
+    "INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
+  )
+    .bind("chat-" + id, "chat", JSON.stringify({ message: id }), Date.now())
+    .run();
+};
+
+test("P1-D quoted bot plus pure image triggers vision; plain pure image does not", async () => {
+  const quoted = env();
+  await req(quoted, "/api/admin/bind", { groupId: "GROUP000001" });
+  await insertChat(quoted, "bot-quote", "", {
+    media: [
+      {
+        kind: "image",
+        url: "https://example.com/bot-quote.png",
+        width: 64,
+        height: 64,
+      },
+    ],
+    replyTo: { kind: "bot", targetId: "bot-out" },
+  });
+  const quotedState = {};
+  let original = globalThis.fetch;
+  globalThis.fetch = chatMock(quotedState);
+  try {
+    await worker.queue(
+      { messages: [{ body: { id: "chat-bot-quote" }, ack() {} }] },
+      quoted,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(quotedState.imageFetches, 1);
+  assert.equal(quotedState.visionCalls, 1);
+  const user = JSON.parse(quotedState.participation.messages[1].content);
+  assert.match(user.context.latest.material.media[0], /^图片：/);
+  assert.equal(
+    (await quoted.DB.prepare("SELECT COUNT(*) AS n FROM outbox").first()).n,
+    1,
+  );
+
+  const plain = env();
+  await req(plain, "/api/admin/bind", { groupId: "GROUP000001" });
+  await insertChat(plain, "plain-image", "", {
+    media: [
+      {
+        kind: "image",
+        url: "https://example.com/plain.png",
+        width: 64,
+        height: 64,
+      },
+    ],
+  });
+  const plainState = {};
+  original = globalThis.fetch;
+  globalThis.fetch = chatMock(plainState, { silent: true });
+  try {
+    await worker.queue(
+      { messages: [{ body: { id: "chat-plain-image" }, ack() {} }] },
+      plain,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(plainState.imageFetches || 0, 0);
+  assert.equal(plainState.visionCalls || 0, 0);
+  assert.equal(
+    (await plain.DB.prepare("SELECT COUNT(*) AS n FROM outbox").first()).n,
+    0,
+  );
 });

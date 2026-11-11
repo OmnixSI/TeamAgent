@@ -185,10 +185,14 @@ export function pickImages(
     latest.mentioned === true ||
     !!meta.mentionsBot;
   const body = String(latest.body || "").trim();
-  if (mentioned || /[？?]|吗|啥|什么|怎么|哪/.test(body))
+  const reply = meta.replyTo;
+  if (
+    mentioned ||
+    reply?.kind === "bot" ||
+    /[？?]|吗|啥|什么|怎么|哪/.test(body)
+  )
     for (const { media, idx } of images(latest))
       take(latest, media, idx, hintOf(latest));
-  const reply = meta.replyTo;
   const target = reply?.targetId ? refRows.get(reply.targetId) : undefined;
   if (target)
     for (const { media, idx } of images(target))
