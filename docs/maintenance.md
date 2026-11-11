@@ -120,3 +120,26 @@ node scripts/evaluate-timing.mjs
 默认结果写入 `~/.inkboard-team/eval/timing-synthetic-result.json`，权限 0600；用 `--output <本机路径>` 可指定位置，不提交结果。本轮 P1 代码交付要求离线合成评测测试和四条规则断言全部通过；按总指挥 2026-11-12 的接续安排，真实模型由交付员在已安全注入环境变量的进程里补跑，作为附加证据，不阻塞代码交付。真实模型评分仍以至少 90% 为通过线；缺少环境变量、请求失败或仅跑规则时不会标记模型合成评测通过。错误只报告未完成，不输出密钥或原始服务异常。
 
 200 个真实窗口的双模型银标、影子回放与 wait 污染排除另行执行；本脚本不声称完成该项。若合并时真实回放仍未达标，部署接续方按方案暂设 `off:wait=1`，达标后再恢复。
+
+## 云端表情库（P2）
+
+代码支持收集、后台标签和按语境发送；QQ 群富媒体仍待线上验收。生产配置保持 `stickers.send=false`。`enabled=true / collect=true` 只开启收集：同一张图按原始 sha256 去重，同一成员重复发送不能让候选晋级，至少两名不同成员使用后才交给视觉模型判断；GIF 或无文字的小图才作为候选，每条消息最多两张。图片字节存入 D1 新表 `stickers`，不修改 `messages.body` 或旧表结构。
+
+标签在 WORK 队列运行，每天最多 40 次，复用既有视觉缓存及每天 300 次视觉额度。状态 0 为候选、1 为待标签、2 为可用、3 为视觉拒收；总量最多 1000 行、单张最多 400000 字节。库满时只清理 30 天前、仅一名发送者的候选；仍满则不收并记录 `sticker.full`。每小时第 7 分钟最多补排十个待标签任务，同一张每天只建一个补排任务。
+
+管理员可通过现有 owner 身份调用 `POST /api/team/stickers`，JSON 为 `{mime,data_base64}`，导入后状态为 1 并排标签任务。支持 JPEG、PNG、GIF、WebP。此路径的 Content-Length 与流读取两处限额均为 `4*ceil(max_bytes/3)+1024`，解码后仍受 `max_bytes` 限制；其他接口继续限制 262144 字节，鉴权不变。未新增读取本机凭据的导入脚本或看板页。
+
+发送需配置值严格为 `true`；字段缺失、字符串 `"true"`、数字等都按关闭处理。嘴替仅在 banter/care 且合适时提供可选的 2–8 字 `sticker` 关键词，多数回复不提供。按 bigram Jaccard 选择得分至少 0.2、24 小时没用过的图；选中后才扣每天 20 次预算，`send_gif=false` 会排除 GIF。同图并发通过同一事务的条件写入保证只排一张。
+
+文字先排队，表情为单独的 `~s` 段。发送前先核对运行开关和 passive 来源年龄；关闭或来源过期时，跳过表情，只有表情待发时连 QQ token 都不获取。文字照常发送。表情先上传 `/files` 获取 `file_info`，再以 `msg_type=7` 发送；缓存距过期超过一分钟时复用，上传没有有效 ttl 时按一小时缓存。任一步失败或网络结果不明均标为 `skipped`，记录 `outbox_attempts`，不重试富媒体。连续三次失败暂停 24 小时并记录 `sticker.paused`，同一轮中后面的图也停止；成功会归零失败计数。
+
+```sql
+-- 关闭已排队及后续表情，不需要部署
+INSERT INTO settings(key,value) VALUES('off:sticker_send','1') ON CONFLICT(key) DO UPDATE SET value='1';
+-- 暂停收集新候选
+INSERT INTO settings(key,value) VALUES('off:sticker_collect','1') ON CONFLICT(key) DO UPDATE SET value='1';
+```
+
+`~s` 不进入 recentBot、对话视图或 P1 的未接话硬规则。`skipped` 不在待发查询或运行状态告警查询中。D1 余量不足时保留 pending，后续 cron 续发；`COST.sticker=6` 覆盖开关、选图、每日预算和三条事务写入，普通文字的 `COST.send_row=10` 不变。富媒体单行另保留两者之和，覆盖缓存写入及熔断路径。关闭的积压用一条条件 UPDATE 标跳过，避免预算不足时逐条写超过 48。
+
+上线接续：由交付员与视觉验收员导入 PNG 和 GIF，临时启用发送并在真群核对上传响应、消息显示及 GIF 动画。没有这些证据前只称“代码就绪，待线上验收”。`file_data`、ttl、富媒体 passive 次数等 QQ 能力仍未验证；不提前实现签名 URL 退路，失败就保持发送关闭。

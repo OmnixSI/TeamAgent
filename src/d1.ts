@@ -27,7 +27,8 @@ export function metered<E extends { DB: any }>(e: E, limit = 48): E & { meter: M
 }
 // B3–B7: image=6, model usage=2; correction with 8 superseded facts=12.
 // send_row=10 includes lazy switches, reference recovery and the third-failure fuse.
-export const COST = { image: 6, turn: 2, tool: 12, send_row: 10, sticker: 5, tail: 16 };
+// sticker=6 covers switch, selection, daily budget, and three atomic reservation writes.
+export const COST = { image: 6, turn: 2, tool: 12, send_row: 10, sticker: 6, tail: 16 };
 export const left = (e: any) => e.meter ? e.meter.left() : Infinity;
 
 /** Fixed application reason; never forward an arbitrary tool exception. */

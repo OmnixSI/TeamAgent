@@ -1,5 +1,5 @@
 import { looksLikeSticker } from "./vision";
-import { collectSticker, tagSticker, retryStickerTags, importSticker } from "./stickers";
+import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -910,12 +910,33 @@ async function processJob(e: Env, id: string) {
 let qqToken: { app: string; value: string; expires: number } | undefined;
 async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
-  const rows = (
+  let rows = (
     await e.DB.prepare(
       "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
     ).all()
   ).results;
   if (!rows.length) return;
+  let switches: Record<string, string | undefined> | undefined;
+  const stickerSources = new Map<string, any>();
+  const stickerRows = rows.filter((o: any) => o.id.endsWith("~s"));
+  if (stickerRows.length) {
+    if (left(e) < 2) return;
+    switches = await loadSwitches(e);
+    if (!stickerSendOn(switches, Date.now())) {
+      // One statement also keeps a disabled backlog within the invocation budget.
+      await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE status='pending' AND id IN ("+stickerRows.map(()=>"?").join(",")+")")
+        .bind(...stickerRows.map((o: any)=>o.id)).run();
+      rows = rows.filter((o: any)=>!o.id.endsWith("~s"));
+    } else for (const o of stickerRows) {
+      if (left(e) < 2) return;
+      const source = o.msg_id ? await e.DB.prepare("SELECT ts FROM messages WHERE id=?").bind(o.msg_id).first() : null;
+      if (!source || !(Date.now()-Date.parse(source.ts)<240000)) {
+        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+        rows = rows.filter((r: any)=>r.id!==o.id);
+      } else stickerSources.set(o.id,source);
+    }
+    if (!rows.length) return;
+  }
   if (!qqToken || qqToken.app !== e.QQ_APP_ID || qqToken.expires < Date.now()) {
     const tokenR = await fetch("https://api.bot.qq.com/app/getAppAccessToken", {
       method: "POST",
@@ -938,8 +959,18 @@ async function sendOutbox(e: Env) {
   }
   const accessToken = qqToken?.value;
   if (!accessToken) return;
-  let switches: Record<string, string | undefined> | undefined;
   for (const o of rows) {
+    if (o.id.endsWith("~s")) {
+      if (!stickerSendOn(switches!, Date.now())) {
+        if (left(e) < 1) break;
+        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+      } else {
+        if (left(e) < COST.send_row + COST.sticker) break;
+        const status = await sendSticker(e, o, accessToken, stickerSources.get(o.id), switches!, messageSequence(o.id));
+        if (status === 401) qqToken = undefined;
+      }
+      continue;
+    }
     if (left(e) < COST.send_row) break;
     let meta: any = {};
     if (o.meta) {
