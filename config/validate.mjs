@@ -48,6 +48,15 @@ export function validateTeamConfig(c) {
       c.scout.hours.every((x) => integer(x, 0, 23)),
     "scout.hours",
   );
+  if (c?.web !== undefined) {
+    check(
+      c.web &&
+        typeof c.web === "object" &&
+        !Array.isArray(c.web) &&
+        typeof c.web.jina === "boolean",
+      "web.jina",
+    );
+  }
   check(integer(c?.execution?.repair_rounds, 1, 5), "execution.repair_rounds");
   for (const key of [
     "code_timeout_seconds",

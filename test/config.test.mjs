@@ -21,11 +21,13 @@ test("shared settings reject unsupported effort, unsafe night batches and malfor
   bad.memory.messages_per_batch = 100;
   bad.memory.timezone = "NoSuch/Zone";
   bad.repositories = ["outside/project"];
+  bad.web = { jina: "yes" };
   const errors = validateTeamConfig(bad);
   assert.ok(errors.includes("model.quick_effort"));
   assert.ok(errors.some((x) => x.startsWith("memory.messages_per_batch")));
   assert.ok(errors.includes("memory.timezone"));
   assert.ok(errors.includes("repositories"));
+  assert.ok(errors.includes("web.jina"));
 });
 test("worker routing reads the same default model, per-kind effort and timeout settings", () => {
   assert.equal(

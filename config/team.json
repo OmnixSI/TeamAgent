@@ -35,6 +35,9 @@
       19
     ]
   },
+  "web": {
+    "jina": true
+  },
   "execution": {
     "repair_rounds": 2,
     "code_timeout_seconds": 1800,

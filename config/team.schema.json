@@ -119,6 +119,18 @@
         "hours"
       ]
     },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jina": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "jina"
+      ]
+    },
     "execution": {
       "type": "object",
       "additionalProperties": false,
