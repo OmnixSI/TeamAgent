@@ -1,14 +1,15 @@
 import { REPOS } from "./policy";
 import { activity, redact } from "./runtime";
+import { quoteIn } from "./view";
 
-export async function rememberCorrection(e: any, input: any, source: any) {
+export async function rememberCorrection(e: any, input: any, source: any, names?: Map<string, string>) {
   if (
     !source?.id ||
     source.meta?.direct !== true ||
     ![...REPOS, "team"].includes(input.repo) ||
     typeof input.quote !== "string" ||
     input.quote.length < 2 ||
-    !source.body.includes(input.quote) ||
+    !quoteIn(source, input.quote, names) ||
     typeof input.value !== "string" ||
     !input.value.trim() ||
     !input.subject?.trim() ||
