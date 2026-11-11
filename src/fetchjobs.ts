@@ -13,6 +13,7 @@ export type BiliResult = {
   bvid: string; title: string; desc: string; owner: string; tname: string;
   duration: number; pubdate: number; stat: Record<string, number>;
   subtitle: string | null; subtitle_lang: string | null;
+  subtitle_status: "ok" | "none" | "login_required" | "unavailable";
   comments: { uname: string; message: string }[]; tier: "light"; fetched_at: string;
 };
 const BV = /^BV[0-9A-Za-z]{10}$/;
@@ -85,7 +86,13 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
 export function biliNoteText(r: BiliResult): string {
   return [`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
     `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
-    r.subtitle ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}` : "未读到 CC 字幕；未查看画面或听取音轨。"].join("\n").slice(0, 6000);
+    r.subtitle
+      ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
+      : r.subtitle_status === "login_required"
+        ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
+        : r.subtitle_status === "unavailable"
+          ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
+          : "无 CC 字幕；未查看画面或听取音轨。"].join("\n").slice(0, 6000);
 }
 export const videoMaterial = (r: BiliResult) => untrusted("bilibili", biliNoteText(r), r.fetched_at);
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
@@ -143,6 +150,9 @@ function cleanResult(r: any): BiliResult {
   return { bvid: r.bvid, title: text(r.title, 300), desc: text(r.desc, 1500), owner: text(r.owner, 100), tname: text(r.tname, 100), duration: number(r.duration), pubdate: number(r.pubdate),
     stat: Object.fromEntries(["view", "like", "coin", "favorite", "reply"].map(k => [k, number(r.stat?.[k])])),
     subtitle: typeof r.subtitle === "string" ? text(r.subtitle, 6000) : null, subtitle_lang: typeof r.subtitle_lang === "string" ? text(r.subtitle_lang, 30) : null,
+    subtitle_status: ["ok", "none", "login_required", "unavailable"].includes(r.subtitle_status)
+      ? r.subtitle_status
+      : typeof r.subtitle === "string" ? "ok" : "none",
     comments: (Array.isArray(r.comments) ? r.comments : []).slice(0, 8).map((c: any) => ({ uname: text(c?.uname, 100), message: text(c?.message, 120) })), tier: "light", fetched_at: Number.isFinite(Date.parse(r.fetched_at)) ? new Date(r.fetched_at).toISOString() : new Date().toISOString() };
 }
 export async function reportFetch(e: any, b: any): Promise<Response> {
