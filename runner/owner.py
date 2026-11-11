@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Loopback-only owner view. Team invitations use the separate authenticated cloud site."""
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-import json, urllib.request, urllib.error, ssl
+import os, json, urllib.request, urllib.error, ssl
 
 C = json.loads((Path.home() / ".inkboard-team/config.json").read_text())
 
@@ -42,23 +42,29 @@ class Handler(BaseHTTPRequestHandler):
         try:
             r = urllib.request.urlopen(
                 req,
-                context=ssl.create_default_context(cafile="/etc/ssl/cert.pem"),
+                context=ssl.create_default_context(
+                    cafile=(
+                        "/etc/ssl/cert.pem"
+                        if os.path.exists("/etc/ssl/cert.pem")
+                        else None
+                    )
+                ),
                 timeout=30,
             )
         except urllib.error.HTTPError as e:
             r = e
         data = r.read()
-        if self.path in ("/", "/guide"):
-            data = data.replace(
-                b"token=sessionStorage.getItem('team-token')||''",
-                b"token='local-owner'",
-            )
         self.send_response(r.status)
         self.send_header(
             "Content-Type", r.headers.get("Content-Type", "application/json")
         )
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if r.headers.get("Content-Security-Policy"):
+            self.send_header(
+                "Content-Security-Policy", r.headers["Content-Security-Policy"]
+            )
         self.end_headers()
         self.wfile.write(data)
 
@@ -68,4 +74,4 @@ class Handler(BaseHTTPRequestHandler):
     do_DELETE = proxy
 
 
-HTTPServer(("127.0.0.1", 3391), Handler).serve_forever()
+ThreadingHTTPServer(("127.0.0.1", 3391), Handler).serve_forever()

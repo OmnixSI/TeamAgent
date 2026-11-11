@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { build } from "../../server/node_modules/esbuild/lib/main.js";
+import { build } from "esbuild";
 await build({
   entryPoints: ["src/worker.ts"],
   bundle: true,
@@ -262,7 +262,7 @@ test("model effort, evidence validation and task plan are persisted", async () =
   };
   try {
     await worker.queue(
-      { messages: [{ body: { id: "plan-plan" }, ack() {} }] },
+      { messages: [{ body: { id: "plan-qq-plan-v1" }, ack() {} }] },
       e,
     );
     const s = await (await req(e, "/api/team/state")).json();
@@ -575,7 +575,7 @@ test("daytime scheduling does not run memory max; nightly consolidation keeps di
         assert.equal(kind, "memory");
         return JSON.stringify({
           facts: [],
-          self_note:"想把大肥鱼的记忆磨顺，接话先别抢。",
+          self_note: "想把大肥鱼的记忆磨顺，接话先别抢。",
           reflection: "保留代称，避免同一来源反复学习。",
           reply: {
             should_speak: true,
@@ -595,7 +595,7 @@ test("daytime scheduling does not run memory max; nightly consolidation keeps di
     },
   );
   assert.equal(calls, 1);
-  assert.match(settings.self_note,/大肥鱼/);
+  assert.match(settings.self_note, /大肥鱼/);
   assert.equal(
     (await e.DB.prepare("SELECT * FROM dreams").all()).results.length,
     1,
@@ -890,4 +890,530 @@ test("silent participation never calls the voice model or queues a QQ reply", as
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("background web research frees chat and resumes with tool results exactly once", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  await qq(e, msg("lookup", "查一下这个新技术有什么用"));
+  const original = globalThis.fetch;
+  let searches = 0,
+    routes = 0;
+  globalThis.fetch = async (url, o) => {
+    if (String(url).includes("/v1/tools/search")) {
+      searches++;
+      return Response.json({
+        results: [{ url: "https://example.com/docs", content: "verified" }],
+      });
+    }
+    const b = JSON.parse(o.body);
+    if (b.messages[0].content.includes("最后的嘴替模块"))
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content:
+                '{"mode":"work","text":"查到了，先做小范围试用。https://example.com/docs"}',
+            },
+          },
+        ],
+      });
+    if (b.messages.some((m) => m.role === "tool")) {
+      assert.ok(b.messages.some((m) => m.tool_call_id === "search-one"));
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content:
+                '{"should_reply":true,"kind":"direct","brief":"文档确认可小范围试用，来源https://example.com/docs"}',
+            },
+          },
+        ],
+      });
+    }
+    routes++;
+    if (routes === 1)
+      return Response.json({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              reasoning_content: "private",
+              tool_calls: [
+                {
+                  id: "search-one",
+                  type: "function",
+                  function: {
+                    name: "search_web",
+                    arguments: '{"query":"public technology"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    return Response.json({
+      choices: [
+        {
+          message: {
+            content: '{"should_reply":false,"kind":"proactive","brief":""}',
+          },
+        },
+      ],
+    });
+  };
+  try {
+    await worker.queue(
+      { messages: [{ body: { id: "chat-lookup" }, ack() {} }] },
+      e,
+    );
+    assert.equal(searches, 0);
+    const job = await e.DB.prepare(
+      "SELECT * FROM jobs WHERE kind='research'",
+    ).first();
+    assert.equal(job.status, "pending");
+    await qq(e, msg("while-research", "哈哈哈"));
+    await worker.queue(
+      { messages: [{ body: { id: "chat-while-research" }, ack() {} }] },
+      e,
+    );
+    assert.equal(routes, 2);
+    assert.equal(searches, 0);
+    await worker.queue({ messages: [{ body: { id: job.id }, ack() {} }] }, e);
+    await worker.queue({ messages: [{ body: { id: job.id }, ack() {} }] }, e);
+    assert.equal(searches, 1);
+    assert.equal(
+      (await e.DB.prepare("SELECT * FROM outbox").all()).results.length,
+      1,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a late plan becomes a draft and cannot overwrite a member or start coding", async () => {
+  const e = env(),
+    repo = "OmnixSI/TeamAgent";
+  const { id } = await (
+    await req(e, "/api/team/task", {
+      repo,
+      title: "original",
+      plan: true,
+      important: false,
+    })
+  ).json();
+  await req(
+    e,
+    "/api/team/task",
+    { id, version: 1, status: "queued", detail: "成员批准的验收条件" },
+    undefined,
+    "PATCH",
+  );
+  assert.equal(
+    (await (await req(e, "/api/runner/claim", {}, "runner-secret")).json())
+      .task,
+    null,
+  );
+  const j = await e.DB.prepare("SELECT id FROM jobs WHERE kind='plan'").first();
+  const original = globalThis.fetch;
+  const efforts = [];
+  globalThis.fetch = async (u, o) => {
+    efforts.push(JSON.parse(o.body).reasoning_effort);
+    return Response.json({
+      choices: [{ message: { content: "旧上下文生成的方案" } }],
+    });
+  };
+  try {
+    await worker.queue({ messages: [{ body: { id: j.id }, ack() {} }] }, e);
+  } finally {
+    globalThis.fetch = original;
+  }
+  const d = await (await req(e, "/api/team/task?id=" + id)).json();
+  assert.equal(d.task.detail, "成员批准的验收条件");
+  assert.equal(d.plan.state, "conflict");
+  assert.equal(d.plan.draft, "旧上下文生成的方案");
+  assert.deepEqual(efforts, ["high"]);
+  assert.equal(
+    (await (await req(e, "/api/runner/claim", {}, "runner-secret")).json())
+      .task,
+    null,
+  );
+  await req(
+    e,
+    "/api/team/task",
+    {
+      id,
+      version: d.task.version,
+      status: "queued",
+      detail: "成员核对后的最终方案",
+    },
+    undefined,
+    "PATCH",
+  );
+  assert.equal(
+    (await (await req(e, "/api/runner/claim", {}, "runner-secret")).json()).task
+      .id,
+    id,
+  );
+});
+
+test("duplicate QQ delivery after a completed plan never starts another planning job", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  const m = msg("once", "/方案 TeamAgent 检查说明书");
+  await qq(e, m);
+  const j = await e.DB.prepare("SELECT id FROM jobs WHERE kind='plan'").first();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({ choices: [{ message: { content: "已整理方案" } }] });
+  try {
+    await worker.queue({ messages: [{ body: { id: j.id }, ack() {} }] }, e);
+  } finally {
+    globalThis.fetch = original;
+  }
+  await qq(e, m);
+  assert.equal(
+    (await e.DB.prepare("SELECT id FROM jobs WHERE kind='plan'").all()).results
+      .length,
+    1,
+  );
+});
+
+test("file production and QQ delivery are separate, terminal receipts are idempotent", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  await qq(e, msg("delivery-source", "生成CSV"));
+  await e.DB.prepare(
+    "INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
+  )
+    .bind(
+      "file-job",
+      "media",
+      JSON.stringify({ message: "delivery-source", effort: "high" }),
+      Date.now(),
+    )
+    .run();
+  const { job } = await (
+    await req(e, "/api/runner/media/claim", { mode: "quick" }, "runner-secret")
+  ).json();
+  const report = {
+    id: job.id,
+    lease: job.payload.lease,
+    result: "CSV已生成",
+    files: [{ name: "项目.csv", bytes: 100 }],
+  };
+  assert.equal(
+    (await req(e, "/api/runner/media/report", report, "runner-secret")).status,
+    200,
+  );
+  assert.equal(
+    (await req(e, "/api/runner/media/report", report, "runner-secret")).status,
+    200,
+  );
+  const d = await e.DB.prepare("SELECT * FROM deliveries").first();
+  assert.equal(d.status, "pending");
+  assert.equal(
+    (await e.DB.prepare("SELECT * FROM jobs WHERE kind='voice_notice'").all())
+      .results.length,
+    0,
+  );
+  const receipt = { id: d.id, status: "sent", sent_count: 1 };
+  await req(e, "/api/runner/delivery/report", receipt, "runner-secret");
+  await req(e, "/api/runner/delivery/report", receipt, "runner-secret");
+  assert.equal(
+    (await e.DB.prepare("SELECT * FROM deliveries").first()).status,
+    "sent",
+  );
+  assert.equal(
+    (await e.DB.prepare("SELECT * FROM jobs WHERE kind='voice_notice'").all())
+      .results.length,
+    1,
+  );
+  assert.equal(
+    (
+      await req(
+        e,
+        "/api/runner/delivery-target",
+        { message: "delivery-source", delivery: d.id },
+        "runner-secret",
+      )
+    ).status,
+    409,
+  );
+});
+
+test("cancelling a file task prevents a stale runner from publishing its result", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  await qq(e, msg("cancel-source", "生成CSV"));
+  await e.DB.prepare(
+    "INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
+  )
+    .bind(
+      "cancel-job",
+      "media",
+      '{"message":"cancel-source","effort":"high"}',
+      Date.now(),
+    )
+    .run();
+  const { job } = await (
+    await req(e, "/api/runner/media/claim", { mode: "quick" }, "runner-secret")
+  ).json();
+  await req(
+    e,
+    "/api/team/utility",
+    { id: job.id, action: "cancel" },
+    undefined,
+    "PATCH",
+  );
+  assert.equal(
+    (
+      await req(
+        e,
+        "/api/runner/media/report",
+        {
+          id: job.id,
+          lease: job.payload.lease,
+          result: "late",
+          files: [{ name: "a.csv", bytes: 3 }],
+        },
+        "runner-secret",
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await e.DB.prepare("SELECT * FROM deliveries").all()).results.length,
+    0,
+  );
+});
+
+test("member sessions coexist on two devices and revocation invalidates both", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  async function login(n) {
+    const ticket = await (await req(e, "/api/team/login/start", {}, "")).json();
+    await qq(e, msg("login-" + n, "/登录 " + ticket.code));
+    return (await (await req(e, "/api/team/login/poll", ticket, "")).json())
+      .token;
+  }
+  const a = await login(1),
+    b = await login(2);
+  assert.notEqual(a, b);
+  assert.equal((await req(e, "/api/team/state", null, a)).status, 200);
+  assert.equal((await req(e, "/api/team/state", null, b)).status, 200);
+  const who = (await (await req(e, "/api/team/state", null, a)).json()).who;
+  await req(e, "/api/admin/revoke", { id: who.id });
+  assert.equal((await req(e, "/api/team/state", null, a)).status, 401);
+  assert.equal((await req(e, "/api/team/state", null, b)).status, 401);
+});
+
+await build({
+  entryPoints: ["src/memory.ts"],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  outfile: ".wrangler/test-memory.mjs",
+});
+const { rememberCorrection, recall } = await import(
+  "../.wrangler/test-memory.mjs"
+);
+test("explicit correction is immediate, evidence-checked and project-scoped; deletion cannot be relearned", async () => {
+  const e = env(),
+    repo = "OmnixSI/WhalePartner",
+    ts = new Date().toISOString();
+  for (const [id, scope] of [
+    ["old", repo],
+    ["other", "OmnixSI/NextThought"],
+  ])
+    await e.DB.prepare("INSERT INTO facts VALUES(?,?,?,?,?,?,?,?,?,NULL)")
+      .bind(
+        id,
+        scope,
+        "大肥鱼",
+        "代称",
+        "旧称",
+        "旧原话",
+        "old-source",
+        "confirmed",
+        "2026-01-01",
+      )
+      .run();
+  const source = {
+    id: "correction",
+    sender: "a",
+    body: "纠正一下，大肥鱼就是WhalePartner",
+    ts,
+    meta: { direct: true },
+  };
+  const c = {
+    repo,
+    subject: "大肥鱼",
+    predicate: "代称",
+    value: "WhalePartner",
+    quote: source.body,
+    supersedes_ids: ["old", "other"],
+  };
+  await rememberCorrection(e, c, source);
+  assert.ok(
+    (await e.DB.prepare("SELECT valid_to FROM facts WHERE id='old'").first())
+      .valid_to,
+  );
+  assert.equal(
+    (await e.DB.prepare("SELECT valid_to FROM facts WHERE id='other'").first())
+      .valid_to,
+    null,
+  );
+  assert.equal((await recall(e, "大肥鱼", repo)).length, 1);
+  await assert.rejects(() =>
+    rememberCorrection(e, { ...c, quote: "编造的原话" }, source),
+  );
+  const current = (await recall(e, "大肥鱼", repo))[0];
+  await req(e, "/api/team/fact", { id: current.id }, undefined, "DELETE");
+  await assert.rejects(() =>
+    rememberCorrection(e, { ...c, subject: "同义代称" }, source),
+  );
+  assert.equal((await recall(e, "大肥鱼", repo)).length, 0);
+});
+
+test("model boundary strips credentials and records actual usage without storing prompts", async () => {
+  await build({
+    entryPoints: ["src/runtime.ts"],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    outfile: ".wrangler/test-runtime.mjs",
+  });
+  const { model } = await import("../.wrangler/test-runtime.mjs");
+  const e = env(),
+    key = "sk-" + "a".repeat(30),
+    original = globalThis.fetch;
+  globalThis.fetch = async (u, o) => {
+    assert.ok(!o.body.includes(key));
+    return Response.json({
+      choices: [{ message: { content: "ok" } }],
+      usage: { prompt_tokens: 31, completion_tokens: 7 },
+    });
+  };
+  try {
+    await model(e, "test", "high", {
+      messages: [{ role: "user", content: "API_KEY=" + key }],
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+  const run = await e.DB.prepare("SELECT * FROM model_runs").first();
+  assert.equal(run.effort, "high");
+  assert.equal(run.input_tokens, 31);
+  assert.equal(run.output_tokens, 7);
+  assert.ok(!JSON.stringify(run).includes(key));
+});
+
+test("an oversized body without Content-Length is rejected before JSON or SQL", async () => {
+  const e = env();
+  const r = await worker.fetch(
+    new Request("https://team.example/api/team/task", {
+      method: "POST",
+      headers: { Authorization: "Bearer owner-secret" },
+      body: JSON.stringify({ title: "x".repeat(270000) }),
+    }),
+    e,
+  );
+  assert.equal(r.status, 413);
+});
+
+test("saving a running task is an explicit human takeover, never a dangling running lease", async () => {
+  const e = env();
+  const { id } = await (
+    await req(e, "/api/team/task", { repo: "OmnixSI/TeamAgent", title: "test" })
+  ).json();
+  await req(
+    e,
+    "/api/team/task",
+    { id, version: 1, status: "queued" },
+    undefined,
+    "PATCH",
+  );
+  const { task } = await (
+    await req(e, "/api/runner/claim", {}, "runner-secret")
+  ).json();
+  assert.equal(
+    (
+      await req(
+        e,
+        "/api/team/task",
+        {
+          id,
+          version: task.version,
+          status: "running",
+          result: "成员接手修改",
+        },
+        undefined,
+        "PATCH",
+      )
+    ).status,
+    200,
+  );
+  const d = await (await req(e, "/api/team/task?id=" + id)).json();
+  assert.equal(d.task.status, "in_progress");
+  assert.equal(d.task.lease, null);
+  assert.equal(
+    (
+      await req(
+        e,
+        "/api/runner/heartbeat",
+        { id, lease: task.lease, version: task.version },
+        "runner-secret",
+      )
+    ).status,
+    409,
+  );
+});
+
+test("temporary repository sync failure retains the last good data and labels its age", async () => {
+  const e = env(),
+    repo = "OmnixSI/TeamAgent";
+  await req(
+    e,
+    "/api/runner/context",
+    {
+      repo,
+      context: {
+        readme: "正确的项目说明",
+        metadata: { default_branch: "main" },
+        files: { "AGENTS.md": "协作规则" },
+      },
+    },
+    "runner-secret",
+  );
+  await req(
+    e,
+    "/api/runner/context",
+    {
+      repo,
+      context: {
+        readme: { unavailable: true },
+        metadata: { unavailable: true },
+        file_errors: ["AGENTS.md"],
+      },
+    },
+    "runner-secret",
+  );
+  const d = await (await req(e, "/api/team/project?repo=" + repo)).json();
+  assert.equal(d.context.readme, "正确的项目说明");
+  assert.equal(d.context.files["AGENTS.md"], "协作规则");
+  assert.ok(d.context.stale_sections.readme);
+  await req(
+    e,
+    "/api/runner/context",
+    {
+      repo,
+      context: { readme: "新说明", metadata: { default_branch: "main" } },
+    },
+    "runner-secret",
+  );
+  const fresh = await (await req(e, "/api/team/project?repo=" + repo)).json();
+  assert.equal(fresh.context.readme, "新说明");
+  assert.deepEqual(fresh.context.stale_sections, {});
 });

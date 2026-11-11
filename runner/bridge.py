@@ -25,7 +25,11 @@ def request(base, path, key, body=None):
         },
     )
     with urllib.request.urlopen(
-        req, timeout=25, context=ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+        req,
+        timeout=25,
+        context=ssl.create_default_context(
+            cafile="/etc/ssl/cert.pem" if os.path.exists("/etc/ssl/cert.pem") else None
+        ),
     ) as r:
         return json.load(r)
 
@@ -82,6 +86,8 @@ def sync_repos():
                 capture_output=True,
                 timeout=20,
             )
+            if rr.returncode != 0 and "404" not in rr.stderr:
+                context.setdefault("file_errors", []).append(filename)
             if rr.returncode == 0:
                 data = json.loads(rr.stdout)
                 if data.get("encoding") == "base64":
@@ -90,6 +96,20 @@ def sync_repos():
                     ).decode("utf8", errors="replace")[:10000]
         branch = context.get("metadata", {}).get("default_branch")
         if branch:
+            head = subprocess.run(
+                ["gh", "api", "repos/" + repo + "/commits/" + branch],
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+            if head.returncode != 0:
+                context["head"] = {"unavailable": True}
+            if head.returncode == 0:
+                commit = json.loads(head.stdout)
+                context["head"] = {
+                    "sha": commit.get("sha"),
+                    "url": commit.get("html_url"),
+                }
             rr = subprocess.run(
                 [
                     "gh",
@@ -100,6 +120,8 @@ def sync_repos():
                 capture_output=True,
                 timeout=20,
             )
+            if rr.returncode != 0:
+                context["checks"] = {"unavailable": True}
             if rr.returncode == 0:
                 context["checks"] = [
                     {
@@ -111,10 +133,20 @@ def sync_repos():
                             "status",
                             "conclusion",
                             "html_url",
+                            "output",
                         ]
                     }
                     for v in json.loads(rr.stdout).get("check_runs", [])
                 ]
+        for check in (
+            context.get("checks", []) if isinstance(context.get("checks"), list) else []
+        ):
+            output = check.pop("output", None)
+            if output:
+                check["evidence"] = {
+                    "title": str(output.get("title") or "")[:300],
+                    "summary": str(output.get("summary") or "")[:3500],
+                }
         cloud("context", {"repo": repo, "context": context})
     last_sync = time.time()
 
@@ -132,9 +164,14 @@ def tick():
             "/v1/events",
             CONFIG["sourceKey"],
             {
-                "id": hashlib.sha256(t["id"].encode()).hexdigest(),
+                "id": hashlib.sha256(
+                    (t["id"] + ":" + str(t["version"])).encode()
+                ).hexdigest(),
                 "type": "team.task",
-                "subject": "task:" + hashlib.sha256(t["id"].encode()).hexdigest(),
+                "subject": "task:"
+                + hashlib.sha256(
+                    (t["id"] + ":" + str(t["version"])).encode()
+                ).hexdigest(),
                 "summary": t["title"][:200],
                 "detail": "任务资料在本机受限配置目录。",
             },
@@ -148,7 +185,12 @@ def tick():
     runs = ev.get("runs", [])
     if runs and runs[-1]["state"] in ("done", "nothing", "cancelled"):
         result_path = (
-            HOME / "results" / (hashlib.sha256(t["id"].encode()).hexdigest() + ".json")
+            HOME
+            / "results"
+            / (
+                hashlib.sha256((t["id"] + ":" + str(t["version"])).encode()).hexdigest()
+                + ".json"
+            )
         )
         result = (
             json.loads(result_path.read_text())

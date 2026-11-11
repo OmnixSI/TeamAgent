@@ -1,0 +1,1144 @@
+let token = sessionStorage.getItem("team-token") || "",
+  state,
+  view = "tasks",
+  loginTimer,
+  lastFull = 0,
+  loading = false;
+const $ = (s) => document.getElementById(s),
+  names = {
+    proposal: "方案待确认",
+    queued: "等待自动执行",
+    running: "自动执行中",
+    in_progress: "成员处理中",
+    needs_human: "待成员接手",
+    ready_for_review: "待评审",
+    done: "已完成",
+    failed: "处理失败",
+    cancelled: "已停止",
+  };
+const tabs = {
+  tasks: "任务与方案",
+  materials: "资料与发现",
+  projects: "项目现状",
+  memory: "记忆与成长",
+  activity: "操作记录",
+  system: "运行状态",
+};
+const date = (t) =>
+  t
+    ? new Date(t).toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "尚无记录";
+const short = (r) => (r ? r.split("/").pop() : "团队");
+function el(tag, text, cls) {
+  const x = document.createElement(tag);
+  if (text !== undefined) x.textContent = text;
+  if (cls) x.className = cls;
+  return x;
+}
+function button(text, fn, cls) {
+  const b = el("button", text, cls);
+  b.onclick = () => Promise.resolve().then(fn).catch(error);
+  return b;
+}
+function link(text, url) {
+  const a = el("a", text);
+  try {
+    const u = new URL(url);
+    if (u.protocol === "https:") {
+      a.href = u.href;
+      a.target = "_blank";
+      a.rel = "noreferrer";
+    }
+  } catch {}
+  return a;
+}
+function badge(text, kind) {
+  return el("span", text, "badge " + (kind || ""));
+}
+function empty(text) {
+  return el("p", text, "empty");
+}
+function error(e) {
+  $("error").textContent = e.message || String(e);
+  if ($("modal").open) toast(e.message || String(e));
+}
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  setTimeout(() => ($("toast").hidden = true), 3500);
+}
+async function api(path, body, method) {
+  const r = await fetch(path, {
+    method: method || (body ? "POST" : "GET"),
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json();
+  if (!r.ok) {
+    if (r.status === 401 && state) {
+      $("app").hidden = true;
+      $("login").hidden = false;
+    }
+    throw Error(j.error || "请求失败");
+  }
+  return j;
+}
+async function copy(text) {
+  await navigator.clipboard.writeText(text);
+  toast("已复制，可交给本机 AI");
+}
+function show(...nodes) {
+  $("detail").replaceChildren(...nodes);
+  if (!$("modal").open) $("modal").showModal();
+}
+function field(name, input) {
+  const l = el("label", name);
+  l.append(input);
+  return l;
+}
+function input(value = "") {
+  const x = el("input");
+  x.value = value;
+  return x;
+}
+function textarea(value = "") {
+  const x = el("textarea");
+  x.value = value;
+  return x;
+}
+function selector(values, value) {
+  const s = el("select");
+  for (const [key, title] of Object.entries(values)) {
+    const o = el("option", title);
+    o.value = key;
+    s.append(o);
+  }
+  s.value = value || "";
+  return s;
+}
+function matches(text, repo) {
+  return (
+    (!$("repo").value || repo === $("repo").value || repo === "team") &&
+    String(text || "")
+      .toLowerCase()
+      .includes($("search").value.trim().toLowerCase())
+  );
+}
+function selectView(next) {
+  view = next;
+  for (const key of Object.keys(tabs)) {
+    $(key + "-view").hidden = key !== view;
+    $("tab-" + key).setAttribute("aria-selected", String(key === view));
+  }
+  $("person").hidden = view !== "tasks";
+  $("search").hidden = ["system", "activity"].includes(view);
+  $("repo").hidden = ["system", "activity"].includes(view);
+  if (view === "system" && !state?.ops) {
+    load();
+    return;
+  }
+  render();
+}
+for (const [key, title] of Object.entries(tabs)) {
+  const b = button(title, () => selectView(key));
+  b.id = "tab-" + key;
+  b.setAttribute("aria-selected", String(key === "tasks"));
+  b.setAttribute("role", "tab");
+  b.setAttribute("aria-controls", key + "-view");
+  $(key + "-view").setAttribute("role", "tabpanel");
+  $("tabs").append(b);
+}
+$("tabs").setAttribute("role", "tablist");
+$("tabs").onkeydown = (event) => {
+  if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+  event.preventDefault();
+  const keys = Object.keys(tabs),
+    i = keys.indexOf(view),
+    next =
+      keys[
+        (i + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length
+      ];
+  $("tab-" + next).focus();
+  selectView(next);
+};
+async function load() {
+  if (loading) return;
+  loading = true;
+  try {
+    const next = await api(
+      "/api/team/state" + (view === "system" ? "?metrics=1" : ""),
+    );
+    state = next;
+    lastFull = Date.now();
+    $("login").hidden = true;
+    $("app").hidden = false;
+    $("logout").hidden = location.hostname === "127.0.0.1";
+    $("who").textContent = state.who.name;
+    $("admin").hidden = state.who.role !== "owner";
+    $("release").textContent = state.project.version.slice(0, 12);
+    $("error").textContent = "";
+    if ($("repo").options.length === 1)
+      for (const r of state.repos) {
+        const o = el("option", short(r));
+        o.value = r;
+        $("repo").append(o);
+      }
+    renderStatus();
+    render();
+  } catch (e) {
+    error(e);
+  } finally {
+    loading = false;
+  }
+}
+function renderStatus() {
+  const c = state.connection,
+    g = c.gateway,
+    gw = g && g.connected && Date.now() - Date.parse(g.at) < 90000,
+    run = c.runnerSeen && Date.now() - Date.parse(c.runnerSeen) < 90000;
+  $("connection").replaceChildren(
+    badge("QQ 网关 · " + (gw ? "在线" : "离线 / 待连接"), gw ? "ok" : "warn"),
+    badge("本机执行端 · " + (run ? "在线" : "离线"), run ? "ok" : "warn"),
+    badge(
+      c.fullMessageVerified ? "全量群消息已实测" : "普通群消息待验证",
+      c.fullMessageVerified ? "ok" : "warn",
+    ),
+    badge("聊天 high · 重要工作 max"),
+  );
+  if (g?.blocked) $("connection").append(badge(g.blocked, "bad"));
+  if (c.chatTiming)
+    $("connection").append(
+      badge(
+        "最近一轮 " +
+          Math.round((c.chatTiming.queueMs + c.chatTiming.modelMs) / 1000) +
+          " 秒",
+      ),
+    );
+  const counts = [
+    [
+      "待推进",
+      state.tasks.filter((t) => ["proposal", "queued"].includes(t.status))
+        .length,
+    ],
+    ["需要成员", state.tasks.filter((t) => t.status === "needs_human").length],
+    [
+      "待评审",
+      state.tasks.filter((t) => t.status === "ready_for_review").length,
+    ],
+    ["项目", state.repos.length],
+  ];
+  $("stats").replaceChildren();
+  for (const [name, n] of counts) {
+    const d = el("div", undefined, "stat");
+    d.append(el("small", name), el("b", String(n)));
+    $("stats").append(d);
+  }
+  $("introtext").textContent =
+    "最后收到群消息 " +
+    date(c.lastMessage) +
+    " · 本机离线会暂停 QQ 收信与文件、代码执行。";
+}
+function render() {
+  if (!state) return;
+  const fn = {
+    tasks: renderTasks,
+    materials: renderMaterials,
+    projects: renderProjects,
+    memory: renderMemory,
+    activity: renderActivity,
+    system: renderSystem,
+  }[view];
+  fn();
+}
+function renderTasks() {
+  const person = $("person").value,
+    rows = state.tasks.filter(
+      (t) =>
+        matches(t.title + " " + t.detail + " " + t.result, t.repo) &&
+        (!person ||
+          (person === "mine" && t.assignee === state.who.name) ||
+          (person === "unassigned" && !t.assignee)),
+    );
+  $("board").replaceChildren();
+  for (const [title, statuses] of [
+    ["待推进", ["proposal", "queued"]],
+    ["正在做", ["running", "in_progress"]],
+    ["需要接力", ["needs_human", "failed"]],
+    ["成果与归档", ["ready_for_review", "done", "cancelled"]],
+  ]) {
+    const col = el("section", undefined, "column"),
+      filtered = rows.filter((t) => statuses.includes(t.status)),
+      h = el("h2", title);
+    h.append(el("span", String(filtered.length), "pill"));
+    col.append(h);
+    if (!filtered.length) col.append(empty("这里暂时没有任务"));
+    for (const t of filtered) {
+      const a = el("article", undefined, "card");
+      a.append(
+        el("small", short(t.repo)),
+        el("h3", t.title),
+        badge(
+          names[t.status],
+          t.status === "ready_for_review"
+            ? "ok"
+            : t.status === "needs_human"
+              ? "warn"
+              : "",
+        ),
+      );
+      if (t.plan_state === "pending") a.append(el("small", "方案正在后台整理"));
+      if (t.plan_state === "conflict") a.append(badge("AI 草稿待核对", "warn"));
+      a.append(el("p", t.detail, "snippet"));
+      const info = el("div", undefined, "actions");
+      info.append(
+        el("small", t.assignee || "未分配"),
+        el("small", date(t.updated_at)),
+      );
+      a.append(
+        info,
+        button("查看 / 接力", () => taskDetail(t.id)),
+      );
+      col.append(a);
+    }
+    $("board").append(col);
+  }
+}
+async function source(id, container) {
+  if (!id) return;
+  try {
+    const m = await api("/api/team/source?id=" + encodeURIComponent(id));
+    const box = el("div", undefined, "source");
+    box.append(
+      el("small", "来源 · " + (m.name || m.sender) + " · " + date(m.ts)),
+      el("blockquote", m.body),
+    );
+    container.append(box);
+    return m;
+  } catch {
+    container.append(el("small", "来源 " + id + "（手动修订或来源不可用）"));
+  }
+}
+async function taskDetail(id) {
+  const d = await api("/api/team/task?id=" + encodeURIComponent(id)),
+    t = d.task;
+  const box = el("div");
+  box.append(
+    el("small", t.repo + " · v" + t.version),
+    el("pre", t.detail || "尚未整理方案"),
+  );
+  const original = await source(t.source_id, box);
+  const planState = d.plan?.state;
+  if (planState === "conflict") {
+    box.append(el("h3", "AI 草稿 · 未覆盖人工内容"), el("pre", d.plan.draft));
+    box.append(el("p", "请核对差异，把需要的部分保存到方案中。", "note"));
+  }
+  const title = input(t.title),
+    detail = textarea(t.detail),
+    assignee = input(t.assignee || ""),
+    result = textarea(t.result || "");
+  const statuses = Object.fromEntries(
+    Object.entries(names).filter(([k]) => k !== "running"),
+  );
+  if (t.status === "running") statuses.running = names.running;
+  const status = selector(statuses, t.status);
+  const row = el("div", undefined, "form-row");
+  row.append(field("负责人", assignee), field("任务状态", status));
+  const edit = el("details");
+  edit.append(
+    el("summary", "修改方案与任务信息"),
+    field("任务目标", title),
+    field("方案 / 验收条件", detail),
+  );
+  const controls = el("div", undefined, "actions");
+  controls.append(
+    button(
+      "保存更新",
+      async () => {
+        await api(
+          "/api/team/task",
+          {
+            id: t.id,
+            version: t.version,
+            title: title.value,
+            detail: detail.value,
+            status: status.value,
+            assignee: assignee.value,
+            result: result.value,
+          },
+          "PATCH",
+        );
+        $("modal").close();
+        await load();
+        toast("任务已更新");
+      },
+      "primary",
+    ),
+    button("我来接手", async () => {
+      await api(
+        "/api/team/task",
+        {
+          id: t.id,
+          version: t.version,
+          status: "in_progress",
+          assignee: state.who.name,
+        },
+        "PATCH",
+      );
+      await load();
+      await taskDetail(t.id);
+    }),
+    button("重新整理重要方案", async () => {
+      await api(
+        "/api/team/task",
+        { id: t.id, version: t.version, action: "plan", important: true },
+        "PATCH",
+      );
+      $("modal").close();
+      await load();
+      toast("重要方案已交后台 max");
+    }),
+    button("复制给本机 AI", () =>
+      copy(
+        "# " +
+          t.title +
+          "\n仓库：" +
+          t.repo +
+          "\n任务：" +
+          t.id +
+          " · v" +
+          t.version +
+          "\n项目基线：" +
+          (d.repository?.head?.sha || "请先核对远端默认分支") +
+          "\n\n原始交办：\n" +
+          (original?.body || "由开发台创建，按下列方案核对") +
+          "\n\n方案与验收：\n" +
+          t.detail +
+          "\n\n已有结果与阻塞：\n" +
+          (t.result || "暂无执行结果") +
+          "\n\n请先核对当前分支、代码版本和已完成内容，在独立分支完成剩余工作；运行相关测试，提交评审后将结果回填 https://inkboard-team.inkboard-server.workers.dev 。不要自动合并或发布。",
+      ),
+    ),
+  );
+  const events = el("div");
+  for (const a of d.events || [])
+    events.append(
+      el("p", date(a.created_at) + " · " + a.actor + " · " + a.summary, "note"),
+    );
+  show(
+    el("h2", t.title),
+    box,
+    edit,
+    row,
+    field("进展、验证结果与接力材料", result),
+    el(
+      "p",
+      "成员接手、停止或更新执行中任务，会使旧执行租约失效。旧结果不能覆盖新版本。",
+      "note",
+    ),
+    controls,
+    el("h3", "操作记录"),
+    events,
+  );
+}
+async function newTask(repo, initial, context) {
+  const project = selector(
+      Object.fromEntries(state.repos.map((r) => [r, short(r)])),
+      repo || $("repo").value || state.repos[0],
+    ),
+    title = input(initial || ""),
+    detail = textarea(context || ""),
+    owner = input(state.who.name),
+    plan = selector(
+      {
+        none: "先保存为团队任务",
+        high: "普通整理 · high",
+        max: "重要方案 · max",
+      },
+      "none",
+    );
+  const actions = el("div", undefined, "actions");
+  actions.append(
+    button(
+      "创建任务",
+      async () => {
+        if (!title.value.trim()) throw Error("先写清任务目标");
+        await api("/api/team/task", {
+          repo: project.value,
+          title: title.value,
+          detail: detail.value || title.value,
+          assignee: owner.value,
+          plan: plan.value !== "none",
+          important: plan.value === "max",
+        });
+        $("modal").close();
+        selectView("tasks");
+        await load();
+      },
+      "primary",
+    ),
+  );
+  show(
+    el("h2", "新任务"),
+    field("项目", project),
+    field("任务目标", title),
+    field("背景、预期行为与验收条件", detail),
+    field("负责人", owner),
+    field("处理方式", plan),
+    el(
+      "p",
+      "生成方案不会自动开工。明确选择等待自动执行后，执行端才会领取；复杂开发适合成员接力。",
+      "note",
+    ),
+    actions,
+  );
+}
+function renderMaterials() {
+  $("utilities").replaceChildren();
+  const rows = (state.utilities || []).filter((t) =>
+    matches(t.title + " " + t.result),
+  );
+  if (!rows.length)
+    $("utilities").append(
+      empty("群里直接交办表格、PDF 或文件整理，进展会出现在这里"),
+    );
+  for (const t of rows) {
+    const a = el("article", undefined, "card");
+    a.append(
+      el("h3", t.title || "视频 / 资料处理"),
+      badge(
+        {
+          done: "资料处理完成",
+          failed: "需要接手",
+          running: "处理中",
+          pending: "等待处理",
+          cancelled: "已停止",
+        }[t.status] || t.status,
+        t.status === "failed" ? "warn" : "",
+      ),
+    );
+    if (t.delivery_status)
+      a.append(
+        badge(
+          {
+            pending: "附件待发送",
+            sent: "QQ 附件已发送",
+            failed: "附件发送失败",
+            unknown: "附件送达待核对",
+          }[t.delivery_status],
+          t.delivery_status === "sent" ? "ok" : "warn",
+        ),
+      );
+    a.append(
+      el("p", t.result || "结果尚未回报", "snippet"),
+      button("查看结果 / 接力", () => utilityDetail(t.id)),
+    );
+    $("utilities").append(a);
+  }
+  $("discoveries").replaceChildren();
+  const found = (state.discoveries || []).filter(
+    (d) => matches(d.title + " " + d.body, d.repo) && d.status !== "dismissed",
+  );
+  if (!found.length)
+    $("discoveries").append(empty("尚无新的技术线索；有用的发现才会留下来"));
+  for (const d of found) {
+    const a = el("article", undefined, "card");
+    a.append(
+      el("small", short(d.repo) + " · " + date(d.created_at)),
+      el("h3", d.title),
+      el("p", d.body),
+    );
+    for (const u of JSON.parse(d.urls)) a.append(link(u, u));
+    const actions = el("div", undefined, "actions");
+    actions.append(
+      button(d.status === "saved" ? "已收藏" : "收藏", async () => {
+        await api(
+          "/api/team/discovery",
+          { id: d.id, status: "saved" },
+          "PATCH",
+        );
+        await load();
+      }),
+      button("转为团队任务", () =>
+        newTask(d.repo, d.title, d.body + "\n" + JSON.parse(d.urls).join("\n")),
+      ),
+      button("略过", async () => {
+        await api(
+          "/api/team/discovery",
+          { id: d.id, status: "dismissed" },
+          "PATCH",
+        );
+        await load();
+      }),
+    );
+    a.append(actions);
+    $("discoveries").append(a);
+  }
+}
+async function utilityDetail(id) {
+  const t = await api("/api/team/utility?id=" + encodeURIComponent(id)),
+    box = el("div");
+  box.append(el("pre", t.instructions || "概括资料并核对与团队项目的关系"));
+  const original = await source(t.source_id, box);
+  const result = el("pre", t.result || "还没有完成结果");
+  if (t.delivery) {
+    const d = t.delivery;
+    box.append(
+      el("h3", "附件交付"),
+      el(
+        "p",
+        {
+          pending: "文件已生成，等待发送到 QQ",
+          sent: "QQ SDK 已确认发送",
+          failed: "发送失败，需成员接手",
+          unknown: "发送结果不明，先核对群文件，不会自动重发",
+        }[d.status] || d.status,
+      ),
+    );
+    for (const f of JSON.parse(d.files))
+      box.append(
+        el("small", f.name + " · " + Math.ceil(f.bytes / 1024) + " KB"),
+      );
+    box.append(
+      el(
+        "p",
+        "已确认 " +
+          d.sent_count +
+          " 个 / 共 " +
+          JSON.parse(d.files).length +
+          " 个",
+        "note",
+      ),
+    );
+  }
+  const actions = el("div", undefined, "actions");
+  actions.append(
+    button("复制给本机 AI", () =>
+      copy(
+        "请接手资料任务：" +
+          (t.title || "资料整理") +
+          "\n原始交办：\n" +
+          (original?.body || "请先在QQ群核对原始文件") +
+          "\n\n处理要求：\n" +
+          (t.instructions || "") +
+          "\n\n已有结果：\n" +
+          (t.result || "尚未完成") +
+          "\n\n请核对输入文件、提取范围与已生成成果，完成后交付真实文件，不要凭空补全缺失资料。",
+      ),
+    ),
+  );
+  if (["pending", "running"].includes(t.status))
+    actions.append(
+      button(
+        "停止处理",
+        async () => {
+          await api(
+            "/api/team/utility",
+            { id: t.id, action: "cancel" },
+            "PATCH",
+          );
+          $("modal").close();
+          await load();
+        },
+        "danger",
+      ),
+    );
+  show(
+    el("h2", t.title || "资料处理"),
+    box,
+    el("h3", "处理结果"),
+    result,
+    actions,
+  );
+}
+function renderProjects() {
+  $("projects").replaceChildren();
+  for (const repo of state.repos.filter((r) => matches(r, r))) {
+    const p = (state.projects || []).find((p) => p.repo === repo),
+      a = el("article", undefined, "card");
+    a.append(
+      el("h3", short(repo)),
+      link("打开 GitHub 仓库", "https://github.com/" + repo),
+      el("small", "最近同步尝试 " + date(p?.updated_at)),
+    );
+    if (p?.stale_sections && Object.keys(JSON.parse(p.stale_sections)).length)
+      a.append(badge("部分资料使用旧缓存", "warn"));
+    const ts = state.tasks.filter(
+      (t) => t.repo === repo && !["done", "cancelled"].includes(t.status),
+    );
+    a.append(
+      el(
+        "p",
+        ts.length +
+          " 项未完成 · " +
+          ts.filter((t) => t.status === "needs_human").length +
+          " 项待接力",
+      ),
+    );
+    let checks = [];
+    try {
+      checks = JSON.parse(p?.checks || "[]");
+    } catch {}
+    for (const c of checks.slice(0, 5)) {
+      const row = el("div", undefined, "actions");
+      row.append(
+        badge(
+          c.name + " · " + (c.conclusion || c.status),
+          c.conclusion === "success" ? "ok" : c.conclusion ? "warn" : "",
+        ),
+      );
+      if (c.html_url) row.append(link("检查详情", c.html_url));
+      a.append(row);
+    }
+    a.append(
+      button("查看项目资料", () => projectDetail(repo)),
+      button("为此项目建任务", () => newTask(repo)),
+    );
+    $("projects").append(a);
+  }
+}
+async function projectDetail(repo) {
+  const p = await api("/api/team/project?repo=" + encodeURIComponent(repo));
+  const box = el("div");
+  box.append(el("small", "同步时间 " + date(p.updated_at)));
+  for (const [title, value] of [
+    ["README", p.context?.readme],
+    ["协作说明", p.context?.files?.["AGENTS.md"]],
+  ])
+    if (value) box.append(el("h3", title), el("pre", value));
+  for (const [title, rows] of [
+    ["未关闭 Issue", p.context?.issues],
+    ["待合并 PR", p.context?.pulls],
+  ]) {
+    box.append(el("h3", title));
+    if (Array.isArray(rows))
+      for (const r of rows)
+        box.append(
+          el("p", "#" + r.number + " " + r.title),
+          link("在 GitHub 查看", r.html_url || r.url),
+        );
+  }
+  show(el("h2", short(repo)), box);
+}
+function renderMemory() {
+  $("identity").textContent = state.identity.note;
+  $("facts").replaceChildren();
+  const facts = state.facts.filter((f) =>
+    matches(
+      f.subject + " " + f.predicate + " " + f.value + " " + f.evidence,
+      f.repo,
+    ),
+  );
+  if (!facts.length)
+    $("facts").append(
+      empty("明确纠正会即时记录，长期事实在夜间整理；没有依据就不编造"),
+    );
+  for (const f of facts) {
+    const a = el("article", undefined, "card");
+    a.append(
+      el("small", short(f.repo) + " · " + date(f.valid_from)),
+      badge(
+        f.status === "confirmed" ? "已确认" : "提议",
+        f.status === "confirmed" ? "ok" : "",
+      ),
+      el("h3", f.subject + " · " + f.predicate),
+      el("p", f.value),
+      el("blockquote", f.evidence),
+    );
+    const controls = el("div", undefined, "actions");
+    controls.append(
+      button("原话 / 版本", async () => {
+        const list = await api(
+            "/api/team/fact/history?id=" + encodeURIComponent(f.id),
+          ),
+          box = el("div");
+        await source(f.source_id, box);
+        for (const x of list.facts)
+          box.append(
+            badge(x.valid_to ? "历史版本" : "当前版本"),
+            el("p", x.value),
+            el("small", date(x.valid_from) + " · " + x.evidence),
+          );
+        show(el("h2", "记忆依据与版本"), box);
+      }),
+      button("修正", () => {
+        const value = textarea(f.value),
+          actions = el("div", undefined, "actions");
+        actions.append(
+          button(
+            "保存修正",
+            async () => {
+              await api(
+                "/api/team/fact",
+                { id: f.id, value: value.value },
+                "PATCH",
+              );
+              $("modal").close();
+              await load();
+            },
+            "primary",
+          ),
+        );
+        show(
+          el("h2", "修正记忆"),
+          el("blockquote", f.evidence),
+          field("准确的内容", value),
+          actions,
+        );
+      }),
+      button(
+        "删除",
+        async () => {
+          if (confirm("删除此记忆？同一原话不会再次自动学习。")) {
+            await api("/api/team/fact", { id: f.id }, "DELETE");
+            await load();
+          }
+        },
+        "danger",
+      ),
+    );
+    a.append(controls);
+    $("facts").append(a);
+  }
+  $("expressions").replaceChildren();
+  if (!state.expressions.length)
+    $("expressions").append(empty("还没有学会本群表达，夜间会核对真实用法"));
+  for (const v of state.expressions.filter((x) =>
+    matches(x.phrase + " " + x.meaning),
+  )) {
+    const a = el("article", undefined, "card");
+    a.append(
+      el("h3", v.phrase),
+      el("p", v.meaning),
+      el(
+        "small",
+        v.scene + " · " + v.frequency + " 条 / " + v.speakers + " 人",
+      ),
+      badge(v.enabled === 1 ? "可使用" : v.enabled === 0 ? "已停用" : "待核对"),
+    );
+    a.append(
+      button(v.enabled === 1 ? "停用" : "启用", async () => {
+        await api(
+          "/api/team/expression",
+          { phrase: v.phrase, enabled: v.enabled !== 1 },
+          "PATCH",
+        );
+        await load();
+      }),
+    );
+    $("expressions").append(a);
+  }
+  $("dreams").replaceChildren();
+  if (!state.dreams.length)
+    $("dreams").append(empty("尚未完成首次真实夜间复盘"));
+  for (const d of state.dreams) {
+    const a = el("article", undefined, "card");
+    a.append(
+      el("small", d.date + " · " + d.message_count + " 条来源"),
+      el("p", d.body),
+      button("查看来源", async () => {
+        const box = el("div");
+        for (const id of JSON.parse(d.sources)) await source(id, box);
+        show(el("h2", "夜间复盘来源"), box);
+      }),
+    );
+    $("dreams").append(a);
+  }
+}
+function renderActivity() {
+  $("activity").replaceChildren();
+  if (!state.activity.length)
+    $("activity").append(empty("尚无新的任务操作记录"));
+  for (const a of state.activity) {
+    const row = el("div", undefined, "event");
+    row.append(
+      el("small", date(a.created_at)),
+      el("small", a.actor),
+      el("p", a.summary),
+    );
+    $("activity").append(row);
+  }
+}
+function table(headers, rows) {
+  const box = el("div", undefined, "table-wrap"),
+    t = el("table", undefined, "table"),
+    h = el("tr");
+  for (const x of headers) h.append(el("th", x));
+  t.append(h);
+  for (const row of rows) {
+    const tr = el("tr");
+    for (const x of row) tr.append(el("td", String(x)));
+    t.append(tr);
+  }
+  box.append(t);
+  return box;
+}
+async function renderSystem() {
+  const box = $("system");
+  box.replaceChildren();
+  const model = el("section", undefined, "panel");
+  model.append(
+    el("h2", "最近 24 小时 · 模型调用"),
+    el("p", "统计真实调用次数、耗时与 API 返回的 Token；未估算账单。", "note"),
+  );
+  model.append(
+    table(
+      ["用途", "档位", "结果", "调用", "平均耗时", "输入 / 输出 Token"],
+      state.ops.models.map((m) => [
+        m.kind,
+        m.effort,
+        m.status,
+        m.n,
+        Math.round(m.duration_ms / 100) / 10 + " 秒",
+        m.input_tokens + " / " + m.output_tokens,
+      ]),
+    ),
+  );
+  box.append(model);
+  const queues = el("section", undefined, "panel");
+  queues.append(
+    el("h2", "后台任务"),
+    table(
+      ["通道", "状态", "数量"],
+      state.ops.queues.map((q) => [q.kind, q.status, q.n]),
+    ),
+  );
+  box.append(queues);
+  const samples = state.ops.samples || [],
+    online = samples.filter((s) => s.gateway_ok && s.runner_ok).length,
+    health = el("section", undefined, "panel");
+  health.append(
+    el("h2", "连续运行观察"),
+    el(
+      "p",
+      samples.length
+        ? "已记录 " +
+            samples.length +
+            " 个五分钟采样，其中网关与执行端同时在线 " +
+            online +
+            " 次。"
+        : "采样刚开始，尚不能判断长期在线情况。",
+    ),
+    el(
+      "p",
+      "采样用于发现断连，不代替真实消息、故障恢复和开发任务验收。当前使用本机 QQ 网关，电脑需登录、联网且保持唤醒。",
+      "note",
+    ),
+    el(
+      "p",
+      "夜间素材：" +
+        state.ops.memory
+          .map(
+            (m) =>
+              (m.processed === 0
+                ? "待整理"
+                : m.processed === 1
+                  ? "已整理"
+                  : "整理失败") +
+              " " +
+              m.n +
+              " 条",
+          )
+          .join(" · "),
+      "note",
+    ),
+  );
+  box.append(health);
+  const issues = el("section", undefined, "panel");
+  issues.append(el("h2", "需要核对的工作"));
+  box.append(issues);
+  try {
+    const o = await api("/api/team/ops");
+    if (!o.failures.length && !o.deliveries.length && !o.notices.length)
+      issues.append(empty("当前没有待核对的后台任务"));
+    for (const j of o.failures) {
+      const a = el("div", undefined, "card");
+      a.append(
+        el("p", j.kind + " · " + j.status + " · " + j.attempts + " 次尝试"),
+        el("small", j.id + " · " + date(j.created_at)),
+      );
+      if (
+        state.who.role === "owner" &&
+        j.status === "failed" &&
+        ["plan", "research", "dream"].includes(j.kind)
+      )
+        a.append(
+          button("人工重试", async () => {
+            await api("/api/admin/retry-job", { id: j.id });
+            await load();
+            toast("已重新排队");
+          }),
+        );
+      issues.append(a);
+    }
+    for (const n of o.notices)
+      issues.append(
+        el(
+          "p",
+          "群消息 " + n.status + " · " + date(n.created_at) + " · " + n.id,
+          "note",
+        ),
+      );
+    for (const d of o.deliveries)
+      issues.append(
+        el(
+          "p",
+          "附件 " +
+            d.status +
+            " · 已确认 " +
+            d.sent_count +
+            " 个 · " +
+            date(d.updated_at),
+          "note",
+        ),
+      );
+  } catch (e) {
+    issues.append(el("p", e.message));
+  }
+}
+$("guide").onclick = async () => {
+  try {
+    const r = await api("/api/team/guide");
+    show(el("h2", "使用说明"), el("pre", r.guide));
+  } catch (e) {
+    error(e);
+  }
+};
+$("qqlogin").onclick = async () => {
+  try {
+    if (loginTimer) clearInterval(loginTimer);
+    const ticket = await api("/api/team/login/start", {});
+    $("logincode").textContent =
+      "请在做 AI 高手群发送：\n/登录 " +
+      ticket.code +
+      "\n保持本页打开，10 分钟内有效。";
+    loginTimer = setInterval(async () => {
+      try {
+        const r = await api("/api/team/login/poll", ticket);
+        if (r.token) {
+          clearInterval(loginTimer);
+          token = r.token;
+          sessionStorage.setItem("team-token", token);
+          await load();
+        }
+      } catch (e) {
+        clearInterval(loginTimer);
+        $("logincode").textContent = e.message;
+      }
+    }, 3000);
+  } catch (e) {
+    error(e);
+  }
+};
+$("signin").onclick = () => {
+  token = $("token").value;
+  sessionStorage.setItem("team-token", token);
+  load();
+};
+$("join").onclick = async () => {
+  try {
+    const r = await api("/api/team/join", { invite: $("invite").value });
+    token = r.token;
+    sessionStorage.setItem("team-token", token);
+    await load();
+  } catch (e) {
+    error(e);
+  }
+};
+$("logout").onclick = async () => {
+  await api("/api/team/logout", {});
+  sessionStorage.removeItem("team-token");
+  location.reload();
+};
+$("refresh").onclick = load;
+$("repo").onchange = render;
+$("search").oninput = render;
+$("person").onchange = render;
+$("close").onclick = () => $("modal").close();
+$("new").onclick = () => newTask();
+$("who").onclick = async () => {
+  if (state?.who.role === "owner") return;
+  const name = input(state.who.name);
+  show(
+    el("h2", "成员名字"),
+    field("在开发台显示为", name),
+    button(
+      "保存",
+      async () => {
+        await api("/api/team/profile", { name: name.value }, "PATCH");
+        $("modal").close();
+        await load();
+      },
+      "primary",
+    ),
+  );
+};
+$("admin").onclick = () => {
+  const box = el("div");
+  box.append(
+    el(
+      "p",
+      "管理员可以邀请、撤销或恢复成员。请勿把管理员凭证发到群里。",
+      "note",
+    ),
+  );
+  const name = input();
+  box.append(
+    field("邀请的成员名字", name),
+    button("生成 24 小时一次性邀请", async () => {
+      if (!name.value.trim()) throw Error("请填写成员名字");
+      const r = await api("/api/admin/invite", { name: name.value });
+      box.append(el("pre", r.invite));
+    }),
+    el("h3", "成员访问"),
+  );
+  for (const m of state.members) {
+    const row = el("div", undefined, "actions");
+    row.append(
+      el("p", m.name + (m.revoked ? " · 已撤销" : "")),
+      button(m.revoked ? "恢复" : "撤销", async () => {
+        await api("/api/admin/" + (m.revoked ? "restore" : "revoke"), {
+          id: m.id,
+        });
+        $("modal").close();
+        await load();
+      }),
+    );
+    box.append(row);
+  }
+  const connection = el("details");
+  connection.append(
+    el("summary", "QQ 接入维护"),
+    el("p", "回调地址：" + location.origin + "/api/qq/events", "note"),
+    button("生成目标群绑定码", async () => {
+      const r = await api("/api/admin/pair", {});
+      box.append(el("pre", "请群主在目标群发送：/绑定 " + r.code));
+    }),
+  );
+  box.append(connection);
+  show(el("h2", "管理接入"), box);
+};
+if (token || location.hostname === "127.0.0.1") load();
+setInterval(async () => {
+  if (document.hidden || $("app").hidden || $("modal").open || loading) return;
+  try {
+    const p = await api("/api/team/pulse");
+    Object.assign(state.connection, p.connection);
+    renderStatus();
+    if (
+      p.revision !== state.revision ||
+      Date.now() - lastFull > 300000 ||
+      (view === "system" && Date.now() - lastFull > 60000)
+    )
+      await load();
+  } catch (e) {
+    error(e);
+  }
+}, 30000);

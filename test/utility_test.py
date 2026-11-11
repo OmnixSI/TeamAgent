@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 
 
 class UtilityTests(unittest.TestCase):
-    def scenario(self, times_out=False, already_sent=False):
+    def scenario(self, times_out=False, already_sent=False, report_failure=False):
         with tempfile.TemporaryDirectory() as temp:
             home = pathlib.Path(temp)
             h = home / ".inkboard-team"
@@ -22,6 +22,7 @@ class UtilityTests(unittest.TestCase):
                 u = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(u)
             reports = []
+            claims = 0
             job = {
                 "id": "file-test",
                 "payload": {
@@ -33,9 +34,15 @@ class UtilityTests(unittest.TestCase):
             }
 
             def cloud(path, body):
+                nonlocal claims
+                if path in ["inputs", "media/heartbeat"]:
+                    return {"messages": []}
                 if path == "media/claim":
-                    return {"job": job}
+                    claims += 1
+                    return {"job": job if claims == 1 else None}
                 reports.append(body)
+                if report_failure and len(reports) == 1:
+                    raise u.urllib.error.URLError("cloud connection lost")
                 return {"ok": True}
 
             proc = MagicMock()
@@ -79,10 +86,16 @@ class UtilityTests(unittest.TestCase):
                 ).write_text("{}")
             with patch.object(u, "cloud", side_effect=cloud), patch.object(
                 u.subprocess, "Popen", side_effect=spawn
-            ), patch.object(u.os, "killpg") as kill, patch.object(
+            ) as agent, patch.object(u.os, "killpg") as kill, patch.object(
                 pathlib.Path, "home", return_value=home
             ):
-                u.once()
+                if report_failure:
+                    with self.assertRaises(u.urllib.error.URLError):
+                        u.once()
+                    u.once()
+                    self.assertEqual(agent.call_count, 1)
+                else:
+                    u.once()
             return (
                 reports,
                 (
@@ -105,6 +118,12 @@ class UtilityTests(unittest.TestCase):
         self.assertFalse(reports[0]["success"])
         self.assertNotIn("private-command", reports[0]["result"])
         self.assertEqual(files, [])
+
+    def test_cloud_receipt_failure_reuses_completion_without_rerunning_agent(self):
+        reports, files, kills = self.scenario(report_failure=True)
+        self.assertEqual(len(reports), 2)
+        self.assertEqual(len(files), 1)
+        self.assertEqual(kills, 0)
 
     def test_completed_delivery_is_not_enqueued_twice(self):
         reports, files, kills = self.scenario(already_sent=True)

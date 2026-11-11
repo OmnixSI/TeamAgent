@@ -4,3 +4,9 @@ wrangler.toml
 .wrangler/
 __pycache__/
 *.pyc
+node_modules/
+.DS_Store
+*.local.json
+
+runner/sdk/node_modules/
+src/ui.generated.ts

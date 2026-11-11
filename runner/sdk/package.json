@@ -1,0 +1,1 @@
+{"name":"team-agent-qq-runtime","private":true,"type":"module","dependencies":{"@tencent-connect/qqbot-nodejs":"1.0.5"}}

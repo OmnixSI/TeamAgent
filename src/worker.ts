@@ -1,3 +1,5 @@
+import { requestPlan, updateTask, createBoardTask } from "./tasks";
+import { model, activity, redact, promptData } from "./runtime";
 import {
   enqueueVoice,
   messageSequence,
@@ -25,6 +27,7 @@ type Env = {
   QQ_APP_ID?: string;
   QQ_APP_SECRET?: string;
   MODEL?: string;
+  RELEASE?: string;
 };
 const enc = new TextEncoder();
 const iso = () => new Date().toISOString();
@@ -60,6 +63,12 @@ async function identity(r: Request, e: Env) {
   const h = await hash(t);
   if (e.ADMIN_TOKEN && h === (await hash(e.ADMIN_TOKEN)))
     return { id: "owner", role: "owner", name: "群主" };
+  const session = await e.DB.prepare(
+    "SELECT m.id,m.name,m.role FROM member_sessions s JOIN members m ON m.id=s.member_id WHERE s.token_hash=? AND s.expires>? AND m.revoked=0",
+  )
+    .bind(h, Date.now())
+    .first();
+  if (session) return session;
   return e.DB.prepare(
     "SELECT id,name,role FROM members WHERE token_hash=? AND revoked=0",
   )
@@ -150,7 +159,7 @@ async function receive(r: Request, e: Env) {
     return json({ op: 12, d: 0 });
   const m = p.d;
   let group = await setting(e, "group_id");
-  if (!group && m.author?.member_role === "owner") {
+  if (!group) {
     const pair = JSON.parse((await setting(e, "pair")) || "null");
     if (
       pair &&
@@ -160,9 +169,17 @@ async function receive(r: Request, e: Env) {
         .trim() ===
         "/绑定 " + pair.code
     ) {
-      await set(e, "group_id", m.group_openid);
-      await set(e, "pair", "null");
-      group = m.group_openid;
+      const originalPair = await setting(e, "pair");
+      if (originalPair === JSON.stringify(pair))
+        await e.DB.batch([
+          e.DB.prepare(
+            "INSERT INTO settings(key,value) SELECT 'group_id',? WHERE EXISTS(SELECT 1 FROM settings WHERE key='pair' AND value=?) ON CONFLICT(key) DO NOTHING",
+          ).bind(m.group_openid, originalPair),
+          e.DB.prepare(
+            "UPDATE settings SET value='null' WHERE key='pair' AND value=?",
+          ).bind(originalPair),
+        ]);
+      group = await setting(e, "group_id");
     }
   }
   if (!group || m.group_openid !== group) return json({ op: 12, d: 0 });
@@ -192,13 +209,15 @@ async function receive(r: Request, e: Env) {
 
   const mentioned =
     p.t === "GROUP_AT_MESSAGE_CREATE" || m.mentions?.some((x: any) => x.is_you);
-  const text = String(m.content || "")
+  const text = redact(String(m.content || ""))
     .replace(/^\s*<@!?[^>]+>\s*/, "")
     .trim();
   const direct =
     !m.msg_elements?.length && (!m.message_type || m.message_type === 0);
   const c = direct ? command(text) : null;
-  await e.DB.prepare("INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,0)")
+  const inserted = await e.DB.prepare(
+    "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,0) RETURNING id",
+  )
     .bind(
       m.id,
       m.group_openid,
@@ -207,23 +226,25 @@ async function receive(r: Request, e: Env) {
       m.timestamp,
       mentioned ? 1 : 0,
     )
-    .run();
+    .first();
   await e.DB.prepare("INSERT OR IGNORE INTO message_meta VALUES(?,?)")
     .bind(
       m.id,
-      JSON.stringify({
-        direct,
-        attachments: m.attachments || [],
-        senderName: m.author.username || "",
-        forwarded: m.msg_elements || [],
-        card: m.ark_data || null,
-        can_request_artifact: !!text,
-        addressedOther:
-          !mentioned &&
-          (/^\s*<@!?[^>]+>/.test(String(m.content || "")) ||
-            m.mentions?.some((v: any) => !v.is_you)),
-        urls: extractUrls(text),
-      }),
+      JSON.stringify(
+        promptData({
+          direct,
+          attachments: m.attachments || [],
+          senderName: m.author.username || "",
+          forwarded: m.msg_elements || [],
+          card: m.ark_data || null,
+          can_request_artifact: !!text,
+          addressedOther:
+            !mentioned &&
+            (/^\s*<@!?[^>]+>/.test(String(m.content || "")) ||
+              m.mentions?.some((v: any) => !v.is_you)),
+          urls: extractUrls(text),
+        }),
+      ),
     )
     .run();
   // Quoted bot output and old forwarded material are context, never automatic reprocessing triggers.
@@ -254,8 +275,8 @@ async function receive(r: Request, e: Env) {
         Date.now(),
       )
       .run();
-  await set(e, "last_message", iso());
-  if (p.t === "GROUP_MESSAGE_CREATE")
+  if (inserted) await set(e, "last_message", iso());
+  if (inserted && p.t === "GROUP_MESSAGE_CREATE")
     await set(e, "full_message_verified", iso());
   if (c) {
     const id = "qq-" + m.id;
@@ -273,7 +294,15 @@ async function receive(r: Request, e: Env) {
         iso(),
       )
       .run();
-    await job(e, "plan-" + m.id, "plan", { task: id });
+    const task = await e.DB.prepare("SELECT * FROM tasks WHERE id=?")
+      .bind(id)
+      .first();
+    if (
+      !(await e.DB.prepare("SELECT task_id FROM task_plans WHERE task_id=?")
+        .bind(id)
+        .first())
+    )
+      await requestPlan(e, task, String(m.author.member_openid || m.author.id));
     await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
       .bind(
         "ack-" + m.id,
@@ -286,9 +315,17 @@ async function receive(r: Request, e: Env) {
         Date.now(),
       )
       .run();
-  } else if (!text.startsWith("/"))
+  } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text))
     await job(e, "chat-" + m.id, "chat", { message: m.id });
   return json({ op: 12, d: 0 });
+}
+function publicCIUrl(value: string) {
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && u.hostname === "github.com";
+  } catch {
+    return false;
+  }
 }
 async function repoContext(e: Env, repo: string) {
   if (!REPOS.includes(repo)) throw Error("repository not allowed");
@@ -350,13 +387,11 @@ async function llm(
   data: any,
 ) {
   if (!e.DEEPSEEK_API_KEY) throw Error("DeepSeek 未配置");
-  const r = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + e.DEEPSEEK_API_KEY,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  const d: any = await model(
+    e,
+    kind,
+    EFFORT[kind],
+    {
       model: e.MODEL || "deepseek-flash",
       reasoning_effort: EFFORT[kind],
       max_tokens: kind === "chat" ? 8192 : 65536,
@@ -369,11 +404,9 @@ async function llm(
         },
         { role: "user", content: JSON.stringify(data) },
       ],
-    }),
-    signal: AbortSignal.timeout(540000),
-  });
-  if (!r.ok) throw Error("DeepSeek HTTP " + r.status);
-  const d: any = await r.json();
+    },
+    540000,
+  );
   const t = d.choices?.[0]?.message?.content;
   if (!t?.trim() || d.choices[0].finish_reason === "length")
     throw Error(
@@ -405,7 +438,122 @@ async function processJob(e: Env, id: string) {
           .bind(m.id)
           .run();
     }
-    if (claim.kind === "dream") await analyse(e, p, semanticServices(e));
+    if (claim.kind === "dream") {
+      if (p.messageIds?.length)
+        p.messages = (
+          await e.DB.prepare(
+            "SELECT id,group_id,sender,substr(body,1,3000) AS body,ts FROM messages WHERE id IN (" +
+              p.messageIds.map(() => "?").join(",") +
+              ") ORDER BY ts",
+          )
+            .bind(...p.messageIds)
+            .all()
+        ).results;
+      await analyse(e, p, semanticServices(e));
+      if (p.messages?.length)
+        await e.DB.prepare(
+          "UPDATE messages SET processed=1 WHERE id IN (" +
+            p.messages.map(() => "?").join(",") +
+            ")",
+        )
+          .bind(...p.messages.map((m: any) => m.id))
+          .run();
+    }
+    if (claim.kind === "ci_triage") {
+      const cache = await e.DB.prepare(
+        "SELECT json FROM repo_cache WHERE repo=?",
+      )
+        .bind(p.repo)
+        .first();
+      const context = cache ? JSON.parse(cache.json) : null;
+      const text = await llm(
+        e,
+        "chat",
+        "根据实际CI检查和已同步项目资料做一次只读初步排查，最多450字。分清已知错误与可能原因，给最便宜的核实步骤；没有日志时只说明可确认的检查状态，不编造根因。不要说已经修复或主动开发。",
+        { repo: p.repo, check: p.check, context },
+      );
+      const urls = publicCIUrl(p.check.html_url) ? [p.check.html_url] : [];
+      await e.DB.prepare(
+        "INSERT OR IGNORE INTO discoveries(id,repo,title,body,urls,created_at) VALUES(?,?,?,?,?,?)",
+      )
+        .bind(
+          id,
+          p.repo,
+          "CI排查 · " + p.check.name,
+          text,
+          JSON.stringify(urls),
+          iso(),
+        )
+        .run();
+      const group = await setting(e, "group_id");
+      if (group) {
+        const spoken = decodeVoice(
+          await speakBrief(
+            e,
+            {
+              facts: text,
+              sourceUrls: urls,
+              instruction:
+                "CI只读初查结果，群里说关键证据和一步建议，完整内容在开发台。不要声称已修复。",
+            },
+            { intent: "分享CI初查" },
+          ),
+        );
+        if (urls[0] && !spoken.text.includes(urls[0]))
+          spoken.text += "\n" + urls[0];
+        await enqueueVoice(e, id, group, null, JSON.stringify(spoken));
+      }
+      await activity(
+        e,
+        "ci.triaged",
+        p.repo,
+        "Bot",
+        "已根据可用CI证据完成只读初查",
+        id,
+      );
+    }
+    if (claim.kind === "research") {
+      if (p.latestId) {
+        const latest = await e.DB.prepare(
+          "SELECT m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=?",
+        )
+          .bind(p.latestId)
+          .first();
+        if (!latest) throw Error("原始消息不可用");
+        p.latest = { ...latest, meta: JSON.parse(latest.metadata || "{}") };
+        const ids = p.batchIds.slice(0, 60);
+        p.batch = (
+          await e.DB.prepare(
+            "SELECT m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.id IN (" +
+              ids.map(() => "?").join(",") +
+              ") ORDER BY m.rowid",
+          )
+            .bind(latest.group_id, ...ids)
+            .all()
+        ).results.map((m: any) => ({
+          ...m,
+          meta: JSON.parse(m.metadata || "{}"),
+        }));
+        p.recent = (
+          await e.DB.prepare(
+            "SELECT id,sender,substr(body,1,3500) AS body,ts FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 16",
+          )
+            .bind(latest.group_id)
+            .all()
+        ).results.reverse();
+      }
+      const answer = await agentAnswer(e, p);
+      if (decodeVoice(answer).text !== "[[SILENT]]")
+        await enqueueVoice(e, id, p.latest.group_id, p.latest.id, answer);
+      await activity(
+        e,
+        "research.done",
+        id,
+        "Bot",
+        "后台检索已完成",
+        id + "-done",
+      );
+    }
     if (claim.kind === "semantic_reply")
       await proactiveReply(e, p, semanticServices(e));
     if (claim.kind === "links")
@@ -421,7 +569,8 @@ async function processJob(e: Env, id: string) {
           {
             facts: p.result,
             status:
-              "资料已整理，文件已生成并进入发送队列；尚不确定QQ附件发送成功，不可说已收到。正式工作完成通知最多3句。",
+              p.status ||
+              "资料已整理；只报告实际结果，附件是否送达以交付状态为准。正式通知最多3句。",
           },
           { latest: m },
         );
@@ -434,6 +583,7 @@ async function processJob(e: Env, id: string) {
       )
         .bind(p.message)
         .first();
+      if (!m) return;
       const cursor = Number((await setting(e, "chat_cursor")) || 0);
       const newest = await e.DB.prepare(
         "SELECT id FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 1",
@@ -453,26 +603,39 @@ async function processJob(e: Env, id: string) {
           .bind(m.group_id)
           .all()
       ).results.reverse();
-      const meta = await e.DB.prepare(
-        "SELECT json FROM message_meta WHERE id=?",
-      )
-        .bind(m.id)
-        .first();
-      const batch = recent
-        .filter((r: any) => r.ordinal > cursor)
-        .map((r: any) => ({ ...r, meta: JSON.parse(r.metadata || "{}") }));
+      const pendingRows = (
+        await e.DB.prepare(
+          "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.rowid>? ORDER BY m.rowid LIMIT 60",
+        )
+          .bind(m.group_id, cursor)
+          .all()
+      ).results;
+      const batch = pendingRows.map((r: any) => ({
+        ...r,
+        meta: JSON.parse(r.metadata || "{}"),
+      }));
+      if (!batch.length) return;
+      const latest = batch[batch.length - 1];
       const modelStarted = Date.now();
       const answer = await agentAnswer(e, {
         recent,
         batch,
-        latest: { ...m, meta: meta ? JSON.parse(meta.json) : {} },
+        latest,
         mentioned: batch.some((r: any) => r.mentioned),
       });
-      await set(
-        e,
-        "chat_cursor",
-        String(Math.max(cursor, ...batch.map((r: any) => r.ordinal))),
-      );
+      if (decodeVoice(answer).text !== "[[SILENT]]")
+        await enqueueVoice(e, id, latest.group_id, latest.id, answer);
+      const newCursor = Math.max(cursor, ...batch.map((r: any) => r.ordinal));
+      await set(e, "chat_cursor", String(newCursor));
+      const remaining = await e.DB.prepare(
+        "SELECT id FROM messages WHERE group_id=? AND rowid>? ORDER BY rowid DESC LIMIT 1",
+      )
+        .bind(m.group_id, newCursor)
+        .first();
+      if (remaining)
+        await job(e, "chat-drain-" + newCursor, "chat", {
+          message: remaining.id,
+        });
       await set(
         e,
         "last_chat_timing",
@@ -482,13 +645,6 @@ async function processJob(e: Env, id: string) {
           at: iso(),
         }),
       );
-      if (decodeVoice(answer).text === "[[SILENT]]") {
-        await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?")
-          .bind(id)
-          .run();
-        return;
-      }
-      await enqueueVoice(e, id, m.group_id, m.id, answer);
     }
     if (claim.kind === "plan") {
       const t = await e.DB.prepare("SELECT * FROM tasks WHERE id=?")
@@ -504,15 +660,33 @@ async function processJob(e: Env, id: string) {
         ).results;
         const plan = await llm(
           e,
-          "plan",
+          p.effort === "high" ? "chat" : "plan",
           "编写正文不超过1800字、可交给开发者执行的中文方案：目标、讨论依据、现状、实施步骤、涉及代码（未读到的文件不可编造）、依赖、测试验收、未解决问题。",
           { task: t, repository: await repoContext(e, t.repo), facts },
         );
+        await e.DB.prepare(
+          "UPDATE task_plans SET draft=?,updated_at=? WHERE task_id=? AND job_id=?",
+        )
+          .bind(plan, iso(), t.id, id)
+          .run();
         const updated = await e.DB.prepare(
           "UPDATE tasks SET detail=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id",
         )
-          .bind(plan, iso(), t.id, t.version)
+          .bind(plan, iso(), t.id, p.version ?? t.version)
           .first();
+        await e.DB.prepare(
+          "UPDATE task_plans SET state=?,updated_at=? WHERE task_id=? AND job_id=?",
+        )
+          .bind(updated ? "ready" : "conflict", iso(), t.id, id)
+          .run();
+        await activity(
+          e,
+          updated ? "plan.ready" : "plan.conflict",
+          t.id,
+          "Bot",
+          updated ? "方案已保存" : "成员已更新任务，AI方案另存为草稿待核对",
+          id + "-ready",
+        );
         if (updated && t.source_id) {
           const source = await e.DB.prepare(
             "SELECT group_id FROM messages WHERE id=?",
@@ -578,8 +752,35 @@ async function processJob(e: Env, id: string) {
       .bind(id)
       .run();
   } catch (err) {
+    if (claim.kind === "dream" && claim.attempts >= 3) {
+      const payload = JSON.parse(claim.payload);
+      const ids =
+        payload.messageIds || (payload.messages || []).map((m: any) => m.id);
+      if (ids.length)
+        await e.DB.prepare(
+          "UPDATE messages SET processed=-1 WHERE processed=0 AND id IN (" +
+            ids.map(() => "?").join(",") +
+            ")",
+        )
+          .bind(...ids)
+          .run();
+    }
+    if (claim.attempts >= 3)
+      await activity(
+        e,
+        "job.failed",
+        id,
+        "系统",
+        "后台任务未完成，可在运行状态查看并接手",
+        id + "-failed",
+      );
     if (claim.kind === "plan" && claim.attempts >= 3) {
       const task = JSON.parse(claim.payload).task;
+      await e.DB.prepare(
+        "UPDATE task_plans SET state='failed',updated_at=? WHERE task_id=? AND job_id=?",
+      )
+        .bind(iso(), task, id)
+        .run();
       await e.DB.prepare(
         "UPDATE tasks SET status='needs_human',result=?,version=version+1,updated_at=? WHERE id=? AND version=1 AND status IN ('proposal','queued')",
       )
@@ -599,6 +800,7 @@ async function processJob(e: Env, id: string) {
       .run();
   }
 }
+let qqToken: { app: string; value: string; expires: number } | undefined;
 async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   const rows = (
@@ -607,14 +809,28 @@ async function sendOutbox(e: Env) {
     ).all()
   ).results;
   if (!rows.length) return;
-  const tokenR = await fetch("https://api.bot.qq.com/app/getAppAccessToken", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: e.QQ_APP_ID, clientSecret: e.QQ_APP_SECRET }),
-  });
-  if (!tokenR.ok) return;
-  const tok: any = await tokenR.json();
-  if (!tok.access_token) return;
+  if (!qqToken || qqToken.app !== e.QQ_APP_ID || qqToken.expires < Date.now()) {
+    const tokenR = await fetch("https://api.bot.qq.com/app/getAppAccessToken", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        appId: e.QQ_APP_ID,
+        clientSecret: e.QQ_APP_SECRET,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!tokenR.ok) return;
+    const tok: any = await tokenR.json();
+    if (!tok.access_token) return;
+    qqToken = {
+      app: e.QQ_APP_ID,
+      value: tok.access_token,
+      expires:
+        Date.now() + Math.max(30, Number(tok.expires_in || 300) - 60) * 1000,
+    };
+  }
+  const accessToken = qqToken?.value;
+  if (!accessToken) return;
   for (const o of rows) {
     const locked = await e.DB.prepare(
       "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
@@ -622,40 +838,59 @@ async function sendOutbox(e: Env) {
       .bind(o.id)
       .first();
     if (!locked) continue;
+    await e.DB.prepare(
+      "INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)",
+    )
+      .bind(o.id, Date.now())
+      .run();
     try {
-      const r = await fetch(
+      const source = o.msg_id
+        ? await e.DB.prepare("SELECT ts FROM messages WHERE id=?")
+            .bind(o.msg_id)
+            .first()
+        : null;
+      const response = await fetch(
         "https://api.bot.qq.com/v2/groups/" +
           encodeURIComponent(o.group_id) +
           "/messages",
         {
           method: "POST",
           headers: {
-            Authorization: "QQBot " + tok.access_token,
+            Authorization: "QQBot " + accessToken,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             content: o.body.slice(0, 4000),
             msg_type: 0,
             msg_id:
-              o.msg_id &&
-              Date.now() -
-                Date.parse(
-                  (
-                    await e.DB.prepare("SELECT ts FROM messages WHERE id=?")
-                      .bind(o.msg_id)
-                      .first()
-                  )?.ts || "1970-01-01",
-                ) <
-                240000
+              source && Date.now() - Date.parse(source.ts) < 240000
                 ? o.msg_id
                 : undefined,
             msg_seq: messageSequence(o.id),
           }),
+          signal: AbortSignal.timeout(20000),
         },
       );
-      await e.DB.prepare("UPDATE outbox SET status=? WHERE id=?")
-        .bind(r.ok ? "sent" : "failed", o.id)
-        .run();
+      let result: any;
+      try {
+        result = await response.json();
+      } catch {}
+      const status =
+        response.ok && (result?.id || result?.code === 0)
+          ? "sent"
+          : response.status >= 500 || !result
+            ? "unknown"
+            : "failed";
+      await e.DB.batch([
+        e.DB.prepare("UPDATE outbox SET status=? WHERE id=?").bind(
+          status,
+          o.id,
+        ),
+        e.DB.prepare(
+          "UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?",
+        ).bind(response.status, String(result?.code || ""), o.id),
+      ]);
+      if (response.status === 401) qqToken = undefined;
     } catch {
       await e.DB.prepare("UPDATE outbox SET status='unknown' WHERE id=?")
         .bind(o.id)
@@ -663,6 +898,7 @@ async function sendOutbox(e: Env) {
     }
   }
 }
+
 async function scheduled(e: Env) {
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Australia/Sydney",
@@ -702,7 +938,7 @@ async function scheduled(e: Env) {
   ) {
     const rows = (
       await e.DB.prepare(
-        "SELECT * FROM messages WHERE processed=0 ORDER BY ts LIMIT 60",
+        "SELECT id,group_id,ts FROM messages WHERE processed=0 ORDER BY ts LIMIT 60",
       ).all()
     ).results;
     const batches = Number((await setting(e, "dream_batches_" + date)) || 0);
@@ -711,11 +947,13 @@ async function scheduled(e: Env) {
     ).first();
     if (rows.length && batches < 8 && !busy) {
       const key = "dream-" + rows[0].id;
-      await job(e, key, "dream", { messages: rows, dream: true, key, date });
-      for (const m of rows)
-        await e.DB.prepare("UPDATE messages SET processed=1 WHERE id=?")
-          .bind(m.id)
-          .run();
+      await job(e, key, "dream", {
+        messageIds: rows.map((m: any) => m.id),
+        dream: true,
+        key,
+        date,
+      });
+
       await set(e, "dream_batches_" + date, String(batches + 1));
     }
   }
@@ -736,7 +974,49 @@ async function scheduled(e: Env) {
       ).send(j);
     } else await processJob(e, j.id);
   }
+  await e.DB.prepare(
+    "UPDATE jobs SET status='failed',error='执行端未回报，需成员核对' WHERE kind='media' AND status='running' AND attempts>=2 AND lease_until<?",
+  )
+    .bind(Date.now())
+    .run();
+  await e.DB.prepare(
+    "UPDATE outbox SET status='unknown' WHERE status='sending' AND id IN (SELECT id FROM outbox_attempts WHERE started_at<?)",
+  )
+    .bind(Date.now() - 120000)
+    .run();
+  const sampleAt = Math.floor(Date.now() / 300000) * 300000;
+  const gateway = JSON.parse((await setting(e, "qq_gateway")) || "null");
+  const runnerAt = Date.parse((await setting(e, "runner_seen")) || "");
+  const counts = await e.DB.prepare(
+    "SELECT SUM(status IN ('pending','running')) AS pending,SUM(status='failed') AS failed FROM jobs",
+  ).first();
+  await e.DB.prepare("INSERT OR IGNORE INTO health_samples VALUES(?,?,?,?,?)")
+    .bind(
+      sampleAt,
+      gateway?.connected && Date.now() - Date.parse(gateway.at) < 90000 ? 1 : 0,
+      Date.now() - runnerAt < 90000 ? 1 : 0,
+      counts.pending || 0,
+      counts.failed || 0,
+    )
+    .run();
+  await e.DB.prepare("DELETE FROM health_samples WHERE at<?")
+    .bind(Date.now() - 7 * 86400000)
+    .run();
+  await e.DB.prepare("DELETE FROM model_usage WHERE hour<?")
+    .bind(Date.now() - 30 * 86400000)
+    .run();
+  await e.DB.prepare("DELETE FROM model_runs WHERE created_at<?")
+    .bind(Date.now() - 30 * 86400000)
+    .run();
+  await e.DB.prepare(
+    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout') AND created_at<?",
+  )
+    .bind(Date.now() - 7 * 86400000)
+    .run();
   await sendOutbox(e);
+  await e.DB.prepare("DELETE FROM member_sessions WHERE expires<?")
+    .bind(Date.now())
+    .run();
   await e.DB.prepare("DELETE FROM login_tickets WHERE expires<?")
     .bind(Date.now() - 86400000)
     .run();
@@ -804,13 +1084,32 @@ async function api(r: Request, e: Env) {
     if (!claimed) return json({ error: "已领取" }, 409);
     const token = crypto.randomUUID() + crypto.randomUUID();
     await e.DB.prepare(
-      "INSERT INTO members(id,name,token_hash) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash",
+      "INSERT INTO members(id,name,token_hash) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
     )
-      .bind(ticket.member_id, ticket.name, await hash(token))
+      .bind(
+        ticket.member_id,
+        ticket.name,
+        await hash(crypto.randomUUID() + crypto.randomUUID()),
+      )
+      .run();
+    await e.DB.prepare("INSERT INTO member_sessions VALUES(?,?,?,?)")
+      .bind(
+        await hash(token),
+        ticket.member_id,
+        Date.now(),
+        Date.now() + 30 * 86400000,
+      )
       .run();
     return json({ token });
   }
-  if (path === "/health") return json({ ok: true, service: "inkboard-team" });
+  if (path === "/api/team/guide" && method === "GET")
+    return json({ guide: GUIDE });
+  if (path === "/health")
+    return json({
+      ok: true,
+      service: "team-agent",
+      release: e.RELEASE || "development",
+    });
   if (path === "/api/qq/events" && method === "POST") return receive(r, e);
   if (path === "/api/team/join" && method === "POST") {
     const b: any = await r.json();
@@ -835,12 +1134,25 @@ async function api(r: Request, e: Env) {
       await set(
         e,
         "qq_gateway",
-        JSON.stringify({ at: iso(), connected: b.connected === true }),
+        JSON.stringify({
+          at: iso(),
+          connected: b.connected === true,
+          blocked: String(b.blocked || "").slice(0, 150),
+        }),
       );
       return json({ ok: true });
     }
     if (path.endsWith("/delivery-target") && method === "POST") {
       const b: any = await r.json();
+      if (b.delivery) {
+        const d = await e.DB.prepare(
+          "SELECT d.status,j.status AS job_status FROM deliveries d JOIN jobs j ON j.id=d.job_id WHERE d.id=? AND d.message_id=?",
+        )
+          .bind(b.delivery, b.message)
+          .first();
+        if (!d || d.status !== "pending" || d.job_status !== "done")
+          return json({ error: "delivery not active" }, 409);
+      }
       const m = await e.DB.prepare(
         "SELECT group_id,id,ts FROM messages WHERE id=?",
       )
@@ -849,6 +1161,79 @@ async function api(r: Request, e: Env) {
       if (!m || m.group_id !== (await setting(e, "group_id")))
         return json({ error: "unknown target" }, 404);
       return json(m);
+    }
+    if (path.endsWith("/inputs") && method === "POST") {
+      const b: any = await r.json(),
+        ids = Array.isArray(b.ids) ? b.ids.slice(0, 8).map(String) : [];
+      if (!ids.length) return json({ messages: [] });
+      const rows = (
+        await e.DB.prepare(
+          "SELECT m.id,m.sender,m.body,m.ts,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.id IN (" +
+            ids.map(() => "?").join(",") +
+            ") ORDER BY m.rowid",
+        )
+          .bind(await setting(e, "group_id"), ...ids)
+          .all()
+      ).results;
+      return json({
+        messages: rows.map((m: any) => ({
+          ...m,
+          metadata: JSON.parse(m.metadata || "{}"),
+        })),
+      });
+    }
+    if (path.endsWith("/delivery/report") && method === "POST") {
+      const b: any = await r.json();
+      if (!["sent", "failed", "unknown"].includes(b.status))
+        return json({ error: "invalid status" }, 400);
+      const d = await e.DB.prepare("SELECT * FROM deliveries WHERE id=?")
+        .bind(b.id)
+        .first();
+      if (!d) return json({ error: "unknown delivery" }, 404);
+      if (["sent", "failed", "unknown"].includes(d.status))
+        return json({ ok: true, already: true });
+      const count = Math.min(
+        JSON.parse(d.files).length,
+        Math.max(0, Number(b.sent_count) || 0),
+      );
+      if (b.status === "sent" && count !== JSON.parse(d.files).length)
+        return json({ error: "附件数量未匹配" }, 400);
+      const updated = await e.DB.prepare(
+        "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
+      )
+        .bind(b.status, count, iso(), b.id)
+        .first();
+      if (updated) {
+        await activity(
+          e,
+          "delivery." + b.status,
+          d.job_id,
+          "QQ网关",
+          b.status === "sent"
+            ? "QQ 已确认发送全部附件"
+            : b.status === "unknown"
+              ? "发送结果不明，保留成果供人工核对；不自动重发"
+              : "附件发送失败，保留成果供接手",
+          b.id + "-result",
+        );
+        const message = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
+          .bind(d.message_id)
+          .first();
+        if (message)
+          await job(e, "delivery-notice-" + b.id, "voice_notice", {
+            message: message.id,
+            status:
+              b.status === "sent"
+                ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
+                : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
+            result: {
+              files: JSON.parse(d.files),
+              sent_count: count,
+              status: b.status,
+            },
+          });
+      }
+      return json({ ok: true });
     }
     if (path.endsWith("/media/claim") && method === "POST") {
       const b: any = await r.json();
@@ -868,8 +1253,28 @@ async function api(r: Request, e: Env) {
         job: row ? { ...row, payload: JSON.parse(row.payload) } : null,
       });
     }
+    if (path.endsWith("/media/heartbeat") && method === "POST") {
+      const b: any = await r.json();
+      const row = await e.DB.prepare(
+        "UPDATE jobs SET lease_until=? WHERE id=? AND kind='media' AND status='running' AND json_extract(payload,'$.lease')=? AND lease_until>? RETURNING id",
+      )
+        .bind(Date.now() + 900000, b.id, b.lease, Date.now())
+        .first();
+      return json({ ok: !!row }, row ? 200 : 409);
+    }
     if (path.endsWith("/media/report") && method === "POST") {
       const b: any = await r.json();
+      const existing = await e.DB.prepare(
+        "SELECT status,payload FROM jobs WHERE id=? AND kind='media'",
+      )
+        .bind(b.id)
+        .first();
+      if (
+        existing?.status === "done" &&
+        b.success !== false &&
+        JSON.parse(existing.payload).lease === b.lease
+      )
+        return json({ ok: true, already: true });
       const done = await e.DB.prepare(
         "UPDATE jobs SET status=? WHERE id=? AND kind='media' AND status='running' AND json_extract(payload,'$.lease')=? RETURNING payload",
       )
@@ -880,7 +1285,44 @@ async function api(r: Request, e: Env) {
         m = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
           .bind(p.message)
           .first();
-      const rawBody = String(b.result);
+      const files = (Array.isArray(b.files) ? b.files : [])
+        .slice(0, 5)
+        .filter(
+          (f: any) =>
+            typeof f.name === "string" &&
+            Number.isFinite(f.bytes) &&
+            f.bytes >= 0 &&
+            f.bytes <= 50 * 1024 * 1024,
+        )
+        .map((f: any) => ({
+          name: redact(f.name.replace(/[\\/]/g, "_")).slice(0, 150),
+          bytes: f.bytes,
+        }));
+      if (files.length && b.success !== false)
+        await e.DB.prepare(
+          "INSERT OR IGNORE INTO deliveries VALUES(?,?,?,'pending',?,0,?)",
+        )
+          .bind(
+            "delivery-" + b.id,
+            b.id,
+            p.message,
+            JSON.stringify(files),
+            iso(),
+          )
+          .run();
+      await activity(
+        e,
+        b.success === false ? "utility.failed" : "utility.done",
+        b.id,
+        "资料助手",
+        b.success === false
+          ? "资料处理未完成，保留输入供接手"
+          : files.length
+            ? "已生成 " + files.length + " 个文件，等待QQ交付"
+            : "资料分析已完成",
+        b.id + "-processing",
+      );
+      const rawBody = redact(String(b.result));
       const body =
         /timed out|Traceback|\/Users\/|Command \[|--permission-mode/.test(
           rawBody,
@@ -899,7 +1341,7 @@ async function api(r: Request, e: Env) {
             m.id,
             JSON.stringify({ mode: "work", text: body }),
           );
-        else
+        else if (!files.length)
           await job(e, "media-result-" + p.message, "voice_notice", {
             message: p.message,
             result: body.slice(0, 8000),
@@ -918,33 +1360,72 @@ async function api(r: Request, e: Env) {
           ? b.context.checks
           : []) {
           if (
-            ["failure", "timed_out", "action_required"].includes(
+            !["failure", "timed_out", "action_required"].includes(
               check.conclusion,
             )
           )
-            await e.DB.prepare(
-              "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)",
+            continue;
+          const key = "ci-" + b.repo + "-" + check.id + "-" + check.head_sha;
+          const fresh = await e.DB.prepare(
+            "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?) RETURNING id",
+          )
+            .bind(
+              key,
+              group,
+              null,
+              b.repo +
+                " 的 " +
+                check.name +
+                " 检查未通过。我先根据现有证据做个初查：" +
+                check.html_url,
+              "pending",
+              Date.now(),
             )
-              .bind(
-                "ci-" + b.repo + "-" + check.id + "-" + check.head_sha,
-                group,
-                null,
-                b.repo +
-                  " 的 " +
-                  check.name +
-                  " 检查未通过（" +
-                  check.conclusion +
-                  "）。我可以先查问题，也可以大家一起看：" +
-                  check.html_url,
-                "pending",
-                Date.now(),
-              )
-              .run();
+            .first();
+          if (fresh)
+            await job(e, key + "-triage", "ci_triage", {
+              repo: b.repo,
+              check: promptData(check),
+            });
         }
+      const old = await e.DB.prepare(
+        "SELECT json,updated_at FROM repo_cache WHERE repo=?",
+      )
+        .bind(b.repo)
+        .first();
+      const previous = old ? JSON.parse(old.json) : {};
+      const merged = promptData(b.context);
+      merged.stale_sections = {};
+      for (const key of [
+        "metadata",
+        "readme",
+        "issues",
+        "pulls",
+        "head",
+        "checks",
+      ]) {
+        if (
+          merged[key]?.unavailable &&
+          previous[key] &&
+          !previous[key].unavailable
+        ) {
+          merged[key] = previous[key];
+          merged.stale_sections[key] =
+            previous.stale_sections?.[key] || old.updated_at;
+        }
+      }
+      for (const file of merged.file_errors || []) {
+        if (previous.files?.[file]) {
+          merged.files ||= {};
+          merged.files[file] = previous.files[file];
+          merged.stale_sections[file] =
+            previous.stale_sections?.[file] || old.updated_at;
+        }
+      }
       await e.DB.prepare(
         "INSERT INTO repo_cache VALUES(?,?,?) ON CONFLICT(repo) DO UPDATE SET json=excluded.json,updated_at=excluded.updated_at",
       )
-        .bind(b.repo, JSON.stringify(b.context), Date.now())
+        .bind(b.repo, JSON.stringify(merged), Date.now())
         .run();
       return json({ ok: true });
     }
@@ -952,7 +1433,7 @@ async function api(r: Request, e: Env) {
       await set(e, "runner_seen", iso());
       const lease = crypto.randomUUID();
       const t = await e.DB.prepare(
-        "UPDATE tasks SET status='running',lease=?,lease_until=?,version=version+1,updated_at=? WHERE id=(SELECT id FROM tasks WHERE status='queued' AND (source_id IS NULL OR EXISTS(SELECT 1 FROM jobs WHERE jobs.id='plan-'||substr(tasks.id,4) AND jobs.status='done')) ORDER BY created_at LIMIT 1) RETURNING *",
+        "UPDATE tasks SET status='running',lease=?,lease_until=?,version=version+1,updated_at=? WHERE id=(SELECT id FROM tasks WHERE status='queued' AND NOT EXISTS(SELECT 1 FROM task_plans WHERE task_id=tasks.id AND state!='ready') AND (source_id IS NULL OR EXISTS(SELECT 1 FROM task_plans WHERE task_id=tasks.id AND state='ready')) ORDER BY created_at LIMIT 1) RETURNING *",
       )
         .bind(lease, Date.now() + 120000, iso())
         .first();
@@ -962,9 +1443,9 @@ async function api(r: Request, e: Env) {
     if (path.endsWith("/heartbeat")) {
       await set(e, "runner_seen", iso());
       const row = await e.DB.prepare(
-        "UPDATE tasks SET lease_until=? WHERE id=? AND lease=? AND status='running' AND version=? RETURNING id",
+        "UPDATE tasks SET lease_until=? WHERE id=? AND lease=? AND status='running' AND version=? AND lease_until>? RETURNING id",
       )
-        .bind(Date.now() + 120000, b.id, b.lease, b.version)
+        .bind(Date.now() + 120000, b.id, b.lease, b.version, Date.now())
         .first();
       return json({ ok: !!row }, row ? 200 : 409);
     }
@@ -972,7 +1453,7 @@ async function api(r: Request, e: Env) {
       if (!["needs_human", "ready_for_review", "failed"].includes(b.status))
         return json({ error: "invalid status" }, 400);
       const row = await e.DB.prepare(
-        "UPDATE tasks SET status=?,result=?,version=version+1,updated_at=?,lease=NULL WHERE id=? AND lease=? AND status='running' AND version=? RETURNING id",
+        "UPDATE tasks SET status=?,result=?,version=version+1,updated_at=?,lease=NULL WHERE id=? AND lease=? AND status='running' AND version=? AND lease_until>? RETURNING id",
       )
         .bind(
           b.status,
@@ -981,14 +1462,72 @@ async function api(r: Request, e: Env) {
           b.id,
           b.lease,
           b.version,
+          Date.now(),
         )
         .first();
+      if (row) {
+        await activity(
+          e,
+          "execution." + b.status,
+          b.id,
+          "开发执行端",
+          "执行结果：" + b.status,
+          b.id + "-result-v" + b.version,
+        );
+        const t = await e.DB.prepare(
+          "SELECT title,source_id,repo FROM tasks WHERE id=?",
+        )
+          .bind(b.id)
+          .first();
+        if (t?.source_id)
+          await job(
+            e,
+            "task-notice-" + b.id + "-v" + b.version,
+            "voice_notice",
+            {
+              message: t.source_id,
+              status:
+                "代码任务结果。只报告状态和看板入口，不输出本机路径或命令。",
+              result: {
+                title: t.title,
+                repo: t.repo,
+                status: b.status,
+                board: "https://inkboard-team.inkboard-server.workers.dev",
+              },
+            },
+          );
+      }
       return json({ ok: !!row }, row ? 200 : 409);
     }
     return json({ error: "not found" }, 404);
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (path === "/api/team/profile" && method === "PATCH") {
+    const b: any = await r.json();
+    const name = String(b.name || "")
+      .trim()
+      .slice(0, 40);
+    if (who.id === "owner" || !name)
+      return json({ error: "成员名字不能为空" }, 400);
+    await e.DB.prepare("UPDATE members SET name=? WHERE id=?")
+      .bind(name, who.id)
+      .run();
+    return json({ ok: true });
+  }
+  if (path === "/api/team/logout" && method === "POST") {
+    const token = r.headers.get("Authorization")?.replace(/^Bearer /, "") || "";
+    await e.DB.prepare("DELETE FROM member_sessions WHERE token_hash=?")
+      .bind(await hash(token))
+      .run();
+    await e.DB.prepare("UPDATE members SET token_hash=? WHERE token_hash=?")
+      .bind(
+        await hash(crypto.randomUUID() + crypto.randomUUID()),
+        await hash(token),
+      )
+      .run();
+    return json({ ok: true });
+  }
   if (path === "/api/team/expression" && method === "PATCH") {
     const b: any = await r.json();
     await e.DB.prepare("UPDATE expressions SET enabled=? WHERE phrase=?")
@@ -997,11 +1536,182 @@ async function api(r: Request, e: Env) {
     return json({ ok: true });
   }
   if (path === "/api/team/guide") return json({ guide: GUIDE });
+  if (path === "/api/team/pulse") {
+    const rows = (
+      await e.DB.prepare(
+        "SELECT key,value FROM settings WHERE key IN ('last_message','runner_seen','qq_gateway','last_chat_timing')",
+      ).all()
+    ).results;
+    const values = Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+    return json({
+      revision:
+        (
+          await e.DB.prepare(
+            "SELECT id FROM activity ORDER BY created_at DESC,rowid DESC LIMIT 1",
+          ).first()
+        )?.id || "initial",
+      connection: {
+        lastMessage: values.last_message,
+        runnerSeen: values.runner_seen,
+        gateway: JSON.parse(values.qq_gateway || "null"),
+        chatTiming: JSON.parse(values.last_chat_timing || "null"),
+      },
+    });
+  }
+  if (path === "/api/team/project") {
+    const repo = u.searchParams.get("repo");
+    if (!REPOS.includes(repo || "")) return json({ error: "未知项目" }, 400);
+    const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
+      .bind(repo)
+      .first();
+    return json(
+      cached
+        ? {
+            repo,
+            updated_at: cached.updated_at,
+            context: JSON.parse(cached.json),
+          }
+        : { repo, context: {} },
+    );
+  }
+  if (path === "/api/team/fact/history") {
+    const fact = await e.DB.prepare("SELECT * FROM facts WHERE id=?")
+      .bind(u.searchParams.get("id"))
+      .first();
+    if (!fact) return json({ error: "记忆不存在" }, 404);
+    const facts = (
+      await e.DB.prepare(
+        "SELECT * FROM facts WHERE repo=? AND subject=? AND predicate=? ORDER BY valid_from DESC LIMIT 20",
+      )
+        .bind(fact.repo, fact.subject, fact.predicate)
+        .all()
+    ).results;
+    return json({ facts });
+  }
+  if (path === "/api/team/sources" && method === "POST") {
+    const b: any = await r.json(),
+      ids = Array.isArray(b.ids) ? b.ids.slice(0, 60).map(String) : [];
+    if (!ids.length) return json({ messages: [] });
+    const messages = (
+      await e.DB.prepare(
+        "SELECT m.id,substr(m.body,1,3000) AS body,length(m.body)>3000 AS truncated,m.ts,m.sender,json_extract(mm.json,'$.senderName') AS name FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.id IN (" +
+          ids.map(() => "?").join(",") +
+          ") ORDER BY m.rowid",
+      )
+        .bind(await setting(e, "group_id"), ...ids)
+        .all()
+    ).results;
+    return json({ messages });
+  }
+  if (path === "/api/team/source") {
+    const source = await e.DB.prepare(
+      "SELECT m.id,m.body,m.ts,m.sender,json_extract(mm.json,'$.senderName') AS name FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=?",
+    )
+      .bind(u.searchParams.get("id"))
+      .first();
+    return source ? json(source) : json({ error: "来源不存在或已删除" }, 404);
+  }
+  if (path === "/api/team/task" && method === "GET") {
+    const task = await e.DB.prepare("SELECT * FROM tasks WHERE id=?")
+      .bind(u.searchParams.get("id"))
+      .first();
+    if (!task) return json({ error: "任务不存在" }, 404);
+    const plan = await e.DB.prepare(
+      "SELECT state,draft FROM task_plans WHERE task_id=?",
+    )
+      .bind(task.id)
+      .first();
+    const events = (
+      await e.DB.prepare(
+        "SELECT * FROM activity WHERE entity=? ORDER BY created_at DESC LIMIT 30",
+      )
+        .bind(task.id)
+        .all()
+    ).results;
+    const cache = await e.DB.prepare("SELECT json FROM repo_cache WHERE repo=?")
+      .bind(task.repo)
+      .first();
+    const repository = cache ? JSON.parse(cache.json) : null;
+    return json({
+      task,
+      plan,
+      events,
+      repository: { head: repository?.head, metadata: repository?.metadata },
+    });
+  }
+  if (path === "/api/team/utility" && method === "GET") {
+    const task = await e.DB.prepare(
+      "SELECT j.id,j.status,j.payload,n.body AS result FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') WHERE j.id=? AND j.kind='media'",
+    )
+      .bind(u.searchParams.get("id"))
+      .first();
+    if (!task) return json({ error: "资料任务不存在" }, 404);
+    const payload = JSON.parse(task.payload);
+    const delivery = await e.DB.prepare(
+      "SELECT * FROM deliveries WHERE job_id=?",
+    )
+      .bind(task.id)
+      .first();
+    return json({
+      id: task.id,
+      status: task.status,
+      title: payload.title,
+      instructions: payload.instructions,
+      source_id: payload.message,
+      result: task.result,
+      delivery,
+    });
+  }
+  if (path === "/api/team/utility" && method === "PATCH") {
+    const b: any = await r.json();
+    if (b.action !== "cancel") return json({ error: "操作无效" }, 400);
+    const row = await e.DB.prepare(
+      "UPDATE jobs SET status='cancelled' WHERE id=? AND kind='media' AND status IN ('pending','running') RETURNING id",
+    )
+      .bind(b.id)
+      .first();
+    if (row)
+      await activity(
+        e,
+        "utility.cancelled",
+        b.id,
+        who.name,
+        "停止资料处理，保留现有输入和成果",
+      );
+    return json({ ok: !!row }, row ? 200 : 409);
+  }
+  if (path === "/api/team/discovery" && method === "PATCH") {
+    const b: any = await r.json();
+    if (!["saved", "dismissed"].includes(b.status))
+      return json({ error: "状态无效" }, 400);
+    await e.DB.prepare("UPDATE discoveries SET status=? WHERE id=?")
+      .bind(b.status, b.id)
+      .run();
+    return json({ ok: true });
+  }
+  if (path === "/api/team/ops") {
+    const failures = (
+      await e.DB.prepare(
+        "SELECT id,kind,status,attempts,created_at FROM jobs WHERE status IN ('failed','running','pending') AND kind!='chat' ORDER BY created_at DESC LIMIT 30",
+      ).all()
+    ).results;
+    const deliveries = (
+      await e.DB.prepare(
+        "SELECT id,job_id,status,files,sent_count,updated_at FROM deliveries WHERE status!='sent' ORDER BY updated_at DESC LIMIT 20",
+      ).all()
+    ).results;
+    const notices = (
+      await e.DB.prepare(
+        "SELECT o.id,o.status,o.created_at,a.http_status,a.code FROM outbox o LEFT JOIN outbox_attempts a ON a.id=o.id WHERE o.status IN ('failed','unknown','sending') ORDER BY o.created_at DESC LIMIT 20",
+      ).all()
+    ).results;
+    return json({ failures, deliveries, notices });
+  }
   if (path === "/api/team/state") {
     const [tasks, facts, members, dreams, expressions, utilities] =
       await Promise.all([
         e.DB.prepare(
-          "SELECT id,repo,title,detail,status,version,assignee,result,source_id,created_at,updated_at FROM tasks ORDER BY updated_at DESC LIMIT 100",
+          "SELECT t.id,t.repo,t.title,substr(t.detail,1,280) AS detail,t.status,t.version,t.assignee,substr(t.result,1,200) AS result,t.source_id,t.created_at,t.updated_at,p.state AS plan_state FROM tasks t LEFT JOIN task_plans p ON p.task_id=t.id ORDER BY t.updated_at DESC LIMIT 200",
         ).all(),
         e.DB.prepare(
           "SELECT * FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 100",
@@ -1014,11 +1724,63 @@ async function api(r: Request, e: Env) {
           "SELECT * FROM expressions ORDER BY updated_at DESC LIMIT 40",
         ).all(),
         e.DB.prepare(
-          "SELECT j.id,json_extract(j.payload,'$.title') AS title,j.status,n.body AS result,n.created_at FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') WHERE j.kind='media' ORDER BY j.created_at DESC LIMIT 20",
+          "SELECT j.id,json_extract(j.payload,'$.title') AS title,j.status,substr(n.body,1,200) AS result,n.created_at,d.status AS delivery_status,d.sent_count,d.files FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') LEFT JOIN deliveries d ON d.job_id=j.id WHERE j.kind='media' ORDER BY j.created_at DESC LIMIT 20",
         ).all(),
       ]);
     return json({
       who,
+      revision:
+        (
+          await e.DB.prepare(
+            "SELECT id FROM activity ORDER BY created_at DESC,rowid DESC LIMIT 1",
+          ).first()
+        )?.id || "initial",
+      project: {
+        repository: "https://github.com/OmnixSI/TeamAgent",
+        name: "TeamAgent",
+        version: e.RELEASE || "development",
+      },
+      projects: (
+        await e.DB.prepare(
+          "SELECT repo,updated_at,json_extract(json,'$.checks') AS checks,json_extract(json,'$.stale_sections') AS stale_sections FROM repo_cache ORDER BY repo",
+        ).all()
+      ).results,
+      activity: (
+        await e.DB.prepare(
+          "SELECT * FROM activity ORDER BY created_at DESC LIMIT 40",
+        ).all()
+      ).results,
+      discoveries: (
+        await e.DB.prepare(
+          "SELECT * FROM discoveries ORDER BY created_at DESC LIMIT 30",
+        ).all()
+      ).results,
+      ops: u.searchParams.has("metrics")
+        ? {
+            queues: (
+              await e.DB.prepare(
+                "SELECT kind,status,COUNT(*) AS n FROM jobs WHERE status IN ('pending','running','failed') GROUP BY kind,status",
+              ).all()
+            ).results,
+            models: (
+              await e.DB.prepare(
+                "SELECT kind,effort,status,SUM(n) AS n,SUM(input_tokens) AS input_tokens,SUM(output_tokens) AS output_tokens,ROUND(SUM(duration_ms)*1.0/SUM(n)) AS duration_ms FROM model_usage WHERE hour>=? GROUP BY kind,effort,status",
+              )
+                .bind(Math.floor(Date.now() / 3600000) * 3600000 - 23 * 3600000)
+                .all()
+            ).results,
+            samples: (
+              await e.DB.prepare(
+                "SELECT * FROM health_samples ORDER BY at DESC LIMIT 288",
+              ).all()
+            ).results,
+            memory: (
+              await e.DB.prepare(
+                "SELECT processed,COUNT(*) AS n FROM messages GROUP BY processed",
+              ).all()
+            ).results,
+          }
+        : null,
       identity: {
         note:
           (await setting(e, "self_note")) ||
@@ -1055,6 +1817,49 @@ async function api(r: Request, e: Env) {
   if (path.startsWith("/api/admin/")) {
     if (who.role !== "owner") return json({ error: "owner only" }, 403);
     const b: any = await r.json();
+    if (path.endsWith("/retry-job")) {
+      const j = await e.DB.prepare(
+        "SELECT * FROM jobs WHERE id=? AND status='failed'",
+      )
+        .bind(b.id)
+        .first();
+      if (!j || !["plan", "research", "dream"].includes(j.kind))
+        return json(
+          {
+            error:
+              "仅可重试失败的方案、检索和夜间整理；代码与发送结果需人工核对",
+          },
+          409,
+        );
+      const payload = JSON.parse(j.payload);
+      if (j.kind === "plan") {
+        const t = await e.DB.prepare("SELECT * FROM tasks WHERE id=?")
+          .bind(payload.task)
+          .first();
+        if (!t || t.version !== payload.version)
+          return json({ error: "任务版本已变更，请在任务内重新生成方案" }, 409);
+      }
+      await e.DB.prepare(
+        "UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL WHERE id=? AND status='failed'",
+      )
+        .bind(j.id)
+        .run();
+      if (j.kind === "dream") {
+        const ids =
+          payload.messageIds || (payload.messages || []).map((m: any) => m.id);
+        if (ids.length)
+          await e.DB.prepare(
+            "UPDATE messages SET processed=0 WHERE processed=-1 AND id IN (" +
+              ids.map(() => "?").join(",") +
+              ")",
+          )
+            .bind(...ids)
+            .run();
+      }
+      if (e.WORK) await e.WORK.send({ id: j.id });
+      await activity(e, "job.retried", j.id, who.name, "人工重试失败任务");
+      return json({ ok: true });
+    }
     if (path.endsWith("/announce")) {
       const group = await setting(e, "group_id");
       if (!group) return json({ error: "group unbound" }, 409);
@@ -1110,7 +1915,24 @@ async function api(r: Request, e: Env) {
         .run();
       return json({ invite: token });
     }
+    if (path.endsWith("/restore")) {
+      await e.DB.prepare("UPDATE members SET revoked=0 WHERE id=?")
+        .bind(b.id)
+        .run();
+      await activity(
+        e,
+        "member.restored",
+        b.id,
+        who.name,
+        "恢复成员，可重新用QQ群登录",
+      );
+      return json({ ok: true });
+    }
     if (path.endsWith("/revoke")) {
+      await e.DB.prepare("DELETE FROM member_sessions WHERE member_id=?")
+        .bind(b.id)
+        .run();
+      await activity(e, "member.revoked", b.id, who.name, "撤销成员的所有会话");
       await e.DB.prepare("UPDATE members SET revoked=1 WHERE id=?")
         .bind(b.id)
         .run();
@@ -1124,72 +1946,71 @@ async function api(r: Request, e: Env) {
     }
   }
   if (path === "/api/team/task" && method === "POST") {
-    const b: any = await r.json();
-    if (!REPOS.includes(b.repo) || !String(b.title || "").trim())
-      return json({ error: "仓库或标题无效" }, 400);
-    const id = crypto.randomUUID();
-    await e.DB.prepare(
-      "INSERT INTO tasks(id,repo,title,detail,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-    )
-      .bind(
-        id,
-        b.repo,
-        String(b.title).slice(0, 500),
-        String(b.detail || b.title).slice(0, 20000),
-        "proposal",
-        iso(),
-        iso(),
-      )
-      .run();
-    return json({ id });
+    const id = await createBoardTask(e, await r.json(), who);
+    return id ? json({ id }) : json({ error: "仓库或任务目标无效" }, 400);
   }
   if (path === "/api/team/task" && method === "PATCH") {
-    const b: any = await r.json();
-    if (!validStatus(b.status)) return json({ error: "invalid status" }, 400);
-    const row = await e.DB.prepare(
-      "UPDATE tasks SET status=?,assignee=?,result=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id",
-    )
-      .bind(
-        b.status,
-        who.name,
-        String(b.result || "").slice(0, 60000),
-        iso(),
-        b.id,
-        b.version,
-      )
-      .first();
-    return json({ ok: !!row }, row ? 200 : 409);
+    const result = await updateTask(e, await r.json(), who);
+    return json(result, result.status || 200);
   }
-  if (path === "/api/team/fact" && method === "DELETE") {
-    const b: any = await r.json();
-    await e.DB.prepare("DELETE FROM facts WHERE id=?").bind(b.id).run();
-    return json({ ok: true });
-  }
-  if (path === "/api/team/fact" && method === "PATCH") {
+  if (path === "/api/team/fact" && ["DELETE", "PATCH"].includes(method)) {
     const b: any = await r.json();
     const old = await e.DB.prepare(
       "SELECT * FROM facts WHERE id=? AND valid_to IS NULL",
     )
       .bind(b.id)
       .first();
-    if (!old) return json({ error: "事实已变更" }, 409);
-    const now = iso();
-    await e.DB.batch([
-      e.DB.prepare(
-        "UPDATE facts SET valid_to=? WHERE id=? AND valid_to IS NULL",
-      ).bind(now, b.id),
-      e.DB.prepare("INSERT INTO facts VALUES(?,?,?,?,?,?,?,?,?,NULL)").bind(
-        crypto.randomUUID(),
-        old.repo,
-        old.subject,
-        old.predicate,
-        String(b.value).slice(0, 2000),
-        old.evidence,
-        old.source_id,
-        "confirmed",
-        now,
-      ),
-    ]);
+    if (!old) return json({ error: "记忆已经变更，请刷新" }, 409);
+    if (method === "DELETE") {
+      await e.DB.batch([
+        e.DB.prepare("INSERT OR IGNORE INTO memory_blocks VALUES(?,?,?)").bind(
+          old.source_id,
+          old.subject,
+          old.predicate,
+        ),
+        e.DB.prepare("DELETE FROM facts WHERE id=?").bind(old.id),
+      ]);
+      await activity(
+        e,
+        "memory.deleted",
+        old.id,
+        who.name,
+        "已删除记忆；同一原话不会被夜间再次提取",
+      );
+    } else {
+      const value = redact(String(b.value || "")).trim();
+      if (!value) return json({ error: "修正内容不能为空" }, 400);
+      const at = iso(),
+        id = crypto.randomUUID();
+      const changes = await e.DB.batch([
+        e.DB.prepare(
+          "INSERT INTO facts SELECT ?,repo,subject,predicate,?,?,?,'confirmed',?,NULL FROM facts WHERE id=? AND valid_to IS NULL",
+        ).bind(
+          id,
+          value.slice(0, 2000),
+          "成员 " + who.name + " 在开发台修正",
+          "member:" + who.id,
+          at,
+          old.id,
+        ),
+        e.DB.prepare(
+          "UPDATE facts SET valid_to=? WHERE id=? AND valid_to IS NULL",
+        ).bind(at, old.id),
+      ]);
+      if (
+        !(await e.DB.prepare("SELECT id FROM facts WHERE id=?")
+          .bind(id)
+          .first())
+      )
+        return json({ error: "记忆已经变更" }, 409);
+      await activity(
+        e,
+        "memory.corrected",
+        id,
+        who.name,
+        "在开发台修正记忆，旧版本已关闭",
+      );
+    }
     return json({ ok: true });
   }
   return json({ error: "not found" }, 404);
@@ -1197,6 +2018,28 @@ async function api(r: Request, e: Env) {
 export default {
   async fetch(r: Request, e: Env) {
     try {
+      if (r.body && !["GET", "HEAD"].includes(r.method)) {
+        const reader = r.body.getReader(),
+          chunks: Uint8Array[] = [];
+        let size = 0;
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > 262144) {
+            await reader.cancel();
+            return json({ error: "body too large" }, 413);
+          }
+          chunks.push(next.value);
+        }
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        r = new Request(r, { body: bytes });
+      }
       return await api(r, e);
     } catch {
       return json({ error: "请求处理失败，请检查服务端配置" }, 500);

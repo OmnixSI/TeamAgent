@@ -15,3 +15,25 @@ CREATE TABLE IF NOT EXISTS media_notes(id TEXT PRIMARY KEY,body TEXT NOT NULL,cr
 CREATE TABLE IF NOT EXISTS dreams(id TEXT PRIMARY KEY,date TEXT NOT NULL,body TEXT NOT NULL,sources TEXT NOT NULL,created_at TEXT NOT NULL,message_count INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS expressions(phrase TEXT PRIMARY KEY,meaning TEXT NOT NULL,scene TEXT NOT NULL,evidence TEXT NOT NULL,source_ids TEXT NOT NULL,frequency INTEGER NOT NULL,speakers INTEGER NOT NULL,enabled INTEGER NOT NULL DEFAULT 2,updated_at TEXT NOT NULL);
+
+CREATE INDEX IF NOT EXISTS messages_group_time ON messages(group_id,ts);
+CREATE INDEX IF NOT EXISTS jobs_status_kind ON jobs(status,kind,created_at);
+CREATE INDEX IF NOT EXISTS facts_scope ON facts(repo,valid_to,valid_from);
+CREATE INDEX IF NOT EXISTS outbox_status_time ON outbox(status,created_at);
+CREATE TABLE IF NOT EXISTS activity(id TEXT PRIMARY KEY,kind TEXT NOT NULL,entity TEXT NOT NULL,actor TEXT NOT NULL,summary TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS activity_entity ON activity(entity,created_at);
+CREATE TABLE IF NOT EXISTS model_runs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,effort TEXT NOT NULL,status TEXT NOT NULL,duration_ms INTEGER NOT NULL,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS task_plans(task_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',draft TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,job_id TEXT NOT NULL,message_id TEXT NOT NULL,status TEXT NOT NULL,files TEXT NOT NULL DEFAULT '[]',sent_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS discoveries(id TEXT PRIMARY KEY,repo TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,urls TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'new',created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memory_blocks(source_id TEXT NOT NULL,subject TEXT NOT NULL,predicate TEXT NOT NULL,PRIMARY KEY(source_id,subject,predicate));
+CREATE TABLE IF NOT EXISTS health_samples(at INTEGER PRIMARY KEY,gateway_ok INTEGER NOT NULL,runner_ok INTEGER NOT NULL,pending INTEGER NOT NULL,failed INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS member_sessions(token_hash TEXT PRIMARY KEY,member_id TEXT NOT NULL,created_at INTEGER NOT NULL,expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS member_sessions_member ON member_sessions(member_id);
+
+CREATE TABLE IF NOT EXISTS outbox_attempts(id TEXT PRIMARY KEY,started_at INTEGER NOT NULL,http_status INTEGER,code TEXT);
+
+CREATE INDEX IF NOT EXISTS activity_time ON activity(created_at);
+CREATE INDEX IF NOT EXISTS model_runs_time ON model_runs(created_at);
+CREATE TABLE IF NOT EXISTS model_usage(hour INTEGER NOT NULL,kind TEXT NOT NULL,effort TEXT NOT NULL,status TEXT NOT NULL,n INTEGER NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,duration_ms INTEGER NOT NULL,PRIMARY KEY(hour,kind,effort,status));

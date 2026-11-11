@@ -41,7 +41,9 @@ class RunnerTests(unittest.TestCase):
             }
             (h / "current.json").write_text(json.dumps(task))
             execute.H = h
-            key = hashlib.sha256(task["id"].encode()).hexdigest()[:32]
+            key = hashlib.sha256(
+                (task["id"] + ":" + str(task["version"])).encode()
+            ).hexdigest()[:32]
             work = h / "work" / key
             (work / "apps/api").mkdir(parents=True)
             (work / "apps/api/package.json").write_text(
@@ -84,9 +86,9 @@ class RunnerTests(unittest.TestCase):
                     text = "https://github.com/example/test/pull/1"
                 return subprocess.CompletedProcess(args, 0, text, "")
 
-            with patch.object(pathlib.Path, "home", return_value=home), patch.object(
-                execute.subprocess, "run", side_effect=fake
-            ), patch(
+            with patch.object(execute, "run_agent", side_effect=fake), patch.object(
+                pathlib.Path, "home", return_value=home
+            ), patch.object(execute.subprocess, "run", side_effect=fake), patch(
                 "urllib.request.urlopen",
                 side_effect=(
                     urllib.error.HTTPError(
@@ -99,6 +101,21 @@ class RunnerTests(unittest.TestCase):
                 execute.main()
             result = json.loads(next((h / "results").glob("*.json")).read_text())
             return result, calls
+
+    def test_actual_agent_timeout_terminates_its_process_group(self):
+        import sys, time
+
+        started = time.monotonic()
+        with self.assertRaises(RuntimeError):
+            execute.run_agent(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                task={},
+                input="",
+                cwd=None,
+                env={},
+                timeout=0.1,
+            )
+        self.assertLess(time.monotonic() - started, 5)
 
     def test_success_publishes_only_draft_after_tests(self):
         r, calls = self.scenario()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, pathlib, subprocess, time, hashlib
+import json, os, pathlib, subprocess, time, hashlib, signal, threading, urllib.request, urllib.error, ssl, re
 
 H = pathlib.Path.home() / ".inkboard-team"
 REPOS = [
@@ -7,6 +7,7 @@ REPOS = [
     "OmnixSI/NextThought-Website",
     "OmnixSI/WhalePartner",
     "OmnixSI/peiwan-store-platform-blueprint",
+    "OmnixSI/TeamAgent",
 ]
 
 
@@ -24,19 +25,118 @@ def run(args, cwd=None, timeout=300):
     return r.stdout
 
 
+def heartbeat(t):
+    config = json.loads((H / "config.json").read_text())
+    check = urllib.request.Request(
+        config["url"] + "/api/runner/heartbeat",
+        data=json.dumps(
+            {"id": t["id"], "lease": t["lease"], "version": t["version"]}
+        ).encode(),
+        headers={
+            "Authorization": "Bearer " + config["runnerToken"],
+            "Content-Type": "application/json",
+            "User-Agent": "TeamAgent/2",
+        },
+    )
+    with urllib.request.urlopen(
+        check,
+        timeout=12,
+        context=ssl.create_default_context(
+            cafile="/etc/ssl/cert.pem" if os.path.exists("/etc/ssl/cert.pem") else None
+        ),
+    ) as response:
+        if response.status != 200:
+            raise RuntimeError("执行租约失效")
+
+
+def run_agent(args, *, task, input, cwd, env, timeout=1800):
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+    done = threading.Event()
+    cancelled = []
+
+    def terminate():
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    def watch():
+        last_ok = time.monotonic()
+        while not done.wait(20):
+            try:
+                heartbeat(task)
+                last_ok = time.monotonic()
+            except Exception as error:
+                if (
+                    isinstance(error, urllib.error.HTTPError) and error.code == 409
+                ) or time.monotonic() - last_ok > 90:
+                    cancelled.append("成员已更新任务或执行租约无法续期，已停止自动处理")
+                    terminate()
+                    if not done.wait(3):
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    previous = {}
+
+    def stop(signum, frame):
+        terminate()
+        raise InterruptedError("开发执行已停止，保留工作副本供接手")
+
+    if threading.current_thread() is threading.main_thread():
+        for sig in [signal.SIGTERM, signal.SIGINT]:
+            previous[sig] = signal.signal(sig, stop)
+    try:
+        try:
+            out, err = proc.communicate(input=input, timeout=timeout)
+        except (subprocess.TimeoutExpired, InterruptedError):
+            terminate()
+            try:
+                proc.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+            raise RuntimeError("开发处理已停止或超时，保留工作副本供接手")
+        if cancelled:
+            raise RuntimeError(cancelled[0])
+        return subprocess.CompletedProcess(args, proc.returncode, out, err)
+    finally:
+        done.set()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
     t = json.loads((H / "current.json").read_text())
     repo = t["repo"]
     if repo not in REPOS:
         raise ValueError("Repository denied")
     resultpath = (
-        H / "results" / (hashlib.sha256(t["id"].encode()).hexdigest() + ".json")
+        H
+        / "results"
+        / (
+            hashlib.sha256((t["id"] + ":" + str(t["version"])).encode()).hexdigest()
+            + ".json"
+        )
     )
     resultpath.parent.mkdir(exist_ok=True)
     if resultpath.exists():
         print("任务已有回执，等待看板确认")
         return
-    key = hashlib.sha256(t["id"].encode()).hexdigest()[:32]
+    key = hashlib.sha256((t["id"] + ":" + str(t["version"])).encode()).hexdigest()[:32]
     root = H / "repos" / repo.split("/")[1]
     work = H / "work" / key
     result = {"status": "needs_human", "result": "尚未执行"}
@@ -57,9 +157,25 @@ def main():
                 {k: t[k] for k in ["repo", "title", "detail"]}, ensure_ascii=False
             )
         )
-        env = dict(os.environ)
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            in {
+                "PATH",
+                "HOME",
+                "USER",
+                "SHELL",
+                "TMPDIR",
+                "LANG",
+                "LC_ALL",
+                "TERM",
+                "HTTPS_PROXY",
+                "HTTP_PROXY",
+                "NO_PROXY",
+            }
+        }
         # Existing credentials file is read only inside this process; never place the API key in argv or output.
-        import re
 
         env["DEEPSEEK_API_KEY"] = re.search(
             r"^\s*DEEPSEEK_API_KEY:\s*[\"\']?([^\s\"\']+)",
@@ -72,7 +188,7 @@ def main():
         prompt = task
         outcomes = []
         for attempt in range(2):
-            r = subprocess.run(
+            r = run_agent(
                 [
                     exe,
                     "--profile",
@@ -89,9 +205,7 @@ def main():
                 input=prompt,
                 cwd=work,
                 env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                task=t,
                 timeout=1800,
             )
             events = []
@@ -104,6 +218,7 @@ def main():
             summary = str(final.get("text") or "")
             if final.get("reason", {}).get("kind") != "completed":
                 raise RuntimeError("DSH 未完成任务：" + summary[-2000:])
+            run(["git", "diff", "--check"], work)
             paths = run(
                 ["git", "ls-files", "--modified", "--others", "--exclude-standard"],
                 work,
@@ -151,50 +266,67 @@ def main():
             for x in staged
         ):
             raise RuntimeError("暂存内容含凭据类文件，请人工检查。")
+        staged_diff = run(["git", "diff", "--cached", "-U0"], work)
+        if re.search(
+            r"^\+[^+].*(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY)",
+            staged_diff,
+            re.M,
+        ):
+            raise RuntimeError("差异含凭据，已停止提交；请人工核对")
         run(["git", "commit", "-m", "team: " + t["title"][:100]], work)
-        import urllib.request, ssl
-
-        config = json.loads((H / "config.json").read_text())
-        check = urllib.request.Request(
-            config["url"] + "/api/runner/heartbeat",
-            data=json.dumps(
-                {"id": t["id"], "lease": t["lease"], "version": t["version"]}
-            ).encode(),
-            headers={
-                "Authorization": "Bearer " + config["runnerToken"],
-                "Content-Type": "application/json",
-                "User-Agent": "InkBoard-Team/1",
-            },
-        )
-        with urllib.request.urlopen(
-            check,
-            timeout=20,
-            context=ssl.create_default_context(cafile="/etc/ssl/cert.pem"),
-        ) as response:
-            if response.status != 200:
-                raise RuntimeError("任务已由成员更新，保留本机差异交接。")
+        heartbeat(t)
         run(["git", "push", "-u", "origin", branch], work)
         body = H / "pr-body.txt"
         body.write_text(
             "## 任务\n"
             + t["title"]
-            + "\n\n## 验证\n验证结果与适用范围见团队看板；请评审后合并。\n\n详细方案与测试结果保存在团队看板。"
+            + "\n\n"
+            + summary[:3000]
+            + "\n\n## 验证\n目录：`"
+            + str(test_dir.relative_to(work))
+            + "`\n\n```text\n"
+            + test.stdout[-4000:]
+            + "\n```\n\n任务："
+            + t["id"]
+            + " · v"
+            + str(t["version"])
+            + "\n\n[团队开发台](https://inkboard-team.inkboard-server.workers.dev) · 请评审后合并。"
         )
-        pr = run(
-            [
-                "gh",
-                "pr",
-                "create",
-                "--draft",
-                "--title",
-                t["title"][:180],
-                "--body-file",
-                str(body),
-                "--head",
-                branch,
-            ],
-            work,
+        existing = json.loads(
+            run(
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--head",
+                    branch,
+                    "--state",
+                    "all",
+                    "--json",
+                    "url",
+                ],
+                work,
+            )
+            or "[]"
         )
+        if existing:
+            pr = existing[0]["url"]
+        else:
+            pr = run(
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--draft",
+                    "--title",
+                    t["title"][:180],
+                    "--body-file",
+                    str(body),
+                    "--head",
+                    branch,
+                ],
+                work,
+            )
         result = {
             "status": "ready_for_review",
             "result": summary

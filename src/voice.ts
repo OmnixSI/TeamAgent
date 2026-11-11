@@ -1,3 +1,4 @@
+import { model } from "./runtime";
 /** Independent group voice. Tool results are facts, never a change to this persona. */
 export const VOICE = `你是“做 AI 高手”团队里常驻的项目搭子，群里的名字暂时叫 Bot，后续跟随大家确认的名字。你把这些项目当作自己参与的事情，喜欢捣鼓新东西、拆穿离谱设计、把脑洞变成能跑的东西。你有自己的判断和偏好，会记得前面惦记的事；不是每轮重置成一个接单客服。别把别人做的开发认领成自己做的。默认简体中文，先接当前这句话的情绪和意思，再说你自己的看法。平时是个嘴欠但靠谱的熟人群友：短、随性、有态度，幽默和抽象浓度偏高。看到槽点就具体吐槽，能抖个机灵就别只回“哈哈确实”。有脾气、能互损，也能认怂自嘲，能反讽、自嘲、接梗、抽象和爆粗；“我操”“你妈的啊”都能自然用于吐槽，不强行塞梗，不拿群友家人开恶毒攻击。粗口是正常口语，合适就说“草”“卧槽”“我操”“妈的”“他妈的”，不要总改成温吞的“有点离谱”。笑点优先来自当前场景的反差、夸张和熟人互损，不是堆热词；别每句都哈哈、别反复同一套“我收声了”。平时别总解释自己是AI或某个模型，也别拿工具限制当人设；被认真问到真实身份时如实回答。不要编造线下生活或真人经历。
 日常通常一两句，能一句说完就一句；可以不写句末句号，不求每次闭环。别复述问题，别把梗拆成语文阅读理解；不懂的梗短问一句即可，不装懂。别习惯性反问、尬夸、安慰、结尾邀约。emoji可用但不当固定尾缀。不要“作为AI”“以下是”“首先其次”“希望能帮到你”“如果你愿意”，不要每次追问“要不要我”。
@@ -74,13 +75,11 @@ export async function enqueueVoice(
       .run();
 }
 export async function speakBrief(e: any, brief: any, context: any) {
-  const r = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + e.DEEPSEEK_API_KEY,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  const d: any = await model(
+    e,
+    "voice",
+    "high",
+    {
       model: e.MODEL || "deepseek-flash",
       reasoning_effort: "high",
       max_tokens: 8192,
@@ -89,7 +88,7 @@ export async function speakBrief(e: any, brief: any, context: any) {
           role: "system",
           content:
             VOICE +
-            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话"}。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告。',
+            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。recentBot是你刚说过的话，别复读相同包袱，尤其别反复季度汇报/PPT示例。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话"}。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告。',
         },
         {
           role: "user",
@@ -107,12 +106,10 @@ export async function speakBrief(e: any, brief: any, context: any) {
           }),
         },
       ],
-    }),
-    signal: AbortSignal.timeout(60000),
-  });
-  if (!r.ok) throw Error("voice HTTP " + r.status);
-  const d: any = await r.json(),
-    text = d.choices?.[0]?.message?.content;
+    },
+    60000,
+  );
+  const text = d.choices?.[0]?.message?.content;
   if (!text?.trim() || d.choices[0].finish_reason === "length")
     throw Error("voice incomplete");
   if (!brief.acceptedActions?.length) {

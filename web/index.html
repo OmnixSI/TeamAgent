@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TeamAgent · 做 AI 高手</title>
+    <style>
+      /*TEAM_STYLE*/
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo" aria-hidden="true">TA</div>
+      <div class="brand">
+        <strong>TeamAgent</strong><small>做 AI 高手 · 团队开发台</small>
+      </div>
+      <div class="actions">
+        <span id="who" class="muted"></span><button id="guide">使用说明</button
+        ><button id="admin" hidden>管理接入</button
+        ><button id="logout" hidden>退出</button>
+      </div>
+    </header>
+    <main>
+      <section id="login" class="panel">
+        <div class="login-title">
+          <span class="badge">团队空间</span>
+          <h1 style="margin-top: 14px">把群里的点子，接着做下去</h1>
+        </div>
+        <p>
+          讨论、资料、方案和开发接力放在同一个地方。用本人的 QQ 群身份登录。
+        </p>
+        <button id="qqlogin" class="primary">用 QQ 群登录</button>
+        <div id="logincode" role="status"></div>
+        <details style="margin-top: 23px">
+          <summary class="muted">已有邀请或访问凭证</summary>
+          <label>一次性邀请<input id="invite" autocomplete="off" /></label
+          ><button id="join">接受邀请</button
+          ><label
+            >个人访问凭证<input
+              id="token"
+              type="password"
+              autocomplete="off" /></label
+          ><button id="signin">登录</button>
+        </details>
+      </section>
+      <div id="error" role="alert"></div>
+      <section id="app" hidden>
+        <div class="intro">
+          <div>
+            <h1>团队工作台</h1>
+            <p id="introtext">从讨论到行动，每一步都有来处。</p>
+          </div>
+          <div class="actions">
+            <button id="refresh">刷新</button
+            ><button id="new" class="primary">＋ 新任务</button>
+          </div>
+        </div>
+        <div id="connection" class="statusline"></div>
+        <div id="stats" class="stats"></div>
+        <nav id="tabs" class="tabs" aria-label="工作台页面"></nav>
+        <div class="toolbar">
+          <select id="repo" aria-label="筛选项目">
+            <option value="">全部项目</option></select
+          ><input
+            id="search"
+            placeholder="搜索任务、资料或记忆"
+            aria-label="搜索"
+          /><select id="person" aria-label="筛选负责人">
+            <option value="">全部负责人</option>
+            <option value="mine">我的任务</option>
+            <option value="unassigned">未分配</option>
+          </select>
+        </div>
+        <section id="tasks-view">
+          <div id="board" class="columns"></div>
+        </section>
+        <section id="materials-view" hidden>
+          <p class="muted" style="margin-bottom: 20px">
+            文件生成与 QQ 交付分别记录。未确认送达的附件不会自动反复发送。
+          </p>
+          <div id="utilities" class="grid"></div>
+          <div class="section-title">
+            <h2>技术线索</h2>
+            <span class="muted">有来源、有用途，再决定要不要做</span>
+          </div>
+          <div id="discoveries" class="grid"></div>
+        </section>
+        <section id="projects-view" hidden>
+          <div id="projects" class="grid"></div>
+        </section>
+        <section id="memory-view" hidden>
+          <div class="panel">
+            <h2>搭子近况</h2>
+            <p id="identity"></p>
+            <p class="note">
+              稳定身份与口吻由项目维护；近况从真实互动成长，不作为新的团队决定或执行权限。
+            </p>
+          </div>
+          <div class="section-title">
+            <h2>有依据的团队记忆</h2>
+            <span class="muted">提议与决定分开，修正保留版本</span>
+          </div>
+          <div id="facts" class="grid two"></div>
+          <div class="section-title">
+            <h2>本群表达</h2>
+            <span class="muted">结合语境使用，不机械复读</span>
+          </div>
+          <div id="expressions" class="grid"></div>
+          <div class="section-title">
+            <h2>夜间复盘</h2>
+            <span class="muted">悉尼 03:00–06:00 · 安静时整理</span>
+          </div>
+          <div id="dreams" class="grid two"></div>
+        </section>
+        <section id="activity-view" hidden>
+          <div class="panel">
+            <h2>最近进展</h2>
+            <div id="activity"></div>
+          </div>
+        </section>
+        <section id="system-view" hidden><div id="system"></div></section>
+      </section>
+    </main>
+    <footer>
+      <a
+        href="https://github.com/OmnixSI/TeamAgent"
+        target="_blank"
+        rel="noreferrer"
+        >OmnixSI / TeamAgent</a
+      >
+      · <span id="release">独立团队项目</span>
+    </footer>
+    <dialog id="modal">
+      <div class="dialog-head">
+        <span>做 AI 高手 / TeamAgent</span
+        ><button id="close" aria-label="关闭详情">关闭 ×</button>
+      </div>
+      <div id="detail"></div>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <script>
+      /*TEAM_SCRIPT*/
+    </script>
+  </body>
+</html>

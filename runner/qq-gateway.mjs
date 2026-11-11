@@ -1,3 +1,4 @@
+import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
 import os from "node:os";
@@ -10,10 +11,29 @@ const secret = JSON.parse(
 );
 const sdk = await import(
   path.join(
-    os.homedir(),
-    ".dsh/profiles/qq-team/node_modules/@tencent-connect/qqbot-nodejs/dist/index.js",
+    home,
+    "sdk/node_modules/@tencent-connect/qqbot-nodejs/dist/index.js",
   )
 );
+const sessionFile = path.join(home, "qq-session.json");
+const sessionPersistence = {
+  load: () => {
+    try {
+      return JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+    } catch {
+      return null;
+    }
+  },
+  save: (value) => {
+    fs.writeFileSync(sessionFile + ".tmp", JSON.stringify(value), {
+      mode: 0o600,
+    });
+    fs.renameSync(sessionFile + ".tmp", sessionFile);
+  },
+  clear: () => {
+    fs.rmSync(sessionFile, { force: true });
+  },
+};
 const spool = path.join(home, "qq-spool");
 fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
 let seed = secret.QQ_APP_SECRET;
@@ -27,12 +47,21 @@ const key = crypto.createPrivateKey({
   type: "pkcs8",
 });
 let flushing = false,
-  connected = false;
+  connected = false,
+  blocked = "";
 async function flush() {
   if (flushing) return;
   flushing = true;
   try {
-    for (const f of fs.readdirSync(spool).slice(0, 30)) {
+    for (const f of fs
+      .readdirSync(spool)
+      .filter((x) => x.endsWith(".json"))
+      .sort(
+        (a, b) =>
+          fs.statSync(path.join(spool, a)).mtimeMs -
+          fs.statSync(path.join(spool, b)).mtimeMs,
+      )
+      .slice(0, 30)) {
       const raw = fs.readFileSync(path.join(spool, f), "utf8");
       const ts = String(Math.floor(Date.now() / 1000));
       const sig = crypto.sign(null, Buffer.from(ts + raw), key).toString("hex");
@@ -46,6 +75,13 @@ async function flush() {
         body: raw,
         signal: AbortSignal.timeout(20000),
       });
+      if ([400, 413].includes(r.status)) {
+        const rejected = path.join(home, "qq-rejected");
+        fs.mkdirSync(rejected, { recursive: true, mode: 0o700 });
+        fs.renameSync(path.join(spool, f), path.join(rejected, f));
+        console.log("QQ relay quarantined an invalid or oversized event");
+        continue;
+      }
       if (!r.ok) throw Error("cloud HTTP " + r.status);
       fs.unlinkSync(path.join(spool, f));
     }
@@ -56,6 +92,7 @@ async function flush() {
   }
 }
 const bot = new sdk.QQBot({
+  sessionPersistence,
   appId: secret.QQ_APP_ID,
   appSecret: secret.QQ_APP_SECRET,
   baseUrl: "https://api.bot.qq.com",
@@ -73,7 +110,9 @@ bot.on("message", async (ctx) => {
   const raw = JSON.stringify({ op: 0, t: m.rawEventType, d: m.raw });
   const name =
     crypto.createHash("sha256").update(m.messageId).digest("hex") + ".json";
-  fs.writeFileSync(path.join(spool, name), raw, { mode: 0o600 });
+  const target = path.join(spool, name);
+  fs.writeFileSync(target + ".tmp", raw, { mode: 0o600 });
+  fs.renameSync(target + ".tmp", target);
   await flush();
 });
 bot.on("ready", () => {
@@ -83,61 +122,52 @@ bot.on("ready", () => {
 bot.on("error", () =>
   console.log("QQ connection error; check credentials/network"),
 );
-bot.on("disconnected", () => {
+bot.on("resumed", () => {
+  connected = true;
+  blocked = "";
+  console.log(new Date().toISOString(), "QQ gateway resumed");
+});
+bot.on("disconnected", (event) => {
   connected = false;
-  console.log("QQ gateway disconnected");
+  console.log(
+    new Date().toISOString(),
+    "QQ gateway disconnected",
+    event.code,
+    event.willReconnect,
+  );
 });
 setInterval(flush, 10000);
 
+const deliveryDir = path.join(home, "file-deliveries");
+recoverDeliveries(deliveryDir);
+async function cloud(pathname, body) {
+  const response = await fetch(config.url + "/api/runner/" + pathname, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + config.runnerToken,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw Error("cloud HTTP " + response.status);
+  return response.json();
+}
 let delivering = false;
 setInterval(async () => {
   if (delivering) return;
   delivering = true;
   try {
-    const dir = path.join(home, "file-deliveries");
-    if (!fs.existsSync(dir)) return;
-    for (const name of fs
-      .readdirSync(dir)
-      .filter((x) => x.endsWith(".json"))
-      .slice(0, 3)) {
-      const file = path.join(dir, name),
-        active = file + ".sending";
-      fs.renameSync(file, active);
-      try {
-        const delivery = JSON.parse(fs.readFileSync(active));
-        const response = await fetch(
-          config.url + "/api/runner/delivery-target",
-          {
-            method: "POST",
-            headers: {
-              Authorization: "Bearer " + config.runnerToken,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ message: delivery.message }),
-          },
-        );
-        if (!response.ok) throw Error("unknown target");
-        const target = await response.json();
-        for (const f of delivery.files) {
-          const real = fs.realpathSync(f),
-            root = fs.realpathSync(path.join(home, "utility")) + path.sep;
-          if (
-            !real.startsWith(root) ||
-            !real.includes(path.sep + "outputs" + path.sep)
-          )
-            throw Error("file path denied");
-          await bot.sendFile(
-            { scope: "group", targetId: target.group_id },
-            { localPath: real },
-          );
-        }
-        fs.renameSync(active, file + ".sent");
-        console.log("Generated files delivered to target group");
-      } catch {
-        fs.renameSync(active, file + ".failed");
-        console.log("Generated file delivery requires attention");
-      }
-    }
+    await deliverFiles({
+      dir: deliveryDir,
+      root: path.join(home, "utility"),
+      target: (body) => cloud("delivery-target", body),
+      report: (body) => cloud("delivery/report", body),
+      sendFile: (group, localPath) =>
+        bot.sendFile({ scope: "group", targetId: group }, { localPath }),
+    });
+  } catch {
+    console.log("File delivery state requires attention");
   } finally {
     delivering = false;
   }
@@ -151,9 +181,28 @@ setInterval(async () => {
         Authorization: "Bearer " + config.runnerToken,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ connected }),
+      body: JSON.stringify({ connected, blocked }),
       signal: AbortSignal.timeout(15000),
     });
   } catch {}
 }, 30000);
-await bot.start();
+const abort = new AbortController();
+process.on("SIGTERM", () => {
+  connected = false;
+  abort.abort();
+  setTimeout(() => process.exit(0), 1000).unref();
+});
+process.on("SIGINT", () => {
+  connected = false;
+  abort.abort();
+  setTimeout(() => process.exit(0), 1000).unref();
+});
+try {
+  await bot.start(abort.signal);
+} catch (error) {
+  connected = false;
+  console.log("QQ gateway stopped", error.code || "startup_error");
+  if (error.code === "GATEWAY_FATAL_CLOSE")
+    blocked = "QQ平台拒绝连接，需管理员核对应用状态（" + error.closeCode + "）";
+  else process.exit(1);
+}
