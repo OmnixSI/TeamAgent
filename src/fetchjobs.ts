@@ -52,7 +52,13 @@ export async function requestBili(e: any, ref: string, tier: string, waiter: str
   if (!validRef(ref) || tier !== "light") throw Error("invalid fetch request");
   await fetchStatement(e, ref, tier, waiter).run();
 }
+/** A committed handoff remains authoritative even after its reply finishes. */
+export async function videoWaitExists(e: any, groupId: string, latestId: string): Promise<boolean> {
+  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id=? LIMIT 1")
+    .bind(groupId, latestId).first());
+}
 export async function startVideoWait(e: any, x: { groupId: string; ref: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
+  if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;
   const active = await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running') LIMIT 1").bind(x.groupId, x.ref).first();
   if (active) return false;
   const now = Date.now(), id = "vw-" + x.latest.id;
@@ -84,23 +90,39 @@ export function biliNoteText(r: BiliResult): string {
 export const videoMaterial = (r: BiliResult) => untrusted("bilibili", biliNoteText(r), r.fetched_at);
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   const now = Date.now();
-  const w = await e.DB.prepare(`UPDATE video_waits SET status='running',lease_until=? WHERE id=? AND
+  const w = await e.DB.prepare(`UPDATE video_waits SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND attempts<3 AND
     ((status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?)) RETURNING *`)
     .bind(now + 120000, waitId, now, now).first();
   if (!w) return;
-  const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
-  const cached = await biliCached(e, w.ref);
-  const materials = cached ? [videoMaterial(cached)] : ["视频内容暂时没读到（本机抓取端可能离线），只依据卡片信息作答。"];
-  const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
-  // A timed-out old attempt must not finish a newer lease.
-  const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
-  if (!owns) return;
-  if (decodeVoice(answer).text !== "[[SILENT]]") await enqueueVoice(e, "video-" + w.id, w.group_id, w.latest_id, answer);
-  await e.DB.prepare("UPDATE video_waits SET status='done' WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).run();
+  try {
+    const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
+    const cached = await biliCached(e, w.ref);
+    const materials = cached ? [videoMaterial(cached)] : ["视频内容暂时没读到（本机抓取端可能离线），只依据卡片信息作答。"];
+    const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
+    // A timed-out old attempt must not finish a newer lease.
+    const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
+    if (!owns) return;
+    if (decodeVoice(answer).text !== "[[SILENT]]") await enqueueVoice(e, "video-" + w.id, w.group_id, w.latest_id, answer);
+    await e.DB.prepare("UPDATE video_waits SET status='done' WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).run();
+  } catch (error) {
+    if (w.attempts >= 3) await failVideoWait(e, w);
+    else throw error;
+  }
+}
+/** No model call at the retry limit. Batch the one fallback with its terminal state. */
+async function failVideoWait(e: any, w: Row): Promise<void> {
+  const guard = "id=? AND status='running' AND lease_until=? AND attempts>=3";
+  await e.DB.batch([
+    e.DB.prepare("INSERT OR IGNORE INTO outbox SELECT ?,group_id,latest_id,?,'pending',? FROM video_waits WHERE " + guard)
+      .bind("video-" + w.id, "视频解读暂时无法完成，已停止自动重试。请稍后再问。", Date.now(), w.id, w.lease_until),
+    e.DB.prepare("UPDATE video_waits SET status='failed' WHERE " + guard).bind(w.id, w.lease_until),
+  ]);
 }
 export async function sweepVideoWaits(e: any): Promise<void> {
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='本机抓取端未回报' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
+  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 20").bind(now).all()).results;
+  for (const w of exhausted) await failVideoWait(e, w);
   const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 20").bind(now, now).all()).results;
   for (const w of rows) await wakeVideoWait(e, w.id);
 }
@@ -162,16 +184,7 @@ export async function fetchRoute(e: any, path: string, b: any): Promise<Response
     const key = "auth:" + b.service, old = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind(key).first();
     let previous: any = {}; try { previous = JSON.parse(old?.value || "{}"); } catch {}
     await e.DB.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key, JSON.stringify({ state: b.state, checked_at: new Date().toISOString(), had_ok: b.state === "ok" || previous.had_ok === true })).run();
-    if (b.state === "ok") await e.DB.prepare("DELETE FROM settings WHERE key=?").bind("auth-reminded:" + b.service).run();
     return Response.json({ ok: true });
   }
   return Response.json({ error: "not found" }, { status: 404 });
-}
-export async function authReminder(e: any, service: string): Promise<string | null> {
-  if (!["bili", "x"].includes(service)) return null;
-  const raw = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind("auth:" + service).first();
-  const status = JSON.parse(raw?.value || "{}");
-  if (!status.had_ok || !["expired", "risk"].includes(status.state)) return null;
-  const row = await e.DB.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(settings.value AS INTEGER)<? RETURNING key").bind("auth-reminded:" + service, String(Date.now()), Date.now() - 86400000).first();
-  return row ? `（顺便：我的 ${service === "bili" ? "B 站" : "X"} 登录过期了，有空在 Mac 上双击桌面「TeamAgent-登录」重新登一下）` : null;
 }

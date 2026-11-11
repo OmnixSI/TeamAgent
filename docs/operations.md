@@ -64,3 +64,5 @@ QQ SDK单独锁定在 runner/sdk/，安装到私密运行目录，不再依赖 D
 只连 B 站 API、b23.tv 与字幕 CDN 公网地址，Cookie 仅发往 API。任务失败或抓取端离线，视频续答到期后按卡片信息回答。暂停领取期间 fetch 同样停止领取。
 
 回滚本机服务：`python3 scripts/install-local.py --apply --remove-fetch`。Worker 设置 `bili.enabled=false` 后停止新建续答，已有等待仍会答完。首次部署与升级需核验 PID、启动哈希及群消息，文件复制成功不代表已启用。
+
+视频续答最多尝试 3 轮；持续失败时只发送一次固定降级说明并进入 `failed`，不会无限重跑。`npm run db:migrate` 会为已有 `video_waits` 表幂等补上 attempts 列并保留等待记录；新建环境直接使用 schema.sql。登录状态接口仅记录状态，本轮未接入登录过期提醒。卸载时若无法停止 team-fetch，会打印警告并保留 plist，需核实进程后再处理。

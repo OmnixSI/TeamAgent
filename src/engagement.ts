@@ -1,6 +1,7 @@
+import { UNTRUSTED_RULE } from "./untrusted";
 import settings from "../config/participation.json";
 /** Group participation is decided before the separate voice module. */
-export const PARTICIPATION = settings.text;
+export const PARTICIPATION = settings.text + "\n" + UNTRUSTED_RULE;
 export function participation(raw: string, forced = false) {
   try {
     const p = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));

@@ -88,4 +88,28 @@ class FetchInstallTests(unittest.TestCase):
         with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1,['launchctl'])):
             with self.assertRaises(subprocess.CalledProcessError): module['restart_services']()
 
+    def test_P2_old_path_node_falls_back_to_highest_nvm(self):
+        versions = self.home / '.nvm/versions/node'
+        for version in ['v22.9.0', 'v24.14.0']:
+            path = versions / version / 'bin/node'
+            path.parent.mkdir(parents=True)
+            path.write_text('')
+        module = runpy.run_path(str(ROOT / 'scripts/install-local.py'))
+        def node(args, **kwargs):
+            version = 'v20.0.0' if args[0] == '/usr/bin/node' else Path(args[0]).parents[1].name
+            return subprocess.CompletedProcess(args, 0, stdout=version)
+        with patch('shutil.which', return_value='/usr/bin/node'), patch('subprocess.run', side_effect=node):
+            self.assertEqual(module['find_node'](), str((versions / 'v24.14.0/bin/node').resolve()))
+
+    def test_P2_failed_bootout_warns_and_retains_plist_without_raising(self):
+        self.apply()
+        path = self.home / 'Library/LaunchAgents/com.inkboard.team-fetch.plist'
+        before = path.read_bytes()
+        module = runpy.run_path(str(ROOT / 'scripts/install-local.py'))
+        with patch('subprocess.run', side_effect=OSError('launchctl unavailable')), patch('builtins.print') as output:
+            module['remove_fetch_service']()
+        self.assertTrue(path.exists())
+        self.assertEqual(path.read_bytes(), before)
+        self.assertTrue(any('警告' in str(call) for call in output.call_args_list))
+
 if __name__ == '__main__': unittest.main()

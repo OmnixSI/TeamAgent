@@ -655,6 +655,7 @@ export async function agentAnswer(e: any, context: any) {
         latestId: context.latest.id,
         batchIds: context.batch?.map((m: any) => m.id) || [context.latest.id],
         mentioned: context.mentioned,
+        videoWaited: context.videoWaited,
         intent: context.intent,
         background: true,
         resume: { messages, pending: m, turn },
@@ -689,6 +690,7 @@ export async function agentAnswer(e: any, context: any) {
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
         !!context.mentioned ||
+        !!context.videoWaited ||
         context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
           recentBot.some(

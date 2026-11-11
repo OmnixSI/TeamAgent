@@ -1,4 +1,4 @@
-import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial } from "./fetchjobs";
+import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadChatContext } from "./context";
@@ -636,9 +636,10 @@ async function processJob(e: Env, id: string) {
       const { batch, latest } = context;
       if (!batch.length || !latest) return;
       const mentioned = batch.some((r: any) => r.mentioned);
-      const ref = needsVideo(batch, latest, context.recent, TEAM);
+      const transferred = await videoWaitExists(e, m.group_id, latest.id);
+      const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
       const cached = ref ? await biliCached(e, ref) : null;
-      if (ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+      if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
         await advanceCursor(e, m.group_id, cursor, batch);
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
@@ -647,6 +648,7 @@ async function processJob(e: Env, id: string) {
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
+        ...(ref ? { videoWaited: true } : {}),
         ...(cached ? { materials: [videoMaterial(cached)] } : {}),
       });
       if (decodeVoice(answer).text !== "[[SILENT]]")
@@ -993,7 +995,8 @@ async function scheduled(e: Env) {
   ).results;
   for (const j of pending) {
     if (e.WORK) {
-      await queueFor(e, j.kind, JSON.parse(j.payload)).send({ id: j.id });
+      const lane = queueFor(e, j.kind, JSON.parse(j.payload));
+      if (lane) await lane.send({ id: j.id });
     } else await processJob(e, j.id);
   }
   await e.DB.prepare(

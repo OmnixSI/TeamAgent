@@ -7,23 +7,24 @@ root = Path(__file__).resolve().parents[1]
 FETCH_LABEL = "com.inkboard.team-fetch"
 
 def find_node():
-    candidate = shutil.which("node")
-    if not candidate:
-        versions = list((Path.home() / ".nvm/versions/node").glob("*/bin/node"))
-        def version(path):
-            return tuple(int(x) for x in re.findall(r"\d+", path.parents[1].name))
-        candidate = next(iter(sorted(versions, key=version, reverse=True)), None)
-    if not candidate and Path("/opt/homebrew/bin/node").exists():
-        candidate = "/opt/homebrew/bin/node"
-    if candidate:
-        candidate = os.path.realpath(candidate)
+    candidates = []
+    path_node = shutil.which("node")
+    if path_node:
+        candidates.append(path_node)
+    versions = list((Path.home() / ".nvm/versions/node").glob("*/bin/node"))
+    def version(path):
+        return tuple(int(x) for x in re.findall(r"\d+", path.parents[1].name))
+    candidates.extend(sorted(versions, key=version, reverse=True))
+    if Path("/opt/homebrew/bin/node").exists():
+        candidates.append("/opt/homebrew/bin/node")
+    for candidate in dict.fromkeys(os.path.realpath(p) for p in candidates):
         try:
             result = subprocess.run([candidate, "--version"], capture_output=True, text=True, timeout=5)
             match = re.match(r"v?(\d+)", result.stdout.strip())
             if result.returncode == 0 and match and int(match[1]) >= 22:
                 return candidate
         except (OSError, subprocess.SubprocessError):
-            pass
+            continue
     return None
 
 def launchctl(*args):
@@ -33,7 +34,9 @@ def launchctl(*args):
         return False
 
 def remove_fetch_service():
-    launchctl("bootout", "gui/" + str(os.getuid()) + "/" + FETCH_LABEL)
+    if not launchctl("bootout", "gui/" + str(os.getuid()) + "/" + FETCH_LABEL):
+        print("警告：team-fetch 停止失败，保留 plist；服务可能仍在运行。")
+        return
     path = Path.home() / "Library/LaunchAgents" / (FETCH_LABEL + ".plist")
     path.unlink(missing_ok=True)
 
