@@ -377,3 +377,143 @@ test('quote metadata is wired from a model-selected member message in the real c
   const row=await e.DB.prepare("SELECT json FROM outbox_meta WHERE id='chat-current'").first();
   assert.deepEqual(JSON.parse(row.json),{reference:'EARLIER-REF'});
 });
+
+// B2: fixed snapshot measured by the reviewer on f16c96d, not an old-code execution.
+const BASELINE_F16C96D = 45;
+const {writeFileSync,mkdirSync}=await import('node:fs');
+const {fragments}=await import('../'+voiceOut);
+const splitVoice=JSON.stringify({mode:'banter',text:'先看画面中的标志。\n\n再核对原消息的语境。'});
+function traceDB(e){
+  const prepare=e.DB.prepare.bind(e.DB),trace=[];
+  e.DB.prepare=sql=>{
+    const wrap=s=>({sql,bind(...a){return wrap(s.bind(...a));},...Object.fromEntries(['first','all','run'].map(k=>[k,async(...a)=>{trace.push(sql);return s[k](...a);}]))});
+    return wrap(prepare(sql));
+  };
+  return trace;
+}
+async function measured(base,label,run){
+  const trace=traceDB(base),before=base.DB.executed,e=metered(base);
+  try{await run(e);}finally{
+    mkdirSync('.agent',{recursive:true});writeFileSync('.agent/'+label+'.json',JSON.stringify({used:e.meter.used,executed:base.DB.executed-before,sql:trace},null,2));
+  }
+  assert.equal(e.meter.used,base.DB.executed-before,label+' meter agrees with the database');
+  return e.meter.used;
+}
+async function imageBudgetFixture(){
+  const base=await bound();base.QQ_APP_ID='budget-'+(++quoteFixture);
+  await qq(base,{...msg('budget-reference','引用的问题'),message_scene:{ext:['msg_idx=BUDGET-REF']}});
+  let id;for(let i=0;i<100;i++)if(fragments(splitVoice,'chat-v-budget-image-'+i).length===2){id='budget-image-'+i;break;}
+  assert.ok(id);await qq(base,{...msg(id,'记住负责人是小王'),author:{id:'member2'},message_scene:{ext:['msg_idx=BUDGET-IMAGE','ref_msg_idx=BUDGET-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://example.com/budget-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');
+  return {base,id};
+}
+async function budgetModel(run,{calls,voice=splitVoice}={}){
+  const old=globalThis.fetch,state={vision:0,decisions:0,requests:[],sent:[]};
+  globalThis.fetch=async(url,init)=>{
+    if(String(url).endsWith('.png'))return new Response(new TextEncoder().encode(String(url)),{headers:{'content-type':'image/png'}});
+    if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'fake-budget-token',expires_in:300});
+    const b=JSON.parse(init.body);
+    if(!b.messages){state.sent.push(b);return Response.json({id:'qq-'+state.sent.length,ext_info:{ref_idx:'BOT-'+state.sent.length}});}
+    let message;
+    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    else if(b.messages[0].content.includes('最后的嘴替模块'))message={content:voice};
+    else{state.decisions++;state.requests.push(structuredClone(b));message=calls?calls(state.decisions,b):{content:'{"action":"reply","kind":"direct","target":"budget-reference","brief":"具体问题"}'};}
+    return Response.json({choices:[{message}]});
+  };
+  try{return await run(state);}finally{globalThis.fetch=old;}
+}
+test('B3 three cold images, a reference and two sent segments fit both phases',async()=>{
+  assert.equal(BASELINE_F16C96D,45);
+  const {base,id}=await imageBudgetFixture();
+  await budgetModel(async state=>{
+    const image=await measured(base,'p1-B3-image',e=>queue(e,'chat-'+id));
+    const answer=await measured(base,'p1-B3-answer',e=>queue(e,'chat-v-'+id));
+    assert.equal(state.vision,3);assert.equal(state.decisions,1);assert.equal(state.sent.length,2);
+    assert.ok(state.sent[0].message_reference);assert.ok(image<=30,'image '+image);assert.ok(answer<=44,'answer '+answer);
+  });
+});
+function correctionCalls(source){return [0,1,2].map(i=>({id:'remember-'+i,type:'function',function:{name:'remember_correction',arguments:JSON.stringify({repo:'team',subject:'budget-'+i,predicate:'owner',value:'小王',source_id:source,quote:'记住负责人是小王',supersedes_ids:Array.from({length:8},(_,j)=>'old-'+j)})}}));}
+test('B4 heavy tools in the image reply cannot exhaust the D1 invocation',async()=>{
+  const {base,id}=await imageBudgetFixture();
+  // P2 is excluded. A pending ~s segment exercises the same outbox-row budget.
+  await budgetModel(async state=>{
+    assert.ok(await measured(base,'p1-B4-image',e=>queue(e,'chat-'+id))<=30);
+    await base.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('previous~s','GROUP000001',id,'表情段占位','pending',Date.now()).run();
+    const answer=await measured(base,'p1-B4-answer',e=>queue(e,'chat-v-'+id));
+    assert.ok(answer<=48,'answer '+answer);
+    const results=state.requests.flatMap(b=>b.messages.filter(m=>m.role==='tool').map(m=>JSON.parse(m.content)));
+    assert.ok(results.some(r=>r.unavailable&&r.reason==='本轮资源已用完，请再发一条消息继续'));
+    assert.ok((await base.DB.prepare("SELECT COUNT(*) n FROM facts WHERE id LIKE 'correction:%'").first()).n<3);
+  },{calls:n=>n===1?{tool_calls:correctionCalls(id)}:{content:'{"action":"reply","kind":"direct","target":"budget-reference","brief":"依据已完成部分作答"}'}});
+});
+test('B5 research with three tools per round withholds tools on the last model request',async()=>{
+  const base=await bound();await qq(base,msg('budget-research','查看团队工作状态'));
+  await base.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('budget-research-job','research',JSON.stringify({latestId:'budget-research',batchIds:['budget-research'],mentioned:true,background:true}),Date.now()).run();
+  await budgetModel(async state=>{
+    const count=await measured(base,'p1-B5-research',e=>queue(e,'budget-research-job'));
+    assert.equal(state.requests.length,3);assert.equal(state.requests.at(-1).tools,undefined);assert.ok(count<=48,'research '+count);
+  },{calls:n=>n<3?{tool_calls:[0,1,2].map(i=>({id:'status-'+n+'-'+i,type:'function',function:{name:'get_work_status',arguments:'{}'}}))}:{content:'{"action":"reply","kind":"direct","brief":"当前状态"}'},voice:'{"mode":"work","text":"当前工作状态。"}'});
+});
+test('B7 scheduled bounds an expired/ready backlog and leaves durable work for later calls',async()=>{
+  const base=await outgoing(5,false);
+  for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
+  const counts=[];
+  await budgetModel(async()=>{
+    for(let i=0;i<4;i++){
+      counts.push(await measured(base,'p1-B7-cron-'+i,e=>cron(e)));
+      if(i===0){
+        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,15);
+        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,5);
+      }
+      // Consume the durable wakes as their separate queue invocations would.
+      const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
+      for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
+    }
+  });
+  assert.ok(counts.every(n=>n<=48),'cron '+counts.join(','));
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,20);
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
+});
+test('B6 fetch report and each of three original video questioners stay below budget',async()=>{
+  const base=await bound();base.QQ_APP_ID='budget-video-'+(++quoteFixture);
+  for(let i=0;i<3;i++){
+    await qq(base,{...msg('budget-video-'+i,'视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),author:{id:'video-user-'+i}},'GROUP_AT_MESSAGE_CREATE');
+    assert.ok(await measured(base,'p1-B6-handoff-'+i,e=>queue(e,'chat-budget-video-'+i))<=48);
+  }
+  const claimed=await(await req(base,'/api/runner/fetch/claim',{},'runner-secret')).json();assert.ok(claimed.job);
+  const result={bvid:'BV1xx411c7mD',title:'预算测试视频',desc:'简介',owner:'UP',tname:'科技',duration:60,pubdate:1,stat:{},subtitle:null,comments:[],fetched_at:new Date().toISOString()};
+  const report=await measured(base,'p1-B6-report',async e=>assert.equal((await req(e,'/api/runner/fetch/report',{id:claimed.job.id,lease:claimed.job.payload.lease,success:true,result},'runner-secret')).status,200));
+  assert.ok(report<=48);
+  await budgetModel(async state=>{
+    for(let i=0;i<3;i++)assert.ok(await measured(base,'p1-B6-reply-'+i,e=>queue(e,'video-vw-budget-video-'+i))<=48);
+    assert.equal(state.sent.length,3);
+  },{voice:'{"mode":"work","text":"只依据视频简介作答，未读到字幕。"}'});
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='done'").first()).n,3);
+});
+test('B8 newer unmentioned message between image and answer coalesces without a second decision',async()=>{
+  const base=await bound();await qq(base,{...msg('budget-old-image','图片是什么'),attachments:[{content_type:'image/png',url:'https://example.com/phase.png',width:64,height:64}]});
+  await budgetModel(async state=>{
+    await queue(base,'chat-budget-old-image');assert.equal(state.vision,1);assert.equal(state.decisions,0);
+    await qq(base,msg('budget-new-message','再看看这个问题'));
+    await queue(base,'chat-v-budget-old-image');assert.equal(state.decisions,0);
+    await queue(base,'chat-budget-new-message');assert.equal(state.decisions,1);assert.equal(state.vision,1);
+    await queue(base,'chat-v-budget-old-image');assert.equal(state.decisions,1);
+  },{voice:'{"mode":"work","text":"合并后的回答。"}'});
+});
+test('budget guards leave a low-budget send and sweep durable; reference fuse costs ten including switches',async()=>{
+  const sendBase=await outgoing(),low=metered(sendBase,10);
+  const bodies=await deliver(low,()=>Response.json({id:'sent'}));
+  assert.equal(bodies.length,0);assert.equal(low.meter.used,2);
+  assert.equal((await sendBase.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'pending');
+  const fuseBase=await outgoing();await fuseBase.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
+  let before=fuseBase.DB.executed;const fuse=metered(fuseBase);
+  await deliver(fuse,b=>b.message_reference?Response.json({code:1},{status:422}):Response.json({id:'sent',ext_info:{ref_idx:'FUSE-BOT'}}));
+  assert.equal(fuse.meter.used,fuseBase.DB.executed-before);assert.equal(fuse.meter.used-2,10);assert.equal(COST.send_row,10);
+  assert.equal(await setting(fuseBase,'off:quote'),'1');
+  const out=`.wrangler/sweep-budget-${process.pid}.mjs`;
+  await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});
+  const {sweepVideoWaits}=await import('../'+out),base=env();
+  for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,0,3).run();
+  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,3);
+});

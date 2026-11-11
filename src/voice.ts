@@ -91,7 +91,7 @@ export async function speakBrief(e: any, brief: any, context: any) {
           role: "user",
           content: JSON.stringify({
             brief,
-            continuity: e.DB
+            continuity: context.switches ? context.switches.self_note : e.DB
               ? (
                   await e.DB.prepare(
                     "SELECT value FROM settings WHERE key='self_note'",

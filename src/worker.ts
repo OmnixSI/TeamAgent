@@ -1,5 +1,5 @@
 import { quoteRef, quoteOutcome } from "./quote";
-import { metered } from "./d1";
+import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
@@ -661,7 +661,7 @@ async function processJob(e: Env, id: string) {
       const refRows = new Map<string, any>();
       const refId = latestPre.meta?.replyTo?.targetId;
       if (refId) {
-        const row = await e.DB.prepare(
+        const row = preloaded.find((r: any) => r.id === refId) || await e.DB.prepare(
           "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=? AND m.group_id=?",
         )
           .bind(refId, m.group_id)
@@ -931,6 +931,7 @@ async function sendOutbox(e: Env) {
   if (!accessToken) return;
   let switches: Record<string, string | undefined> | undefined;
   for (const o of rows) {
+    if (left(e) < COST.send_row) break;
     let meta: any = {};
     if (o.meta) {
       try { meta = JSON.parse(o.meta); } catch {}
@@ -1137,7 +1138,6 @@ async function scheduled(e: Env) {
     await cleanupBudget(e);
     await set(e, "budget_cleanup_day", date);
   }
-  await sendOutbox(e);
   await e.DB.prepare("DELETE FROM member_sessions WHERE expires<?")
     .bind(Date.now())
     .run();
@@ -1149,6 +1149,8 @@ async function scheduled(e: Env) {
   )
     .bind(iso(), Date.now())
     .run();
+  // Finish mandatory maintenance before the sender spends its remaining budget.
+  await sendOutbox(e);
 }
 async function api(r: Request, e: Env) {
   const u = new URL(r.url),

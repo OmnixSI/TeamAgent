@@ -1,3 +1,4 @@
+import { COST, left, ResourceLimitError } from "./d1";
 import { parseDecision } from "./rhythm";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
@@ -838,7 +839,7 @@ export async function agentAnswer(e: any, context: any) {
         {
           max_tokens: 8192,
           messages,
-          ...(turn < 2 ? { tools } : {}),
+          ...(turn < 2 && left(e) >= COST.turn * 2 + COST.tool + COST.tail ? { tools } : {}),
         },
       );
       m = d.choices?.[0]?.message;
@@ -929,6 +930,7 @@ export async function agentAnswer(e: any, context: any) {
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
       try {
+        if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
         if (index >= 3) throw Error("本轮工具额度已用完");
         const a = JSON.parse(call.function.arguments);
         switch (call.function.name) {
@@ -1185,7 +1187,7 @@ export async function agentAnswer(e: any, context: any) {
       } catch (error) {
         result = {
           unavailable: true,
-          reason: error instanceof AuthorizationError ? error.message : "未能获得资料，不能据此编造结论",
+          reason: error instanceof AuthorizationError || error instanceof ResourceLimitError ? error.message : "未能获得资料，不能据此编造结论",
         };
       }
       if (result?.accepted === true)

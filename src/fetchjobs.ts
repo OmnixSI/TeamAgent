@@ -1,3 +1,4 @@
+import { left } from "./d1";
 import { TEAM } from "./config";
 import { extractBili } from "./inbound";
 import { metaOf } from "./view";
@@ -122,10 +123,16 @@ async function failVideoWait(e: any, w: Row): Promise<void> {
 export async function sweepVideoWaits(e: any): Promise<void> {
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='本机抓取端未回报' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
-  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 20").bind(now).all()).results;
-  for (const w of exhausted) await failVideoWait(e, w);
-  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 20").bind(now, now).all()).results;
-  for (const w of rows) await wakeVideoWait(e, w.id);
+  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
+  for (const w of exhausted) {
+    if (left(e) < 4) break;
+    await failVideoWait(e, w);
+  }
+  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 5").bind(now, now).all()).results;
+  for (const w of rows) {
+    if (left(e) < 4) break;
+    await wakeVideoWait(e, w.id);
+  }
 }
 export async function claimFetch(e: any): Promise<Row | null> {
   const now = Date.now(), lease = crypto.randomUUID();
