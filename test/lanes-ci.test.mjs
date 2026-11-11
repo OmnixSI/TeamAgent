@@ -97,7 +97,7 @@ test("CI triage uses concrete annotations, is high effort, and never re-runs the
       annotations: [
         {
           message:
-            "The job was not started because account payments have failed or the spending limit needs to be increased.",
+            "src/ci.ts: Cannot find module '@example/missing-types' (TS2307).",
           level: "failure",
         },
       ],
@@ -122,18 +122,17 @@ test("CI triage uses concrete annotations, is high effort, and never re-runs the
           {
             message: {
               content:
-                '{"mode":"work","text":"是账户账单或额度限制，job根本没启动；先由管理员核对账户状态。"}',
+                '{"mode":"work","text":"CI报TS2307缺少模块，先核对依赖和锁文件。"}',
             },
           },
         ],
       });
-    assert.ok(b.messages[1].content.includes("The job was not started"));
+    assert.ok(b.messages[1].content.includes("TS2307"));
     return Response.json({
       choices: [
         {
           message: {
-            content:
-              "具体annotation表明账户账单或额度受限，job未启动，不能判成代码测试失败。",
+            content: "具体annotation表明TS2307缺少模块，先核对依赖和锁文件。",
           },
         },
       ],
@@ -151,7 +150,7 @@ test("CI triage uses concrete annotations, is high effort, and never re-runs the
     assert.equal(calls, 2);
     assert.match(
       (await e.DB.prepare("SELECT body FROM discoveries").first()).body,
-      /job未启动/,
+      /TS2307/,
     );
   } finally {
     globalThis.fetch = original;

@@ -415,8 +415,12 @@ test("CI notifications deduplicate and media lease rejects stale reports", async
   };
   await req(e, "/api/runner/context", payload, "runner-secret");
   await req(e, "/api/runner/context", payload, "runner-secret");
+  const ci = await e.DB.prepare(
+    "SELECT id FROM jobs WHERE kind='ci_triage'",
+  ).first();
+  await worker.queue({ messages: [{ body: { id: ci.id }, ack() {} }] }, e);
   assert.equal(
-    (await e.DB.prepare("SELECT * FROM outbox WHERE id LIKE 'ci-%'").all())
+    (await e.DB.prepare("SELECT * FROM outbox WHERE id LIKE 'ci2-%'").all())
       .results.length,
     1,
   );
@@ -770,6 +774,44 @@ test("participation follows semantic judgment without a fixed quota", async () =
     true,
   );
   assert.equal(await maySpeak(e, { should_reply: false }, false, true), true);
+});
+test("unprompted repeated wording is silent but an explicit follow-up still gets an answer", async () => {
+  const e = env(),
+    original = globalThis.fetch;
+  await e.DB.prepare("INSERT INTO outbox VALUES(?,?,?,?,?,?)")
+    .bind(
+      "previous-reply",
+      "GROUP000001",
+      null,
+      "这条 建议，我说过。",
+      "sent",
+      Date.now(),
+    )
+    .run();
+  globalThis.fetch = async (_url, options) => {
+    const b = JSON.parse(options.body);
+    return Response.json({
+      choices: [
+        {
+          message: {
+            content: b.messages[0].content.includes("最后的嘴替模块")
+              ? '{"mode":"work","text":"这条建议我说过"}'
+              : '{"should_reply":true,"kind":"proactive","brief":"此前已给过的建议"}',
+          },
+        },
+      ],
+    });
+  };
+  try {
+    const context = { latest: { body: "一个普通讨论" }, recent: [] };
+    assert.equal(decodeVoice(await agentAnswer(e, context)).text, "[[SILENT]]");
+    assert.equal(
+      decodeVoice(await agentAnswer(e, { ...context, mentioned: true })).text,
+      "这条建议我说过",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 test("silent participation never calls the voice model or queues a QQ reply", async () => {
   const e = env();

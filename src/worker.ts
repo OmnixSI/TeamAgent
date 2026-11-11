@@ -7,6 +7,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
+import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
 import {
@@ -329,14 +330,6 @@ async function receive(r: Request, e: Env) {
     await job(e, "chat-" + m.id, "chat", { message: m.id });
   return json({ op: 12, d: 0 });
 }
-function publicCIUrl(value: string) {
-  try {
-    const u = new URL(value);
-    return u.protocol === "https:" && u.hostname === "github.com";
-  } catch {
-    return false;
-  }
-}
 async function repoContext(e: Env, repo: string) {
   if (!REPOS.includes(repo)) throw Error("repository not allowed");
   const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
@@ -470,62 +463,23 @@ async function processJob(e: Env, id: string) {
           .run();
     }
     if (claim.kind === "ci_triage") {
-      const cache = await e.DB.prepare(
-        "SELECT json FROM repo_cache WHERE repo=?",
-      )
-        .bind(p.repo)
-        .first();
-      const context = cache ? JSON.parse(cache.json) : null;
-      const text = await llm(
-        e,
-        "chat",
-        "根据实际CI检查和已同步项目资料做一次只读初步排查，最多450字。分清已知错误与可能原因，给最便宜的核实步骤；优先引用annotation中的具体失败信息；没有证据时不罗列猜测，不编造根因。不要说已经修复或主动开发。",
-        { repo: p.repo, check: p.check, context },
-      );
-      const urls = publicCIUrl(p.check.html_url) ? [p.check.html_url] : [];
-      const previous = await e.DB.prepare(
-        "SELECT id FROM discoveries WHERE repo=? AND title=? AND urls=? LIMIT 1",
-      )
-        .bind(p.repo, "CI排查 · " + p.check.name, JSON.stringify(urls))
-        .first();
-      await e.DB.prepare(
-        "INSERT INTO discoveries(id,repo,title,body,urls,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,created_at=excluded.created_at",
-      )
-        .bind(
-          previous?.id || p.incident || id,
-          p.repo,
-          "CI排查 · " + p.check.name,
-          text,
-          JSON.stringify(urls),
-          iso(),
-        )
-        .run();
-      const group = await setting(e, "group_id");
-      if (group) {
-        const spoken = decodeVoice(
-          await speakBrief(
+      await triageCI(e, p, {
+        analyse: async (facts: any) => {
+          const cache = await e.DB.prepare(
+            "SELECT json FROM repo_cache WHERE repo=?",
+          )
+            .bind(facts.repo)
+            .first();
+          return llm(
             e,
-            {
-              facts: text,
-              sourceUrls: urls,
-              instruction:
-                "CI只读初查结果，群里说关键证据和一步建议，完整内容在开发台。不要声称已修复。",
-            },
-            { intent: "分享CI初查" },
-          ),
-        );
-        if (urls[0] && !spoken.text.includes(urls[0]))
-          spoken.text += "\n" + urls[0];
-        await enqueueVoice(e, id, group, null, JSON.stringify(spoken));
-      }
-      await activity(
-        e,
-        "ci.triaged",
-        p.repo,
-        "Bot",
-        "已根据可用CI证据完成只读初查",
-        id,
-      );
+            "chat",
+            "根据实际CI检查和已同步项目资料做一次只读初步排查，最多450字。区分已知错误与可能原因，优先引用annotation具体失败信息，给最便宜的核实步骤；没有证据不罗列猜测，不编造根因，不宣称已修复。",
+            { ...facts, context: cache ? JSON.parse(cache.json) : null },
+          );
+        },
+        voice: (brief: any) =>
+          speakBrief(e, brief, { intent: "分享一次CI初查" }),
+      });
     }
     if (claim.kind === "research") {
       if (p.latestId) {
@@ -1411,53 +1365,20 @@ async function api(r: Request, e: Env) {
       if (!/^OmnixSI\/[A-Za-z0-9_.-]+$/.test(String(b.repo)))
         return json({ error: "repository denied" }, 403);
       const group = await setting(e, "group_id");
-      if (group)
-        for (const check of Array.isArray(b.context.checks)
-          ? b.context.checks
-          : []) {
-          if (
-            !["failure", "timed_out", "action_required"].includes(
-              check.conclusion,
-            )
-          )
-            continue;
-          const key = "ci-" + b.repo + "-" + check.id + "-" + check.head_sha;
-          const fresh = await e.DB.prepare(
-            "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?) RETURNING id",
-          )
-            .bind(
-              key,
-              group,
-              null,
-              b.repo +
-                " 的 " +
-                check.name +
-                " 检查未通过。我先根据现有证据做个初查：" +
-                check.html_url,
-              "pending",
-              Date.now(),
-            )
-            .first();
-          const evidence = check.evidence || {};
-          if (
-            evidence.title ||
-            evidence.summary ||
-            evidence.annotations?.length
-          ) {
-            const digest = (await hash(JSON.stringify(evidence))).slice(0, 16);
-            await job(e, key + "-triage-" + digest, "ci_triage", {
-              repo: b.repo,
-              check: promptData(check),
-              incident: key,
-            });
-          }
-        }
       const old = await e.DB.prepare(
         "SELECT json,updated_at FROM repo_cache WHERE repo=?",
       )
         .bind(b.repo)
         .first();
       const previous = old ? JSON.parse(old.json) : {};
+      await observeChecks(
+        e,
+        b.repo,
+        Array.isArray(b.context.checks) ? b.context.checks : [],
+        previous,
+        group,
+        (id: string, kind: string, payload: any) => job(e, id, kind, payload),
+      );
       const merged = promptData(b.context);
       merged.stale_sections = {};
       for (const key of [

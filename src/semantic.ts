@@ -7,6 +7,7 @@ import {
   participation,
   maySpeak,
   recordProactive,
+  alreadySaid,
 } from "./engagement";
 import {
   phraseCandidates,
@@ -653,6 +654,11 @@ export async function agentAnswer(e: any, context: any) {
           .sort((a: any, b: any) => a.at - b.at)
           .slice(-32),
         recentBot,
+        alreadyReportedCI: (
+          await e.DB.prepare(
+            "SELECT scope,repo,check_name,cause,summary,state FROM ci_incidents WHERE notified_cycle>0 AND state='open' ORDER BY updated_at DESC LIMIT 8",
+          ).all()
+        ).results,
         context: promptContext,
       }),
     },
@@ -743,8 +749,11 @@ export async function agentAnswer(e: any, context: any) {
         },
         context,
       );
-      if (decision.kind !== "direct" && !forced && !acceptedActions.length)
+      if (decision.kind !== "direct" && !forced && !acceptedActions.length) {
+        if (alreadySaid(decodeVoice(spoken).text, recentBot))
+          return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         await recordProactive(e);
+      }
       return spoken;
     }
     messages.push(m);
