@@ -20,9 +20,8 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
+      - name: Check local Python
+        run: python3 -c "import sys; assert sys.version_info >= (3, 12); print(sys.version)"
       - run: npm ci
       - run: npm run check
       - run: npm test
