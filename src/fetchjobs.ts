@@ -1,3 +1,4 @@
+import { left } from "./d1";
 import { TEAM } from "./config";
 import { extractBili } from "./inbound";
 import { metaOf } from "./view";
@@ -54,19 +55,22 @@ export async function requestBili(e: any, ref: string, tier: string, waiter: str
   await fetchStatement(e, ref, tier, waiter).run();
 }
 /** A committed handoff remains authoritative even after its reply finishes. */
-export async function videoWaitExists(e: any, groupId: string, latestId: string): Promise<boolean> {
-  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id=? LIMIT 1")
-    .bind(groupId, latestId).first());
+export async function videoWaitExists(e: any, groupId: string, latestId: string | string[]): Promise<boolean> {
+  const ids = Array.isArray(latestId) ? latestId : [latestId];
+  if (!ids.length) return false;
+  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id IN (" + ids.map(() => "?").join(",") + ") LIMIT 1")
+    .bind(groupId, ...ids).first());
 }
 export async function startVideoWait(e: any, x: { groupId: string; ref: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
   if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;
-  const active = await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running') LIMIT 1").bind(x.groupId, x.ref).first();
-  if (active) return false;
+  const active = await e.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')").bind(x.groupId, x.ref).first();
+  if (active.n >= 3) return false;
   const now = Date.now(), id = "vw-" + x.latest.id;
   await e.DB.batch([
     e.DB.prepare(`INSERT OR IGNORE INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,due_at,created_at)
-      SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running'))`)
-      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
+      SELECT ?,?,?,?,?,?,COALESCE((SELECT MIN(due_at) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')),?),?
+      WHERE (SELECT COUNT(*) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')) < 3`)
+      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
     fetchStatement(e, x.ref, "light", id, now),
   ]);
   return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first());
@@ -128,10 +132,16 @@ async function failVideoWait(e: any, w: Row): Promise<void> {
 export async function sweepVideoWaits(e: any): Promise<void> {
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='本机抓取端未回报' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
-  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 20").bind(now).all()).results;
-  for (const w of exhausted) await failVideoWait(e, w);
-  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 20").bind(now, now).all()).results;
-  for (const w of rows) await wakeVideoWait(e, w.id);
+  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
+  for (const w of exhausted) {
+    if (left(e) < 4) break;
+    await failVideoWait(e, w);
+  }
+  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 5").bind(now, now).all()).results;
+  for (const w of rows) {
+    if (left(e) < 4) break;
+    await wakeVideoWait(e, w.id);
+  }
 }
 export async function claimFetch(e: any): Promise<Row | null> {
   const now = Date.now(), lease = crypto.randomUUID();

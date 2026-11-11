@@ -237,6 +237,74 @@
         "enabled",
         "wait_seconds"
       ]
+    },
+    "rhythm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mention",
+        "image",
+        "busy",
+        "idle",
+        "cap_ms",
+        "wait_min",
+        "wait_max",
+        "wait_horizon_ms",
+        "hard_window_ms",
+        "hard_humans"
+      ],
+      "properties": {
+        "mention": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "image": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "busy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "idle": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "cap_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        },
+        "wait_min": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 45
+        },
+        "wait_max": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 45
+        },
+        "wait_horizon_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600000
+        },
+        "hard_window_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "hard_humans": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
     }
   },
   "required": [
@@ -246,7 +314,8 @@
     "execution",
     "repositories",
     "project_aliases",
-    "bili"
+    "bili",
+    "rhythm"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamAgent共享参数"

@@ -1,3 +1,4 @@
+import { chunks } from "./d1";
 import { TEAM } from "./config";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
@@ -331,12 +332,8 @@ export async function describeImage(
   }
 }
 
-export async function annotateTurn(
-  e: any,
-  picks: ImagePick[],
-  deadlineMs = TEAM.vision?.turn_deadline_ms ?? 12000,
-) {
-  if (!picks.length) return;
+export async function coldPicks(e: any, picks: ImagePick[]): Promise<ImagePick[]> {
+  if (!picks.length) return [];
   const ids = [...new Set(picks.map((p) => p.messageId))];
   const existing = new Set(
     (
@@ -349,13 +346,20 @@ export async function annotateTurn(
         .all()
     ).results.map((r: any) => r.message_id + ":" + r.idx),
   );
+  return picks.filter(p => !existing.has(p.messageId + ":" + p.idx));
+}
+
+export async function annotateTurn(
+  e: any,
+  picks: ImagePick[],
+  deadlineMs = TEAM.vision?.turn_deadline_ms ?? 12000,
+) {
+  if (!picks.length) return;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs);
   try {
     await Promise.allSettled(
-      picks
-        .filter((p) => !existing.has(p.messageId + ":" + p.idx))
-        .map(async (p) => {
+      picks.map(async (p) => {
           const note = await describeImage(
             e,
             p.media,
@@ -382,15 +386,10 @@ export async function imageNotesFor(
   const ids = [...new Set(messageIds.filter(Boolean))];
   const out = new Map<string, string[]>();
   if (!ids.length) return out;
-  const rows = (
-    await e.DB.prepare(
-      "SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" +
-        ids.map(() => "?").join(",") +
-        ") ORDER BY mi.message_id,mi.idx",
-    )
-      .bind(...ids)
-      .all()
-  ).results;
+  const batches = await e.DB.batch(chunks(ids).map(part =>
+    e.DB.prepare("SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" + part.map(() => "?").join(",") + ") ORDER BY mi.message_id,mi.idx")
+      .bind(...part)));
+  const rows = batches.flatMap((r: any) => r.results);
   for (const r of rows) {
     const note =
       "图片：" +

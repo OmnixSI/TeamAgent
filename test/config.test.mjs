@@ -50,3 +50,12 @@ test("worker routing reads the same default model, per-kind effort and timeout s
   );
   assert.equal(modelSettings("voice", "high", 1).model, settings.model.name);
 });
+test('rhythm settings validate debounce seconds and positive timing thresholds',()=>{
+  assert.deepEqual(validateTeamConfig(settings),[]);
+  for(const [key,value] of [['mention',11],['idle',-1],['busy','3'],['cap_ms',0],['hard_humans',0]]){
+    const bad=structuredClone(settings);bad.rhythm[key]=value;
+    assert.ok(validateTeamConfig(bad).includes('rhythm.'+key),key);
+  }
+  const bad=structuredClone(settings);bad.rhythm.wait_min=40;bad.rhythm.wait_max=10;
+  assert.ok(validateTeamConfig(bad).some(x=>x.startsWith('rhythm.wait_min')));
+});

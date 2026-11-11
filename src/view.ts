@@ -1,4 +1,4 @@
-import { renderMentions, type Card, type Mention } from "./inbound";
+import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
 
 export type ViewMsg = {
   id: string; sortAt: number; ord: number; at: string; from: string; fromId: string;
@@ -8,15 +8,30 @@ export type ViewMsg = {
 };
 export type RefTarget = { id: string; from: string; fromId: string; text: string; media?: string[] };
 const mentionsOf = new WeakMap<ViewMsg, Mention[]>();
+export function withLegacy(meta: any): any {
+  if (meta.media !== undefined) return meta;
+  const next = { ...meta }, media = mediaOf(meta.attachments);
+  if (media.length) next.media = media;
+  if (next.ownUrls === undefined && meta.urls !== undefined) next.ownUrls = meta.urls;
+  if (next.quoted === undefined && meta.forwarded?.length)
+    next.quoted = { authorId: "", text: meta.forwarded.map((q: any) => q.content).join(" ").slice(0, 200), media: [] };
+  if (next.bili === undefined && next.ownUrls?.length) next.bili = extractBili(next.ownUrls, "");
+  return next;
+}
 export function metaOf(row: any): any {
-  if (row.meta) return row.meta;
-  try { return JSON.parse(row.metadata || "{}"); } catch { return {}; }
+  if (row.meta) return withLegacy(row.meta);
+  try { return withLegacy(JSON.parse(row.metadata || "{}")); } catch { return {}; }
+}
+const FACE = /\[<face,id=\d+\/>\]|<faceType=[^>]*>/g;
+export function displayText(body: string, mentions: Mention[]): string {
+  return renderMentions(body, mentions).replace(FACE, "[表情]");
 }
 function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
   return (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
 }
 export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
-  return row.body.includes(quote) || renderMentions(row.body, resolvedMentions(metaOf(row), names)).includes(quote);
+  const mentions = resolvedMentions(metaOf(row), names);
+  return row.body.includes(quote) || renderMentions(row.body, mentions).includes(quote) || displayText(row.body, mentions).includes(quote);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {
@@ -87,7 +102,7 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
     id: row.id, sortAt, ord: row.ordinal || 0, at: stamp(sortAt).time,
     from: named(row.sender || "", names.get(row.sender) || meta.senderName, names), fromId: String(row.sender || "").slice(-6),
     to: addressee({ ...meta, mentionsBot }, names), re: target?.id,
-    text: renderMentions(String(row.body || ""), mentions).replace(/\[<face,id=\d+\/>\]|<faceType=[^>]*>/g, "[表情]") || meta.placeholder || "",
+    text: displayText(String(row.body || ""), mentions) || meta.placeholder || "",
     ...(Object.keys(material).length ? { material } : {}), ...(flags.length ? { flags } : {}),
   };
   mentionsOf.set(v, mentions);

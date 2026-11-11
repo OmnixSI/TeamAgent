@@ -73,3 +73,50 @@ Node24或更新、Python3.12或更新即可运行检查；检查不调用付费�
 迁移发布电脑：使用[GitHub官方自托管runner安装流程](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)，只关联本私有仓库，标签包含 `teamagent`。新电脑登录Wrangler并安装Node、Python、gh与DSH；按[运维说明](operations.md)准备QQ、autoloop和后台服务，再运行Check。迁移QQ网关时先停止旧网关，避免同一机器人两处登录。
 
 本机目录仍叫 `~/.inkboard-team`，用于沿用绑定、缓冲与历史回执。它包含当前连接、共享凭据、session、工作副本和日志；可维护源码均在本仓库，历史群数据在D1，运行状态不作为源码提交。发布runner的注册材料保存在本机专用目录，重新注册不需要改业务代码。
+
+## 插话、防抖与紧急关闭
+
+`config/team.json` 的 `rhythm` 控制聊天时机，修改后需要部署；D1 的 `settings` 开关在下次判定或发送时读取，不需要部署。
+
+| rhythm 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `mention / image / busy / idle` | `1 / 4 / 3 / 2` 秒 | 被 @、只发图、两分钟内至少三条人类消息、其他聊天的防抖；可设为 0，范围 0–10 |
+| `cap_ms` | 8000 | 最早未处理消息超过此时限，允许非最新任务处理这批消息 |
+| `wait_min / wait_max` | `5 / 45` 秒 | 模型请求等待的上下界；同批最多等一次 |
+| `wait_horizon_ms` | 120000 | 超过此批次年龄，不再接受等待 |
+| `hard_window_ms / hard_humans` | `1800000 / 6` | 上次主动发言在半小时内、之后少于六条人类消息且没人 @ 或引用机器人时，拦住第二次主动插话 |
+
+通过既有、已授权的 D1 管理入口写入以下语句，即可停用等待或引用；删除对应行后恢复。关闭等待会把模型的 `wait` 解释为 `stop`，不影响被 @ 的必回规则；关闭引用也会影响已入队但未发送的引用。
+
+```sql
+INSERT INTO settings(key,value) VALUES('off:wait','1') ON CONFLICT(key) DO UPDATE SET value='1';
+INSERT INTO settings(key,value) VALUES('off:quote','1') ON CONFLICT(key) DO UPDATE SET value='1';
+-- 恢复：DELETE FROM settings WHERE key IN ('off:wait','off:quote');
+```
+
+`off:sticker_send`、`off:sticker_collect` 和 `sticker_paused_until` 仅作为后续表情能力的预留开关，本次 P1 不启用表情发送。引用连续出现三次「HTTP 400/422 JSON → 去掉引用后成功」时，自动设置 `off:quote=1`，并记录 `quote.disabled`。其他 HTTP 错误或未知发送结果不因此重发。恢复前应核对 `outbox_attempts` 和真实 QQ 响应；成功带引用发送会归零 `quote_fail`。
+
+`chat_decisions` 保存每轮的批次、动作、是否 forced、等待、硬规则、引用目标与 outbox id；`outbox_meta` 单独保存引用，保留旧表的位置插入格式。两张表只通过幂等 CREATE 追加。冷图段不写决策或推进游标，续跑的 `chat-v-*` 才判定；等待续跑是 `chat-wait-*`。
+
+部署后的观察点：`last_chat_timing.queueMs` 可核对 Queues 延迟投递；若被 @ 的队列等待持续超过 5 秒，按方案将四个防抖秒数设为 0 后部署回退。QQ 拒绝引用的真实码型、外部请求与 D1 子请求配额仍需线上日志核验，单测不能替代。
+
+## D1 预算与插话评测
+
+`src/d1.ts` 的 `metered()` 在 fetch、每条 queue 消息和 scheduled 入口记录真实执行数，`batch` 的每条语句分别计数。上限 48 为故障路径保留两条；计量器只记录，工具、发送和视频扫描在调用处判断余量。
+
+`COST` 依据 `test/rhythm.test.mjs` 的 B3–B7 实测：冷图 `image=6`，每次模型用量记录 `turn=2`；带八条旧事实更新的纠正工具最多 12，故 `tool` 从 8 升为 12。首次读开关、引用去除重发及第三次失败熔断合计最多 10，故 `send_row` 从 7 升为 10。`tail=16` 保留后续回答与持久化余量，`sticker=5` 为尚未实现的 P2 初值。本次实测三图段 28、引用加两段发送的回答段 44、重工具回合 44、research 30、视频 report 8、各 video_reply 29、积压 cron 最多 44 条。视频扫描每类最多五条；积压由后续 cron 和独立队列任务继续处理。cron 先完成必要维护，再把剩余额度交给发送，避免发送耗尽维护额度。
+
+不准通过调高 48 或调低常量掩盖超限。后续实现扩大工具或发送路径时，先补最大路径的计数测试，再按实测提高常量；三图段应分别保持不超过 30 和 44。
+
+60 条合成场景在 `test/fixtures/timing-synthetic.json`，全部虚构，不含群消息。`scripts/evaluate-timing.mjs` 调用生产的视图、提示组装、三态解析和硬规则函数；标签不进入提示，模型走既有 runtime 边界。真实模型评测只接收当前进程已有的 `DEEPSEEK_API_KEY`，不读取 `.env` 或凭据文件，不发送 QQ、不读远端 D1、不在 CI 调用模型。
+
+```sh
+# 仅确定性规则验证，不调用模型，不代表合成模型评测通过
+node scripts/evaluate-timing.mjs --rules-only
+# 在已安全配置环境变量的本机进程运行；最多调参重跑三轮
+node scripts/evaluate-timing.mjs
+```
+
+默认结果写入 `~/.inkboard-team/eval/timing-synthetic-result.json`，权限 0600；用 `--output <本机路径>` 可指定位置，不提交结果。本轮 P1 代码交付要求离线合成评测测试和四条规则断言全部通过；按总指挥 2026-11-12 的接续安排，真实模型由交付员在已安全注入环境变量的进程里补跑，作为附加证据，不阻塞代码交付。真实模型评分仍以至少 90% 为通过线；缺少环境变量、请求失败或仅跑规则时不会标记模型合成评测通过。错误只报告未完成，不输出密钥或原始服务异常。
+
+200 个真实窗口的双模型银标、影子回放与 wait 污染排除另行执行；本脚本不声称完成该项。若合并时真实回放仍未达标，部署接续方按方案暂设 `off:wait=1`，达标后再恢复。

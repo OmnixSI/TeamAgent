@@ -52,3 +52,7 @@ CREATE TABLE IF NOT EXISTS video_waits(id TEXT PRIMARY KEY,group_id TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS video_waits_due ON video_waits(status,due_at);
 CREATE TABLE IF NOT EXISTS image_notes(sha TEXT PRIMARY KEY,desc TEXT NOT NULL,tags TEXT NOT NULL,sticker_like INTEGER NOT NULL,text TEXT,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS message_images(message_id TEXT NOT NULL,idx INTEGER NOT NULL,sha TEXT NOT NULL,PRIMARY KEY(message_id,idx));
+
+CREATE TABLE IF NOT EXISTS chat_decisions(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,latest_id TEXT NOT NULL,batch_ids TEXT NOT NULL,mentioned INTEGER NOT NULL,forced INTEGER NOT NULL,waited INTEGER NOT NULL,gate TEXT NOT NULL,action TEXT NOT NULL,spoken_kind TEXT,target_id TEXT,wait_seconds INTEGER,reason TEXT,outbox_id TEXT,policy TEXT NOT NULL DEFAULT 'live',model_ms INTEGER,created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS chat_decisions_group ON chat_decisions(group_id,created_at);
+CREATE TABLE IF NOT EXISTS outbox_meta(id TEXT PRIMARY KEY,json TEXT NOT NULL);

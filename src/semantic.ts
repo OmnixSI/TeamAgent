@@ -1,4 +1,7 @@
-import { loadChatContext, buildViews } from "./context";
+import { COST, left, ResourceLimitError } from "./d1";
+import { parseDecision } from "./rhythm";
+import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
+import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
@@ -6,9 +9,9 @@ import { model, activity, redact, utilityText } from "./runtime";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
+  participationMessages,
   participation,
   maySpeak,
-  recordProactive,
   alreadySaid,
 } from "./engagement";
 import {
@@ -58,6 +61,9 @@ export async function analyse(e: any, p: any, s: Services) {
   ).results;
   for (const m of rows)
     m.meta = JSON.parse(metadata.find((x: any) => x.id === m.id)?.json || "{}");
+  // Nightly learning has no interactive authorization step. Reject a tainted
+  // round entirely, including facts, expressions, reflection and self_note.
+  if (tainted({ ...p, batch: rows }, rows.map((m: any) => ({ role: "user", content: m.body })))) return;
   if (p.dream)
     rows = rows.filter(
       (m: any) =>
@@ -129,6 +135,7 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
         .all()
     ).results.map((f: any) => f.source_id),
   );
+  const names = await namesFor(e, rows.flatMap((r: any) => [r.sender, ...(r.meta?.mentions || []).map((m: any) => m.id)]));
   const factWrites = [];
   for (const f of Array.isArray(result.facts) ? result.facts.slice(0, 8) : []) {
     const source = rows.find((m: any) => m.id === f.source_id);
@@ -137,7 +144,7 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
       !(REPOS.includes(f.repo) || f.repo === "team") ||
       typeof f.evidence !== "string" ||
       !f.evidence.trim() ||
-      !quoteIn(source, f.evidence) ||
+      !quoteIn(source, f.evidence, names) ||
       !["confirmed", "proposal"].includes(f.status)
     )
       continue;
@@ -592,6 +599,15 @@ export async function scout(e: any, p: any, s: Services) {
   );
 }
 
+async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: any, context: any, messages: any[]) {
+  const result = authorize(tool, quote, source, context, messages);
+  if (result.ok === false) {
+    await activity(e, "authz.denied", tool, source?.sender || "Bot", tool + ": " + result.reason);
+    throw new AuthorizationError(result.reason);
+  }
+  return result;
+}
+
 export async function agentAnswer(e: any, context: any) {
   const facts = (
     await e.DB.prepare(
@@ -620,7 +636,7 @@ export async function agentAnswer(e: any, context: any) {
       function: {
         name: "remember_correction",
         description:
-          "仅在当前成员明确纠正项目代称、既有事实或你的习惯，或明确解释本群黑话时，用原话立即记住。普通推测不调用。",
+          "仅在当前成员用不是…是、应该叫、名字改成、纠正、其实是等明确纠正语气修正项目代称、既有事实或你的习惯时，用原话保存纠正。普通记住某个现象的陈述、转述和推测不调用。",
         parameters: {
           type: "object",
           properties: {
@@ -788,15 +804,8 @@ export async function agentAnswer(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
-  const messages: any[] = context.resume?.messages || [
-    {
-      role: "system",
-      content: PARTICIPATION,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        selfNote: (
+  const messages: any[] = context.resume?.messages || participationMessages({
+        selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
           ).first()
@@ -806,7 +815,7 @@ export async function agentAnswer(e: any, context: any) {
         projects: INITIAL_PROJECT_HINTS,
         facts: promptFacts,
         materials: context.materials,
-        reflection: (
+        reflection: context.switches ? context.switches.team_reflection : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='team_reflection'",
           ).first()
@@ -819,9 +828,7 @@ export async function agentAnswer(e: any, context: any) {
           ).all()
         ).results,
         context: promptContext,
-      }),
-    },
-  ];
+  });
   for (let turn = context.resume?.turn || 0; turn < 3; turn++) {
     let m: any;
     if (context.resume?.pending) {
@@ -835,7 +842,7 @@ export async function agentAnswer(e: any, context: any) {
         {
           max_tokens: 8192,
           messages,
-          ...(turn < 2 ? { tools } : {}),
+          ...(turn < 2 && left(e) >= COST.turn * 2 + COST.tool + COST.tail ? { tools } : {}),
         },
       );
       m = d.choices?.[0]?.message;
@@ -851,12 +858,14 @@ export async function agentAnswer(e: any, context: any) {
       !context.background &&
       context.latest?.id
     ) {
+      Object.assign(context.decisionOut ?? {}, { action: "tool" });
       const id = "research-" + context.latest.id;
       const payload = {
         latestId: context.latest.id,
         batchIds: context.batch?.map((m: any) => m.id) || [context.latest.id],
         mentioned: context.mentioned,
         videoWaited: context.videoWaited,
+        authz: { tainted: tainted(context, messages) },
         intent: context.intent,
         background: true,
         resume: { messages, pending: m, turn },
@@ -898,8 +907,9 @@ export async function agentAnswer(e: any, context: any) {
             (r: any) => r.body.trim() === String(q.content || "").trim(),
           ),
         );
-      const decision = participation(m.content, forced);
-      if (!(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
+      const decision = parseDecision(m.content, { forced, allowWait: !!context.allowWait });
+      Object.assign(context.decisionOut ?? {}, decision, { forced });
+      if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       const spoken = await speakBrief(
         e,
@@ -912,9 +922,10 @@ export async function agentAnswer(e: any, context: any) {
         context,
       );
       if (decision.kind !== "direct" && !forced && !acceptedActions.length) {
-        if (alreadySaid(decodeVoice(spoken).text, recentBot))
+        if (alreadySaid(decodeVoice(spoken).text, recentBot)) {
+          Object.assign(context.decisionOut ?? {}, { action: "dup" });
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
-        await recordProactive(e);
+        }
       }
       return spoken;
     }
@@ -922,6 +933,7 @@ export async function agentAnswer(e: any, context: any) {
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
       try {
+        if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
         if (index >= 3) throw Error("本轮工具额度已用完");
         const a = JSON.parse(call.function.arguments);
         switch (call.function.name) {
@@ -954,6 +966,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            await authorizeWrite(e, "remember_correction", a.quote, source, context, messages);
             result = await rememberCorrection(e, a, source, context.names);
             break;
           }
@@ -964,6 +977,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            await authorizeWrite(e, "create_file_task", a.request_quote, source, context, messages);
             if (
               !source?.id ||
               !(
@@ -1070,6 +1084,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            const authorization = await authorizeWrite(e, "prepare_project_task", a.request_quote, source, context, messages);
             if (
               !source?.id ||
               source.meta?.direct !== true ||
@@ -1088,7 +1103,7 @@ export async function agentAnswer(e: any, context: any) {
                 a.repo,
                 String(a.title).slice(0, 300),
                 String(a.detail).slice(0, 12000),
-                a.execute_requested === true
+                authorization.tainted ? "proposal" : a.execute_requested === true
                   ? a.complexity === "small"
                     ? "queued"
                     : "needs_human"
@@ -1172,10 +1187,10 @@ export async function agentAnswer(e: any, context: any) {
           default:
             result = { error: "unknown tool" };
         }
-      } catch {
+      } catch (error) {
         result = {
           unavailable: true,
-          reason: "未能获得资料，不能据此编造结论",
+          reason: error instanceof AuthorizationError || error instanceof ResourceLimitError ? error.message : "未能获得资料，不能据此编造结论",
         };
       }
       if (result?.accepted === true)

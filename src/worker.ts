@@ -1,3 +1,7 @@
+import { isDirectRequest } from "./engagement";
+import { quoteRef, quoteOutcome } from "./quote";
+import { metered, COST, left } from "./d1";
+import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
@@ -23,6 +27,7 @@ import {
 } from "./voice";
 import {
   annotateTurn,
+  coldPicks,
   imageNotesFor,
   pickImages,
   visionProvider,
@@ -108,14 +113,19 @@ async function runner(r: Request, e: Env) {
     )) === (await hash(e.RUNNER_TOKEN))
   );
 }
-async function job(e: Env, id: string, kind: string, payload: any) {
+async function job(e: Env, id: string, kind: string, payload: any, opts?: { delaySeconds?: number }) {
+  const delaySeconds = opts?.delaySeconds || 0;
+  if (delaySeconds > 0) payload.notBefore = Date.now() + delaySeconds * 1000;
   await e.DB.prepare(
     "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
   )
     .bind(id, kind, JSON.stringify(payload), Date.now())
     .run();
   const queue = queueFor(e, kind, payload);
-  if (queue) await queue.send({ id });
+  if (queue) {
+    if (delaySeconds > 0) await queue.send({ id }, { delaySeconds: Math.ceil(delaySeconds) });
+    else await queue.send({ id });
+  }
 }
 async function qqKey(secret: string) {
   let s = secret;
@@ -362,8 +372,12 @@ async function receive(r: Request, e: Env) {
         Date.now(),
       )
       .run();
-  } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text))
-    await job(e, "chat-" + m.id, "chat", { message: m.id });
+  } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text)) {
+    const recentTs = (await e.DB.prepare("SELECT ts FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 10").bind(m.group_openid).all()).results;
+    const humansLast2m = recentTs.filter((r: any) => Date.now() - Date.parse(r.ts) < 120000).length;
+    const bareImage = !!ib.media?.some((x: any) => x.kind === "image") && !text.trim();
+    await job(e, "chat-" + m.id, "chat", { message: m.id }, { delaySeconds: debounceSeconds({ mentioned, bareImage, humansLast2m }) });
+  }
   return json({ op: 12, d: 0 });
 }
 async function repoContext(e: Env, repo: string) {
@@ -477,9 +491,9 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
-    .bind(now + 660000, id, now)
+    .bind(now + 660000, id, now, now)
     .first();
   if (!claim) return;
   try {
@@ -633,15 +647,13 @@ async function processJob(e: Env, id: string) {
         .first();
       if (!m) return;
       const cursor = Number((await setting(e, "chat_cursor")) || 0);
-      const newest = await e.DB.prepare(
-        "SELECT id FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 1",
-      )
-        .bind(m.group_id)
-        .first();
-      if (m.ordinal <= cursor || (!m.mentioned && newest?.id !== m.id)) {
-        await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?")
-          .bind(id)
-          .run();
+      const head = await e.DB.prepare(
+        "SELECT (SELECT id FROM messages WHERE group_id=?1 ORDER BY rowid DESC LIMIT 1) AS newest_id,(SELECT ts FROM messages WHERE group_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 1) AS oldest_ts",
+      ).bind(m.group_id, cursor).first();
+      const newest = head.newest_id ? { id: head.newest_id } : null;
+      const oldestAt = Date.parse(head.oldest_ts) || 0;
+      if (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() })) {
+        await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
       const preloaded = await loadBatch(e, m.group_id, cursor);
@@ -650,14 +662,18 @@ async function processJob(e: Env, id: string) {
       const refRows = new Map<string, any>();
       const refId = latestPre.meta?.replyTo?.targetId;
       if (refId) {
-        const row = await e.DB.prepare(
+        const row = preloaded.find((r: any) => r.id === refId) || await e.DB.prepare(
           "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=? AND m.group_id=?",
         )
           .bind(refId, m.group_id)
           .first();
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
       }
-      const picks = visionProvider(e)
+      const sw = await loadSwitches(e);
+      const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
+        && !preloaded.some((row: any) => isDirectRequest(row, { batch: preloaded }))
+        && await unansweredProactive(e, m.group_id);
+      const picks = !hardStop && visionProvider(e)
         ? pickImages(
             preloaded,
             latestPre,
@@ -665,12 +681,13 @@ async function processJob(e: Env, id: string) {
             TEAM.vision?.turn_max ?? 3,
           )
         : [];
-      if (picks.length)
-        await annotateTurn(
-          e,
-          picks,
-          TEAM.vision?.turn_deadline_ms ?? 12000,
-        );
+      const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
+      if (cold.length) {
+        await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
+        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true });
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
       const context = await loadChatContext(e, {
         groupId: m.group_id,
         cursor,
@@ -681,23 +698,43 @@ async function processJob(e: Env, id: string) {
       const { batch, latest } = context;
       if (!batch.length || !latest) return;
       const mentioned = batch.some((r: any) => r.mentioned);
-      const transferred = await videoWaitExists(e, m.group_id, latest.id);
+      const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
       const cached = ref ? await biliCached(e, ref) : null;
+      const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+        await recordDecision(e, { ...decisionRow, gate: "video", action: "reply", forced: true });
         await advanceCursor(e, m.group_id, cursor, batch);
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
       }
+      if (hardStop && !ref) {
+        await recordDecision(e, { ...decisionRow, gate: "hard_unanswered", action: "stop", forced: false });
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const decision: any = {};
       const modelStarted = Date.now();
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
+        allowWait: allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
+        switches: sw,
+        decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
         ...(cached ? { materials: [videoMaterial(cached)] } : {}),
       });
-      if (decodeVoice(answer).text !== "[[SILENT]]")
-        await enqueueVoice(e, id, latest.group_id, latest.id, answer);
+      if (decision.action === "wait") {
+        await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
+        await recordDecision(e, { ...decisionRow, gate: "model", action: "wait", forced: !!decision.forced, wait_seconds: decision.waitSeconds, reason: decision.reason });
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const spoken = decodeVoice(answer).text !== "[[SILENT]]";
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
+      await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
+        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
       await set(
         e,
@@ -868,7 +905,7 @@ async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   const rows = (
     await e.DB.prepare(
-      "SELECT * FROM outbox WHERE status='pending' ORDER BY created_at,id LIMIT 5",
+      "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
     ).all()
   ).results;
   if (!rows.length) return;
@@ -894,7 +931,15 @@ async function sendOutbox(e: Env) {
   }
   const accessToken = qqToken?.value;
   if (!accessToken) return;
+  let switches: Record<string, string | undefined> | undefined;
   for (const o of rows) {
+    if (left(e) < COST.send_row) break;
+    let meta: any = {};
+    if (o.meta) {
+      try { meta = JSON.parse(o.meta); } catch {}
+      switches ??= await loadSwitches(e);
+    }
+    const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
     const locked = await e.DB.prepare(
       "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
     )
@@ -912,39 +957,35 @@ async function sendOutbox(e: Env) {
             .bind(o.msg_id)
             .first()
         : null;
-      const response = await fetch(
-        "https://api.bot.qq.com/v2/groups/" +
-          encodeURIComponent(o.group_id) +
-          "/messages",
+      const send = (ref?: string, increment = 0) => fetch(
+        "https://api.bot.qq.com/v2/groups/" + encodeURIComponent(o.group_id) + "/messages",
         {
           method: "POST",
-          headers: {
-            Authorization: "QQBot " + accessToken,
-            "Content-Type": "application/json",
-          },
+          headers: { Authorization: "QQBot " + accessToken, "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: o.body.slice(0, 4000),
-            msg_type: 0,
-            msg_id:
-              source && Date.now() - Date.parse(source.ts) < 240000
-                ? o.msg_id
-                : undefined,
-            msg_seq: messageSequence(o.id),
+            content: o.body.slice(0, 4000), msg_type: 0,
+            msg_id: source && Date.now() - Date.parse(source.ts) < 240000 ? o.msg_id : undefined,
+            msg_seq: messageSequence(o.id) + increment,
+            ...(ref ? { message_reference: { message_id: ref } } : {}),
           }),
           signal: AbortSignal.timeout(20000),
         },
       );
-      let result: any;
-      try {
-        result = await response.json();
-      } catch {}
+      let response = await send(reference), result: any, recovered = false;
+      try { result = await response.json(); } catch {}
+      if (reference && quoteOutcome(response.status, result) === "maybe_ref") {
+        response = await send(undefined, 1);
+        result = undefined;
+        try { result = await response.json(); } catch {}
+        recovered = quoteOutcome(response.status, result) === "ok";
+      }
       const status =
         response.ok && (result?.id || result?.code === 0)
           ? "sent"
           : response.status >= 500 || !result
             ? "unknown"
             : "failed";
-      await e.DB.batch([
+      const sent = await e.DB.batch([
         e.DB.prepare("UPDATE outbox SET status=? WHERE id=?").bind(
           status,
           o.id,
@@ -955,7 +996,19 @@ async function sendOutbox(e: Env) {
         ...(status === "sent" && typeof result?.ext_info?.ref_idx === "string"
           ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'bot',?,?,?)").bind(result.ext_info.ref_idx, o.id, o.group_id, Date.now())]
           : []),
+        ...(reference && status === "sent" ? [recovered
+          ? e.DB.prepare("INSERT INTO settings VALUES('quote_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value")
+          : e.DB.prepare("UPDATE settings SET value='0' WHERE key='quote_fail' AND value!='0'")] : []),
       ]);
+      if (reference && status === "sent") {
+        const failures = recovered ? Number(sent.at(-1)?.results?.[0]?.value || 0) : 0;
+        switches!.quote_fail = String(failures);
+        if (failures >= 3) {
+          await e.DB.prepare("INSERT INTO settings VALUES('off:quote','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+          await activity(e, "quote.disabled", "quote", "Bot", "引用连续失败，已自动关闭引用回复");
+          switches!["off:quote"] = "1";
+        }
+      }
       if (response.status === 401) qqToken = undefined;
     } catch {
       await e.DB.prepare("UPDATE outbox SET status='unknown' WHERE id=?")
@@ -1033,9 +1086,9 @@ async function scheduled(e: Env) {
   await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
-      .bind(Date.now())
+      .bind(Date.now(), Date.now())
       .all()
   ).results;
   for (const j of pending) {
@@ -1087,7 +1140,6 @@ async function scheduled(e: Env) {
     await cleanupBudget(e);
     await set(e, "budget_cleanup_day", date);
   }
-  await sendOutbox(e);
   await e.DB.prepare("DELETE FROM member_sessions WHERE expires<?")
     .bind(Date.now())
     .run();
@@ -1099,6 +1151,8 @@ async function scheduled(e: Env) {
   )
     .bind(iso(), Date.now())
     .run();
+  // Finish mandatory maintenance before the sender spends its remaining budget.
+  await sendOutbox(e);
 }
 async function api(r: Request, e: Env) {
   const u = new URL(r.url),
@@ -2182,6 +2236,7 @@ async function api(r: Request, e: Env) {
 }
 export default {
   async fetch(r: Request, e: Env) {
+    e = metered(e);
     try {
       if (r.body && !["GET", "HEAD"].includes(r.method)) {
         const reader = r.body.getReader(),
@@ -2211,13 +2266,17 @@ export default {
     }
   },
   async queue(batch: any, e: Env) {
+    const base = e;
+    e = metered(base);
     for (const m of batch.messages) {
+      e = metered(base);
       await processJob(e, m.body.id);
       m.ack();
     }
     await sendOutbox(e);
   },
   async scheduled(_c: any, e: Env, ctx: any) {
+    e = metered(e);
     ctx.waitUntil(scheduled(e));
   },
 };

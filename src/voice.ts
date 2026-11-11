@@ -54,6 +54,7 @@ export async function enqueueVoice(
   group: string,
   message: string | null,
   raw: string,
+  opts?: { reference?: string; sticker?: string },
 ) {
   const parts = fragments(raw, id);
   for (let i = 0; i < parts.length; i++)
@@ -67,6 +68,8 @@ export async function enqueueVoice(
         Date.now() + i,
       )
       .run();
+  if (parts.length && opts?.reference)
+    await e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({ reference: opts.reference })).run();
 }
 export async function speakBrief(e: any, brief: any, context: any) {
   const d: any = await model(
@@ -88,7 +91,7 @@ export async function speakBrief(e: any, brief: any, context: any) {
           role: "user",
           content: JSON.stringify({
             brief,
-            continuity: e.DB
+            continuity: context.switches ? context.switches.self_note : e.DB
               ? (
                   await e.DB.prepare(
                     "SELECT value FROM settings WHERE key='self_note'",

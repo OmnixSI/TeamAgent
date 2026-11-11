@@ -52,7 +52,7 @@ export function extractBili(urls: string[], _text: string): Bili[] {
     return bvid || aid ? [{ url, ...(bvid ? { bvid } : { aid }) }] : [];
   });
 }
-function mediaOf(attachments: any): Media[] {
+export function mediaOf(attachments: any): Media[] {
   return (Array.isArray(attachments) ? attachments : []).map(a => {
     const contentType = String(a.content_type || "");
     const kind: Media["kind"] = contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : contentType === "voice" || contentType.startsWith("audio/") || a.asr_refer_text ? "voice" : "file";

@@ -1,17 +1,19 @@
+import { explicitWriteRequest, tainted } from "./authz";
+import { addressee, metaOf } from "./view";
+import { parseDecision } from "./rhythm";
 import { UNTRUSTED_RULE } from "./untrusted";
 import settings from "../config/participation.json";
 /** Group participation is decided before the separate voice module. */
 export const PARTICIPATION = settings.text + "\n" + UNTRUSTED_RULE;
 export function participation(raw: string, forced = false) {
-  try {
-    const p = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    if (typeof p.should_reply === "boolean") return p;
-  } catch {}
-  return {
-    should_reply: forced,
-    kind: forced ? "direct" : "proactive",
-    brief: forced ? raw : "",
-  };
+  const d = parseDecision(raw, { forced, allowWait: false });
+  return { should_reply: d.action === "reply", kind: d.kind, brief: d.brief };
+}
+export type ParticipationInput = Record<string, any> & { system?: string };
+/** Preserve caller field order, so production and replay use identical messages. */
+export function participationMessages(x: ParticipationInput): { role: string; content: string }[] {
+  const { system = PARTICIPATION, ...data } = x;
+  return [{ role: "system", content: system }, { role: "user", content: JSON.stringify(data) }];
 }
 export async function maySpeak(
   e: any,
@@ -19,7 +21,7 @@ export async function maySpeak(
   forced: boolean,
   accepted: boolean,
 ) {
-  return accepted || forced || p.should_reply === true;
+  return accepted || forced || p.action === "reply" || p.should_reply === true;
 }
 export function alreadySaid(text: string, recent: any[]) {
   const normalize = (value: string) =>
@@ -32,19 +34,11 @@ export function alreadySaid(text: string, recent: any[]) {
     )
   );
 }
-export async function recordProactive(e: any) {
-  const row = await e.DB.prepare(
-    "SELECT value FROM settings WHERE key='proactive_history'",
-  ).first();
-  let history: number[] = [];
-  try {
-    history = JSON.parse(row?.value || "[]");
-  } catch {}
-  history = history.filter((t) => Date.now() - t < 600000);
-  history.push(Date.now());
-  await e.DB.prepare(
-    "INSERT INTO settings VALUES('proactive_history',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-  )
-    .bind(JSON.stringify(history))
-    .run();
+
+/** Routing hint only: tool execution still requires authorizeWrite and its original checks. */
+export function isDirectRequest(row: any, context: any = { batch: [row] }): boolean {
+  const meta = metaOf(row), recipient = addressee(meta, new Map());
+  if ((recipient && recipient !== "你") || meta.addressedOther) return false;
+  const dirty = tainted(context, []);
+  return explicitWriteRequest("create_file_task", row, context.names, dirty) || explicitWriteRequest("prepare_project_task", row, context.names, dirty);
 }

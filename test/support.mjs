@@ -18,6 +18,7 @@ fixture.model.effort_by_kind = {
   code: "max",
   vision: "none",
 };
+fixture.rhythm = { ...fixture.rhythm, mention: 0, image: 0, busy: 0, idle: 0 };
 fixture.memory = {
   timezone: "Australia/Sydney",
   start_hour: 3,
@@ -61,37 +62,23 @@ const { default: worker, signature } = await import("../" + output);
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8"));
-  return {
+  const database = {
+    executed: 0,
     prepare(sql) {
-      return {
-        bind(...args) {
-          return {
-            async first() {
-              return d.prepare(sql).get(...args) || null;
-            },
-            async all() {
-              return { results: d.prepare(sql).all(...args) };
-            },
-            async run() {
-              return d.prepare(sql).run(...args);
-            },
-          };
-        },
-        async all() {
-          return { results: d.prepare(sql).all() };
-        },
-        async first() {
-          return d.prepare(sql).get() || null;
-        },
-        async run() {
-          return d.prepare(sql).run();
-        },
-      };
+      const statement = (args = []) => ({
+        sql,
+        bind(...values) { return statement(values); },
+        async first() { database.executed++; return d.prepare(sql).get(...args) || null; },
+        async all() { database.executed++; return { results: d.prepare(sql).all(...args) }; },
+        async run() { database.executed++; return d.prepare(sql).run(...args); },
+      });
+      return statement();
     },
     async batch(ss) {
-      return Promise.all(ss.map((s) => s.run()));
+      return Promise.all(ss.map(s => /^\s*(SELECT|WITH)\b|\bRETURNING\b/i.test(s.sql) ? s.all() : s.run()));
     },
   };
+  return database;
 }
 function env() {
   return {
@@ -99,7 +86,7 @@ function env() {
     ADMIN_TOKEN: "owner-secret",
     RUNNER_TOKEN: "runner-secret",
     QQ_APP_SECRET: "test-only-secret",
-    WORK: { async send() {} },
+    WORK: { sent: [], async send(body, opts) { this.sent.push({ body, opts }); } },
     DEEPSEEK_API_KEY: "fake",
   };
 }
@@ -110,7 +97,7 @@ async function req(
   key = "owner-secret",
   method = body ? "POST" : "GET",
 ) {
-  return worker.fetch(
+  return (e.testWorker || worker).fetch(
     new Request("https://team.example" + path, {
       method,
       headers: {
@@ -125,7 +112,7 @@ async function req(
 async function qq(e, data, type = "GROUP_MESSAGE_CREATE") {
   const raw = JSON.stringify({ op: 0, t: type, d: data });
   const ts = String(Math.floor(Date.now() / 1000));
-  return worker.fetch(
+  return (e.testWorker || worker).fetch(
     new Request("https://team.example/api/qq/events", {
       method: "POST",
       body: raw,
@@ -146,3 +133,32 @@ const msg = (id, content, group = "GROUP000001") => ({
 });
 
 export { worker, env, req, qq, msg };
+
+// Build an isolated configuration fixture for tests that exercise real delays.
+export async function setupWith(patch) {
+  const { createHash } = await import('node:crypto');
+  const next = structuredClone(fixture);
+  for (const [key, value] of Object.entries(patch))
+    next[key] = value && typeof value === 'object' && !Array.isArray(value) ? { ...next[key], ...value } : value;
+  const tag = createHash('sha256').update(JSON.stringify(patch)).digest('hex').slice(0, 12);
+  const outfile = `.wrangler/test-patch-${process.pid}-${tag}.mjs`;
+  await build({ entryPoints: ['src/worker.ts'], bundle: true, format: 'esm', platform: 'browser', outfile,
+    plugins: [{ name: 'patched-team-fixture', setup(builder) {
+      builder.onLoad({ filter: /config\/team\.json$/ }, () => ({ contents: JSON.stringify(next), loader: 'json' }));
+    } }],
+  });
+  const module = await import('../' + outfile), e = env();
+  e.testWorker = module.default;
+  return e;
+}
+
+export async function runChat(e, id) {
+  const runtime = e.testWorker || worker;
+  const send = task => runtime.queue({ messages: [{ body: { id: task }, ack() {} }] }, e);
+  await send(id);
+  for (let round = 0; round < 3; round++) {
+    const pending = (await e.DB.prepare("SELECT id FROM jobs WHERE kind='chat' AND status='pending' AND id LIKE 'chat-v-%' ORDER BY created_at").all()).results;
+    if (!pending.length) return;
+    for (const task of pending) await send(task.id);
+  }
+}
