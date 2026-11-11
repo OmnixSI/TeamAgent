@@ -12,8 +12,11 @@ export function metaOf(row: any): any {
   if (row.meta) return row.meta;
   try { return JSON.parse(row.metadata || "{}"); } catch { return {}; }
 }
-export function quoteIn(row: { body: string; meta?: any }, quote: string): boolean {
-  return row.body.includes(quote) || renderMentions(row.body, row.meta?.mentions || []).includes(quote);
+function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
+  return (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
+}
+export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
+  return row.body.includes(quote) || renderMentions(row.body, resolvedMentions(metaOf(row), names)).includes(quote);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {
@@ -35,7 +38,7 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   const meta = metaOf(row), reply = meta.replyTo;
   const reId = reply?.kind === "bot" ? "b:" + reply.targetId : reply?.kind === "member" ? reply.targetId : undefined;
   const target = reId ? refs.get(reId) : undefined;
-  const mentions: Mention[] = (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
+  const mentions = resolvedMentions(meta, names);
   const sortAt = Date.parse(row.ts) || 0;
   const material: ViewMsg["material"] = {};
   if (meta.cardView) material.card = meta.cardView;

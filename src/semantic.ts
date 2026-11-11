@@ -750,7 +750,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
-            result = await rememberCorrection(e, a, source);
+            result = await rememberCorrection(e, a, source, context.names);
             break;
           }
           case "recall_memory":
@@ -768,7 +768,7 @@ export async function agentAnswer(e: any, context: any) {
               ) ||
               typeof a.request_quote !== "string" ||
               !a.request_quote.trim() ||
-              !quoteIn(source, a.request_quote)
+              !quoteIn(source, a.request_quote, context.names)
             )
               throw Error("需要本群当前发言中的明确文件交办原话");
             const recent = (
@@ -872,7 +872,7 @@ export async function agentAnswer(e: any, context: any) {
               !REPOS.includes(a.repo) ||
               typeof a.request_quote !== "string" ||
               !a.request_quote.trim() ||
-              !quoteIn(source, a.request_quote)
+              !quoteIn(source, a.request_quote, context.names)
             )
               throw Error("需要明确本群直接交办");
             const id = "qq-" + source.id;

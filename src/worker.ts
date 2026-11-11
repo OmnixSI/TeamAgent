@@ -235,7 +235,7 @@ async function receive(r: Request, e: Env) {
     : undefined;
   const replyTo = ref
     ? { kind: ref.kind, targetId: ref.target_id, authorId: ref.kind === "bot" ? "bot" : ref.author_id, ...(ref.kind === "member" && ib.quoted?.authorName ? { authorName: ib.quoted.authorName } : {}) }
-    : ib.quoted ? { kind: "unknown", authorId: ib.quoted.authorId, authorName: ib.quoted.authorName, text: ib.quoted.text.slice(0, 200) } : undefined;
+    : ib.refMsgIdx && ib.quoted ? { kind: "unknown", authorId: ib.quoted.authorId, authorName: ib.quoted.authorName, text: ib.quoted.text.slice(0, 200) } : undefined;
   const inserted = await e.DB.prepare(
     "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,0) RETURNING id",
   )

@@ -36,7 +36,7 @@ export function parseCard(ark: any): Card | undefined {
     ? Object.fromEntries(ark.fields.filter((f: any) => f && typeof f.key === "string").map((f: any) => [f.key, f.value]))
     : ark.fields || {};
   const str = (v: any) => typeof v === "string" ? v : undefined;
-  return { type: str(ark.type) || "card", name: str(ark.name), title: str(fields.title), desc: str(fields.desc), url: str(fields.jump_url), preview: str(fields.preview), source: str(fields.source) || str(fields.tag) };
+  return { type: str(ark.ark_type) || str(ark.type) || "card", name: str(ark.ark_name) || str(ark.name), title: str(fields.title), desc: str(fields.desc), url: str(fields.jump_url), preview: str(fields.preview), source: str(fields.source) || str(fields.tag) };
 }
 export function extractBili(urls: string[], _text: string): Bili[] {
   return urls.flatMap<Bili>(url => {
@@ -55,7 +55,7 @@ export function extractBili(urls: string[], _text: string): Bili[] {
 function mediaOf(attachments: any): Media[] {
   return (Array.isArray(attachments) ? attachments : []).map(a => {
     const contentType = String(a.content_type || "");
-    const kind: Media["kind"] = contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : contentType.startsWith("audio/") || a.asr_refer_text ? "voice" : "file";
+    const kind: Media["kind"] = contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : contentType === "voice" || contentType.startsWith("audio/") || a.asr_refer_text ? "voice" : "file";
     return { kind, url: a.url, contentType, width: a.width, height: a.height, size: a.size, filename: a.filename, ...(typeof a.asr_refer_text === "string" ? { asr: a.asr_refer_text } : {}) };
   });
 }
@@ -76,6 +76,6 @@ export function parseInbound(eventType: string, d: any): Inbound {
   const card = parseCard(d.ark_data), media = mediaOf(d.attachments);
   const ownUrls = extractUrls(body + " " + JSON.stringify(d.ark_data || {}));
   const quotedUrls = extractUrls(JSON.stringify(elements));
-  const placeholder = body ? "" : card ? "[卡片] " + (card.name || card.source || "") + (card.title ? "：" + card.title : "") : media[0]?.kind === "image" ? "[图片]" : media[0]?.kind === "voice" ? "[语音]" : media[0]?.kind === "video" ? "[视频]" : media[0] ? "[文件]" + (media[0].filename ? " " + media[0].filename : "") : "";
+  const placeholder = body ? "" : card ? "[卡片] " + (card.source || card.name || "") + (card.title ? "：" + card.title : "") : media[0]?.kind === "image" ? "[图片]" : media[0]?.kind === "voice" ? "[语音]" : media[0]?.kind === "video" ? "[视频]" : media[0] ? "[文件]" + (media[0].filename ? " " + media[0].filename : "") : "";
   return { senderId: String(d.author?.member_openid || d.author?.id || ""), senderName: d.author?.username || "", body, mentions, mentionsBot: eventType === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.isBot), msgIdx: ext.msg_idx, refMsgIdx, quoted, card, media, bili: extractBili(ownUrls, body), ownUrls, quotedUrls, placeholder };
 }
