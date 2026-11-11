@@ -1,4 +1,5 @@
-import { debounceSeconds, shouldProcessNow } from "./rhythm";
+import { metered } from "./d1";
+import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
@@ -24,6 +25,7 @@ import {
 } from "./voice";
 import {
   annotateTurn,
+  coldPicks,
   imageNotesFor,
   pickImages,
   visionProvider,
@@ -665,7 +667,10 @@ async function processJob(e: Env, id: string) {
           .first();
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
       }
-      const picks = visionProvider(e)
+      const sw = await loadSwitches(e);
+      const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
+        && await unansweredProactive(e, m.group_id);
+      const picks = !hardStop && visionProvider(e)
         ? pickImages(
             preloaded,
             latestPre,
@@ -673,12 +678,13 @@ async function processJob(e: Env, id: string) {
             TEAM.vision?.turn_max ?? 3,
           )
         : [];
-      if (picks.length)
-        await annotateTurn(
-          e,
-          picks,
-          TEAM.vision?.turn_deadline_ms ?? 12000,
-        );
+      const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
+      if (cold.length) {
+        await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
+        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true });
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
       const context = await loadChatContext(e, {
         groupId: m.group_id,
         cursor,
@@ -692,20 +698,40 @@ async function processJob(e: Env, id: string) {
       const transferred = await videoWaitExists(e, m.group_id, latest.id);
       const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
       const cached = ref ? await biliCached(e, ref) : null;
+      const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+        await recordDecision(e, { ...decisionRow, gate: "video", action: "reply", forced: true });
         await advanceCursor(e, m.group_id, cursor, batch);
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
       }
+      if (hardStop && !ref) {
+        await recordDecision(e, { ...decisionRow, gate: "hard_unanswered", action: "stop", forced: false });
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const decision: any = {};
       const modelStarted = Date.now();
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
+        allowWait: allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
+        switches: sw,
+        decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
         ...(cached ? { materials: [videoMaterial(cached)] } : {}),
       });
-      if (decodeVoice(answer).text !== "[[SILENT]]")
-        await enqueueVoice(e, id, latest.group_id, latest.id, answer);
+      if (decision.action === "wait") {
+        await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
+        await recordDecision(e, { ...decisionRow, gate: "model", action: "wait", forced: !!decision.forced, wait_seconds: decision.waitSeconds, reason: decision.reason });
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const spoken = decodeVoice(answer).text !== "[[SILENT]]";
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer);
+      await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
+        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
       await set(
         e,
@@ -2190,6 +2216,7 @@ async function api(r: Request, e: Env) {
 }
 export default {
   async fetch(r: Request, e: Env) {
+    e = metered(e);
     try {
       if (r.body && !["GET", "HEAD"].includes(r.method)) {
         const reader = r.body.getReader(),
@@ -2219,13 +2246,17 @@ export default {
     }
   },
   async queue(batch: any, e: Env) {
+    const base = e;
+    e = metered(base);
     for (const m of batch.messages) {
+      e = metered(base);
       await processJob(e, m.body.id);
       m.ack();
     }
     await sendOutbox(e);
   },
   async scheduled(_c: any, e: Env, ctx: any) {
+    e = metered(e);
     ctx.waitUntil(scheduled(e));
   },
 };

@@ -146,3 +146,147 @@ test('I5 an oldest pending message beyond the cap permits a non-newest job',asyn
   await withAnswer(async seen=>{await queue(e,'chat-B');assert.equal(seen.filter(b=>!b.messages[0].content.includes('最后的嘴替模块')).length,1);});
   assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'3');
 });
+const d1Out=`.wrangler/meter-p1-${process.pid}.mjs`;
+await build({entryPoints:['src/d1.ts'],bundle:true,format:'esm',platform:'browser',outfile:d1Out});
+const {metered,left,COST}=await import('../'+d1Out);
+test('B1/B9 meter counts executions and batch statements exactly; plain env has no limit',async()=>{
+  const base=env(),e=metered(base),before=base.DB.executed;
+  await e.DB.prepare('SELECT ? AS v').bind('a').first();
+  await e.DB.prepare('SELECT 1').all();
+  await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('meter','1').run();
+  await e.DB.batch([e.DB.prepare('SELECT 1'),e.DB.prepare('SELECT 2'),e.DB.prepare('SELECT 3')]);
+  assert.equal(e.meter.used,6);assert.equal(base.DB.executed-before,6);assert.equal(left(e),42);
+  assert.equal(left(base),Infinity);
+  assert.equal(metered(e),e);
+  for(const [key,min] of Object.entries({image:6,turn:2,tool:8,send_row:7,sticker:5,tail:16}))assert.ok(COST[key]>=min,key);
+});
+
+test('B8 cold images run in a separate invocation without advancing cursor or deciding',async()=>{
+  const base=await bound();
+  await qq(base,{...msg('image-turn','这是什么'),attachments:[{content_type:'image/png',url:'https://example.com/one.png',width:64,height:64}]},'GROUP_AT_MESSAGE_CREATE');
+  const old=globalThis.fetch;let visionCalls=0,decisions=0;
+  globalThis.fetch=async(url,options)=>{
+    if(String(url).endsWith('.png'))return new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'image/png'}});
+    const b=JSON.parse(options.body),voice=b.messages[0].content.includes('最后的嘴替模块');
+    let content;if(b.reasoning_effort==='none'){visionCalls++;content='{"desc":"图中有红圆","text":"","tags":[],"meme":false}';}
+    else if(voice)content='{"mode":"work","text":"图中有红圆。"}';
+    else{decisions++;content='{"should_reply":true,"kind":"direct","brief":"红圆"}';}
+    return Response.json({choices:[{message:{content}}]});
+  };
+  try{
+    const imageEnv=metered(base),before=base.DB.executed;await queue(imageEnv,'chat-image-turn');
+    assert.equal(visionCalls,1);assert.equal(decisions,0);
+    assert.equal(await base.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
+    assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM chat_decisions').first()).n,0);
+    assert.ok(await base.DB.prepare("SELECT id FROM jobs WHERE id='chat-v-image-turn' AND status='pending'").first());
+    assert.equal(imageEnv.meter.used,base.DB.executed-before-3);
+    const replyEnv=metered(base);await queue(replyEnv,'chat-v-image-turn');
+    assert.equal(visionCalls,1);assert.equal(decisions,1);
+  }finally{globalThis.fetch=old;}
+});
+async function decide(action,run,options={}){
+  const old=globalThis.fetch,state={decisions:0,vision:0,images:0,voices:0,seen:[]};
+  globalThis.fetch=async(url,init)=>{
+    if(String(url).endsWith('.png')){state.images++;return new Response(new Uint8Array([3,2,1]),{headers:{'content-type':'image/png'}});}
+    const b=JSON.parse(init.body);state.seen.push(b);let message;
+    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    else if(b.messages[0].content.includes('最后的嘴替模块')){state.voices++;message={content:JSON.stringify({mode:'work',text:options.text||'这是当前问题的回答。'})};}
+    else{state.decisions++;message=typeof action==='function'?action(state.decisions,b):{content:JSON.stringify(action)};}
+    return Response.json({choices:[{message}]});
+  };
+  try{return await run(state);}finally{globalThis.fetch=old;}
+}
+async function seedHard(kind='proactive',age=1000){
+  const e=await bound();await qq(e,msg('seed','话题开头'));
+  await e.DB.prepare("INSERT INTO settings VALUES('chat_cursor','1')").run();
+  await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('seed-bot','GROUP000001','seed','主动发言','sent',Date.now()-age).run();
+  await rhythm.recordDecision(e,{id:'seed-bot',group_id:'GROUP000001',latest_id:'seed',batch_ids:['seed'],gate:'model',action:'reply',spoken_kind:kind,outbox_id:'seed-bot',created_at:Date.now()-age});
+  return e;
+}
+const imageAttachments=[0,1].map(i=>({content_type:'image/png',url:'https://example.com/hard'+i+'.png',width:64,height:64}));
+test('I9/G1 hard unanswered gate skips all models, even for two unseen images',async()=>{
+  for(const images of [false,true]){
+    const e=await seedHard();await qq(e,msg('one','接着聊'));await qq(e,{...msg('two','这是什么'),...(images?{attachments:imageAttachments}:{})});
+    await decide({action:'reply',kind:'proactive'},async state=>{
+      await queue(e,'chat-two');assert.equal(state.decisions,0);assert.equal(state.vision,0);assert.equal(state.images,0);
+      const d=await e.DB.prepare("SELECT * FROM chat_decisions WHERE id='chat-two'").first();assert.equal(d.gate,'hard_unanswered');assert.equal(d.action,'stop');
+      assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM image_notes').first()).n,0);
+      assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'3');
+    });
+  }
+});
+test('G2 a video request takes priority over the unanswered gate',async()=>{
+  const e=await seedHard();await qq(e,msg('video','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'));
+  await decide({action:'stop'},async state=>{
+    await queue(e,'chat-video');assert.equal(state.decisions,0);
+    assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM video_waits').first()).n,1);
+    assert.equal((await e.DB.prepare("SELECT gate FROM chat_decisions WHERE id='chat-video'").first()).gate,'video');
+  });
+});
+test('G3/I11 mentions bypass the gate, describe their image and force a reply',async()=>{
+  const e=await seedHard();await qq(e,{...msg('mentioned','这是什么'),attachments:imageAttachments.slice(0,1)},'GROUP_AT_MESSAGE_CREATE');
+  const {runChat}=await import('./support.mjs');
+  await decide({action:'stop'},async state=>{
+    await runChat(e,'chat-mentioned');assert.equal(state.vision,1);assert.equal(state.decisions,1);assert.equal(state.voices,1);
+    const d=await e.DB.prepare("SELECT * FROM chat_decisions WHERE latest_id='mentioned'").first();assert.equal(d.action,'reply');assert.equal(d.forced,1);
+  });
+});
+for(const variant of ['six-humans','bot-quote','expired','video-reply','direct'])test('I10 '+variant+' permits a new decision',async()=>{
+  const e=await seedHard(variant==='direct'?'direct':'proactive',variant==='expired'?31*60000:1000);
+  if(variant==='video-reply')await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('video-other','GROUP000001','seed','视频回复','sent',Date.now()).run();
+  const n=variant==='six-humans'?6:2;
+  for(let i=0;i<n;i++)await qq(e,msg('human'+i,'新消息'+i));
+  if(variant==='bot-quote'){
+    const m=JSON.parse((await e.DB.prepare('SELECT json FROM message_meta WHERE id=?').bind('human'+(n-1)).first()).json);m.replyTo={kind:'bot',targetId:'seed-bot'};
+    await e.DB.prepare('UPDATE message_meta SET json=? WHERE id=?').bind(JSON.stringify(m),'human'+(n-1)).run();
+  }
+  await decide({action:'reply',kind:'proactive',brief:'新回应'},async state=>{await queue(e,'chat-human'+(n-1));assert.equal(state.decisions,1);assert.equal(state.voices,1);});
+});
+test('I6 wait defers without advancing cursor and a second wait becomes stop',async()=>{
+  const e=await bound();await qq(e,msg('half','还没说完'));
+  await decide({action:'wait',wait_seconds:10},async state=>{
+    const before=Date.now();await queue(e,'chat-half');
+    assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,0);
+    assert.equal(await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
+    const j=await e.DB.prepare("SELECT * FROM jobs WHERE id='chat-wait-half'").first();assert.ok(j);
+    const payload=JSON.parse(j.payload);assert.ok(payload.notBefore>=before+10000);assert.equal(payload.waited,true);
+    assert.equal((await e.DB.prepare("SELECT action FROM chat_decisions WHERE id='chat-half'").first()).action,'wait');
+    const real=Date.now;try{Date.now=()=>payload.notBefore+1;await queue(e,j.id);}finally{Date.now=real;}
+    const d=await e.DB.prepare('SELECT * FROM chat_decisions WHERE id=?').bind(j.id).first();assert.equal(d.action,'stop');assert.equal(d.waited,1);
+    assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'1');assert.equal(state.decisions,2);
+  });
+});
+for(const mentioned of [false,true])test('I7/I8 new messages supersede old wait, mentioned='+mentioned,async()=>{
+  const e=await bound();await qq(e,msg('half','还有半句'));
+  await decide({action:'wait',wait_seconds:10},async()=>{await queue(e,'chat-half');});
+  const waiting=await e.DB.prepare("SELECT payload FROM jobs WHERE id='chat-wait-half'").first();
+  await qq(e,msg('newer','现在说完了'),mentioned?'GROUP_AT_MESSAGE_CREATE':'GROUP_MESSAGE_CREATE');
+  await decide({action:'reply',kind:'direct',brief:'答复'},async state=>{
+    await queue(e,'chat-newer');assert.equal(state.decisions,1);
+    const real=Date.now;try{Date.now=()=>JSON.parse(waiting.payload).notBefore+1;await queue(e,'chat-wait-half');}finally{Date.now=real;}
+    assert.equal(state.decisions,1);assert.equal((await e.DB.prepare("SELECT status FROM jobs WHERE id='chat-wait-half'").first()).status,'done');
+  });
+});
+test('I14 tool handoff and duplicate voice are recorded as tool and dup',async()=>{
+  const e=await bound();await qq(e,msg('tool-turn','查最新资料'),'GROUP_AT_MESSAGE_CREATE');
+  await decide(()=>({tool_calls:[{id:'search',type:'function',function:{name:'search_web',arguments:'{"query":"资料"}'}}]}),async()=>{
+    await queue(e,'chat-tool-turn');assert.equal((await e.DB.prepare("SELECT action FROM chat_decisions WHERE id='chat-tool-turn'").first()).action,'tool');
+  });
+  const duplicate=await bound();await qq(duplicate,msg('dup-turn','新话题'));
+  await duplicate.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('prior','GROUP000001',null,'复读内容','sent',Date.now()).run();
+  await decide({action:'reply',kind:'proactive',brief:'复读内容'},async()=>{
+    await queue(duplicate,'chat-dup-turn');const d=await duplicate.DB.prepare("SELECT action,outbox_id FROM chat_decisions WHERE id='chat-dup-turn'").first();assert.equal(d.action,'dup');assert.equal(d.outbox_id,null);
+  },{text:'复读内容'});
+});
+
+const semanticOut=`.wrangler/semantic-rhythm-${process.pid}.mjs`;
+await build({entryPoints:['src/semantic.ts'],bundle:true,format:'esm',platform:'browser',outfile:semanticOut});
+const {proactiveReply}=await import('../'+semanticOut);
+test('I13 non-chat callers never create a repeated chat wait',async()=>{
+  const e=await bound();await qq(e,msg('source','普通资料'));
+  await decide({action:'wait',wait_seconds:10},async state=>{
+    await proactiveReply(e,{source:'source',context:'读资料'},{});
+    assert.equal(state.voices,0);
+    assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE id LIKE 'chat-wait-%'").first()).n,0);
+  });
+});

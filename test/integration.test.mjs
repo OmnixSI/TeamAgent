@@ -815,16 +815,11 @@ await build({
   platform: "browser",
   outfile: ".wrangler/test-engagement.mjs",
 });
-const { maySpeak, recordProactive } =
+const { maySpeak } =
   await import("../.wrangler/test-engagement.mjs");
 test("participation follows semantic judgment without a fixed quota", async () => {
   const e = env();
   assert.equal(await maySpeak(e, { should_reply: false }, false, false), false);
-  assert.equal(
-    await maySpeak(e, { should_reply: true, kind: "proactive" }, false, false),
-    true,
-  );
-  await recordProactive(e);
   assert.equal(
     await maySpeak(e, { should_reply: true, kind: "proactive" }, false, false),
     true,

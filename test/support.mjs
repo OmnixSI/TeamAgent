@@ -151,3 +151,14 @@ export async function setupWith(patch) {
   e.testWorker = module.default;
   return e;
 }
+
+export async function runChat(e, id) {
+  const runtime = e.testWorker || worker;
+  const send = task => runtime.queue({ messages: [{ body: { id: task }, ack() {} }] }, e);
+  await send(id);
+  for (let round = 0; round < 3; round++) {
+    const pending = (await e.DB.prepare("SELECT id FROM jobs WHERE kind='chat' AND status='pending' AND id LIKE 'chat-v-%' ORDER BY created_at").all()).results;
+    if (!pending.length) return;
+    for (const task of pending) await send(task.id);
+  }
+}

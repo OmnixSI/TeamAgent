@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
-import { env, msg, qq, req, worker } from "./support.mjs";
+import { env, msg, qq, req, worker, runChat as runChatJob } from "./support.mjs";
 
 await build({
   entryPoints: ["src/vision.ts"],
@@ -453,12 +453,7 @@ const imageEvent = (id, text, extra = {}) => {
   return { ...event, ...extra };
 };
 
-const runChat = async (e, id) => {
-  await worker.queue(
-    { messages: [{ body: { id: "chat-" + id }, ack() {} }] },
-    e,
-  );
-};
+const runChat = (e, id) => runChatJob(e, "chat-" + id);
 
 const chatMock = (state, opts = {}) => async (url, init) => {
   const u = String(url);
@@ -737,10 +732,7 @@ test("P1-A a quoted image outside the 24-message window is visible in the prompt
   const original = globalThis.fetch;
   globalThis.fetch = chatMock(state);
   try {
-    await worker.queue(
-      { messages: [{ body: { id: "chat-quote-latest" }, ack() {} }] },
-      e,
-    );
+    await runChatJob(e, "chat-quote-latest");
   } finally {
     globalThis.fetch = original;
   }
@@ -799,10 +791,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
   let original = globalThis.fetch;
   globalThis.fetch = chatMock(quotedState);
   try {
-    await worker.queue(
-      { messages: [{ body: { id: "chat-bot-quote" }, ack() {} }] },
-      quoted,
-    );
+    await runChatJob(quoted, "chat-bot-quote");
   } finally {
     globalThis.fetch = original;
   }
@@ -831,10 +820,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
   original = globalThis.fetch;
   globalThis.fetch = chatMock(plainState, { silent: true });
   try {
-    await worker.queue(
-      { messages: [{ body: { id: "chat-plain-image" }, ack() {} }] },
-      plain,
-    );
+    await runChatJob(plain, "chat-plain-image");
   } finally {
     globalThis.fetch = original;
   }

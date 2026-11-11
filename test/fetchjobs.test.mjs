@@ -255,3 +255,9 @@ test('P1-2 video force-reply survives a background tool handoff', async () => {
     assert.equal((await rows(e, 'outbox')).filter(o => o.msg_id === 'video-question').length, 1);
   } finally { globalThis.fetch = old; }
 });
+
+test('I12 video handoff is recorded before the W7 recovery path runs',async()=>{
+  const e=await setup();await first(e);
+  const decision=await e.DB.prepare("SELECT gate,action,forced FROM chat_decisions WHERE id='chat-question'").first();
+  assert.equal(decision.gate,'video');assert.equal(decision.action,'reply');assert.equal(decision.forced,1);
+});

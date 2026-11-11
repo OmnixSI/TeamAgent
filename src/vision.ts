@@ -332,12 +332,8 @@ export async function describeImage(
   }
 }
 
-export async function annotateTurn(
-  e: any,
-  picks: ImagePick[],
-  deadlineMs = TEAM.vision?.turn_deadline_ms ?? 12000,
-) {
-  if (!picks.length) return;
+export async function coldPicks(e: any, picks: ImagePick[]): Promise<ImagePick[]> {
+  if (!picks.length) return [];
   const ids = [...new Set(picks.map((p) => p.messageId))];
   const existing = new Set(
     (
@@ -350,13 +346,20 @@ export async function annotateTurn(
         .all()
     ).results.map((r: any) => r.message_id + ":" + r.idx),
   );
+  return picks.filter(p => !existing.has(p.messageId + ":" + p.idx));
+}
+
+export async function annotateTurn(
+  e: any,
+  picks: ImagePick[],
+  deadlineMs = TEAM.vision?.turn_deadline_ms ?? 12000,
+) {
+  if (!picks.length) return;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs);
   try {
     await Promise.allSettled(
-      picks
-        .filter((p) => !existing.has(p.messageId + ":" + p.idx))
-        .map(async (p) => {
+      picks.map(async (p) => {
           const note = await describeImage(
             e,
             p.media,

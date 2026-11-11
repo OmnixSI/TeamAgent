@@ -1,3 +1,4 @@
+import { parseDecision } from "./rhythm";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -10,7 +11,6 @@ import {
   participationMessages,
   participation,
   maySpeak,
-  recordProactive,
   alreadySaid,
 } from "./engagement";
 import {
@@ -801,7 +801,7 @@ export async function agentAnswer(e: any, context: any) {
     intent: context.intent,
   };
   const messages: any[] = context.resume?.messages || participationMessages({
-        selfNote: (
+        selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
           ).first()
@@ -811,7 +811,7 @@ export async function agentAnswer(e: any, context: any) {
         projects: INITIAL_PROJECT_HINTS,
         facts: promptFacts,
         materials: context.materials,
-        reflection: (
+        reflection: context.switches ? context.switches.team_reflection : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='team_reflection'",
           ).first()
@@ -854,6 +854,7 @@ export async function agentAnswer(e: any, context: any) {
       !context.background &&
       context.latest?.id
     ) {
+      Object.assign(context.decisionOut ?? {}, { action: "tool" });
       const id = "research-" + context.latest.id;
       const payload = {
         latestId: context.latest.id,
@@ -902,8 +903,9 @@ export async function agentAnswer(e: any, context: any) {
             (r: any) => r.body.trim() === String(q.content || "").trim(),
           ),
         );
-      const decision = participation(m.content, forced);
-      if (!(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
+      const decision = parseDecision(m.content, { forced, allowWait: !!context.allowWait });
+      Object.assign(context.decisionOut ?? {}, decision, { forced });
+      if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       const spoken = await speakBrief(
         e,
@@ -916,9 +918,10 @@ export async function agentAnswer(e: any, context: any) {
         context,
       );
       if (decision.kind !== "direct" && !forced && !acceptedActions.length) {
-        if (alreadySaid(decodeVoice(spoken).text, recentBot))
+        if (alreadySaid(decodeVoice(spoken).text, recentBot)) {
+          Object.assign(context.decisionOut ?? {}, { action: "dup" });
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
-        await recordProactive(e);
+        }
       }
       return spoken;
     }

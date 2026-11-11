@@ -32,19 +32,3 @@ export function alreadySaid(text: string, recent: any[]) {
     )
   );
 }
-export async function recordProactive(e: any) {
-  const row = await e.DB.prepare(
-    "SELECT value FROM settings WHERE key='proactive_history'",
-  ).first();
-  let history: number[] = [];
-  try {
-    history = JSON.parse(row?.value || "[]");
-  } catch {}
-  history = history.filter((t) => Date.now() - t < 600000);
-  history.push(Date.now());
-  await e.DB.prepare(
-    "INSERT INTO settings VALUES('proactive_history',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-  )
-    .bind(JSON.stringify(history))
-    .run();
-}
