@@ -16,7 +16,7 @@ test("file work yields chat and runs in the tools lane while the deep lane is un
     },
   };
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
-  await qq(e, msg("file-route", "把这些数据整理成CSV"));
+  await qq(e, msg("file-route", "帮我把这些数据整理成CSV"));
   const original = globalThis.fetch;
   globalThis.fetch = async (u, o) => {
     const b = JSON.parse(o.body);
@@ -54,7 +54,7 @@ test("file work yields chat and runs in the tools lane while the deep lane is un
                 function: {
                   name: "create_file_task",
                   arguments:
-                    '{"title":"CSV","instructions":"生成CSV","request_quote":"把这些数据整理成CSV"}',
+                    '{"title":"CSV","instructions":"生成CSV","request_quote":"帮我把这些数据整理成CSV"}',
                 },
               },
             ],
