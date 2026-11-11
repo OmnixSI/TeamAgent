@@ -35,7 +35,7 @@ QQ SDK单独锁定在 runner/sdk/，安装到私密运行目录，不再依赖 D
 
 在确认没有运行中资料或开发任务后执行 python3 scripts/install-local.py，更新已审查的运行文件。脚本保留配置、配对、spool、结果与系统服务，安装官方SDK并更新五仓名单，不创建新凭据。
 
-当前 launchd 服务：com.inkboard.team-qq、com.inkboard.team-runner、com.inkboard.team-owner、com.inkboard.team-utility、com.inkboard.team-utility-quick。用户登录后运行；退出桌面窗口不影响服务。按需用 launchctl kickstart -k gui/$(id -u)/服务名 重启，避免处理中途重启。
+当前 launchd 服务：com.inkboard.team-qq、com.inkboard.team-runner、com.inkboard.team-owner、com.inkboard.team-utility、com.inkboard.team-utility-quick、com.inkboard.team-fetch。用户登录后运行；退出桌面窗口不影响服务。按需用 launchctl kickstart -k gui/$(id -u)/服务名 重启，避免处理中途重启。
 
 电脑需登录、联网、保持唤醒。当前 QQ 入口仍是本机官方长连接；电脑离线时，QQ收信、文件与代码执行均暂停。Web端与已保存资料留在Cloudflare。
 
@@ -56,3 +56,13 @@ QQ SDK单独锁定在 runner/sdk/，安装到私密运行目录，不再依赖 D
 开发台显示近期队列、真实模型档位/耗时/Token、错误任务、附件状态、5分钟连接采样和夜间素材积压。采样最多保留7天，模型指标保留30天，完成的聊天/检索唤醒记录7天后清理；原始消息、事实、任务和交付证据单独持久保存。
 
 日志在私密目录，发布Issue时只提交脱敏的错误码、任务版本与复现步骤。不要上传config、worker-secrets、credentials、QQ session、原始群聊备份或内部思考。
+
+## B 站轻档抓取
+
+`bili.enabled` 控制按需读取公开简介、CC 字幕与热评；无登录态也可运行，字幕缺失时明确说明范围。独立 `team-fetch` 由 `python3 scripts/install-local.py --apply` 幂等安装，要求 Node ≥22；日志在 `~/.inkboard-team/fetch.log` 与 `fetch-error.log`，启动行包含脚本 SHA-256 前 12 位。
+
+只连 B 站 API、b23.tv 与字幕 CDN 公网地址，Cookie 仅发往 API。任务失败或抓取端离线，视频续答到期后按卡片信息回答。暂停领取期间 fetch 同样停止领取。
+
+回滚本机服务：`python3 scripts/install-local.py --apply --remove-fetch`。Worker 设置 `bili.enabled=false` 后停止新建续答，已有等待仍会答完。首次部署与升级需核验 PID、启动哈希及群消息，文件复制成功不代表已启用。
+
+视频续答最多尝试 3 轮；持续失败时只发送一次固定降级说明并进入 `failed`，不会无限重跑。`npm run db:migrate` 会为已有 `video_waits` 表幂等补上 attempts 列并保留等待记录；新建环境直接使用 schema.sql。登录状态接口仅记录状态，本轮未接入登录过期提醒。卸载时若无法停止 team-fetch，会打印警告并保留 plist，需核实进程后再处理。

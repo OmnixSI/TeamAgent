@@ -219,6 +219,24 @@
         "turn_deadline_ms",
         "prompt"
       ]
+    },
+    "bili": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "wait_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+        }
+      },
+      "required": [
+        "enabled",
+        "wait_seconds"
+      ]
     }
   },
   "required": [
@@ -227,7 +245,8 @@
     "scout",
     "execution",
     "repositories",
-    "project_aliases"
+    "project_aliases",
+    "bili"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamAgent共享参数"

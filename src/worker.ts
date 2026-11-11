@@ -1,3 +1,4 @@
+import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -460,10 +461,23 @@ function semanticServices(e: Env) {
     job: (id: string, kind: string, payload: any) => job(e, id, kind, payload),
   };
 }
+async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any[]) {
+  const newCursor = Math.max(cursor, ...batch.map((r: any) => r.ordinal));
+  await set(e, "chat_cursor", String(newCursor));
+  const remaining = await e.DB.prepare(
+    "SELECT id FROM messages WHERE group_id=? AND rowid>? ORDER BY rowid DESC LIMIT 1",
+  )
+    .bind(groupId, newCursor)
+    .first();
+  if (remaining)
+    await job(e, "chat-drain-" + newCursor, "chat", {
+      message: remaining.id,
+    });
+}
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
     .bind(now + 660000, id, now)
     .first();
@@ -610,6 +624,7 @@ async function processJob(e: Env, id: string) {
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
     }
+    if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
       const m = await e.DB.prepare(
         "SELECT rowid AS ordinal,* FROM messages WHERE id=?",
@@ -665,24 +680,25 @@ async function processJob(e: Env, id: string) {
       });
       const { batch, latest } = context;
       if (!batch.length || !latest) return;
+      const mentioned = batch.some((r: any) => r.mentioned);
+      const transferred = await videoWaitExists(e, m.group_id, latest.id);
+      const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
+      const cached = ref ? await biliCached(e, ref) : null;
+      if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
       const modelStarted = Date.now();
       const answer = await agentAnswer(e, {
         ...context,
-        mentioned: batch.some((r: any) => r.mentioned),
+        mentioned,
+        ...(ref ? { videoWaited: true } : {}),
+        ...(cached ? { materials: [videoMaterial(cached)] } : {}),
       });
       if (decodeVoice(answer).text !== "[[SILENT]]")
         await enqueueVoice(e, id, latest.group_id, latest.id, answer);
-      const newCursor = Math.max(cursor, ...batch.map((r: any) => r.ordinal));
-      await set(e, "chat_cursor", String(newCursor));
-      const remaining = await e.DB.prepare(
-        "SELECT id FROM messages WHERE group_id=? AND rowid>? ORDER BY rowid DESC LIMIT 1",
-      )
-        .bind(m.group_id, newCursor)
-        .first();
-      if (remaining)
-        await job(e, "chat-drain-" + newCursor, "chat", {
-          message: remaining.id,
-        });
+      await advanceCursor(e, m.group_id, cursor, batch);
       await set(
         e,
         "last_chat_timing",
@@ -1014,16 +1030,18 @@ async function scheduled(e: Env) {
       await set(e, "dream_batches_" + date, String(batches + 1));
     }
   }
+  await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind!='media' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now())
       .all()
   ).results;
   for (const j of pending) {
     if (e.WORK) {
-      await queueFor(e, j.kind, JSON.parse(j.payload)).send({ id: j.id });
+      const lane = queueFor(e, j.kind, JSON.parse(j.payload));
+      if (lane) await lane.send({ id: j.id });
     } else await processJob(e, j.id);
   }
   await e.DB.prepare(
@@ -1227,6 +1245,9 @@ async function api(r: Request, e: Env) {
       Number(await setting(e, "runner_pause_until")) > Date.now()
     )
       return json({ task: null, job: null });
+
+    if (path.startsWith("/api/runner/fetch/") && method === "POST")
+      return fetchRoute(e, path, await r.json());
 
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();

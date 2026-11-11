@@ -791,7 +791,7 @@ export async function agentAnswer(e: any, context: any) {
   const messages: any[] = context.resume?.messages || [
     {
       role: "system",
-      content: PARTICIPATION + "\n" + UNTRUSTED_RULE,
+      content: PARTICIPATION,
     },
     {
       role: "user",
@@ -805,6 +805,7 @@ export async function agentAnswer(e: any, context: any) {
         today: now(),
         projects: INITIAL_PROJECT_HINTS,
         facts: promptFacts,
+        materials: context.materials,
         reflection: (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='team_reflection'",
@@ -855,6 +856,7 @@ export async function agentAnswer(e: any, context: any) {
         latestId: context.latest.id,
         batchIds: context.batch?.map((m: any) => m.id) || [context.latest.id],
         mentioned: context.mentioned,
+        videoWaited: context.videoWaited,
         intent: context.intent,
         background: true,
         resume: { messages, pending: m, turn },
@@ -889,6 +891,7 @@ export async function agentAnswer(e: any, context: any) {
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
         !!context.mentioned ||
+        !!context.videoWaited ||
         context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
           recentBot.some(
