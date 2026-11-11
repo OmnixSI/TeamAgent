@@ -59,7 +59,7 @@ export function createFetchClient(options={}){
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
  const rate=()=>{const slot=serial.then(async()=>{if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
- function risk(hit){riskCount=hit?riskCount+1:0;if(riskCount>=2)pausedUntil=now()+600000;}
+ function risk(hit,reset=true){riskCount=hit?riskCount+1:(reset?0:riskCount);if(riskCount>=2)pausedUntil=now()+600000;}
  async function get(raw,kind){
    const u=allowed(raw,kind);await rate();
    // Fresh headers per request: never reuse the API Cookie for a subtitle/short URL.
@@ -77,7 +77,7 @@ export function createFetchClient(options={}){
          const status=res.statusCode;
          let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
          log('fetch '+kind+' '+u.pathname+' status='+status);
-         const hit=status===412||[-352,-412].includes(data?.code);risk(hit);
+         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
          if(hit||(!(status>=200&&status<300)&&!(kind==='short'&&status>=300&&status<400))){const error=Error(now()<pausedUntil?'风控':'抓取失败');error.status=status;error.code=data?.code;fail(error);return;}
          settled=true;clearTimeout(timer);resolveResult({status,headers:res.headers,data});
        });
@@ -130,7 +130,7 @@ export function createFetchClient(options={}){
          const selected=list.find(s=>['zh-CN','zh-Hans','ai-zh'].includes(s.lan))||list[0];
          if(selected?.subtitle_url){const url=selected.subtitle_url.startsWith('//')?'https:'+selected.subtitle_url:selected.subtitle_url;const sub=await biliSubtitle(url);subtitle=(sub.body||[]).map(x=>String(x.content||'')).join(' ').slice(0,6000)||null;subtitle_lang=selected.lan||null;subtitle_status=subtitle?'ok':'none';}
          else if(player.data?.need_login_subtitle)subtitle_status='login_required';
-       }
+       }else subtitle_status='unavailable';
      }catch(error){if(now()<pausedUntil)throw error;subtitle_status='unavailable';}
    }
    let comments=[];

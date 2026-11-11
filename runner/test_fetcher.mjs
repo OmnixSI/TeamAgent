@@ -66,3 +66,32 @@ test('N12 need_login_subtitle is surfaced explicitly',async()=>{
  assert.equal(r.subtitle,null);
  assert.equal(r.subtitle_status,'login_required');
 });
+
+
+test('N13 two view 412s pause and later short-link work sends no request',async()=>{
+ const f=fixture(o=>{
+  const p=o.path.split('?')[0];
+  if(p.endsWith('/spi'))return {body:{code:0,data:{b_3:'fresh-b3'}}};
+  if(p.endsWith('/nav'))return {body:{code:-101,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};
+  if(p.endsWith('/view'))return {status:412,body:{code:-412}};
+  return {body:{code:0,data:{}}};
+ },{cookies:{buvid3:'stale-b3'}});
+ await assert.rejects(f.client.biliLight(BV),/风控/);
+ assert.equal(f.calls.filter(o=>o.path.includes('/web-interface/view')).length,2);
+ const before=f.calls.length;
+ await assert.rejects(f.client.biliLight('abcd'),/风控/);
+ assert.equal(f.calls.length,before);
+});
+test('N14 player code -403 marks subtitle unavailable, not none',async()=>{
+ const f=fixture(o=>{
+  const p=o.path.split('?')[0];
+  if(p.endsWith('/spi'))return {body:{code:0,data:{b_3:'b3'}}};
+  if(p.endsWith('/nav'))return {body:{code:-101,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};
+  if(p.endsWith('/view'))return {body:{code:0,data:{bvid:BV,title:'T',desc:'D',owner:{name:'UP'},tname:'科技',duration:60,pubdate:1,stat:{view:2},aid:123,pages:[{cid:456}]}}};
+  if(p.endsWith('/v2'))return {body:{code:-403}};
+  return {body:{code:0,data:{replies:[]}}};
+ });
+ const r=await f.client.biliLight(BV);
+ assert.equal(r.subtitle,null);
+ assert.equal(r.subtitle_status,'unavailable');
+});
