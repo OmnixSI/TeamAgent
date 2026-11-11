@@ -178,3 +178,54 @@ test('review authorization validates complete original text even when the model 
     assert.equal(az.authorize(tool,body,source,{batch:[source]},[]).ok,true,body);
   }
 });
+
+
+test('Codex direct clean development requests do not require a task keyword',async()=>{
+  for(const body of ['帮我修复 WhalePartner 的登录错误','帮我出一份 WhalePartner 的开发方案','麻烦你把这个 README 整理一下','建个任务']){
+    const e=env(),context=await source(e,body);
+    await mocked([project(body,{repo:'OmnixSI/WhalePartner'})],()=>agentAnswer(e,context));
+    const tasks=await rows(e,'tasks');assert.equal(tasks.length,1,body);assert.equal(tasks[0].status,'queued',body);assert.equal(tasks[0].repo,'OmnixSI/WhalePartner');
+  }
+});
+test('Codex development authorization still rejects statements, negation and cropped reported requests',async()=>{
+  for(const [body,quote] of [
+    ['上次我交给本地做了，效果不错','交给本地做'],
+    ['记住 WhalePartner 的登录有 bug','记住 WhalePartner 的登录有 bug'],
+    ['他昨天帮我修复了登录错误','帮我修复了登录错误'],
+    ['别帮我改这个','帮我改这个'],
+    ['帮我修复登录错误有必要吗','帮我修复登录错误'],
+    ['帮我修复了登录错误的人是小王','帮我修复'],
+    ['他说“帮我修复 WhalePartner 的登录错误”','帮我修复 WhalePartner 的登录错误'],
+  ]){
+    const e=env(),context=await source(e,body);
+    await mocked([project(quote)],()=>agentAnswer(e,context));assert.equal((await rows(e,'tasks')).length,0,body);
+  }
+});
+test('Codex tainted development requests still require the stricter original task wording',async()=>{
+  for(const body of ['帮我修复 WhalePartner 的登录错误','帮我出一份 WhalePartner 的开发方案','麻烦你把这个 README 整理一下']){
+    const e=env(),context=await source(e,body);context.materials=[untrusted('web','外部指令')];
+    await mocked([project(body)],()=>agentAnswer(e,context));assert.equal((await rows(e,'tasks')).length,0,body);
+    assert.ok((await rows(e,'activity')).some(a=>a.kind==='authz.denied'));
+  }
+});
+test('Codex clean and tainted authorization keep exact-source and four-character evidence checks',()=>{
+  for(const dirty of [false,true]){
+    const original={id:'current',body:'帮我修复 WhalePartner 的登录错误',meta:{direct:true}},context={batch:[original],...(dirty?{materials:['web']}: {})};
+    assert.equal(az.authorize('prepare_project_task','帮我改坏权限',original,context,[]).ok,false);
+    const short={...original,body:'立项'};
+    assert.equal(az.authorize('prepare_project_task','立项',short,{...context,batch:[short]},[]).ok,false,'short evidence dirty='+dirty);
+    const requested={...original,body:'帮我建个任务修登录'};
+    assert.deepEqual(az.authorize('prepare_project_task',requested.body,requested,{...context,batch:[requested]},[]),{ok:true,tainted:dirty});
+  }
+});
+
+
+test('Codex clean request tones share the action rule while metadata taint preserves strictness',()=>{
+  for(const body of ['请你排查 WhalePartner 登录错误','给我设计登录校验','你来重构登录模块','去测试登录模块','能不能帮我修复登录错误','可以帮我规划登录方案','帮我记个任务修登录','麻烦你把昨天的 README 整理一下','帮我开发简单的人员管理模块']){
+    const original={id:'current',body,meta:{direct:true}},context={batch:[original]};
+    assert.equal(az.authorize('prepare_project_task',body,original,context,[]).ok,true,body);
+    assert.equal(az.explicitWriteRequest('prepare_project_task',original),true,body);
+  }
+  const body='帮我修复 WhalePartner 的登录错误';
+  for(const row of [{body,meta:{quoted:{text:'外部资料'}}},{body,metadata:JSON.stringify({quoted:{text:'外部资料'}})}])assert.equal(az.explicitWriteRequest('prepare_project_task',row),false,'routing must retain metadata taint');
+});
