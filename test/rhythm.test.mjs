@@ -623,3 +623,22 @@ test('review bare imperative project request still reaches normal tools',async()
   });
   assert.equal((await e.DB.prepare("SELECT status FROM tasks WHERE source_id='bare-request'").first()).status,'queued');
 });
+
+
+test('Codex unmentioned clean development request reaches tools after proactive speech',async()=>{
+  const e=await seedHard(),body='帮我修复 WhalePartner 的登录错误';await qq(e,msg('development-request',body));
+  await decide(n=>n===1?{tool_calls:[{id:'dev',type:'function',function:{name:'prepare_project_task',arguments:JSON.stringify({source_id:'development-request',request_quote:body,repo:'OmnixSI/WhalePartner',title:'登录错误',detail:'明确交办修复',execute_requested:true,complexity:'small'})}}]}:{content:'{"action":"reply","kind":"direct","brief":"已建任务"}'},async()=>{
+    const route=metered(e),before=e.DB.executed;await queue(route,'chat-development-request');assert.equal(route.meter.used,e.DB.executed-before);assert.ok(route.meter.used<=48);
+    const job=await e.DB.prepare("SELECT id FROM jobs WHERE id='research-development-request'").first();assert.ok(job);
+    const work=metered(e),beforeWork=e.DB.executed;await queue(work,job.id);assert.equal(work.meter.used,e.DB.executed-beforeWork);assert.ok(work.meter.used<=48);
+    writeFileSync('.agent/p1-development-counts.json',JSON.stringify({chat:route.meter.used,research:work.meter.used}));
+  });
+  assert.equal((await e.DB.prepare("SELECT status FROM tasks WHERE source_id='development-request'").first()).status,'queued');
+});
+test('Codex statement and memory wording do not bypass the proactive gate',async()=>{
+  for(const [i,body] of ['上次我交给本地做了，效果不错','记住 WhalePartner 的登录有 bug','他昨天帮我修复了登录错误','别帮我改这个','帮我修复登录错误有必要吗'].entries()){
+    const e=await seedHard(),id='dev-not-command-'+i;await qq(e,msg(id,body));
+    await decide({action:'reply',kind:'proactive'},async state=>{await queue(e,'chat-'+id);assert.equal(state.decisions,0,body);assert.equal(state.voices,0,body);});
+    assert.equal((await e.DB.prepare('SELECT gate FROM chat_decisions WHERE id=?').bind('chat-'+id).first()).gate,'hard_unanswered',body);
+  }
+});
