@@ -114,5 +114,9 @@ export function validateTeamConfig(c) {
   for (const [key, max] of Object.entries({cap_ms:60000, wait_min:45, wait_max:45, wait_horizon_ms:600000, hard_window_ms:86400000, hard_humans:100}))
     check(integer(c?.rhythm?.[key], 1, max), "rhythm." + key);
   check(c?.rhythm?.wait_min <= c?.rhythm?.wait_max, "rhythm.wait_min <= wait_max");
+  for (const key of ['enabled','collect','send_gif']) check(typeof c?.stickers?.[key] === 'boolean', 'stickers.'+key);
+  // send is deliberately fail-closed at runtime: only literal true enables it.
+  for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
+  for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
   return errors;
 }

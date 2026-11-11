@@ -1,3 +1,5 @@
+import { looksLikeSticker } from "./vision";
+import { collectSticker, tagSticker, retryStickerTags, importSticker } from "./stickers";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -303,6 +305,11 @@ async function receive(r: Request, e: Env) {
       .filter(v => v.name)
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
+  if (TEAM.stickers.enabled && TEAM.stickers.collect) {
+    const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!text.trim())).slice(0,2);
+    if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
+      for (const {media, idx} of candidates) await job(e, "sticker-"+m.id+"-"+idx, "sticker", {url:media.url,sender:ib.senderId,message:m.id,idx});
+  }
   // Quoted bot output and old forwarded material are context, never automatic reprocessing triggers.
   const urls = ib.ownUrls;
   const videoUrls = urls.filter((u: string) =>
@@ -637,6 +644,8 @@ async function processJob(e: Env, id: string) {
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
     }
+    if (claim.kind === "sticker") await collectSticker(e, p);
+    if (claim.kind === "sticker-tag") await tagSticker(e, p);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
       const m = await e.DB.prepare(
@@ -1149,8 +1158,13 @@ async function scheduled(e: Env) {
   )
     .bind(iso(), Date.now())
     .run();
+  await retryStickerTags(e);
   // Finish mandatory maintenance before the sender spends its remaining budget.
   await sendOutbox(e);
+}
+function requestBodyLimit(r: Request) {
+  return r.method === 'POST' && new URL(r.url).pathname === '/api/team/stickers'
+    ? 4 * Math.ceil(TEAM.stickers.max_bytes / 3) + 1024 : 262144;
 }
 async function api(r: Request, e: Env) {
   const u = new URL(r.url),
@@ -1162,7 +1176,7 @@ async function api(r: Request, e: Env) {
     r.headers.get("Origin") !== u.origin
   )
     return json({ error: "origin denied" }, 403);
-  if (Number(r.headers.get("Content-Length") || 0) > 262144)
+  if (Number(r.headers.get("Content-Length") || 0) > requestBodyLimit(r))
     return json({ error: "body too large" }, 413);
   if (path === "/" || path === "/guide")
     return new Response(HTML, {
@@ -1644,6 +1658,10 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (path === "/api/team/stickers" && method === "POST") {
+    if (who.role !== "owner") return json({error:"owner only"},403);
+    return importSticker(e, await r.json());
+  }
   if (path === "/api/team/vision/selftest" && method === "GET") {
     if (who.role !== "owner")
       return json({ error: "owner only" }, 403);
@@ -2244,7 +2262,7 @@ export default {
           const next = await reader.read();
           if (next.done) break;
           size += next.value.byteLength;
-          if (size > 262144) {
+          if (size > requestBodyLimit(r)) {
             await reader.cancel();
             return json({ error: "body too large" }, 413);
           }

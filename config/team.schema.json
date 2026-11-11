@@ -305,6 +305,68 @@
           "maximum": 100
         }
       }
+    },
+    "stickers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "collect": {
+          "type": "boolean"
+        },
+        "send": {
+          "type": "boolean"
+        },
+        "send_gif": {
+          "type": "boolean"
+        },
+        "min_senders": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 5
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400000
+        },
+        "max_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tag": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40
+            },
+            "send": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "tag",
+            "send"
+          ]
+        }
+      },
+      "required": [
+        "enabled",
+        "collect",
+        "send_gif",
+        "min_senders",
+        "max_bytes",
+        "max_rows",
+        "caps"
+      ]
     }
   },
   "required": [
@@ -315,7 +377,8 @@
     "repositories",
     "project_aliases",
     "bili",
-    "rhythm"
+    "rhythm",
+    "stickers"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TeamAgent共享参数"

@@ -33,7 +33,7 @@ export type ImagePick = {
   hint: string;
 };
 
-const IMAGE_MIME = new Set([
+export const IMAGE_MIME = new Set([
   "image/jpeg",
   "image/png",
   "image/gif",
@@ -206,7 +206,7 @@ export function pickImages(
   return picks.slice(0, max);
 }
 
-async function sha256(bytes: Uint8Array) {
+export async function sha256(bytes: Uint8Array) {
   const copy = new Uint8Array(bytes);
   const digest = await crypto.subtle.digest("SHA-256", copy.buffer);
   return Array.from(new Uint8Array(digest))
@@ -297,7 +297,13 @@ export async function describeImage(
     if (!img.url || signal.aborted) return null;
     const fetched = await fetchImage(img.url, signal);
     if (!fetched) return null;
-    const sha = (await sha256(fetched.bytes)) + ":" + version;
+    return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version);
+  } catch { return null; }
+}
+
+export async function describeBytes(e: any, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal, version = VISION_VERSION): Promise<ImageNote | null> {
+  try {
+    const sha = (await sha256(bytes)) + ":" + version;
     const cached = await e.DB.prepare(
       "SELECT sha,desc,tags,sticker_like,text FROM image_notes WHERE sha=?",
     )
@@ -309,8 +315,8 @@ export async function describeImage(
     const provider = visionProvider(e);
     if (!provider) return null;
     const note = await provider.describe(
-      fetched.bytes,
-      fetched.mime,
+      bytes,
+      mime,
       hint,
       signal,
     );
