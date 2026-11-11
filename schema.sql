@@ -37,3 +37,7 @@ CREATE TABLE IF NOT EXISTS outbox_attempts(id TEXT PRIMARY KEY,started_at INTEGE
 CREATE INDEX IF NOT EXISTS activity_time ON activity(created_at);
 CREATE INDEX IF NOT EXISTS model_runs_time ON model_runs(created_at);
 CREATE TABLE IF NOT EXISTS model_usage(hour INTEGER NOT NULL,kind TEXT NOT NULL,effort TEXT NOT NULL,status TEXT NOT NULL,n INTEGER NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,duration_ms INTEGER NOT NULL,PRIMARY KEY(hour,kind,effort,status));
+CREATE TABLE IF NOT EXISTS member_passwords(member_id TEXT PRIMARY KEY,login_name TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ai_tokens(id TEXT PRIMARY KEY,member_id TEXT NOT NULL,label TEXT NOT NULL,token_hash TEXT UNIQUE NOT NULL,created_at INTEGER NOT NULL,expires INTEGER NOT NULL,last_used INTEGER,revoked INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ai_tokens_member ON ai_tokens(member_id,revoked);
+CREATE TABLE IF NOT EXISTS task_claims(task_id TEXT NOT NULL,version INTEGER NOT NULL,member_id TEXT NOT NULL,member_name TEXT NOT NULL,actor_type TEXT NOT NULL,claimed_at TEXT NOT NULL,PRIMARY KEY(task_id,version));

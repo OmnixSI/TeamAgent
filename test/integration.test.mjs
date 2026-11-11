@@ -742,9 +742,8 @@ await build({
   platform: "browser",
   outfile: ".wrangler/test-engagement.mjs",
 });
-const { maySpeak, recordProactive } = await import(
-  "../.wrangler/test-engagement.mjs"
-);
+const { maySpeak, recordProactive } =
+  await import("../.wrangler/test-engagement.mjs");
 test("participation follows semantic judgment without a fixed quota", async () => {
   const e = env();
   assert.equal(await maySpeak(e, { should_reply: false }, false, false), false);
@@ -1128,9 +1127,8 @@ await build({
   platform: "browser",
   outfile: ".wrangler/test-memory.mjs",
 });
-const { rememberCorrection, recall } = await import(
-  "../.wrangler/test-memory.mjs"
-);
+const { rememberCorrection, recall } =
+  await import("../.wrangler/test-memory.mjs");
 test("explicit correction is immediate, evidence-checked and project-scoped; deletion cannot be relearned", async () => {
   const e = env(),
     repo = "OmnixSI/WhalePartner",
@@ -1269,7 +1267,12 @@ test("saving a running task is an explicit human takeover, never a dangling runn
   );
   const d = await (await req(e, "/api/team/task?id=" + id)).json();
   assert.equal(d.task.status, "in_progress");
-  assert.equal(d.task.lease, null);
+  assert.equal(d.task.lease, undefined);
+  assert.equal(
+    (await e.DB.prepare("SELECT lease FROM tasks WHERE id=?").bind(id).first())
+      .lease,
+    null,
+  );
   assert.equal(
     (
       await req(

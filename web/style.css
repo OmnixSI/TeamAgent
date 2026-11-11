@@ -597,3 +597,50 @@ footer {
     padding: 17px;
   }
 }
+
+.teamstrip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -7px 0 18px;
+}
+.teamstrip > small {
+  margin-right: 5px;
+}
+.member-chip {
+  border-radius: 20px;
+  font-size: 12px;
+  padding: 6px 12px;
+  min-height: 32px;
+}
+.member-chip.mine {
+  border-color: #aaa9ee;
+  background: #efefff;
+  color: #4545ae;
+}
+.identity-button {
+  background: #efefff;
+  color: #4545ae;
+  font-weight: 600;
+}
+.latest-commit {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+  display: grid;
+  gap: 9px;
+}
+.latest-commit > a {
+  font-size: 14px;
+  line-height: 1.6;
+  font-weight: 550;
+}
+.latest-commit .actions {
+  font-size: 12px;
+  color: var(--muted);
+}
+#nameform > button {
+  width: 100%;
+  margin-top: 12px;
+}

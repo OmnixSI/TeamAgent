@@ -46,7 +46,7 @@
 4. 仅有“处理完成”会掩盖附件未送达；现在独立记录生成、发送确认和未知结果，恢复只补报回执。
 5. 删除记忆后，夜间可能把同一原文再抽一遍；现在留下来源删除记录，手动修订也有真实编辑来源。
 6. 夜间旧批次的消息元信息曾按“最新60条”找，会漏掉旧批的转发边界；现在按准确消息 ID 批量查询。
-7. 多设备登录会轮换同一个成员凭据；现在使用独立会话，可整体撤销。
+7. 多设备登录会轮换同一个成员凭据；现在使用独立会话，可整体撤销。成员入口已按最新要求切为三人名字口令，大小写无关，共享同一份工作台；旧群登录和邀请入口停用。
 8. 任务重排后会复用旧执行回执；现在执行事件、分支和回执绑定任务版本。
 9. 断开后的 SDK RESUMED 没有更新在线标记；现在同时处理 READY / RESUMED，并持久化 session。
 10. 分散查询可能超过免费 D1 每次50查询；夜间批量读写已合并，避免以付费升档掩盖问题。
@@ -58,3 +58,9 @@
 目前有价值但尚未完成的工作是：官方云端 QQ 回调、首次真实夜间记录、24小时故障观察、更多业务仓库构建环境，以及带版本引用的更深源码检索。OCR、音频转写和更多付费工具要按实际需求再接，先把已有链路验收清楚。
 
 参考原始来源：[MaiBot](https://github.com/Mai-with-u/MaiBot)、[自然聊天 skill](https://github.com/1rua/astrbot-qq-natural-chat-skill)、[WhalePartner](https://github.com/OmnixSI/WhalePartner)、[InkBoard](https://github.com/ooooooomygosh/inkboard)、[SuperAgent](https://github.com/deepseek-ai/dsh-superagent-prototype)、[OpenClaw Dreaming](https://docs.openclaw.ai/concepts/dreaming)。
+
+## 三人工作台与本机 AI 接力
+
+hongming、jinxiang、jinyi 使用自己的名字登录。三人的共享数据和普通成员页面相同，身份只用于操作归属。主动领取使用原版本原子更新，记录领取人，后台生成一次群通知；不抢走他人正在处理的任务。
+
+本机 MCP 与命令行客户端使用单独、可撤销的成员凭证，读取真实资料、领取任务并回填进展。AI 只能操作自己的回报，不能管理密钥、成员、执行端或直接确认验收。任务版本冲突时先重新读取。组织项目同步增加提交作者、时间与 GitHub 链接，新项目也进入动态列表，自动代码执行仍按已配置仓库范围。

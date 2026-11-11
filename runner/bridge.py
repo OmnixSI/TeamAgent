@@ -46,7 +46,32 @@ def sync_repos():
     global last_sync
     if time.time() - last_sync < 300:
         return
-    for repo in CONFIG["repos"]:
+    repositories = list(CONFIG["repos"])
+    organization = subprocess.run(
+        [
+            "gh",
+            "repo",
+            "list",
+            "OmnixSI",
+            "--limit",
+            "100",
+            "--json",
+            "nameWithOwner,isArchived",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    if organization.returncode == 0:
+        repositories = sorted(
+            set(repositories)
+            | {
+                r["nameWithOwner"]
+                for r in json.loads(organization.stdout)
+                if not r["isArchived"]
+            }
+        )
+    for repo in repositories:
         context = {"repo": repo, "syncedAt": time.time()}
         for key, path in [
             ("metadata", ""),
@@ -107,9 +132,22 @@ def sync_repos():
                 context["head"] = {"unavailable": True}
             if head.returncode == 0:
                 commit = json.loads(head.stdout)
+                person = commit.get("author") or {}
+                authored = commit.get("commit", {}).get("author") or {}
                 context["head"] = {
                     "sha": commit.get("sha"),
                     "url": commit.get("html_url"),
+                    "message": str(commit.get("commit", {}).get("message") or "").split(
+                        "\n"
+                    )[0][:300],
+                    "author": {
+                        "name": authored.get("name")
+                        or person.get("login")
+                        or "未知作者",
+                        "login": person.get("login"),
+                        "url": person.get("html_url"),
+                    },
+                    "at": authored.get("date"),
                 }
             rr = subprocess.run(
                 [

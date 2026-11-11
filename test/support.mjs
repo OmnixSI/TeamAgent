@@ -35,6 +35,9 @@ function db() {
         async first() {
           return d.prepare(sql).get() || null;
         },
+        async run() {
+          return d.prepare(sql).run();
+        },
       };
     },
     async batch(ss) {

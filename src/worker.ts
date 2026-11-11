@@ -1,3 +1,11 @@
+import {
+  nameLogin,
+  provisionNames,
+  aiIdentity,
+  aiRouteAllowed,
+  tokenRoute,
+} from "./accounts";
+import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -64,15 +72,16 @@ async function identity(r: Request, e: Env) {
   if (!t) return null;
   const h = await hash(t);
   if (e.ADMIN_TOKEN && h === (await hash(e.ADMIN_TOKEN)))
-    return { id: "owner", role: "owner", name: "群主" };
+    return { id: "owner", role: "owner", name: "hongming", via: "owner" };
+  if (t.startsWith("teamai_")) return aiIdentity(e, h);
   const session = await e.DB.prepare(
-    "SELECT m.id,m.name,m.role FROM member_sessions s JOIN members m ON m.id=s.member_id WHERE s.token_hash=? AND s.expires>? AND m.revoked=0",
+    "SELECT m.id,m.name,m.role FROM member_sessions s JOIN members m ON m.id=s.member_id WHERE s.token_hash=? AND s.expires>? AND m.revoked=0 AND (NOT EXISTS(SELECT 1 FROM settings WHERE key='auth_mode' AND value='names') OR EXISTS(SELECT 1 FROM member_passwords p WHERE p.member_id=m.id))",
   )
     .bind(h, Date.now())
     .first();
   if (session) return session;
   return e.DB.prepare(
-    "SELECT id,name,role FROM members WHERE token_hash=? AND revoked=0",
+    "SELECT id,name,role FROM members WHERE token_hash=? AND revoked=0 AND NOT EXISTS(SELECT 1 FROM settings WHERE key='auth_mode' AND value='names')",
   )
     .bind(h)
     .first();
@@ -565,6 +574,31 @@ async function processJob(e: Env, id: string) {
     if (claim.kind === "links")
       await understandLinks(e, p, semanticServices(e));
     if (claim.kind === "scout") await scout(e, p, semanticServices(e));
+    if (claim.kind === "claim_notice") {
+      const t = await e.DB.prepare(
+        "SELECT id,title,repo,assignee,status FROM tasks WHERE id=?",
+      )
+        .bind(p.task)
+        .first();
+      const group = await setting(e, "group_id");
+      if (t && group && t.assignee === p.member) {
+        const spoken = await speakBrief(
+          e,
+          {
+            facts: {
+              member: p.member,
+              task: t.title,
+              repo: t.repo,
+              actorType: p.actorType,
+            },
+            instruction:
+              "成员刚在团队开发台主动接手任务。用一到两句中文告诉群友是谁接了什么，具体夸一句愿意接活和推进，不夸尚未完成的成果、不拉踩其他人。轻快自然，名字保持原样；本机AI接手时说明是这个成员的本机AI。不要宣布已经做完。",
+          },
+          { intent: "在群里报接手并表扬接活的队友" },
+        );
+        await enqueueVoice(e, id, group, null, spoken);
+      }
+    }
     if (claim.kind === "voice_notice") {
       const m = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
         .bind(p.message)
@@ -1048,6 +1082,17 @@ async function api(r: Request, e: Env) {
         "Referrer-Policy": "no-referrer",
       },
     });
+  if (path === "/api/team/login-name" && method === "POST")
+    return nameLogin(r, e);
+  if (
+    [
+      "/api/team/login/start",
+      "/api/team/login/poll",
+      "/api/team/join",
+    ].includes(path) &&
+    (await setting(e, "auth_mode")) === "names"
+  )
+    return json({ error: "请在首页输入成员名字登录" }, 410);
   if (path === "/api/team/login/start" && method === "POST") {
     const count = await e.DB.prepare(
       "SELECT COUNT(*) AS n FROM login_tickets WHERE expires>?",
@@ -1347,7 +1392,7 @@ async function api(r: Request, e: Env) {
 
     if (path.endsWith("/context") && method === "POST") {
       const b: any = await r.json();
-      if (!REPOS.includes(b.repo))
+      if (!/^OmnixSI\/[A-Za-z0-9_.-]+$/.test(String(b.repo)))
         return json({ error: "repository denied" }, 403);
       const group = await setting(e, "group_id");
       if (group)
@@ -1506,8 +1551,22 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (who.via === "ai" && !aiRouteAllowed(path, method))
+    return json(
+      { error: "本机AI仅可查询项目、创建与领取任务、回填自己的进展" },
+      403,
+    );
+  if (path === "/api/team/ai-tokens") return tokenRoute(r, e, who);
+  if (path === "/api/team/tasks" && method === "GET")
+    return listTasks(e, u, who);
+  if (path === "/api/team/task/claim" && method === "POST")
+    return claimTask(e, await r.json(), who);
+  if (path === "/api/team/task/report" && method === "POST")
+    return reportTask(e, await r.json(), who);
   if (path === "/api/team/profile" && method === "PATCH") {
     const b: any = await r.json();
+    if (who.id.startsWith("name:"))
+      return json({ error: "团队名字与登录身份一致，无需修改" }, 400);
     const name = String(b.name || "")
       .trim()
       .slice(0, 40);
@@ -1563,7 +1622,8 @@ async function api(r: Request, e: Env) {
   }
   if (path === "/api/team/project") {
     const repo = u.searchParams.get("repo");
-    if (!REPOS.includes(repo || "")) return json({ error: "未知项目" }, 400);
+    if (!/^OmnixSI\/[A-Za-z0-9_.-]+$/.test(repo || ""))
+      return json({ error: "未知项目" }, 400);
     const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
       .bind(repo)
       .first();
@@ -1636,7 +1696,7 @@ async function api(r: Request, e: Env) {
       .first();
     const repository = cache ? JSON.parse(cache.json) : null;
     return json({
-      task,
+      task: publicTask(task),
       plan,
       events,
       repository: { head: repository?.head, metadata: repository?.metadata },
@@ -1732,6 +1792,11 @@ async function api(r: Request, e: Env) {
       ]);
     return json({
       who,
+      teammates: (
+        await e.DB.prepare(
+          "SELECT m.id,m.name FROM members m JOIN member_passwords p ON p.member_id=m.id WHERE m.revoked=0 ORDER BY m.name",
+        ).all()
+      ).results,
       revision:
         (
           await e.DB.prepare(
@@ -1745,7 +1810,7 @@ async function api(r: Request, e: Env) {
       },
       projects: (
         await e.DB.prepare(
-          "SELECT repo,updated_at,json_extract(json,'$.checks') AS checks,json_extract(json,'$.stale_sections') AS stale_sections FROM repo_cache ORDER BY repo",
+          "SELECT repo,updated_at,json_extract(json,'$.checks') AS checks,json_extract(json,'$.stale_sections') AS stale_sections,json_extract(json,'$.head') AS head FROM repo_cache ORDER BY repo",
         ).all()
       ).results,
       activity: (
@@ -1823,6 +1888,8 @@ async function api(r: Request, e: Env) {
   if (path.startsWith("/api/admin/")) {
     if (who.role !== "owner") return json({ error: "owner only" }, 403);
     const b: any = await r.json();
+    if (path.endsWith("/name-members") && method === "POST")
+      return provisionNames(e, b);
     if (path.endsWith("/retry-job")) {
       const j = await e.DB.prepare(
         "SELECT * FROM jobs WHERE id=? AND status='failed'",
@@ -1935,6 +2002,9 @@ async function api(r: Request, e: Env) {
       return json({ ok: true });
     }
     if (path.endsWith("/revoke")) {
+      await e.DB.prepare("UPDATE ai_tokens SET revoked=1 WHERE member_id=?")
+        .bind(b.id)
+        .run();
       await e.DB.prepare("DELETE FROM member_sessions WHERE member_id=?")
         .bind(b.id)
         .run();
@@ -1952,7 +2022,12 @@ async function api(r: Request, e: Env) {
     }
   }
   if (path === "/api/team/task" && method === "POST") {
-    const id = await createBoardTask(e, await r.json(), who);
+    const input: any = await r.json();
+    if (who.via === "ai") {
+      input.assignee = "";
+      input.plan = false;
+    }
+    const id = await createBoardTask(e, input, who);
     return id ? json({ id }) : json({ error: "仓库或任务目标无效" }, 400);
   }
   if (path === "/api/team/task" && method === "PATCH") {

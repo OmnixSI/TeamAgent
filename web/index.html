@@ -15,7 +15,9 @@
         <strong>TeamAgent</strong><small>做 AI 高手 · 团队开发台</small>
       </div>
       <div class="actions">
-        <span id="who" class="muted"></span><button id="guide">使用说明</button
+        <button id="who" class="identity-button" hidden></button
+        ><button id="localai" hidden>本机 AI 接入</button
+        ><button id="guide">使用说明</button
         ><button id="admin" hidden>管理接入</button
         ><button id="logout" hidden>退出</button>
       </div>
@@ -27,21 +29,23 @@
           <h1 style="margin-top: 14px">把群里的点子，接着做下去</h1>
         </div>
         <p>
-          讨论、资料、方案和开发接力放在同一个地方。用本人的 QQ 群身份登录。
+          讨论、方案和任务是大家共享的。输入自己的名字，就能认领工作、回填进展。
         </p>
-        <button id="qqlogin" class="primary">用 QQ 群登录</button>
-        <div id="logincode" role="status"></div>
-        <details style="margin-top: 23px">
-          <summary class="muted">已有邀请或访问凭证</summary>
-          <label>一次性邀请<input id="invite" autocomplete="off" /></label
-          ><button id="join">接受邀请</button
-          ><label
-            >个人访问凭证<input
-              id="token"
+        <form id="nameform">
+          <label
+            >你的名字 / 登录口令<input
+              id="membername"
               type="password"
-              autocomplete="off" /></label
-          ><button id="signin">登录</button>
-        </details>
+              placeholder="输入自己的名字"
+              autocomplete="current-password"
+              required
+          /></label>
+          <p class="note">不区分大小写，登录后右上角会显示你的名字。</p>
+          <button id="namelogin" class="primary" type="submit">
+            进入团队工作台
+          </button>
+        </form>
+        <div id="logincode" role="status"></div>
       </section>
       <div id="error" role="alert"></div>
       <section id="app" hidden>
@@ -57,6 +61,11 @@
         </div>
         <div id="connection" class="statusline"></div>
         <div id="stats" class="stats"></div>
+        <div
+          id="teamstrip"
+          class="teamstrip"
+          aria-label="团队成员与当前接手情况"
+        ></div>
         <nav id="tabs" class="tabs" aria-label="工作台页面"></nav>
         <div class="toolbar">
           <select id="repo" aria-label="筛选项目">

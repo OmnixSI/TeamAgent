@@ -24,3 +24,5 @@ jobs:
       - run: npm test
       - run: npm run test:runner
       - run: npm run check:ui
+      - run: npm ci --prefix clients
+      - run: npm test --prefix clients

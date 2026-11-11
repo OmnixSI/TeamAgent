@@ -19,7 +19,7 @@ const $ = (s) => document.getElementById(s),
 const tabs = {
   tasks: "任务与方案",
   materials: "资料与发现",
-  projects: "项目现状",
+  projects: "项目动态",
   memory: "记忆与成长",
   activity: "操作记录",
   system: "运行状态",
@@ -192,22 +192,60 @@ async function load() {
     $("app").hidden = false;
     $("logout").hidden = location.hostname === "127.0.0.1";
     $("who").textContent = state.who.name;
+    $("who").hidden = false;
+    $("localai").hidden = false;
     $("admin").hidden = state.who.role !== "owner";
     $("release").textContent = state.project.version.slice(0, 12);
     $("error").textContent = "";
     if ($("repo").options.length === 1)
-      for (const r of state.repos) {
+      for (const r of [
+        ...new Set([...state.repos, ...state.projects.map((p) => p.repo)]),
+      ]) {
         const o = el("option", short(r));
         o.value = r;
         $("repo").append(o);
       }
     renderStatus();
+    renderTeam();
     render();
   } catch (e) {
     error(e);
   } finally {
     loading = false;
   }
+}
+function renderTeam() {
+  const members = state.teammates || [];
+  $("teamstrip").replaceChildren(el("small", "一起推进"));
+  for (const m of members) {
+    const count = state.tasks.filter(
+      (t) =>
+        t.assignee === m.name && ["in_progress", "running"].includes(t.status),
+    ).length;
+    const b = button(
+      m.name + " · 接手 " + count + " 项",
+      () => {
+        $("person").value = m.name;
+        selectView("tasks");
+      },
+      "member-chip",
+    );
+    if (m.name === state.who.name) b.classList.add("mine");
+    $("teamstrip").append(b);
+    if (![...$("person").options].some((o) => o.value === m.name)) {
+      const o = el("option", m.name);
+      o.value = m.name;
+      $("person").append(o);
+    }
+  }
+}
+async function takeTask(id, version) {
+  const result = await api("/api/team/task/claim", { id, version });
+  await load();
+  toast(
+    result.already ? "这项任务已经是你接手的" : "已接手，群里会同步这条进展",
+  );
+  return result;
 }
 function renderStatus() {
   const c = state.connection,
@@ -275,7 +313,8 @@ function renderTasks() {
         matches(t.title + " " + t.detail + " " + t.result, t.repo) &&
         (!person ||
           (person === "mine" && t.assignee === state.who.name) ||
-          (person === "unassigned" && !t.assignee)),
+          (person === "unassigned" && !t.assignee) ||
+          person === t.assignee),
     );
   $("board").replaceChildren();
   for (const [title, statuses] of [
@@ -309,13 +348,26 @@ function renderTasks() {
       a.append(el("p", t.detail, "snippet"));
       const info = el("div", undefined, "actions");
       info.append(
-        el("small", t.assignee || "未分配"),
+        el(
+          "small",
+          t.assignee
+            ? t.assignee +
+                (["in_progress", "running"].includes(t.status)
+                  ? " · 已接手"
+                  : " · 负责人")
+            : "待认领",
+        ),
         el("small", date(t.updated_at)),
       );
-      a.append(
-        info,
-        button("查看 / 接力", () => taskDetail(t.id)),
-      );
+      a.append(info);
+      const controls = el("div", undefined, "actions");
+      if (
+        !["done", "cancelled"].includes(t.status) &&
+        !(t.status === "in_progress" && t.assignee)
+      )
+        controls.append(button("我来接手", () => takeTask(t.id, t.version)));
+      controls.append(button("查看 / 接力", () => taskDetail(t.id)));
+      a.append(controls);
       col.append(a);
     }
     $("board").append(col);
@@ -391,20 +443,15 @@ async function taskDetail(id) {
       },
       "primary",
     ),
-    button("我来接手", async () => {
-      await api(
-        "/api/team/task",
-        {
-          id: t.id,
-          version: t.version,
-          status: "in_progress",
-          assignee: state.who.name,
-        },
-        "PATCH",
-      );
-      await load();
-      await taskDetail(t.id);
-    }),
+    button(
+      t.assignee === state.who.name && t.status === "in_progress"
+        ? "我已接手，刷新进展"
+        : "我来接手",
+      async () => {
+        await takeTask(t.id, t.version);
+        await taskDetail(t.id);
+      },
+    ),
     button("重新整理重要方案", async () => {
       await api(
         "/api/team/task",
@@ -433,7 +480,7 @@ async function taskDetail(id) {
           t.detail +
           "\n\n已有结果与阻塞：\n" +
           (t.result || "暂无执行结果") +
-          "\n\n请先核对当前分支、代码版本和已完成内容，在独立分支完成剩余工作；运行相关测试，提交评审后将结果回填 https://inkboard-team.inkboard-server.workers.dev 。不要自动合并或发布。",
+          "\n\n如果已连接 TeamAgent MCP，先用 teamagent_get_task 核对当前版本，再用 teamagent_claim_task 接手，最后用 teamagent_report_task 回填；使用接手后返回的新版本。先核对当前分支和已有内容，在独立分支完成剩余工作并验证。不要自动合并或发布。",
       ),
     ),
   );
@@ -465,7 +512,7 @@ async function newTask(repo, initial, context) {
     ),
     title = input(initial || ""),
     detail = textarea(context || ""),
-    owner = input(state.who.name),
+    owner = input(""),
     plan = selector(
       {
         none: "先保存为团队任务",
@@ -670,7 +717,9 @@ async function utilityDetail(id) {
 }
 function renderProjects() {
   $("projects").replaceChildren();
-  for (const repo of state.repos.filter((r) => matches(r, r))) {
+  for (const repo of [
+    ...new Set([...state.repos, ...state.projects.map((p) => p.repo)]),
+  ].filter((r) => matches(r, r))) {
     const p = (state.projects || []).find((p) => p.repo === repo),
       a = el("article", undefined, "card");
     a.append(
@@ -680,6 +729,37 @@ function renderProjects() {
     );
     if (p?.stale_sections && Object.keys(JSON.parse(p.stale_sections)).length)
       a.append(badge("部分资料使用旧缓存", "warn"));
+    let head;
+    try {
+      head = typeof p?.head === "string" ? JSON.parse(p.head) : p?.head;
+    } catch {}
+    if (head?.sha) {
+      const latest = el("div", undefined, "latest-commit");
+      latest.append(
+        el("small", "最新提交 · " + date(head.at)),
+        link(
+          head.message || head.sha.slice(0, 7),
+          head.url || "https://github.com/" + repo + "/commit/" + head.sha,
+        ),
+      );
+      const author = head.author || {};
+      const by = el("div", undefined, "actions");
+      by.append(
+        el("span", "作者 " + (author.name || author.login || "未知作者")),
+      );
+      if (author.url)
+        by.append(
+          link(author.login ? "@" + author.login : "GitHub主页", author.url),
+        );
+      by.append(
+        link(
+          head.sha.slice(0, 7),
+          head.url || "https://github.com/" + repo + "/commit/" + head.sha,
+        ),
+      );
+      latest.append(by);
+      a.append(latest);
+    } else a.append(el("small", "最新提交正在同步"));
     const ts = state.tasks.filter(
       (t) => t.repo === repo && !["done", "cancelled"].includes(t.status),
     );
@@ -1021,45 +1101,24 @@ $("guide").onclick = async () => {
     error(e);
   }
 };
-$("qqlogin").onclick = async () => {
+$("nameform").onsubmit = async (event) => {
+  event.preventDefault();
+  const b = $("namelogin");
+  if (b.disabled) return;
+  b.disabled = true;
+  $("logincode").textContent = "";
   try {
-    if (loginTimer) clearInterval(loginTimer);
-    const ticket = await api("/api/team/login/start", {});
-    $("logincode").textContent =
-      "请在做 AI 高手群发送：\n/登录 " +
-      ticket.code +
-      "\n保持本页打开，10 分钟内有效。";
-    loginTimer = setInterval(async () => {
-      try {
-        const r = await api("/api/team/login/poll", ticket);
-        if (r.token) {
-          clearInterval(loginTimer);
-          token = r.token;
-          sessionStorage.setItem("team-token", token);
-          await load();
-        }
-      } catch (e) {
-        clearInterval(loginTimer);
-        $("logincode").textContent = e.message;
-      }
-    }, 3000);
-  } catch (e) {
-    error(e);
-  }
-};
-$("signin").onclick = () => {
-  token = $("token").value;
-  sessionStorage.setItem("team-token", token);
-  load();
-};
-$("join").onclick = async () => {
-  try {
-    const r = await api("/api/team/join", { invite: $("invite").value });
+    const r = await api("/api/team/login-name", {
+      password: $("membername").value,
+    });
     token = r.token;
     sessionStorage.setItem("team-token", token);
+    $("membername").value = "";
     await load();
   } catch (e) {
-    error(e);
+    $("logincode").textContent = e.message;
+  } finally {
+    b.disabled = false;
   }
 };
 $("logout").onclick = async () => {
@@ -1073,43 +1132,110 @@ $("search").oninput = render;
 $("person").onchange = render;
 $("close").onclick = () => $("modal").close();
 $("new").onclick = () => newTask();
-$("who").onclick = async () => {
-  if (state?.who.role === "owner") return;
-  const name = input(state.who.name);
-  show(
-    el("h2", "成员名字"),
-    field("在开发台显示为", name),
+$("who").onclick = () => {
+  const box = el("div");
+  box.append(
+    el("p", "当前身份：" + state.who.name),
+    el(
+      "p",
+      "大家查看同一份工作台；领取后任务显示你的名字，进展也同步给其他成员。",
+      "note",
+    ),
+    button("只看我接手的工作", () => {
+      $("modal").close();
+      $("person").value = "mine";
+      selectView("tasks");
+    }),
+    button("连接我的本机AI", showLocalAI),
+  );
+  show(el("h2", state.who.name), box);
+};
+$("localai").onclick = () => showLocalAI();
+async function showLocalAI() {
+  const result = await api("/api/team/ai-tokens"),
+    box = el("div"),
+    label = input("我的本机AI");
+  box.append(
+    el(
+      "p",
+      "让你电脑上的 Claude、Codex 或其他支持 MCP 的助手读取方案、接手任务、回填结果。动作会记在你的名字下。",
+    ),
+    el(
+      "p",
+      "每台电脑可用独立、可撤销的接入凭证。不要把凭证发到群里或写进仓库。",
+      "note",
+    ),
+    field("这台AI的名字", label),
+  );
+  const actions = el("div", undefined, "actions");
+  actions.append(
     button(
-      "保存",
+      "生成我的接入配置",
       async () => {
-        await api("/api/team/profile", { name: name.value }, "PATCH");
-        $("modal").close();
-        await load();
+        const key = await api("/api/team/ai-tokens", { label: label.value });
+        const url = "https://inkboard-team.inkboard-server.workers.dev";
+        const config = {
+          mcpServers: {
+            teamagent: {
+              command: "node",
+              args: ["/你的本机路径/TeamAgent/clients/mcp.mjs"],
+              env: { TEAM_AGENT_URL: url, TEAM_AGENT_TOKEN: key.token },
+            },
+          },
+        };
+        const text = JSON.stringify(config, null, 2);
+        const details = el("div");
+        details.append(
+          el("h3", "仅本次显示 · 请保存在自己的AI配置中"),
+          el(
+            "p",
+            "先克隆团队仓库，在clients目录运行npm ci；把下方路径换成自己电脑上的实际路径。凭证90天有效，可随时撤销。",
+            "note",
+          ),
+          el("pre", text),
+          button("复制MCP配置", () => copy(text)),
+          link(
+            "完整接入说明",
+            "https://github.com/OmnixSI/TeamAgent/blob/main/docs/local-ai.md",
+          ),
+        );
+        box.append(details);
       },
       "primary",
     ),
   );
-};
+  box.append(actions, el("h3", "已有连接"));
+  for (const t of result.tokens) {
+    const row = el("div", undefined, "card");
+    row.append(
+      el("p", t.label + " · " + (t.revoked ? "已撤销" : "可使用")),
+      el(
+        "small",
+        "上次使用 " + date(t.last_used) + " · 到期 " + date(t.expires),
+      ),
+    );
+    if (!t.revoked)
+      row.append(
+        button("撤销这把凭证", async () => {
+          await api("/api/team/ai-tokens", { id: t.id }, "DELETE");
+          await showLocalAI();
+        }),
+      );
+    box.append(row);
+  }
+  show(el("h2", "我的本机AI接入"), box);
+}
 $("admin").onclick = () => {
   const box = el("div");
   box.append(
     el(
       "p",
-      "管理员可以邀请、撤销或恢复成员。请勿把管理员凭证发到群里。",
+      "团队使用三人名字登录。管理员可以暂停或恢复访问；暂停时会撤销该成员的会话和本机AI凭证。",
       "note",
     ),
   );
-  const name = input();
-  box.append(
-    field("邀请的成员名字", name),
-    button("生成 24 小时一次性邀请", async () => {
-      if (!name.value.trim()) throw Error("请填写成员名字");
-      const r = await api("/api/admin/invite", { name: name.value });
-      box.append(el("pre", r.invite));
-    }),
-    el("h3", "成员访问"),
-  );
-  for (const m of state.members) {
+  box.append(el("h3", "成员访问"));
+  for (const m of state.members.filter((m) => m.id.startsWith("name:"))) {
     const row = el("div", undefined, "actions");
     row.append(
       el("p", m.name + (m.revoked ? " · 已撤销" : "")),
