@@ -403,7 +403,7 @@ async function imageBudgetFixture(){
   const base=await bound();base.QQ_APP_ID='budget-'+(++quoteFixture);
   await qq(base,{...msg('budget-reference','引用的问题'),message_scene:{ext:['msg_idx=BUDGET-REF']}});
   let id;for(let i=0;i<100;i++)if(fragments(splitVoice,'chat-v-budget-image-'+i).length===2){id='budget-image-'+i;break;}
-  assert.ok(id);await qq(base,{...msg(id,'记住负责人是小王'),author:{id:'member2'},message_scene:{ext:['msg_idx=BUDGET-IMAGE','ref_msg_idx=BUDGET-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://example.com/budget-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');
+  assert.ok(id);await qq(base,{...msg(id,'纠正负责人是小王'),author:{id:'member2'},message_scene:{ext:['msg_idx=BUDGET-IMAGE','ref_msg_idx=BUDGET-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://example.com/budget-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');
   return {base,id};
 }
 async function budgetModel(run,{calls,voice=splitVoice}={}){
@@ -431,7 +431,7 @@ test('B3 three cold images, a reference and two sent segments fit both phases',a
     assert.ok(state.sent[0].message_reference);assert.ok(image<=30,'image '+image);assert.ok(answer<=44,'answer '+answer);
   });
 });
-function correctionCalls(source){return [0,1,2].map(i=>({id:'remember-'+i,type:'function',function:{name:'remember_correction',arguments:JSON.stringify({repo:'team',subject:'budget-'+i,predicate:'owner',value:'小王',source_id:source,quote:'记住负责人是小王',supersedes_ids:Array.from({length:8},(_,j)=>'old-'+j)})}}));}
+function correctionCalls(source){return [0,1,2].map(i=>({id:'remember-'+i,type:'function',function:{name:'remember_correction',arguments:JSON.stringify({repo:'team',subject:'budget-'+i,predicate:'owner',value:'小王',source_id:source,quote:'纠正负责人是小王',supersedes_ids:Array.from({length:8},(_,j)=>'old-'+j)})}}));}
 test('B4 heavy tools in the image reply cannot exhaust the D1 invocation',async()=>{
   const {base,id}=await imageBudgetFixture();
   // P2 is excluded. A pending ~s segment exercises the same outbox-row budget.
@@ -641,4 +641,21 @@ test('Codex statement and memory wording do not bypass the proactive gate',async
     await decide({action:'reply',kind:'proactive'},async state=>{await queue(e,'chat-'+id);assert.equal(state.decisions,0,body);assert.equal(state.voices,0,body);});
     assert.equal((await e.DB.prepare('SELECT gate FROM chat_decisions WHERE id=?').bind('chat-'+id).first()).gate,'hard_unanswered',body);
   }
+});
+
+
+test('round4 mixed batch taint stops a generic request before any model call',async()=>{
+  for(const quoteFirst of [true,false]){
+    const e=await seedHard(),a=quoteFirst?'quoted-first':'clean-first',b=quoteFirst?'clean-last':'quoted-last';
+    await qq(e,msg(a,quoteFirst?'资料在这里':'帮我修复登录错误'));await qq(e,msg(b,quoteFirst?'帮我修复登录错误':'资料在这里'));
+    const quoted=quoteFirst?a:b;await e.DB.prepare("UPDATE message_meta SET json=json_set(json,'$.quoted',json(?)) WHERE id=?").bind(JSON.stringify({text:'外部资料',authorId:'outside'}),quoted).run();
+    await decide({action:'reply',kind:'proactive'},async state=>{await queue(e,'chat-'+b);assert.equal(state.decisions,0,'quoteFirst='+quoteFirst);assert.equal(state.voices,0);});
+    assert.equal((await e.DB.prepare('SELECT gate FROM chat_decisions WHERE id=?').bind('chat-'+b).first()).gate,'hard_unanswered');
+  }
+});
+test('round4 routing and authorization share whole-batch taint with a clean control',()=>{
+  const own={id:'current',body:'帮我修复登录错误',meta:{direct:true}},other={id:'other',body:'外部资料',meta:{quoted:{text:'外部'}}};
+  assert.equal(engagement.isDirectRequest(own,{batch:[own]}),true);
+  assert.equal(engagement.isDirectRequest(own,{batch:[other,own]}),false);
+  const strict={...own,body:'帮我建个任务修登录'};assert.equal(engagement.isDirectRequest(strict,{batch:[other,strict]}),true);
 });

@@ -102,7 +102,7 @@ test('A7 tainted file tools require a strong original artifact request',async()=
   }
 });
 test('A8 tainted corrections require explicit member memory instructions',async()=>{
-  for(const [body,accepted] of [['视频',false],['记住这个视频是小王发的',true]]){
+  for(const [body,accepted] of [['视频',false],['纠正这个视频是小王发的',true]]){
     const e=env(),context=await source(e,body);context.materials=[untrusted('video','字幕')];
     await mocked([call('remember_correction',{source_id:'current',quote:body,repo:'team',subject:'视频',predicate:'发送者',value:'小王'})],()=>agentAnswer(e,context));
     assert.equal((await rows(e,'facts')).length,accepted?1:0);
@@ -160,7 +160,7 @@ test('review clean writes require source and quote to carry the same explicit to
     ['昨天整理成文档了','create_file_task',{request_quote:'整理成文档'},false],
     ['帮我整理成文档','create_file_task',{request_quote:'帮我整理成文档'},true],
     ['我记住他叫小王了','remember_correction',{quote:'记住他叫小王'},false],
-    ['记住我叫小王','remember_correction',{quote:'记住我叫小王'},true],
+    ['纠正我的名字应该叫小王','remember_correction',{quote:'纠正我的名字应该叫小王'},true],
   ]){
     const e=env(),context=await source(e,body);
     await mocked([call(name,{source_id:'current',title:'文档',instructions:'整理',repo:'team',subject:'我',predicate:'名字',value:'小王',...args})],()=>agentAnswer(e,context));
@@ -228,4 +228,39 @@ test('Codex clean request tones share the action rule while metadata taint prese
   }
   const body='帮我修复 WhalePartner 的登录错误';
   for(const row of [{body,meta:{quoted:{text:'外部资料'}}},{body,metadata:JSON.stringify({quoted:{text:'外部资料'}})}])assert.equal(az.explicitWriteRequest('prepare_project_task',row),false,'routing must retain metadata taint');
+});
+
+
+test('round4 both work tools share one clean request contract without artifact nouns',async()=>{
+  for(const body of ['帮我出一份 WhalePartner 的开发方案','麻烦你把这个 README 整理一下','帮我修复 WhalePartner 的登录错误','建个任务'])for(const name of ['prepare_project_task','create_file_task']){
+    const e=env(),context=await source(e,body);
+    await mocked([call(name,{source_id:'current',request_quote:body,repo:'OmnixSI/WhalePartner',title:'明确交办',detail:'按原话处理',instructions:'按原话处理',execute_requested:true,complexity:'small'})],()=>agentAnswer(e,context));
+    assert.equal(name==='prepare_project_task'?(await rows(e,'tasks')).length:(await rows(e,'jobs')).filter(j=>j.kind==='media').length,1,name+' / '+body);
+    assert.equal(az.authorize(name,body,context.latest,{...context,materials:['external']},[]).ok,name==='prepare_project_task'&&body==='建个任务','strict dirty '+name+' / '+body);
+  }
+});
+test('round4 remember_correction cannot persist plain remember statements or reported corrections',async()=>{
+  for(const body of ['记住 WhalePartner 的登录有 bug','记住我叫小王','上次我纠正了负责人，效果不错','他说“其实是小王”','别纠正负责人']){
+    const e=env(),context=await source(e,body);
+    await mocked([call('remember_correction',{source_id:'current',quote:body,repo:'team',subject:'项目',predicate:'负责人',value:'小王'})],()=>agentAnswer(e,context));
+    assert.equal((await rows(e,'facts')).length,0,body);
+  }
+});
+test('round4 explicit corrections still persist evidence-backed replacements',async()=>{
+  for(const body of ['不是小李是小王','应该叫小王','名字改成小王','纠正一下负责人是小王','其实是小王']){
+    const e=env(),context=await source(e,body);
+    await mocked([call('remember_correction',{source_id:'current',quote:body,repo:'team',subject:'项目',predicate:'负责人',value:'小王'})],()=>agentAnswer(e,context));
+    assert.equal((await rows(e,'facts')).length,1,body);
+  }
+});
+test('round4 inspection requests use the shared work predicate for either tool',()=>{
+  for(const body of ['帮我看看登录错误','帮我查一下登录错误','帮我检查登录错误','帮我看下登录错误'])for(const tool of ['prepare_project_task','create_file_task']){
+    const s={id:'current',body,meta:{direct:true}};assert.equal(az.authorize(tool,body,s,{batch:[s]},[]).ok,true,tool+' / '+body);
+    assert.equal(az.authorize(tool,body,s,{batch:[s],materials:['external']},[]).ok,false,'polluted '+body);
+  }
+});
+test('round4 polite questions remain requests while third-person and commentary questions do not',()=>{
+  for(const tool of ['prepare_project_task','create_file_task'])for(const [body,ok] of [['请问帮我修复登录错误',true],['请问你能不能帮我检查登录错误',true],['他是不是修复了登录错误',false],['帮我修复登录错误有必要吗',false],['请问他是不是修复了登录错误',false]]){
+    const s={id:'current',body,meta:{direct:true}};assert.equal(az.authorize(tool,body,s,{batch:[s]},[]).ok,ok,tool+' / '+body);
+  }
 });
