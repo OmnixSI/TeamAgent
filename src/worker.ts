@@ -1,3 +1,4 @@
+import { quoteRef, quoteOutcome } from "./quote";
 import { metered } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
@@ -729,7 +730,7 @@ async function processJob(e: Env, id: string) {
         return;
       }
       const spoken = decodeVoice(answer).text !== "[[SILENT]]";
-      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer);
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
       await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
         spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
@@ -902,7 +903,7 @@ async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   const rows = (
     await e.DB.prepare(
-      "SELECT * FROM outbox WHERE status='pending' ORDER BY created_at,id LIMIT 5",
+      "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
     ).all()
   ).results;
   if (!rows.length) return;
@@ -928,7 +929,14 @@ async function sendOutbox(e: Env) {
   }
   const accessToken = qqToken?.value;
   if (!accessToken) return;
+  let switches: Record<string, string | undefined> | undefined;
   for (const o of rows) {
+    let meta: any = {};
+    if (o.meta) {
+      try { meta = JSON.parse(o.meta); } catch {}
+      switches ??= await loadSwitches(e);
+    }
+    const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
     const locked = await e.DB.prepare(
       "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
     )
@@ -946,39 +954,35 @@ async function sendOutbox(e: Env) {
             .bind(o.msg_id)
             .first()
         : null;
-      const response = await fetch(
-        "https://api.bot.qq.com/v2/groups/" +
-          encodeURIComponent(o.group_id) +
-          "/messages",
+      const send = (ref?: string, increment = 0) => fetch(
+        "https://api.bot.qq.com/v2/groups/" + encodeURIComponent(o.group_id) + "/messages",
         {
           method: "POST",
-          headers: {
-            Authorization: "QQBot " + accessToken,
-            "Content-Type": "application/json",
-          },
+          headers: { Authorization: "QQBot " + accessToken, "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: o.body.slice(0, 4000),
-            msg_type: 0,
-            msg_id:
-              source && Date.now() - Date.parse(source.ts) < 240000
-                ? o.msg_id
-                : undefined,
-            msg_seq: messageSequence(o.id),
+            content: o.body.slice(0, 4000), msg_type: 0,
+            msg_id: source && Date.now() - Date.parse(source.ts) < 240000 ? o.msg_id : undefined,
+            msg_seq: messageSequence(o.id) + increment,
+            ...(ref ? { message_reference: { message_id: ref } } : {}),
           }),
           signal: AbortSignal.timeout(20000),
         },
       );
-      let result: any;
-      try {
-        result = await response.json();
-      } catch {}
+      let response = await send(reference), result: any, recovered = false;
+      try { result = await response.json(); } catch {}
+      if (reference && quoteOutcome(response.status, result) === "maybe_ref") {
+        response = await send(undefined, 1);
+        result = undefined;
+        try { result = await response.json(); } catch {}
+        recovered = quoteOutcome(response.status, result) === "ok";
+      }
       const status =
         response.ok && (result?.id || result?.code === 0)
           ? "sent"
           : response.status >= 500 || !result
             ? "unknown"
             : "failed";
-      await e.DB.batch([
+      const sent = await e.DB.batch([
         e.DB.prepare("UPDATE outbox SET status=? WHERE id=?").bind(
           status,
           o.id,
@@ -989,7 +993,19 @@ async function sendOutbox(e: Env) {
         ...(status === "sent" && typeof result?.ext_info?.ref_idx === "string"
           ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'bot',?,?,?)").bind(result.ext_info.ref_idx, o.id, o.group_id, Date.now())]
           : []),
+        ...(reference && status === "sent" ? [recovered
+          ? e.DB.prepare("INSERT INTO settings VALUES('quote_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value")
+          : e.DB.prepare("UPDATE settings SET value='0' WHERE key='quote_fail' AND value!='0'")] : []),
       ]);
+      if (reference && status === "sent") {
+        const failures = recovered ? Number(sent.at(-1)?.results?.[0]?.value || 0) : 0;
+        switches!.quote_fail = String(failures);
+        if (failures >= 3) {
+          await e.DB.prepare("INSERT INTO settings VALUES('off:quote','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+          await activity(e, "quote.disabled", "quote", "Bot", "引用连续失败，已自动关闭引用回复");
+          switches!["off:quote"] = "1";
+        }
+      }
       if (response.status === 401) qqToken = undefined;
     } catch {
       await e.DB.prepare("UPDATE outbox SET status='unknown' WHERE id=?")

@@ -290,3 +290,90 @@ test('I13 non-chat callers never create a repeated chat wait',async()=>{
     assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE id LIKE 'chat-wait-%'").first()).n,0);
   });
 });
+const quoteOut=`.wrangler/quote-p1-${process.pid}.mjs`;
+await build({entryPoints:['src/quote.ts'],bundle:true,format:'esm',platform:'browser',outfile:quoteOut});
+const quotes=await import('../'+quoteOut);
+const voiceOut=`.wrangler/voice-p1-${process.pid}.mjs`;
+await build({entryPoints:['src/voice.ts'],bundle:true,format:'esm',platform:'browser',outfile:voiceOut});
+const {enqueueVoice,messageSequence}=await import('../'+voiceOut);
+test('Q1 quote target honors batch membership, latest position and speaker count',()=>{
+  const a={id:'a',sender:'u',mentioned:1},b={id:'b',sender:'u',mentioned:0},base={latestId:'b',batch:[a,b],mentioned:false,groupNewestId:'b'};
+  assert.equal(quotes.decideQuote({...base,target:'b'}),null);assert.equal(quotes.decideQuote({...base,target:'a'}),'a');
+  assert.equal(quotes.decideQuote({...base,target:'b',batch:[a,{...b,sender:'v'}]}),'b');
+  assert.equal(quotes.decideQuote({...base,target:'outside',mentioned:true}),'a');assert.equal(quotes.decideQuote(base),null);
+});
+test('Q2f status classification only permits reference fallback for JSON 400/422',()=>{
+  const cases=[[200,{id:'ok'},'ok'],[400,{code:1},'maybe_ref'],[422,{},'maybe_ref'],[400,undefined,'other'],[403,{},'other'],[429,{},'other'],[503,{},'other'],[0,undefined,'other']];
+  for(const [status,body,expected] of cases)assert.equal(quotes.quoteOutcome(status,body),expected,status);
+});
+let quoteFixture=0;
+async function outgoing(count=1,reference=true){
+  const e=env();e.QQ_APP_ID='quote-test-'+(++quoteFixture);
+  await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?)').bind('source','GROUP000001','U1','原始问题',new Date().toISOString(),1,0).run();
+  for(let i=0;i<count;i++)await enqueueVoice(e,'out-'+i,'GROUP000001','source','{"mode":"work","text":"可核验的回复。"}',reference?{reference:'REF'}:undefined);
+  return e;
+}
+async function deliver(e,reply){
+  const old=globalThis.fetch,bodies=[];
+  globalThis.fetch=async(url,options)=>{
+    if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'fake-qq-token',expires_in:300});
+    const body=JSON.parse(options.body);bodies.push(body);return reply(body,bodies.length);
+  };
+  try{await queue(e,'nonexistent-job');return bodies;}finally{globalThis.fetch=old;}
+}
+const setting=(e,key)=>e.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first().then(r=>r?.value);
+test('Q2 rejected reference retries once without it and increments sequence and failure counter',async()=>{
+  const e=await outgoing(),bodies=await deliver(e,(_b,n)=>n===1?Response.json({code:123},{status:400}):Response.json({id:'sent'}));
+  assert.equal(bodies.length,2);assert.deepEqual(bodies[0].message_reference,{message_id:'REF'});assert.equal(bodies[1].message_reference,undefined);
+  assert.equal(bodies[1].msg_seq,bodies[0].msg_seq+1);assert.equal(await setting(e,'quote_fail'),'1');
+  assert.equal((await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'sent');
+});
+test('Q2b three confirmed reference failures disable subsequent references in the same send',async()=>{
+  const e=await outgoing(4),bodies=await deliver(e,b=>b.message_reference?Response.json({code:123},{status:400}):Response.json({id:'sent'}));
+  assert.equal(bodies.length,7);assert.equal(bodies[6].message_reference,undefined);assert.equal(await setting(e,'off:quote'),'1');assert.equal(await setting(e,'quote_fail'),'3');
+  assert.ok((await e.DB.prepare("SELECT * FROM activity WHERE kind='quote.disabled'").all()).results.length);
+});
+test('Q2c successful reference resets the consecutive failure counter',async()=>{
+  const e=await outgoing();await e.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
+  const bodies=await deliver(e,()=>Response.json({id:'sent',ext_info:{ref_idx:'new-bot-ref'}}));
+  assert.equal(bodies.length,1);assert.equal(await setting(e,'quote_fail'),'0');
+  assert.ok(await e.DB.prepare("SELECT * FROM message_refs WHERE ref_idx='new-bot-ref'").first());
+});
+test('Q2d non-reference errors and malformed responses never trigger another QQ message',async()=>{
+  for(const mode of [429,500,401,403,'network','bad-json']){
+    const e=await outgoing();await e.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
+    const bodies=await deliver(e,()=>{if(mode==='network')throw Error('offline');return mode==='bad-json'?new Response('not-json',{status:400}):Response.json({code:123},{status:mode});});
+    assert.equal(bodies.length,1,String(mode));assert.equal(await setting(e,'quote_fail'),'2');
+    const state=(await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status;
+    assert.equal(state,[500,'network','bad-json'].includes(mode)?'unknown':'failed',String(mode));
+  }
+});
+test('Q2e failure after dropping the reference does not count as a reference fault',async()=>{
+  const e=await outgoing();await e.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
+  const bodies=await deliver(e,()=>Response.json({code:123},{status:400}));
+  assert.equal(bodies.length,2);assert.equal(await setting(e,'quote_fail'),'2');
+  assert.equal((await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'failed');
+});
+test('Q3 runtime quote switch and absent reference mappings avoid reference metadata',async()=>{
+  const e=env(),context={latest:{id:'b',group_id:'g'},batch:[{id:'a',sender:'u',mentioned:1},{id:'b',sender:'v'}],groupNewestId:'b'};
+  let before=e.DB.executed;assert.equal(await quotes.quoteRef(e,{target:'a'},context,{'off:quote':'1'}),undefined);assert.equal(e.DB.executed-before,0);
+  assert.equal(await quotes.quoteRef(e,{target:'a'},context,{}),undefined);
+  await e.DB.prepare('INSERT INTO message_refs VALUES(?,?,?,?,?)').bind('member-ref','member','a','g',Date.now()).run();
+  assert.equal(await quotes.quoteRef(e,{target:'a'},context,{}),'member-ref');
+  const out=await outgoing();await out.DB.prepare("INSERT INTO settings VALUES('off:quote','1')").run();
+  const bodies=await deliver(out,()=>Response.json({id:'ok'}));assert.equal(bodies[0].message_reference,undefined);
+});
+test('Q4 ordinary message fields and the passive 240-second boundary stay unchanged',async()=>{
+  const e=await outgoing(1,false),bodies=await deliver(e,()=>Response.json({id:'ok'}));
+  assert.deepEqual(bodies[0],{content:'可核验的回复。',msg_type:0,msg_id:'source',msg_seq:messageSequence('out-0')});
+  const old=await outgoing(1,false);await old.DB.prepare('UPDATE messages SET ts=?').bind(new Date(Date.now()-241000).toISOString()).run();
+  const older=await deliver(old,()=>Response.json({id:'ok'}));assert.equal(older[0].msg_id,undefined);
+});
+test('quote metadata is wired from a model-selected member message in the real chat path',async()=>{
+  const e=await bound();
+  await qq(e,{...msg('earlier','前面的具体问题'),message_scene:{ext:['msg_idx=EARLIER-REF']}});
+  await qq(e,{...msg('current','回答上面那条'),author:{id:'member2'}},'GROUP_AT_MESSAGE_CREATE');
+  await decide({action:'reply',kind:'direct',target:'earlier',brief:'回复前面的具体问题'},()=>queue(e,'chat-current'));
+  const row=await e.DB.prepare("SELECT json FROM outbox_meta WHERE id='chat-current'").first();
+  assert.deepEqual(JSON.parse(row.json),{reference:'EARLIER-REF'});
+});
