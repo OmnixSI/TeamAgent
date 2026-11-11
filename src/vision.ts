@@ -1,3 +1,4 @@
+import { chunks } from "./d1";
 import { TEAM } from "./config";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
@@ -382,15 +383,10 @@ export async function imageNotesFor(
   const ids = [...new Set(messageIds.filter(Boolean))];
   const out = new Map<string, string[]>();
   if (!ids.length) return out;
-  const rows = (
-    await e.DB.prepare(
-      "SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" +
-        ids.map(() => "?").join(",") +
-        ") ORDER BY mi.message_id,mi.idx",
-    )
-      .bind(...ids)
-      .all()
-  ).results;
+  const batches = await e.DB.batch(chunks(ids).map(part =>
+    e.DB.prepare("SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" + part.map(() => "?").join(",") + ") ORDER BY mi.message_id,mi.idx")
+      .bind(...part)));
+  const rows = batches.flatMap((r: any) => r.results);
   for (const r of rows) {
     const note =
       "图片：" +

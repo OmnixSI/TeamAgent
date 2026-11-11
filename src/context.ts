@@ -1,3 +1,4 @@
+import { chunks } from "./d1";
 import { botView, buildConversation, mediaViews, metaOf, refIdsOf, viewMessage, type RefTarget } from "./view";
 import { imageNotesFor } from "./vision";
 
@@ -12,6 +13,13 @@ type ChatContext = {
   imagePicks: Set<string>;
 };
 
+export async function namesFor(e: { DB: any }, ids: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return new Map();
+  const batches = await e.DB.batch(chunks(unique).map(part =>
+    e.DB.prepare("SELECT member_id,name FROM member_names WHERE member_id IN (" + part.map(() => "?").join(",") + ")").bind(...part)));
+  return new Map(batches.flatMap((r: any) => r.results).map((r: any) => [r.member_id, r.name]));
+}
 export async function loadBatch(e: { DB: any }, groupId: string, cursor: number) {
   const rows = (
     await e.DB.prepare(
@@ -72,34 +80,18 @@ export async function loadChatContext(
       .first();
     if (r) latest = { ...r, meta: metaOf(r) };
   }
-  const names = new Map<string, string>(
-    (
-      await e.DB.prepare("SELECT member_id,name FROM member_names LIMIT 500").all()
-    ).results.map((r: any) => [r.member_id, r.name]),
-  );
-  const refs = new Map<string, RefTarget>(),
-    targetMeta = new Map<string, any>(),
-    ids = refIdsOf([...recent, ...batch, ...(latest ? [latest] : [])]);
-  if (ids.member.length) {
-    const rows = (
-      await e.DB.prepare(
-        "SELECT m.id,m.sender,substr(m.body,1,200) body,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id IN (" +
-          ids.member.map(() => "?").join(",") +
-          ")",
-      )
-        .bind(...ids.member)
-        .all()
-    ).results;
-    for (const r of rows) {
-      const meta = metaOf(r);
-      targetMeta.set(r.id, meta);
-      refs.set(r.id, {
-        id: r.id,
-        from: names.get(r.sender) || "成员" + r.sender.slice(-4),
-        fromId: r.sender.slice(-6),
-        text: r.body,
-      });
-    }
+  const refs = new Map<string, RefTarget>(), targetMeta = new Map<string, any>();
+  const contextRows = [...recent, ...batch, ...(latest ? [latest] : [])], ids = refIdsOf(contextRows);
+  const refBatches = ids.member.length ? await e.DB.batch(chunks(ids.member).map(part =>
+    e.DB.prepare("SELECT m.id,m.sender,substr(m.body,1,200) body,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id IN (" + part.map(() => "?").join(",") + ")").bind(...part))) : [];
+  const refRows: Row[] = refBatches.flatMap((r: any) => r.results);
+  const names = await namesFor(e, [...contextRows, ...refRows].flatMap(r => {
+    const meta = metaOf(r);
+    return [r.sender, ...(meta.mentions || []).map((m: any) => m.id), meta.replyTo?.authorId];
+  }));
+  for (const r of refRows) {
+    targetMeta.set(r.id, metaOf(r));
+    refs.set(r.id, { id: r.id, from: names.get(r.sender) || "成员" + r.sender.slice(-4), fromId: r.sender.slice(-6), text: r.body });
   }
   if (ids.bot.length) {
     const rows = (

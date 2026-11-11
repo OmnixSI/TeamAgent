@@ -59,13 +59,14 @@ export async function videoWaitExists(e: any, groupId: string, latestId: string)
 }
 export async function startVideoWait(e: any, x: { groupId: string; ref: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
   if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;
-  const active = await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running') LIMIT 1").bind(x.groupId, x.ref).first();
-  if (active) return false;
+  const active = await e.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')").bind(x.groupId, x.ref).first();
+  if (active.n >= 3) return false;
   const now = Date.now(), id = "vw-" + x.latest.id;
   await e.DB.batch([
     e.DB.prepare(`INSERT OR IGNORE INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,due_at,created_at)
-      SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running'))`)
-      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
+      SELECT ?,?,?,?,?,?,COALESCE((SELECT MIN(due_at) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')),?),?
+      WHERE (SELECT COUNT(*) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')) < 3`)
+      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
     fetchStatement(e, x.ref, "light", id, now),
   ]);
   return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first());

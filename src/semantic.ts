@@ -1,5 +1,5 @@
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
-import { loadChatContext, buildViews } from "./context";
+import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
@@ -130,6 +130,7 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
         .all()
     ).results.map((f: any) => f.source_id),
   );
+  const names = await namesFor(e, rows.flatMap((r: any) => [r.sender, ...(r.meta?.mentions || []).map((m: any) => m.id)]));
   const factWrites = [];
   for (const f of Array.isArray(result.facts) ? result.facts.slice(0, 8) : []) {
     const source = rows.find((m: any) => m.id === f.source_id);
@@ -138,7 +139,7 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
       !(REPOS.includes(f.repo) || f.repo === "team") ||
       typeof f.evidence !== "string" ||
       !f.evidence.trim() ||
-      !quoteIn(source, f.evidence) ||
+      !quoteIn(source, f.evidence, names) ||
       !["confirmed", "proposal"].includes(f.status)
     )
       continue;

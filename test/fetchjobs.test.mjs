@@ -14,7 +14,7 @@ const runner=(e,path,b)=>req(e,'/api/runner/fetch/'+path,b,'runner-secret');
 async function setup(){const e=env(); await req(e,'/api/admin/bind',{groupId:group}); return e;}
 async function first(e,id='question'){await qq(e,msg(id,'视频讲了啥 https://www.bilibili.com/video/'+BV),'GROUP_AT_MESSAGE_CREATE'); await queue(e,'chat-'+id); return (await rows(e,'video_waits'))[0];}
 async function mockModel(run,fail=false){const old=globalThis.fetch,seen=[]; globalThis.fetch=async(_url,o)=>{const b=JSON.parse(o.body);seen.push(b);if(fail)throw Error('model interrupted');return Response.json({choices:[{message:{content:b.messages[0].content.includes('最后的嘴替模块')?'{"mode":"work","text":"UP 主介绍了新方法。"}':'{"should_reply":false,"kind":"proactive","brief":"测试视频标题"}'}}]});};try{return await run(seen);}finally{globalThis.fetch=old;}}
-async function report(e){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result});}
+async function report(e,videoResult=result){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:videoResult});}
 
 test('F1 cron excludes fetch but dispatches ordinary jobs',async()=>{const e=env(),sent=[];e.WORK={async send(b){sent.push(b.id);}};await insertJob(e,'fetch','fetch');await insertJob(e,'plain','discussion');await cron(e);assert.ok(sent.includes('plain'));assert.ok(!sent.includes('fetch'));assert.equal((await rows(e,'jobs')).find(x=>x.id==='fetch').attempts,0);});
 test('F2 misdelivered fetch is not claimed by generic worker',async()=>{const e=env();await f.requestBili(e,BV,'light','w');await queue(e,'fetch-bili-'+BV);const j=(await rows(e,'jobs'))[0];assert.equal(j.status,'pending');assert.equal(j.attempts,0);assert.ok((await (await runner(e,'claim',{})).json()).job);});
@@ -24,7 +24,66 @@ test('W2 reports resume original question after newer chat advanced cursor',asyn
 test('W3 cron waits for due_at then answers once with fallback',async()=>{const e=await setup(),w=await first(e);await cron(e);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));await e.DB.prepare('UPDATE video_waits SET due_at=?').bind(now()-1).run();await cron(e);await mockModel(async seen=>{await queue(e,'video-'+w.id);assert.match(JSON.stringify(seen),/暂时没读到/);await cron(e);await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
 test('W4 report and deadline wakes racing still answer once',async()=>{const e=await setup(),w=await first(e);await e.DB.prepare('UPDATE video_waits SET due_at=?').bind(now()-1).run();await Promise.all([report(e),cron(e)]);await mockModel(async()=>{await Promise.all([queue(e,'video-'+w.id),queue(e,'video-'+w.id)]);assert.equal((await rows(e,'outbox')).length,1);});});
 test('W5 three redeliveries answer once',async()=>{const e=await setup(),w=await first(e);await report(e);await mockModel(async()=>{for(let i=0;i<3;i++)await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
-test('W6 same active ref does not create another wait',async()=>{const e=await setup();await first(e);await mockModel(async()=>{await first(e,'second');assert.equal((await rows(e,'video_waits')).length,1);assert.ok((await rows(e,'outbox')).some(x=>x.msg_id==='second'));});});
+async function sameVideo(e,id,sender) {
+  await qq(e,{...msg(id,'这个视频讲了啥 https://www.bilibili.com/video/'+BV),author:{id:sender}},'GROUP_AT_MESSAGE_CREATE');
+  await queue(e,'chat-'+id);
+  return (await rows(e,'video_waits')).find(w=>w.latest_id===id);
+}
+const noSubtitle={...result,subtitle:null,subtitle_lang:null};
+test('W6 second questioner shares the original deadline and receives video material',async()=>{
+  const e=await setup(),one=await first(e);
+  const realNow=Date.now;let two;
+  try{Date.now=()=>realNow()+10000;two=await sameVideo(e,'second','member2');}finally{Date.now=realNow;}
+  assert.ok(two);assert.equal(two.due_at,one.due_at);
+  const fetch=(await rows(e,'jobs')).find(j=>j.kind==='fetch');
+  assert.deepEqual(JSON.parse(fetch.payload).waiters,[one.id,two.id]);
+  assert.equal((await rows(e,'outbox')).length,0);
+  await report(e,noSubtitle);
+  await mockModel(async seen=>{
+    await queue(e,'video-'+one.id);await queue(e,'video-'+two.id);
+    assert.equal((await rows(e,'outbox')).filter(o=>o.msg_id==='question').length,1);
+    assert.equal((await rows(e,'outbox')).filter(o=>o.msg_id==='second').length,1);
+    const prompts=seen.map(b=>JSON.parse(b.messages[1].content)).filter(b=>b.materials);
+    assert.equal(prompts.length,2);assert.ok(prompts.every(p=>JSON.stringify(p.materials).includes('测试视频标题')));
+  });
+});
+test('W6b three simultaneous questioners wait; the fourth follows the ordinary reply path',async()=>{
+  const e=await setup();await first(e);
+  await sameVideo(e,'second','member2');await sameVideo(e,'third','member3');
+  await mockModel(async()=>{await sameVideo(e,'fourth','member4');});
+  assert.equal((await rows(e,'video_waits')).length,3);
+  assert.equal(JSON.parse((await rows(e,'jobs')).find(j=>j.kind==='fetch').payload).waiters.length,3);
+  assert.equal((await rows(e,'outbox')).filter(o=>o.msg_id==='fourth').length,1);
+});
+test('W6c repeat chat delivery never duplicates its wait or fetch waiter',async()=>{
+  const e=await setup(),w=await first(e);
+  await e.DB.prepare("DELETE FROM settings WHERE key='chat_cursor'").run();
+  await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0 WHERE id='chat-question'").run();
+  await queue(e,'chat-question');
+  assert.equal((await rows(e,'video_waits')).length,1);
+  assert.deepEqual(JSON.parse((await rows(e,'jobs')).find(j=>j.kind==='fetch').payload).waiters,[w.id]);
+});
+test('W6d late waiter omitted from report is recovered on deadline with cached video material',async()=>{
+  const e=await setup(),w=await first(e);await report(e,noSubtitle);
+  await qq(e,msg('late','这个视频讲了啥'),'GROUP_AT_MESSAGE_CREATE');
+  await e.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)').bind('vw-late',group,BV,'late','["late"]',1,now()-1,now()).run();
+  await cron(e);
+  await mockModel(async seen=>{
+    await queue(e,'video-vw-late');
+    assert.equal((await rows(e,'outbox')).filter(o=>o.msg_id==='late').length,1);
+    assert.match(JSON.stringify(seen),/测试视频标题/);
+  });
+});
+test('W6e joining a leased fetch adds both waiters before report',async()=>{
+  const e=await setup(),one=await first(e);
+  const {job}=await(await runner(e,'claim',{})).json();
+  const two=await sameVideo(e,'second','member2');assert.ok(two);
+  await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:noSubtitle});
+  await mockModel(async()=>{
+    await queue(e,'video-'+one.id);await queue(e,'video-'+two.id);
+    assert.equal((await rows(e,'outbox')).length,2);
+  });
+});
 test('W7 interrupted wait reopens done wake job after video lease expires; mentions force reply',async()=>{const e=await setup(),w=await first(e);await report(e);await mockModel(()=>queue(e,'video-'+w.id),true);await mockModel(()=>queue(e,'video-'+w.id));assert.equal((await rows(e,'jobs')).find(x=>x.kind==='video_reply').status,'done');await e.DB.prepare('UPDATE video_waits SET lease_until=?').bind(now()-1).run();await cron(e);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);assert.equal((await rows(e,'video_waits'))[0].status,'done');});});
 test('W8 cached material answers immediately; eight-day cache expires',async()=>{const e=await setup();await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:'+BV,JSON.stringify(result),new Date().toISOString()).run();await mockModel(async seen=>{await first(e);assert.equal((await rows(e,'video_waits')).length,0);assert.match(JSON.stringify(seen),/测试视频标题/);});await e.DB.prepare('UPDATE media_notes SET created_at=?').bind(new Date(now()-8*86400000).toISOString()).run();assert.equal(await f.biliCached(e,BV),null);});
 test('R1 needsVideo handles mentions, references, quoted URLs, recency, av and disable',()=>{const cfg={bili:{enabled:true}},b={id:'b',body:'',meta:{bili:[{bvid:BV}]}},ask={id:'a',body:'这个视频讲啥',meta:{}};assert.equal(f.needsVideo([], {...b,mentioned:1},[],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{replyTo:{targetId:'b'}}},[b],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{quotedUrls:['https://b23.tv/abcd']}},[],cfg),'abcd');assert.equal(f.needsVideo([],ask,[b,ask],cfg),BV);assert.equal(f.needsVideo([],ask,[b,...Array.from({length:10},(_,i)=>({...ask,id:''+i}))],cfg),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{aid:'av1'}]}},[],cfg),null);assert.equal(f.needsVideo([],{...b,mentioned:1},[],{bili:{enabled:false}}),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{short:'abcd'},{bvid:BV}]}},[],cfg),BV);});
@@ -43,7 +102,7 @@ test('auth-status records only allowed state fields without claiming reminders',
   assert.equal(f.authReminder, undefined);
 });
 test('expired running video wakes even when outer job still has its longer lease',async()=>{const e=await setup(),w=await first(e);await report(e);await e.DB.prepare("UPDATE video_waits SET status='running',lease_until=?").bind(now()-1).run();await e.DB.prepare("UPDATE jobs SET status='running',lease_until=?,attempts=2 WHERE kind='video_reply'").bind(now()+600000).run();await cron(e);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
-test('early wake and concurrent starts do not duplicate or prematurely answer',async()=>{const e=await setup();await qq(e,msg('one','hello'));const x={groupId:group,ref:BV,latest:{id:'one'},batchIds:['one'],mentioned:true};const started=await Promise.all([f.startVideoWait(e,x),f.startVideoWait(e,{...x,latest:{id:'two'}})]);assert.equal(started.filter(Boolean).length,1);const w=(await rows(e,'video_waits'))[0];await f.wakeVideoWait(e,w.id);await f.runVideoWait(e,w.id);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));assert.equal((await rows(e,'outbox')).length,0);});
+test('early wake and concurrent starts do not duplicate or prematurely answer',async()=>{const e=await setup();await qq(e,msg('one','hello'));const x={groupId:group,ref:BV,latest:{id:'one'},batchIds:['one'],mentioned:true};const started=await Promise.all([f.startVideoWait(e,x),f.startVideoWait(e,{...x,latest:{id:'two'}})]);assert.equal(started.filter(Boolean).length,2);assert.equal((await rows(e,'video_waits')).length,2);const w=(await rows(e,'video_waits'))[0];await f.wakeVideoWait(e,w.id);await f.runVideoWait(e,w.id);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));assert.equal((await rows(e,'outbox')).length,0);});
 test('duplicate fetch reports are idempotent and expired leases cannot publish',async()=>{const e=await setup(),w=await first(e);const {job}=await(await runner(e,'claim',{})).json();const b={id:job.id,lease:job.payload.lease,success:true,result};assert.equal((await runner(e,'report',b)).status,200);assert.equal((await runner(e,'report',b)).status,200);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});await f.requestBili(e,BV,'light','new');assert.equal((await runner(e,'report',b)).status,409);const next=(await(await runner(e,'claim',{})).json()).job;await e.DB.prepare('UPDATE jobs SET lease_until=? WHERE id=?').bind(now()-1,next.id).run();assert.equal((await runner(e,'report',{...b,lease:next.payload.lease})).status,409);});
 test('R3 superseding a fetch lease during report cannot publish stale cache or wake waiters',async()=>{const e=await setup();await first(e);const {job}=await(await runner(e,'claim',{})).json();const batch=e.DB.batch.bind(e.DB);let replaced=false;e.DB.batch=async statements=>{if(!replaced){replaced=true;await e.DB.prepare('UPDATE jobs SET lease_until=? WHERE id=?').bind(now()-1,job.id).run();await f.claimFetch(e);}return batch(statements);};const response=await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result});assert.equal(response.status,409);assert.equal((await rows(e,'media_notes')).length,0);assert.equal((await rows(e,'video_waits'))[0].ready,0);});
 
