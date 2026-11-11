@@ -88,5 +88,17 @@
   "bili": {
     "enabled": true,
     "wait_seconds": 30
+  },
+  "rhythm": {
+    "mention": 1,
+    "image": 4,
+    "busy": 3,
+    "idle": 2,
+    "cap_ms": 8000,
+    "wait_min": 5,
+    "wait_max": 45,
+    "wait_horizon_ms": 120000,
+    "hard_window_ms": 1800000,
+    "hard_humans": 6
   }
 }

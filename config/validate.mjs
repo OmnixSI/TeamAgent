@@ -109,5 +109,10 @@ export function validateTeamConfig(c) {
   );
   check(typeof c?.bili?.enabled === "boolean", "bili.enabled");
   check(integer(c?.bili?.wait_seconds, 1, 90), "bili.wait_seconds");
+  for (const key of ["mention", "image", "busy", "idle"])
+    check(integer(c?.rhythm?.[key], 0, 10), "rhythm." + key);
+  for (const [key, max] of Object.entries({cap_ms:60000, wait_min:45, wait_max:45, wait_horizon_ms:600000, hard_window_ms:86400000, hard_humans:100}))
+    check(integer(c?.rhythm?.[key], 1, max), "rhythm." + key);
+  check(c?.rhythm?.wait_min <= c?.rhythm?.wait_max, "rhythm.wait_min <= wait_max");
   return errors;
 }

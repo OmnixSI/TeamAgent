@@ -97,7 +97,7 @@ async function req(
   key = "owner-secret",
   method = body ? "POST" : "GET",
 ) {
-  return worker.fetch(
+  return (e.testWorker || worker).fetch(
     new Request("https://team.example" + path, {
       method,
       headers: {
@@ -112,7 +112,7 @@ async function req(
 async function qq(e, data, type = "GROUP_MESSAGE_CREATE") {
   const raw = JSON.stringify({ op: 0, t: type, d: data });
   const ts = String(Math.floor(Date.now() / 1000));
-  return worker.fetch(
+  return (e.testWorker || worker).fetch(
     new Request("https://team.example/api/qq/events", {
       method: "POST",
       body: raw,
@@ -133,3 +133,21 @@ const msg = (id, content, group = "GROUP000001") => ({
 });
 
 export { worker, env, req, qq, msg };
+
+// Build an isolated configuration fixture for tests that exercise real delays.
+export async function setupWith(patch) {
+  const { createHash } = await import('node:crypto');
+  const next = structuredClone(fixture);
+  for (const [key, value] of Object.entries(patch))
+    next[key] = value && typeof value === 'object' && !Array.isArray(value) ? { ...next[key], ...value } : value;
+  const tag = createHash('sha256').update(JSON.stringify(patch)).digest('hex').slice(0, 12);
+  const outfile = `.wrangler/test-patch-${process.pid}-${tag}.mjs`;
+  await build({ entryPoints: ['src/worker.ts'], bundle: true, format: 'esm', platform: 'browser', outfile,
+    plugins: [{ name: 'patched-team-fixture', setup(builder) {
+      builder.onLoad({ filter: /config\/team\.json$/ }, () => ({ contents: JSON.stringify(next), loader: 'json' }));
+    } }],
+  });
+  const module = await import('../' + outfile), e = env();
+  e.testWorker = module.default;
+  return e;
+}

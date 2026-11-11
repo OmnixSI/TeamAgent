@@ -1,3 +1,4 @@
+import { debounceSeconds, shouldProcessNow } from "./rhythm";
 import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
@@ -108,14 +109,19 @@ async function runner(r: Request, e: Env) {
     )) === (await hash(e.RUNNER_TOKEN))
   );
 }
-async function job(e: Env, id: string, kind: string, payload: any) {
+async function job(e: Env, id: string, kind: string, payload: any, opts?: { delaySeconds?: number }) {
+  const delaySeconds = opts?.delaySeconds || 0;
+  if (delaySeconds > 0) payload.notBefore = Date.now() + delaySeconds * 1000;
   await e.DB.prepare(
     "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
   )
     .bind(id, kind, JSON.stringify(payload), Date.now())
     .run();
   const queue = queueFor(e, kind, payload);
-  if (queue) await queue.send({ id });
+  if (queue) {
+    if (delaySeconds > 0) await queue.send({ id }, { delaySeconds: Math.ceil(delaySeconds) });
+    else await queue.send({ id });
+  }
 }
 async function qqKey(secret: string) {
   let s = secret;
@@ -362,8 +368,12 @@ async function receive(r: Request, e: Env) {
         Date.now(),
       )
       .run();
-  } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text))
-    await job(e, "chat-" + m.id, "chat", { message: m.id });
+  } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text)) {
+    const recentTs = (await e.DB.prepare("SELECT ts FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 10").bind(m.group_openid).all()).results;
+    const humansLast2m = recentTs.filter((r: any) => Date.now() - Date.parse(r.ts) < 120000).length;
+    const bareImage = !!ib.media?.some((x: any) => x.kind === "image") && !text.trim();
+    await job(e, "chat-" + m.id, "chat", { message: m.id }, { delaySeconds: debounceSeconds({ mentioned, bareImage, humansLast2m }) });
+  }
   return json({ op: 12, d: 0 });
 }
 async function repoContext(e: Env, repo: string) {
@@ -477,9 +487,9 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
-    .bind(now + 660000, id, now)
+    .bind(now + 660000, id, now, now)
     .first();
   if (!claim) return;
   try {
@@ -633,15 +643,13 @@ async function processJob(e: Env, id: string) {
         .first();
       if (!m) return;
       const cursor = Number((await setting(e, "chat_cursor")) || 0);
-      const newest = await e.DB.prepare(
-        "SELECT id FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 1",
-      )
-        .bind(m.group_id)
-        .first();
-      if (m.ordinal <= cursor || (!m.mentioned && newest?.id !== m.id)) {
-        await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?")
-          .bind(id)
-          .run();
+      const head = await e.DB.prepare(
+        "SELECT (SELECT id FROM messages WHERE group_id=?1 ORDER BY rowid DESC LIMIT 1) AS newest_id,(SELECT ts FROM messages WHERE group_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 1) AS oldest_ts",
+      ).bind(m.group_id, cursor).first();
+      const newest = head.newest_id ? { id: head.newest_id } : null;
+      const oldestAt = Date.parse(head.oldest_ts) || Date.now();
+      if (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() })) {
+        await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
       const preloaded = await loadBatch(e, m.group_id, cursor);
@@ -1033,9 +1041,9 @@ async function scheduled(e: Env) {
   await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
-      .bind(Date.now())
+      .bind(Date.now(), Date.now())
       .all()
   ).results;
   for (const j of pending) {

@@ -7,6 +7,7 @@ import { model, activity, redact, utilityText } from "./runtime";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
+  participationMessages,
   participation,
   maySpeak,
   recordProactive,
@@ -799,14 +800,7 @@ export async function agentAnswer(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
-  const messages: any[] = context.resume?.messages || [
-    {
-      role: "system",
-      content: PARTICIPATION,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
+  const messages: any[] = context.resume?.messages || participationMessages({
         selfNote: (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
@@ -830,9 +824,7 @@ export async function agentAnswer(e: any, context: any) {
           ).all()
         ).results,
         context: promptContext,
-      }),
-    },
-  ];
+  });
   for (let turn = context.resume?.turn || 0; turn < 3; turn++) {
     let m: any;
     if (context.resume?.pending) {

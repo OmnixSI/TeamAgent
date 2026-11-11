@@ -1,17 +1,17 @@
+import { parseDecision } from "./rhythm";
 import { UNTRUSTED_RULE } from "./untrusted";
 import settings from "../config/participation.json";
 /** Group participation is decided before the separate voice module. */
 export const PARTICIPATION = settings.text + "\n" + UNTRUSTED_RULE;
 export function participation(raw: string, forced = false) {
-  try {
-    const p = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    if (typeof p.should_reply === "boolean") return p;
-  } catch {}
-  return {
-    should_reply: forced,
-    kind: forced ? "direct" : "proactive",
-    brief: forced ? raw : "",
-  };
+  const d = parseDecision(raw, { forced, allowWait: false });
+  return { should_reply: d.action === "reply", kind: d.kind, brief: d.brief };
+}
+export type ParticipationInput = Record<string, any> & { system?: string };
+/** Preserve caller field order, so production and replay use identical messages. */
+export function participationMessages(x: ParticipationInput): { role: string; content: string }[] {
+  const { system = PARTICIPATION, ...data } = x;
+  return [{ role: "system", content: system }, { role: "user", content: JSON.stringify(data) }];
 }
 export async function maySpeak(
   e: any,
@@ -19,7 +19,7 @@ export async function maySpeak(
   forced: boolean,
   accepted: boolean,
 ) {
-  return accepted || forced || p.should_reply === true;
+  return accepted || forced || p.action === "reply" || p.should_reply === true;
 }
 export function alreadySaid(text: string, recent: any[]) {
   const normalize = (value: string) =>
