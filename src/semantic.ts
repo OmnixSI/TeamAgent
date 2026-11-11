@@ -272,6 +272,7 @@ export async function tool(
   name: "fetch" | "search",
   body: any,
   timeout = 45000,
+  maxBytes = 1_000_000,
 ) {
   const r = await fetch("https://api.deepseek.com/v1/tools/" + name, {
     method: "POST",
@@ -283,7 +284,7 @@ export async function tool(
     signal: AbortSignal.timeout(timeout),
   });
   if (!r.ok) throw Error(name + " HTTP " + r.status);
-  const raw = await readLimited(r, 1_000_000);
+  const raw = await readLimited(r, maxBytes);
   if (raw === null) throw Error(name + " response too large");
   return JSON.parse(raw);
 }
@@ -432,16 +433,22 @@ export async function readUrl(
     } catch {}
   }
   try {
-    const d = await tool(e, "fetch", { url }, Math.min(8000, remaining()));
+    const d = await tool(
+      e,
+      "fetch",
+      { url },
+      Math.min(8000, remaining()),
+      512 * 1024,
+    );
     const text = String(d?.content || "").trim();
     if (text) return { source: "deepseek", text };
   } catch {}
   return null;
 }
-function untrustedResults(results: any) {
+export function untrustedResults(results: any) {
   return (Array.isArray(results) ? results : []).map((r: any) => {
     const out = { ...r };
-    for (const key of ["content", "snippet", "text"])
+    for (const key of ["title", "content", "snippet", "text"])
       if (typeof r?.[key] === "string")
         out[key] = untrusted(String(r.url || "search"), r[key]);
     return out;
@@ -518,7 +525,8 @@ export async function scout(e: any, p: any, s: Services) {
   const selected = parse(
     await s.llm(
       "chat",
-      `只输出JSON {share:boolean,repo,title,brief,urls:[]}。只选择一项真正能改进项目、与上次不同的新发现；没有就share=false。brief最多250字，说明用途、一个便宜试法与依赖；明确区分事实和推测。链接只能取检索结果中实际出现的官方文档或GitHub原始链接，不能编造。不要把“热门”当成“适合”。`,
+      `只输出JSON {share:boolean,repo,title,brief,urls:[]}。只选择一项真正能改进项目、与上次不同的新发现；没有就share=false。brief最多250字，说明用途、一个便宜试法与依赖；明确区分事实和推测。链接只能取检索结果中实际出现的官方文档或GitHub原始链接，不能编造。不要把“热门”当成“适合”。` +
+        UNTRUSTED_RULE,
       { findings, previous: await s.setting("last_scout_text") },
     ),
   );

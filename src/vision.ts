@@ -4,6 +4,7 @@ import type { Media } from "./inbound";
 import { renderMentions } from "./inbound";
 import { model } from "./runtime";
 import { metaOf } from "./view";
+import { untrusted } from "./untrusted";
 
 export const VISION_VERSION = "v1";
 export const SELFTEST_PNG =
@@ -184,7 +185,7 @@ export function pickImages(
     latest.mentioned === true ||
     !!meta.mentionsBot;
   const body = String(latest.body || "").trim();
-  if (mentioned || !body || /[？?]|吗|啥|什么|怎么|哪/.test(body))
+  if (mentioned || /[？?]|吗|啥|什么|怎么|哪/.test(body))
     for (const { media, idx } of images(latest))
       take(latest, media, idx, hintOf(latest));
   const reply = meta.replyTo;
@@ -379,7 +380,7 @@ export async function imageNotesFor(
   if (!ids.length) return out;
   const rows = (
     await e.DB.prepare(
-      "SELECT mi.message_id,mi.idx,n.desc,n.text FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" +
+      "SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" +
         ids.map(() => "?").join(",") +
         ") ORDER BY mi.message_id,mi.idx",
     )
@@ -390,7 +391,15 @@ export async function imageNotesFor(
     const note =
       "图片：" +
       String(r.desc || "") +
-      (r.text ? "；图中文字：" + String(r.text) : "");
+      (r.text
+        ? "；图中文字：" +
+          untrusted(
+            "图中文字",
+            String(r.text),
+            new Date(Number(r.created_at || Date.now())).toISOString(),
+            1000,
+          )
+        : "");
     const list = out.get(r.message_id) || [];
     list[Number(r.idx)] = note;
     out.set(r.message_id, list);

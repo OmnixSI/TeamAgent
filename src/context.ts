@@ -1,4 +1,4 @@
-import { botView, buildConversation, metaOf, refIdsOf, viewMessage, type RefTarget } from "./view";
+import { botView, buildConversation, mediaViews, metaOf, refIdsOf, viewMessage, type RefTarget } from "./view";
 import { imageNotesFor } from "./vision";
 
 type Row = Record<string, any>;
@@ -78,24 +78,28 @@ export async function loadChatContext(
     ).results.map((r: any) => [r.member_id, r.name]),
   );
   const refs = new Map<string, RefTarget>(),
+    targetMeta = new Map<string, any>(),
     ids = refIdsOf([...recent, ...batch, ...(latest ? [latest] : [])]);
   if (ids.member.length) {
     const rows = (
       await e.DB.prepare(
-        "SELECT id,sender,substr(body,1,200) body FROM messages WHERE id IN (" +
+        "SELECT m.id,m.sender,substr(m.body,1,200) body,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id IN (" +
           ids.member.map(() => "?").join(",") +
           ")",
       )
         .bind(...ids.member)
         .all()
     ).results;
-    for (const r of rows)
+    for (const r of rows) {
+      const meta = metaOf(r);
+      targetMeta.set(r.id, meta);
       refs.set(r.id, {
         id: r.id,
         from: names.get(r.sender) || "成员" + r.sender.slice(-4),
         fromId: r.sender.slice(-6),
         text: r.body,
       });
+    }
   }
   if (ids.bot.length) {
     const rows = (
@@ -120,7 +124,14 @@ export async function loadChatContext(
       (r.meta?.media || []).some((m: any) => m.kind === "image"),
     )
     .map((r) => r.id);
-  const imageNotes = await imageNotesFor(e, [...new Set(withImages)]);
+  const imagePicks = new Set(x.imagePicks || []);
+  const imageNotes = await imageNotesFor(e, [
+    ...new Set([...withImages, ...ids.member]),
+  ]);
+  for (const [id, meta] of targetMeta) {
+    const media = mediaViews(meta, id, imageNotes, imagePicks);
+    if (media?.length) refs.get(id)!.media = media;
+  }
   return {
     recent,
     batch,
@@ -128,7 +139,7 @@ export async function loadChatContext(
     names,
     refs,
     imageNotes,
-    imagePicks: new Set(x.imagePicks || []),
+    imagePicks,
   };
 }
 

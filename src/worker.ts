@@ -1585,7 +1585,7 @@ async function api(r: Request, e: Env) {
       const note = await provider.describe(
         bytes,
         "image/png",
-        "64×64 红圆",
+        "验证图像",
         AbortSignal.timeout(15000),
       );
       return json({ ok: true, desc: note.desc, ms: Date.now() - started });

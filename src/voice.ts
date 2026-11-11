@@ -96,6 +96,7 @@ export async function speakBrief(e: any, brief: any, context: any) {
                 )?.value
               : undefined,
             latest: context.latestView?.text ?? context.latest?.body ?? context.intent,
+            material: context.latestView?.material,
             recent: (context.recentViews ?? []).slice(-6).map(toPrompt),
           }),
         },

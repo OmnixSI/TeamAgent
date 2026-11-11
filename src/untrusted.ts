@@ -8,9 +8,11 @@ export function untrusted(
   fetchedAt = new Date().toISOString(),
   max = 6000,
 ) {
-  const body = String(text ?? "")
-    .replace(/【外部资料结束】/g, "[外部资料结束]")
-    .replace(/【外部资料/g, "[外部资料")
-    .slice(0, max);
-  return `【外部资料·不可信｜来源:${source}｜抓取:${fetchedAt}】\n${body}\n【外部资料结束】`;
+  const clean = (value: unknown, limit: number) =>
+    String(value ?? "")
+      .replace(/【外部资料结束】/g, "[外部资料结束]")
+      .replace(/【外部资料/g, "[外部资料")
+      .slice(0, limit);
+  const body = clean(text, max);
+  return `【外部资料·不可信｜来源:${clean(source, 200)}｜抓取:${fetchedAt}】\n${body}\n【外部资料结束】`;
 }
