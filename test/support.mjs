@@ -18,6 +18,7 @@ fixture.model.effort_by_kind = {
   code: "max",
   vision: "none",
 };
+fixture.rhythm = { ...fixture.rhythm, mention: 0, image: 0, busy: 0, idle: 0 };
 fixture.memory = {
   timezone: "Australia/Sydney",
   start_hour: 3,
@@ -61,37 +62,23 @@ const { default: worker, signature } = await import("../" + output);
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8"));
-  return {
+  const database = {
+    executed: 0,
     prepare(sql) {
-      return {
-        bind(...args) {
-          return {
-            async first() {
-              return d.prepare(sql).get(...args) || null;
-            },
-            async all() {
-              return { results: d.prepare(sql).all(...args) };
-            },
-            async run() {
-              return d.prepare(sql).run(...args);
-            },
-          };
-        },
-        async all() {
-          return { results: d.prepare(sql).all() };
-        },
-        async first() {
-          return d.prepare(sql).get() || null;
-        },
-        async run() {
-          return d.prepare(sql).run();
-        },
-      };
+      const statement = (args = []) => ({
+        sql,
+        bind(...values) { return statement(values); },
+        async first() { database.executed++; return d.prepare(sql).get(...args) || null; },
+        async all() { database.executed++; return { results: d.prepare(sql).all(...args) }; },
+        async run() { database.executed++; return d.prepare(sql).run(...args); },
+      });
+      return statement();
     },
     async batch(ss) {
-      return Promise.all(ss.map((s) => s.run()));
+      return Promise.all(ss.map(s => /^\s*(SELECT|WITH)\b|\bRETURNING\b/i.test(s.sql) ? s.all() : s.run()));
     },
   };
+  return database;
 }
 function env() {
   return {
@@ -99,7 +86,7 @@ function env() {
     ADMIN_TOKEN: "owner-secret",
     RUNNER_TOKEN: "runner-secret",
     QQ_APP_SECRET: "test-only-secret",
-    WORK: { async send() {} },
+    WORK: { sent: [], async send(body, opts) { this.sent.push({ body, opts }); } },
     DEEPSEEK_API_KEY: "fake",
   };
 }
