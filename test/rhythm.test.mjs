@@ -175,11 +175,11 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
   };
   try{
     const imageEnv=metered(base),before=base.DB.executed;await queue(imageEnv,'chat-image-turn');
+    assert.equal(imageEnv.meter.used,base.DB.executed-before);
     assert.equal(visionCalls,1);assert.equal(decisions,0);
     assert.equal(await base.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
     assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM chat_decisions').first()).n,0);
     assert.ok(await base.DB.prepare("SELECT id FROM jobs WHERE id='chat-v-image-turn' AND status='pending'").first());
-    assert.equal(imageEnv.meter.used,base.DB.executed-before-3);
     const replyEnv=metered(base);await queue(replyEnv,'chat-v-image-turn');
     assert.equal(visionCalls,1);assert.equal(decisions,1);
   }finally{globalThis.fetch=old;}
