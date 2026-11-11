@@ -95,7 +95,7 @@ test('A6 cached video material is subject to the same authorization check',async
   });
 });
 test('A7 tainted file tools require a strong original artifact request',async()=>{
-  for(const [body,accepted] of [['视频',false],['把视频内容整理成文档',true]]){
+  for(const [body,accepted] of [['视频',false],['请把视频内容整理成文档',true]]){
     const e=env(),context=await source(e,body);context.materials=[untrusted('video','字幕')];
     await mocked([call('create_file_task',{source_id:'current',request_quote:body,title:'文档',instructions:'整理视频',source_ids:['current']})],()=>agentAnswer(e,context));
     assert.equal((await rows(e,'jobs')).some(j=>j.kind==='media'),accepted);
@@ -173,7 +173,7 @@ test('review authorization validates complete original text even when the model 
     const source={id:'current',body,meta:{direct:true}};
     for(const quote of [body,body.includes('建个任务')?'建个任务':'交给本地做'])assert.equal(az.authorize('prepare_project_task',quote,source,{batch:[source]},[]).ok,false,body);
   }
-  for(const body of ['建个任务','帮我建个任务','请交给本地做','把视频内容整理成文档','看完这个视频帮我建个任务跟进一下']){
+  for(const body of ['建个任务','帮我建个任务','请交给本地做','请把视频内容整理成文档','看完这个视频帮我建个任务跟进一下']){
     const tool=body.includes('文档')?'create_file_task':'prepare_project_task',source={id:'current',body,meta:{direct:true}};
     assert.equal(az.authorize(tool,body,source,{batch:[source]},[]).ok,true,body);
   }

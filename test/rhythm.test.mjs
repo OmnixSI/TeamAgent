@@ -659,3 +659,11 @@ test('round4 routing and authorization share whole-batch taint with a clean cont
   assert.equal(engagement.isDirectRequest(own,{batch:[other,own]}),false);
   const strict={...own,body:'帮我建个任务修登录'};assert.equal(engagement.isDirectRequest(strict,{batch:[other,strict]}),true);
 });
+
+test('completed-work statements remain behind the hard gate with zero model calls',async()=>{
+  for(const [i,body] of ['把登录错误修好了','把 README 整理好了','把视频内容整理成文档了','帮我把登录错误修好了'].entries()){
+    const e=await seedHard(),id='completed-work-'+i;await qq(e,msg(id,body));
+    await decide({action:'reply',kind:'proactive'},async state=>{await queue(e,'chat-'+id);assert.equal(state.decisions,0,body);assert.equal(state.voices,0,body);});
+    assert.equal((await e.DB.prepare('SELECT gate FROM chat_decisions WHERE id=?').bind('chat-'+id).first()).gate,'hard_unanswered');
+  }
+});

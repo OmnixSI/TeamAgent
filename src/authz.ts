@@ -28,11 +28,14 @@ export const STRONG: Record<WriteTool, RegExp> = {
 };
 
 // Both work tools use this language contract on clean turns. No artifact nouns.
-const REQUEST_TONE = /^(?:请问(?:你)?)?(?:(?:请|麻烦)(?:你)?|帮我|帮忙|给我|你来|去|劳驾|能不能(?:帮我|帮忙|帮|请你)?|可以(?:帮我|帮忙|帮|请你)|能帮我|把)/;
+const REQUEST_TONE = /^(?:请问(?:你)?)?(?:(?:请|麻烦)(?:你)?|帮我|帮忙|给我|你来|你把|去|劳驾|能不能(?:帮我|帮忙|帮|请你)?|可以(?:帮我|帮忙|帮|请你)|能帮我)/;
 const STRICT_REQUEST_TONE = /^(?:(?:请|麻烦)(?:你)?|帮我|帮忙|劳驾|能不能(?:帮我|帮忙|请你)?|(?:可以|能)帮我)/;
 const WORK_ACTION = /修复|修|实现|开发|写|做|出|整理|改|加|排查|重构|测试|部署|规划|设计|方案|文档|看看|查一下|检查|看下/;
 const TASK_REQUEST = new RegExp(STRONG.prepare_project_task.source + "|记(一?[个条])?任务", "i");
 const CORRECTION = /^(?:(?:请|麻烦)(?:你)?(?:帮我)?|帮我)?(?:纠正(?:一下)?|不是.{1,80}是|应该叫|名字改成|其实是)/;
+// Reject completion/aspect markers across the whole work request. 了/过 cover
+// verb endings, result complements (好了/完了/成了), and sentence-final reports.
+const COMPLETED_WORK = /[了过]|已经|搞定|弄好/;
 const COMMAND_EXCLUSIONS = {
   statementTail: /^(?:了|过|的|很|挺|真|太|是|会|不|效果)|的(?:人)?是/,
   negatedLead: /(?:没有|不要|别|不用|不必|无需|不想|不需要|记住|记一下|记下来)/,
@@ -44,7 +47,7 @@ function imperativeMatch(clause: string, match: RegExpExecArray, dirty: boolean)
   const prefix = clause.slice(0, match.index), suffix = clause.slice(match.index + match[0].length);
   if (COMMAND_EXCLUSIONS.statementTail.test(suffix) || COMMAND_EXCLUSIONS.negatedLead.test(prefix) || COMMAND_EXCLUSIONS.reportedLead.test(prefix)) return false;
   const lead = prefix.replace(/^(?:现在|这次|接下来|明天|稍后|然后|再|先)\s*/, "");
-  return !lead || (dirty ? STRICT_REQUEST_TONE : REQUEST_TONE).test(lead) || /^把/.test(lead) ||
+  return !lead || (dirty ? STRICT_REQUEST_TONE : REQUEST_TONE).test(lead) ||
     /^(?:看完|读完|看了)[\s\S]{0,60}(?:帮我|帮忙|请你)$/.test(lead);
 }
 
@@ -56,6 +59,7 @@ function ownClauses(text: string): string[] {
 
 /** The only clean-turn work predicate, shared by file and project tools. */
 export function cleanWorkRequest(text: string): boolean {
+  if (COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {
     if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
     const task = TASK_REQUEST.exec(clause);
@@ -72,6 +76,7 @@ export function cleanWorkRequest(text: string): boolean {
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
+  if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {
     if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
     if (tool === "remember_correction") {
