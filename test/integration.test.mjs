@@ -102,6 +102,70 @@ test("anonymous denied and owner secret never returned", async () => {
   const s = await (await req(e, "/api/team/state")).text();
   assert.ok(!s.includes(e.ADMIN_TOKEN));
 });
+test("public Chinese guide stays readable while anonymous state, task and source remain private", async () => {
+  const e = env(),
+    anonymous = "",
+    privateMessage = "只对群成员可见的原始消息 · 9f2a",
+    privateTitle = "只对群成员可见的任务标题 · 7c1d",
+    privateDetail = "只对群成员可见的验收细节 · 4b8e",
+    credentials = [e.ADMIN_TOKEN, e.RUNNER_TOKEN, e.QQ_APP_SECRET],
+    ts = new Date().toISOString();
+  await e.DB.prepare(
+    "INSERT INTO messages(id,group_id,sender,body,ts) VALUES(?,?,?,?,?)",
+  )
+    .bind("example", "GROUP000001", "member1", privateMessage, ts)
+    .run();
+  await e.DB.prepare(
+    "INSERT INTO tasks(id,repo,title,detail,status,version,result,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+  )
+    .bind(
+      "example",
+      "OmnixSI/TeamAgent",
+      privateTitle,
+      privateDetail,
+      "proposal",
+      1,
+      "",
+      ts,
+      ts,
+    )
+    .run();
+
+  const guideResponse = await req(e, "/api/team/guide", null, anonymous);
+  assert.equal(guideResponse.status, 200);
+  assert.match(
+    guideResponse.headers.get("content-type") || "",
+    /application\/json/,
+  );
+  const { guide } = await guideResponse.json();
+  assert.equal(typeof guide, "string");
+  assert.match(guide, /做 AI 高手/);
+  assert.match(guide, /群机器人使用说明/);
+  assert.match(guide, /第一次登录/);
+  assert.match(guide, /[\u4e00-\u9fff]{4,}/);
+  for (const secret of credentials)
+    assert.ok(!guide.includes(secret), "public guide leaked a credential");
+
+  for (const [path, label] of [
+    ["/api/team/state", "state"],
+    ["/api/team/task?id=example", "task"],
+    ["/api/team/source?id=example", "source"],
+  ]) {
+    const response = await req(e, path, null, anonymous),
+      body = await response.text();
+    assert.equal(response.status, 401, `${label} must require login`);
+    for (const hidden of [privateMessage, privateTitle, privateDetail])
+      assert.ok(!body.includes(hidden), `${label} leaked private content`);
+    for (const secret of credentials)
+      assert.ok(!body.includes(secret), `${label} leaked a credential`);
+  }
+
+  const source = await (await req(e, "/api/team/source?id=example")).json();
+  assert.equal(source.body, privateMessage);
+  const task = await (await req(e, "/api/team/task?id=example")).json();
+  assert.equal(task.task.title, privateTitle);
+  assert.equal(task.task.detail, privateDetail);
+});
 test("invitation single use, member cannot administer, revocation immediate", async () => {
   const e = env();
   const { invite } = await (
