@@ -582,21 +582,37 @@ async function processJob(e: Env, id: string) {
         .first();
       const group = await setting(e, "group_id");
       if (t && group && t.assignee === p.member) {
-        const spoken = await speakBrief(
-          e,
-          {
-            facts: {
-              member: p.member,
-              task: t.title,
-              repo: t.repo,
-              actorType: p.actorType,
+        let praise = "这波主动接活，靠谱。";
+        try {
+          const spoken = await speakBrief(
+            e,
+            {
+              facts: {
+                member: p.member,
+                task: t.title,
+                repo: t.repo,
+                actorType: p.actorType,
+              },
+              instruction:
+                "成员刚在团队开发台主动接手任务。系统会另行准确显示领取人和任务名，你只补一句简短自然的表扬：夸愿意接活和推进，不夸尚未完成的成果、不拉踩其他人，不复述领取信息，不宣布已经做完。",
             },
-            instruction:
-              "成员刚在团队开发台主动接手任务。用一到两句中文告诉群友是谁接了什么，具体夸一句愿意接活和推进，不夸尚未完成的成果、不拉踩其他人。轻快自然，名字保持原样；本机AI接手时说明是这个成员的本机AI。不要宣布已经做完。",
-          },
-          { intent: "在群里报接手并表扬接活的队友" },
+            { intent: "在群里报接手并表扬接活的队友" },
+          );
+          praise = decodeVoice(spoken).text;
+        } catch {
+          // Claim attribution must still arrive when the voice provider is unavailable.
+        }
+        const actor = p.member + (p.actorType === "ai" ? " 的本机 AI" : "");
+        await enqueueVoice(
+          e,
+          id,
+          group,
+          null,
+          JSON.stringify({
+            mode: "work",
+            text: actor + "接手了「" + t.title + "」。" + praise,
+          }),
         );
-        await enqueueVoice(e, id, group, null, spoken);
       }
     }
     if (claim.kind === "voice_notice") {

@@ -281,7 +281,10 @@ function renderStatus() {
       "待评审",
       state.tasks.filter((t) => t.status === "ready_for_review").length,
     ],
-    ["项目", state.repos.length],
+    [
+      "项目",
+      new Set([...state.repos, ...state.projects.map((p) => p.repo)]).size,
+    ],
   ];
   $("stats").replaceChildren();
   for (const [name, n] of counts) {

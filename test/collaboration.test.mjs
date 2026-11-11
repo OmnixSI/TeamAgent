@@ -132,7 +132,7 @@ test("concurrent claims have one winner, shared attribution and one durable prai
           message: {
             content: JSON.stringify({
               mode: "work",
-              text: winner.assignee + " 接下协作验收了，主动扛活这波可以！",
+              text: "主动扛活这波可以！",
             }),
           },
         },
@@ -151,6 +151,27 @@ test("concurrent claims have one winner, shared attribution and one durable prai
   const notices = (await e.DB.prepare("SELECT body FROM outbox").all()).results;
   assert.equal(notices.length, 1);
   assert.ok(notices[0].body.includes(winner.assignee));
+  assert.ok(notices[0].body.includes("「协作验收」"));
+});
+test("claim attribution still reaches the group when the voice provider fails", async () => {
+  const e = env(),
+    keys = await members(e),
+    id = await task(e, "模型断连仍报领取人");
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  await req(e, "/api/team/task/claim", { id, version: 1 }, keys.jinyi);
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response("unavailable", { status: 503 });
+  try {
+    await worker.queue(
+      { messages: [{ body: { id: "claim-" + id + "-v2" }, ack() {} }] },
+      e,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  const row = await e.DB.prepare("SELECT status,body FROM outbox").first();
+  assert.equal(row.status, "pending");
+  assert.ok(row.body.includes("jinyi接手了「模型断连仍报领取人」"));
 });
 test("local AI tokens can claim and report their own work, cannot administer, impersonate or approve completion", async () => {
   const e = env(),

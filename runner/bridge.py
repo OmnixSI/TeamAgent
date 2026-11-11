@@ -54,7 +54,7 @@ def sync_repos():
             "list",
             "OmnixSI",
             "--limit",
-            "100",
+            "1000",
             "--json",
             "nameWithOwner,isArchived",
         ],
@@ -68,7 +68,6 @@ def sync_repos():
             | {
                 r["nameWithOwner"]
                 for r in json.loads(organization.stdout)
-                if not r["isArchived"]
             }
         )
     for repo in repositories:

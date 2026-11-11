@@ -565,6 +565,11 @@ test("casual imperfections are stable, occasional and never touch work, digits, 
   assert.ok(split > 0 && split < 200);
   assert.ok(typo > 0 && typo < 30);
   assert.equal(decodeVoice('{"mode":"work","text":"已完成"}').text, "已完成");
+  assert.equal(decodeVoice("work：进展已同步").text, "进展已同步");
+  assert.equal(
+    decodeVoice('{"mode":"work","text":"work: 仍在处理"}').text,
+    "仍在处理",
+  );
 });
 test("nightly slang promotion requires real group evidence; opt-out survives future learning", async () => {
   const e = env(),
