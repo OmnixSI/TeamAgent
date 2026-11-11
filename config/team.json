@@ -100,5 +100,18 @@
     "wait_horizon_ms": 120000,
     "hard_window_ms": 1800000,
     "hard_humans": 6
+  },
+  "stickers": {
+    "enabled": true,
+    "collect": true,
+    "send": false,
+    "send_gif": true,
+    "min_senders": 2,
+    "max_bytes": 400000,
+    "max_rows": 1000,
+    "caps": {
+      "tag": 40,
+      "send": 20
+    }
   }
 }

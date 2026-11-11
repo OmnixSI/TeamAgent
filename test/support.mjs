@@ -67,7 +67,7 @@ function db() {
     prepare(sql) {
       const statement = (args = []) => ({
         sql,
-        bind(...values) { return statement(values); },
+        bind(...values) { return statement(values.map(v => v instanceof ArrayBuffer ? new Uint8Array(v) : v)); },
         async first() { database.executed++; return d.prepare(sql).get(...args) || null; },
         async all() { database.executed++; return { results: d.prepare(sql).all(...args) }; },
         async run() { database.executed++; return d.prepare(sql).run(...args); },

@@ -775,7 +775,7 @@ export async function agentAnswer(e: any, context: any) {
   ];
   const recentBot = (
     await e.DB.prepare(
-      "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') ORDER BY created_at DESC LIMIT 10",
+      "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
     ).all()
   ).results.reverse();
   Object.assign(context, buildViews(context, recentBot));
