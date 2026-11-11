@@ -2,7 +2,11 @@
 import pathlib,json,urllib.request,ssl,os,subprocess,time,sys,shutil
 
 H=pathlib.Path.home()/".inkboard-team"
-SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick"]
+SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick","com.inkboard.team-fetch"]
+def restart_services():
+    for name in SERVICES:
+        subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/"+name],check=name!="com.inkboard.team-fetch",capture_output=True)
+
 def main():
     marker=H/"pending-restart.json"
     if not marker.exists() or (H/"current.json").exists() or any((H/"file-deliveries").glob("*.sending")):return
@@ -20,8 +24,7 @@ def main():
     if not stage.is_relative_to((H/"runtime-staging").resolve()):raise RuntimeError("Invalid runtime staging path")
     subprocess.run([sys.executable,str(stage/"scripts/install-local.py"),"--apply"],check=True,timeout=45)
     if marker.exists() and marker.read_text()==raw:marker.unlink()
-    for name in SERVICES:
-        subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/"+name],check=True,capture_output=True)
+    restart_services()
     request.data=b'{"resume":true}'
     with urllib.request.urlopen(request,context=context,timeout=20):pass
     shutil.rmtree(stage)

@@ -7,7 +7,7 @@
     "check": "tsc --noEmit --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,WebWorker src/*.ts --resolveJsonModule",
     "dev": "wrangler dev",
     "deploy": "node scripts/deploy.mjs",
-    "test:runner": "python3 -m unittest discover -s test -p '*_test.py'",
+    "test:runner": "python3 -m unittest discover -s test -p '*_test.py' && node --test runner/test_fetcher.mjs",
     "check:ui": "node scripts/check-ui.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "build:web": "node scripts/build-ui.mjs",

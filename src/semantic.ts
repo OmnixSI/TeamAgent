@@ -604,6 +604,7 @@ export async function agentAnswer(e: any, context: any) {
         today: now(),
         projects: INITIAL_PROJECT_HINTS,
         facts: promptFacts,
+        materials: context.materials,
         reflection: (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='team_reflection'",

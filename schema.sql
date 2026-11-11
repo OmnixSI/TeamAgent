@@ -47,3 +47,6 @@ CREATE INDEX IF NOT EXISTS ci_observation_incident ON ci_observations(incident_i
 
 CREATE TABLE IF NOT EXISTS message_refs(ref_idx TEXT PRIMARY KEY,kind TEXT NOT NULL,target_id TEXT NOT NULL,group_id TEXT NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS member_names(member_id TEXT PRIMARY KEY,name TEXT NOT NULL,source TEXT NOT NULL,updated_at TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS video_waits(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,ref TEXT NOT NULL,latest_id TEXT NOT NULL,batch_ids TEXT NOT NULL,mentioned INTEGER NOT NULL,due_at INTEGER NOT NULL,ready INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'waiting',lease_until INTEGER,created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS video_waits_due ON video_waits(status,due_at);

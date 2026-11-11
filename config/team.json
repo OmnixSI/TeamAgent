@@ -72,5 +72,9 @@
       "群机器人",
       "团队开发台"
     ]
+  },
+  "bili": {
+    "enabled": true,
+    "wait_seconds": 30
   }
 }

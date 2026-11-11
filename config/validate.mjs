@@ -79,5 +79,7 @@ export function validateTeamConfig(c) {
     !/\bsk-[A-Za-z0-9_-]{16,}\b/.test(JSON.stringify(c)),
     "shared API belongs in DEEPSEEK_API_KEY secret",
   );
+  check(typeof c?.bili?.enabled === "boolean", "bili.enabled");
+  check(integer(c?.bili?.wait_seconds, 1, 90), "bili.wait_seconds");
   return errors;
 }
