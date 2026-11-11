@@ -517,3 +517,45 @@ test('budget guards leave a low-budget send and sweep durable; reference fuse co
   const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,3);
 });
+
+test('synthetic timing corpus uses production views and hides acceptable actions from model input',async()=>{
+  const {loadTimingRuntime,timingInput,runTimingEvaluation}=await import('../scripts/evaluate-timing.mjs');
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/timing-synthetic.json',import.meta.url),'utf8')),runtime=await loadTimingRuntime();
+  assert.equal(fixture.cases.length,60);
+  const counts=Object.fromEntries([...new Set(fixture.cases.map(x=>x.category))].map(c=>[c,fixture.cases.filter(x=>x.category===c).length]));
+  assert.deepEqual(counts,{mention:10,member_chat:10,laughter:8,unfinished:8,open_question:8,unanswered:6,quote_bot:4,ended:6});
+  let called=0;
+  const report=await runTimingEvaluation({fixture,runtime,complete:async(messages,scene)=>{
+    called++;const input=timingInput(runtime,fixture.snapshot,scene);
+    assert.deepEqual(messages,runtime.participationMessages(input));
+    const data=JSON.parse(messages[1].content);
+    for(const key of ['acceptable','category','previousDecision'])assert.equal(data[key],undefined);
+    assert.ok(data.conversation.length);assert.equal(data.context.latest.id,scene.messages.at(-1).id);
+    return JSON.stringify({action:scene.acceptable[0],kind:'direct',brief:'虚构测试输出',wait_seconds:15});
+  }});
+  assert.equal(called,54);assert.equal(report.synthetic.total,60);assert.equal(report.synthetic.pass,60);assert.equal(report.rules.pass,report.rules.total);assert.ok(report.passed);
+});
+test('synthetic timing gate fails on a wrong action and rules-only never claims model acceptance',async()=>{
+  const {loadTimingRuntime,runTimingEvaluation}=await import('../scripts/evaluate-timing.mjs');
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/timing-synthetic.json',import.meta.url),'utf8')),runtime=await loadTimingRuntime();
+  const bad=await runTimingEvaluation({fixture,runtime,complete:async()=>'not json'});
+  assert.ok(!bad.passed);assert.ok(bad.synthetic.pass<54);assert.equal(bad.rules.pass,bad.rules.total);
+  const rules=await runTimingEvaluation({fixture,runtime});
+  assert.equal(rules.synthetic.status,'not_run');assert.equal(rules.synthetic.pass,null);assert.ok(!rules.passed);
+});
+test('P1 policy keeps its existing paragraphs and replaces only the two output-contract sentences',()=>{
+  const policy=JSON.parse(readFileSync(new URL('../config/participation.json',import.meta.url),'utf8')).text;
+  assert.ok(policy.includes('action:"reply"|"wait"|"stop"'));assert.ok(policy.includes('wait_seconds:15'));
+  assert.ok(policy.includes('拿不准就选stop'));assert.ok(policy.includes('被@或被引用时只能reply'));
+  assert.ok(!policy.includes('输出JSON {should_reply:'));
+});
+test('timing CLI is offline in rules-only mode, writes private results and fails without an injected key',async()=>{
+  const {spawnSync}=await import('node:child_process'),{statSync,existsSync}=await import('node:fs');
+  const output=`.agent/p1-cli-rules-${process.pid}.json`,missing=`.agent/p1-cli-no-key-${process.pid}.json`;
+  const cli=args=>spawnSync(process.execPath,['scripts/evaluate-timing.mjs',...args],{cwd:process.cwd(),env:{PATH:process.env.PATH},encoding:'utf8'});
+  const rules=cli(['--rules-only','--output',output]);assert.equal(rules.status,0,rules.stderr);
+  const result=JSON.parse(readFileSync(output,'utf8'));assert.equal(result.rules.pass,4);assert.equal(result.passed,false);assert.equal(result.synthetic.status,'not_run');
+  assert.equal(statSync(output).mode&0o777,0o600);
+  const absent=cli(['--output',missing]);assert.equal(absent.status,1);assert.equal(existsSync(missing),false);
+  assert.ok(!absent.stderr.includes('Bearer'));assert.ok(!absent.stderr.includes('sk-'));
+});
