@@ -15,7 +15,7 @@ const { redact } = await bundle("runtime"), { extractUrls } = await bundle("poli
 const { rememberCorrection } = await bundle("memory"), { phraseCandidates } = await bundle("learning");
 const { agentAnswer, proactiveReply } = await bundle("semantic");
 const group = "GROUP000001", names = new Map([["U1", "阿明"], ["U2", "小王"]]);
-const card = (title = "T", url = "https://b23.tv/new") => ({ type: "miniapp", name: "哔哩哔哩", fields: { title, jump_url: url } });
+const card = (title = "T", url = "https://b23.tv/new") => ({ ark_type: "miniapp", ark_name: "哔哩哔哩", fields: { title, jump_url: url } });
 async function setup() { const e = env(); await req(e, "/api/admin/bind", { groupId: group }); return e; }
 async function meta(e, id) { return JSON.parse((await e.DB.prepare("SELECT json FROM message_meta WHERE id=?").bind(id).first()).json); }
 async function queue(e, id) { await worker.queue({ messages: [{ body: { id }, ack() {} }] }, e); }
@@ -55,19 +55,21 @@ test("A2 empty card/image/voice bodies stay empty; placeholders and ASR live in 
 test("A3 ASR cannot be correction evidence", async () => {
   await assert.rejects(rememberCorrection(env(), { repo: "team", quote: "明天开会", subject: "日程", predicate: "时间", value: "明天" }, { id: "voice", body: "", meta: { direct: true, media: [{ asr: "明天开会" }] } }), /需要当前发言中的逐字纠正依据/);
 });
-async function taskEvidence(tool, quote) {
-  const e = await setup(), source = row("evidence", "U1", "<@U2> 帮我整理成文档", { group_id: group, meta: { direct: true, can_request_artifact: true, mentions: [{ id: "U2", name: "小王", isBot: false }], placeholder: "[图片]", cardView: card("卡片标题") } });
+async function taskEvidence(tool, quote, mentionName = "小王") {
+  const e = await setup(), source = row("evidence", "U1", "<@U2> 帮我整理成文档", { group_id: group, meta: { direct: true, can_request_artifact: true, mentions: [{ id: "U2", name: mentionName, isBot: false }], placeholder: "[图片]", cardView: card("卡片标题") } });
   await e.DB.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,0)").bind(source.id, group, source.sender, source.body, source.ts, 0).run();
   let toolResult;
   await mocked(async () => { await agentAnswer(e, { latest: source, batch: [source], recent: [source], names, refs: new Map(), background: true }); }, (body, n) => {
-    if (n === 1) return { role: "assistant", tool_calls: [{ id: "evidence-tool", type: "function", function: { name: tool, arguments: JSON.stringify({ repo: "OmnixSI/TeamAgent", title: "整理", detail: "整理说明", instructions: "整理说明", source_id: source.id, request_quote: quote }) } }] };
+    if (n === 1) return { role: "assistant", tool_calls: [{ id: "evidence-tool", type: "function", function: { name: tool, arguments: JSON.stringify({ repo: "OmnixSI/TeamAgent", title: "整理", detail: "整理说明", instructions: "整理说明", source_id: source.id, request_quote: quote, quote, subject: "协作", predicate: "负责人", value: "小王" }) } }] };
     toolResult = JSON.parse(body.messages.find(m => m.role === "tool").content);
     return '{"should_reply":true,"kind":"direct","brief":"结果已核实"}';
   });
   const created = tool === "create_file_task"
     ? await e.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE id='utility-evidence'").first()
-    : await e.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE id='qq-evidence'").first();
-  assert.equal(created.n, toolResult.accepted ? 1 : 0);
+    : tool === "remember_correction"
+      ? await e.DB.prepare("SELECT COUNT(*) n FROM facts WHERE source_id='evidence'").first()
+      : await e.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE id='qq-evidence'").first();
+  assert.equal(created.n, toolResult.accepted || toolResult.remembered ? 1 : 0);
   return toolResult;
 }
 test("A4 create_file_task accepts rendered mention only; rejects synthetic material", async () => {
@@ -270,4 +272,58 @@ test("F9 record D1 statements and bound new chat context reads", async t => {
   const chatExtra = sql.filter(s => /member_names|FROM messages WHERE id IN|FROM outbox WHERE id IN/.test(s)).length;
   assert.ok(chatExtra <= 4);
   t.diagnostic(`D1 statements: plain=${plain}, quoted=${quoted}, added context reads=${extra}, added chat reads=${chatExtra}`);
+});
+
+test("P2-1 ARK field names preserve card identity, source label and legacy compatibility", async () => {
+  const parsed = ib.parseCard(card());
+  assert.equal(parsed.type, "miniapp");
+  assert.equal(parsed.name, "哔哩哔哩");
+  assert.equal(ib.parseCard({ type: "legacy", name: "旧卡片" }).name, "旧卡片");
+  const canonical = ib.parseCard({ ...card(), type: "legacy", name: "旧名" });
+  assert.equal(canonical.type, "miniapp"); assert.equal(canonical.name, "哔哩哔哩");
+  const e = await setup(), ark = { ...card(), ark_name: "miniapp", fields: { ...card().fields, source: "哔哩哔哩" } };
+  await qq(e, { ...msg("ark-fields", ""), ark_data: ark });
+  const m = await meta(e, "ark-fields");
+  assert.equal(m.placeholder, "[卡片] 哔哩哔哩：T");
+  assert.equal(m.cardView.type, "miniapp"); assert.equal(m.cardView.name, "miniapp");
+  assert.equal((await e.DB.prepare("SELECT body FROM messages WHERE id='ark-fields'").first()).body, "");
+});
+
+test("P2-2 voice attachment without ASR renders as voice rather than file", async () => {
+  const e = await setup();
+  for (const [id, attachment] of [["voice-no-asr", { content_type: "voice" }], ["voice-empty-asr", { content_type: "voice", asr_refer_text: "" }]]) {
+    await qq(e, { ...msg(id, ""), attachments: [attachment] });
+    const m = await meta(e, id);
+    assert.equal(m.media[0].kind, "voice"); assert.equal(m.placeholder, "[语音]");
+    const v = view.viewMessage(row(id, "U1", "", { meta: m }), names, new Map());
+    assert.equal(v.text, "[语音]"); assert.deepEqual(v.material.media, ["语音"]);
+    assert.equal((await e.DB.prepare("SELECT body FROM messages WHERE id=?").bind(id).first()).body, "");
+  }
+});
+
+test("P2-3 cached mention names match view evidence for correction, file and project tools", async () => {
+  const source = row("names-evidence", "U1", "<@U2> 帮我整理成文档", { meta: { mentions: [{ id: "U2", name: "", isBot: false }], placeholder: "[图片]", cardView: { title: "卡片标题" }, media: [{ kind: "voice", asr: "转写内容" }] } });
+  const v = view.viewMessage(source, names, new Map());
+  assert.equal(v.text, "@小王 帮我整理成文档");
+  assert.equal(view.quoteIn(source, v.text, names), true);
+  assert.equal(view.quoteIn(source, source.body, names), true);
+  assert.equal(view.quoteIn(source, "@其他人 帮我整理成文档", names), false);
+  for (const quote of ["[图片]", "卡片标题", "转写内容"]) assert.equal(view.quoteIn(source, quote, names), false);
+  for (const tool of ["create_file_task", "prepare_project_task", "remember_correction"]) {
+    const result = await taskEvidence(tool, v.text, "");
+    assert.equal(tool === "remember_correction" ? result.remembered : result.accepted, true, tool);
+    assert.equal((await taskEvidence(tool, "[图片]", "")).unavailable, true, tool);
+  }
+});
+
+test("P2-4 forwarded material without ref_msg_idx never sets replyTo or addressee", async () => {
+  const e = await setup(), d = { ...quotedEvent(), message_type: 0 };
+  await qq(e, d);
+  const m = await meta(e, d.id);
+  assert.equal(m.refMsgIdx, undefined); assert.equal(m.replyTo, undefined);
+  assert.equal(m.quoted.authorName, "阿明"); assert.deepEqual(m.quotedUrls, ["https://b23.tv/old"]);
+  const v = view.viewMessage(row(d.id, "U3", d.content, { meta: m }), names, new Map());
+  assert.equal(v.to, undefined); assert.equal(v.re, undefined);
+  assert.equal(v.material.quote.from, "阿明"); assert.equal(v.material.quote.text, "https://b23.tv/old");
+  assert.equal(await e.DB.prepare("SELECT id FROM jobs WHERE id='media-quoted'").first(), null);
 });
