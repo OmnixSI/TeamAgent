@@ -61,6 +61,9 @@ export async function analyse(e: any, p: any, s: Services) {
   ).results;
   for (const m of rows)
     m.meta = JSON.parse(metadata.find((x: any) => x.id === m.id)?.json || "{}");
+  // Nightly learning has no interactive authorization step. Reject a tainted
+  // round entirely, including facts, expressions, reflection and self_note.
+  if (tainted({ ...p, batch: rows }, rows.map((m: any) => ({ role: "user", content: m.body })))) return;
   if (p.dream)
     rows = rows.filter(
       (m: any) =>

@@ -175,11 +175,11 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
   };
   try{
     const imageEnv=metered(base),before=base.DB.executed;await queue(imageEnv,'chat-image-turn');
+    assert.equal(imageEnv.meter.used,base.DB.executed-before);
     assert.equal(visionCalls,1);assert.equal(decisions,0);
     assert.equal(await base.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
     assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM chat_decisions').first()).n,0);
     assert.ok(await base.DB.prepare("SELECT id FROM jobs WHERE id='chat-v-image-turn' AND status='pending'").first());
-    assert.equal(imageEnv.meter.used,base.DB.executed-before-3);
     const replyEnv=metered(base);await queue(replyEnv,'chat-v-image-turn');
     assert.equal(visionCalls,1);assert.equal(decisions,1);
   }finally{globalThis.fetch=old;}
@@ -605,4 +605,21 @@ test('explicit-request routing cannot authorize a different tool from polluted q
   });
   assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM tasks').first()).n,0);
   assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM activity WHERE kind='authz.denied'").first()).n,1);
+});
+
+
+test('review historical statements and memory chatter never bypass the proactive gate',async()=>{
+  for(const [i,body] of ['上次我交给本地做了，效果不错','我已经建个任务了','整理成文档挺好的','记住我今天很开心','别忘了昨天创建任务的事','他说“帮我建个任务”'].entries()){
+    const e=await seedHard(),id='not-command-'+i;await qq(e,msg(id,body));
+    await decide({action:'reply',kind:'proactive'},async state=>{await queue(e,'chat-'+id);assert.equal(state.decisions,0,body);assert.equal(state.voices,0,body);});
+    const log=await e.DB.prepare('SELECT gate,action FROM chat_decisions WHERE id=?').bind('chat-'+id).first();assert.equal(log.gate,'hard_unanswered',body);assert.equal(log.action,'stop',body);
+  }
+});
+test('review bare imperative project request still reaches normal tools',async()=>{
+  const e=await seedHard();await qq(e,msg('bare-request','建个任务'));
+  await decide(n=>n===1?{tool_calls:[{id:'project',type:'function',function:{name:'prepare_project_task',arguments:JSON.stringify({source_id:'bare-request',request_quote:'建个任务',repo:'OmnixSI/TeamAgent',title:'明确交办',detail:'只处理现在的请求',execute_requested:true,complexity:'small'})}}]}:{content:'{"action":"reply","kind":"direct","brief":"已建任务"}'},async state=>{
+    await queue(e,'chat-bare-request');
+    const research=await e.DB.prepare("SELECT id FROM jobs WHERE id='research-bare-request'").first();assert.ok(research);await queue(e,research.id);assert.ok(state.decisions>=1);
+  });
+  assert.equal((await e.DB.prepare("SELECT status FROM tasks WHERE source_id='bare-request'").first()).status,'queued');
 });
