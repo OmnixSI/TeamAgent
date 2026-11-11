@@ -33,7 +33,7 @@
 
 团队共用API配置在本仓库 **Settings → Secrets and variables → Actions → `DEEPSEEK_API_KEY`**。发布会把它同步到Cloudflare服务端和本机团队运行目录。聊天、检索、方案、记忆、文件与开发统一使用团队配置；成员维护或发布时无需各自重复填API。
 
-更换共用API：在该仓库Secret中更新值，再运行 **Actions → Check → Run workflow**，或者提交参数变更触发发布。Secret值不会被GitHub重新展示，仓库维护者可更新，工作流可使用。QQ群和网页不展示它。
+更换共用API：在该仓库Secret中更新值，再运行 **Actions → Check → Run workflow**，或者提交参数变更触发发布。Secret值不会被GitHub重新展示，拥有 Secrets 管理权限的仓库管理员可更新，工作流可使用。普通 Write 维护者修改参数、代码和工作流时，自动发布会直接沿用已有共用API。QQ群和网页不展示它。
 
 其他团队服务凭据也已集中配置为仓库Secrets：`TEAM_ADMIN_TOKEN`、`TEAM_RUNNER_TOKEN`、`TEAM_QQ_APP_ID`、`TEAM_QQ_APP_SECRET`、`TEAM_AUTOLOOP_SOURCE_KEY`。Cloudflare登录使用发布电脑已有的官方Wrangler登录；它的个人OAuth会话不属于项目配置。基础设施标识已在实际wrangler.toml中。
 
