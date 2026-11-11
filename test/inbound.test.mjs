@@ -55,8 +55,9 @@ test("A2 empty card/image/voice bodies stay empty; placeholders and ASR live in 
 test("A3 ASR cannot be correction evidence", async () => {
   await assert.rejects(rememberCorrection(env(), { repo: "team", quote: "明天开会", subject: "日程", predicate: "时间", value: "明天" }, { id: "voice", body: "", meta: { direct: true, media: [{ asr: "明天开会" }] } }), /需要当前发言中的逐字纠正依据/);
 });
+const evidenceRequest = { create_file_task: "帮我整理成文档", prepare_project_task: "帮我建个任务整理文档", remember_correction: "记住负责人是小王" };
 async function taskEvidence(tool, quote, mentionName = "小王") {
-  const e = await setup(), source = row("evidence", "U1", "<@U2> 帮我整理成文档", { group_id: group, meta: { direct: true, can_request_artifact: true, mentions: [{ id: "U2", name: mentionName, isBot: false }], placeholder: "[图片]", cardView: card("卡片标题") } });
+  const e = await setup(), source = row("evidence", "U1", "<@U2> " + evidenceRequest[tool], { group_id: group, meta: { direct: true, can_request_artifact: true, mentions: [{ id: "U2", name: mentionName, isBot: false }], placeholder: "[图片]", cardView: card("卡片标题") } });
   await e.DB.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,0)").bind(source.id, group, source.sender, source.body, source.ts, 0).run();
   let toolResult;
   await mocked(async () => { await agentAnswer(e, { latest: source, batch: [source], recent: [source], names, refs: new Map(), background: true }); }, (body, n) => {
@@ -77,7 +78,7 @@ test("A4 create_file_task accepts rendered mention only; rejects synthetic mater
   for (const quote of ["[图片]", "卡片标题"]) assert.equal((await taskEvidence("create_file_task", quote)).unavailable, true);
 });
 test("A5 prepare_project_task accepts rendered mention and rejects card evidence", async () => {
-  const accepted = await taskEvidence("prepare_project_task", "@小王 帮我整理成文档");
+  const accepted = await taskEvidence("prepare_project_task", "@小王 帮我建个任务整理文档");
   assert.equal(accepted.accepted, true);
   assert.equal((await taskEvidence("prepare_project_task", "卡片标题")).unavailable, true);
 });
@@ -310,7 +311,7 @@ test("P2-3 cached mention names match view evidence for correction, file and pro
   assert.equal(view.quoteIn(source, "@其他人 帮我整理成文档", names), false);
   for (const quote of ["[图片]", "卡片标题", "转写内容"]) assert.equal(view.quoteIn(source, quote, names), false);
   for (const tool of ["create_file_task", "prepare_project_task", "remember_correction"]) {
-    const result = await taskEvidence(tool, v.text, "");
+    const result = await taskEvidence(tool, "@小王 " + evidenceRequest[tool], "");
     assert.equal(tool === "remember_correction" ? result.remembered : result.accepted, true, tool);
     assert.equal((await taskEvidence(tool, "[图片]", "")).unavailable, true, tool);
   }

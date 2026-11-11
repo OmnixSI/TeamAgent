@@ -1,3 +1,4 @@
+import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
@@ -592,6 +593,15 @@ export async function scout(e: any, p: any, s: Services) {
   );
 }
 
+async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: any, context: any, messages: any[]) {
+  const result = authorize(tool, quote, source, context, messages);
+  if (result.ok === false) {
+    await activity(e, "authz.denied", tool, source?.sender || "Bot", tool + ": " + result.reason);
+    throw new AuthorizationError(result.reason);
+  }
+  return result;
+}
+
 export async function agentAnswer(e: any, context: any) {
   const facts = (
     await e.DB.prepare(
@@ -857,6 +867,7 @@ export async function agentAnswer(e: any, context: any) {
         batchIds: context.batch?.map((m: any) => m.id) || [context.latest.id],
         mentioned: context.mentioned,
         videoWaited: context.videoWaited,
+        authz: { tainted: tainted(context, messages) },
         intent: context.intent,
         background: true,
         resume: { messages, pending: m, turn },
@@ -954,6 +965,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            await authorizeWrite(e, "remember_correction", a.quote, source, context, messages);
             result = await rememberCorrection(e, a, source, context.names);
             break;
           }
@@ -964,6 +976,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            await authorizeWrite(e, "create_file_task", a.request_quote, source, context, messages);
             if (
               !source?.id ||
               !(
@@ -1070,6 +1083,7 @@ export async function agentAnswer(e: any, context: any) {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
+            const authorization = await authorizeWrite(e, "prepare_project_task", a.request_quote, source, context, messages);
             if (
               !source?.id ||
               source.meta?.direct !== true ||
@@ -1088,7 +1102,7 @@ export async function agentAnswer(e: any, context: any) {
                 a.repo,
                 String(a.title).slice(0, 300),
                 String(a.detail).slice(0, 12000),
-                a.execute_requested === true
+                authorization.tainted ? "proposal" : a.execute_requested === true
                   ? a.complexity === "small"
                     ? "queued"
                     : "needs_human"
@@ -1172,10 +1186,10 @@ export async function agentAnswer(e: any, context: any) {
           default:
             result = { error: "unknown tool" };
         }
-      } catch {
+      } catch (error) {
         result = {
           unavailable: true,
-          reason: "未能获得资料，不能据此编造结论",
+          reason: error instanceof AuthorizationError ? error.message : "未能获得资料，不能据此编造结论",
         };
       }
       if (result?.accepted === true)
