@@ -1,3 +1,5 @@
+import { loadChatContext, buildViews } from "./context";
+import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
 import { model, activity, redact, utilityText } from "./runtime";
@@ -133,7 +135,7 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
       !(REPOS.includes(f.repo) || f.repo === "team") ||
       typeof f.evidence !== "string" ||
       !f.evidence.trim() ||
-      !source.body.includes(f.evidence) ||
+      !quoteIn(source, f.evidence) ||
       !["confirmed", "proposal"].includes(f.status)
     )
       continue;
@@ -216,19 +218,13 @@ export async function proactiveReply(e: any, p: any, s: Services) {
     .bind(p.source)
     .first();
   if (!source) return;
-  const recent = (
-    await e.DB.prepare(
-      "SELECT sender,body,ts FROM messages WHERE group_id=? ORDER BY ts DESC LIMIT 25",
-    )
-      .bind(source.group_id)
-      .all()
-  ).results.reverse();
+  const context = await loadChatContext(e, { groupId: source.group_id });
   const facts = (
     await e.DB.prepare(
       "SELECT repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 40",
     ).all()
   ).results;
-  const answer = await agentAnswer(e, { recent, facts, intent: p.context });
+  const answer = await agentAnswer(e, { ...context, facts, intent: p.context });
   await enqueueVoice(
     e,
     "semantic-" + source.id,
@@ -562,34 +558,14 @@ export async function agentAnswer(e: any, context: any) {
   ];
   const recentBot = (
     await e.DB.prepare(
-      "SELECT body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') ORDER BY created_at DESC LIMIT 10",
+      "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') ORDER BY created_at DESC LIMIT 10",
     ).all()
   ).results.reverse();
+  Object.assign(context, buildViews(context, recentBot));
   const learnedExpressions = await relevantExpressions(
     e,
     context.latest?.body || context.intent || "",
   );
-  const messageView = (m: any) => ({
-    id: m.id,
-    sender: m.sender,
-    body: String(m.body || "").slice(0, 3500),
-    ts: m.ts,
-    mentioned: m.mentioned,
-    meta: m.meta
-      ? {
-          direct: m.meta.direct,
-          addressedOther: m.meta.addressedOther,
-          forwarded: m.meta.forwarded
-            ? JSON.stringify(m.meta.forwarded).slice(0, 1800)
-            : undefined,
-          attachments: m.meta.attachments?.map((a: any) => ({
-            filename: a.filename,
-            content_type: a.content_type,
-          })),
-          urls: m.meta.urls,
-        }
-      : undefined,
-  });
   const recallQuery = [
     context.latest?.body,
     ...(context.batch || []).slice(-5).map((m: any) => m.body),
@@ -606,8 +582,8 @@ export async function agentAnswer(e: any, context: any) {
     ).values(),
   ].slice(0, 24);
   const promptContext = {
-    latest: context.latest ? messageView(context.latest) : undefined,
-    batch: context.batch?.map(messageView),
+    latest: context.latestView ? toPrompt(context.latestView) : undefined,
+    batch: context.batchViews.map(toPrompt),
     mentioned: context.mentioned,
     intent: context.intent,
   };
@@ -633,26 +609,7 @@ export async function agentAnswer(e: any, context: any) {
             "SELECT value FROM settings WHERE key='team_reflection'",
           ).first()
         )?.value,
-        conversation: [
-          ...(context.recent || []).map((m: any, i: number) => ({
-            role: "member",
-            id: m.id,
-            sender: m.sender,
-            body: String(m.body).slice(
-              0,
-              i >= (context.recent || []).length - 4 ? 1800 : 500,
-            ),
-            at: Date.parse(m.ts),
-          })),
-          ...recentBot.map((m: any) => ({
-            role: "bot",
-            body: m.body,
-            at: m.created_at,
-            replyTo: m.msg_id,
-          })),
-        ]
-          .sort((a: any, b: any) => a.at - b.at)
-          .slice(-32),
+        conversation: buildConversation(context.recentViews, recentBot.map(botView)).map(toPrompt),
         recentBot,
         alreadyReportedCI: (
           await e.DB.prepare(
@@ -731,6 +688,7 @@ export async function agentAnswer(e: any, context: any) {
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
         !!context.mentioned ||
+        context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
           recentBot.some(
             (r: any) => r.body.trim() === String(q.content || "").trim(),
@@ -810,7 +768,7 @@ export async function agentAnswer(e: any, context: any) {
               ) ||
               typeof a.request_quote !== "string" ||
               !a.request_quote.trim() ||
-              !source.body.includes(a.request_quote)
+              !quoteIn(source, a.request_quote)
             )
               throw Error("需要本群当前发言中的明确文件交办原话");
             const recent = (
@@ -914,7 +872,7 @@ export async function agentAnswer(e: any, context: any) {
               !REPOS.includes(a.repo) ||
               typeof a.request_quote !== "string" ||
               !a.request_quote.trim() ||
-              !source.body.includes(a.request_quote)
+              !quoteIn(source, a.request_quote)
             )
               throw Error("需要明确本群直接交办");
             const id = "qq-" + source.id;

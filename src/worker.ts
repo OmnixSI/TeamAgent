@@ -1,4 +1,7 @@
 import { TEAM } from "./config";
+import { parseInbound } from "./inbound";
+import { loadChatContext } from "./context";
+import { viewMessage } from "./view";
 import {
   nameLogin,
   provisionNames,
@@ -219,14 +222,20 @@ async function receive(r: Request, e: Env) {
     return json({ op: 12, d: 0 });
   }
 
-  const mentioned =
-    p.t === "GROUP_AT_MESSAGE_CREATE" || m.mentions?.some((x: any) => x.is_you);
-  const text = redact(String(m.content || ""))
-    .replace(/^\s*<@!?[^>]+>\s*/, "")
-    .trim();
+  const ib = parseInbound(p.t, m);
+  const mentioned = p.t === "GROUP_AT_MESSAGE_CREATE" || ib.mentionsBot;
+  const text = ib.body;
   const direct =
     !m.msg_elements?.length && (!m.message_type || m.message_type === 0);
   const c = direct ? command(text) : null;
+  const ref = ib.refMsgIdx
+    ? await e.DB.prepare(
+        "SELECT r.kind,r.target_id,m.sender AS author_id FROM message_refs r LEFT JOIN messages m ON r.kind='member' AND m.id=r.target_id WHERE r.ref_idx=? AND r.group_id=?",
+      ).bind(ib.refMsgIdx, m.group_openid).first()
+    : undefined;
+  const replyTo = ref
+    ? { kind: ref.kind, targetId: ref.target_id, authorId: ref.kind === "bot" ? "bot" : ref.author_id, ...(ref.kind === "member" && ib.quoted?.authorName ? { authorName: ib.quoted.authorName } : {}) }
+    : ib.quoted ? { kind: "unknown", authorId: ib.quoted.authorId, authorName: ib.quoted.authorName, text: ib.quoted.text.slice(0, 200) } : undefined;
   const inserted = await e.DB.prepare(
     "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,0) RETURNING id",
   )
@@ -239,7 +248,7 @@ async function receive(r: Request, e: Env) {
       mentioned ? 1 : 0,
     )
     .first();
-  await e.DB.prepare("INSERT OR IGNORE INTO message_meta VALUES(?,?)")
+  const metadata = e.DB.prepare("INSERT OR IGNORE INTO message_meta VALUES(?,?)")
     .bind(
       m.id,
       JSON.stringify(
@@ -255,12 +264,29 @@ async function receive(r: Request, e: Env) {
             (/^\s*<@!?[^>]+>/.test(String(m.content || "")) ||
               m.mentions?.some((v: any) => !v.is_you)),
           urls: extractUrls(text),
+          mentions: ib.mentions,
+          msgIdx: ib.msgIdx,
+          refMsgIdx: ib.refMsgIdx,
+          replyTo,
+          quoted: ib.quoted,
+          cardView: ib.card,
+          media: ib.media,
+          bili: ib.bili,
+          ownUrls: ib.ownUrls,
+          quotedUrls: ib.quotedUrls,
+          placeholder: ib.placeholder,
         }),
       ),
-    )
-    .run();
+    );
+  await e.DB.batch([
+    metadata,
+    ...(ib.msgIdx ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'member',?,?,?)").bind(ib.msgIdx, m.id, m.group_openid, Date.now())] : []),
+    ...[{ id: ib.senderId, name: ib.senderName }, ...ib.mentions.filter(v => v.name).slice(0, 5)]
+      .filter(v => v.name)
+      .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
+  ]);
   // Quoted bot output and old forwarded material are context, never automatic reprocessing triggers.
-  const urls = extractUrls(text + " " + JSON.stringify(m.ark_data || {}));
+  const urls = ib.ownUrls;
   const videoUrls = urls.filter((u: string) =>
     /bilibili\.com|b23\.tv|youtube\.com|youtu\.be|vimeo\.com/i.test(u),
   );
@@ -490,27 +516,11 @@ async function processJob(e: Env, id: string) {
           .bind(p.latestId)
           .first();
         if (!latest) throw Error("原始消息不可用");
-        p.latest = { ...latest, meta: JSON.parse(latest.metadata || "{}") };
-        const ids = p.batchIds.slice(0, 60);
-        p.batch = (
-          await e.DB.prepare(
-            "SELECT m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.id IN (" +
-              ids.map(() => "?").join(",") +
-              ") ORDER BY m.rowid",
-          )
-            .bind(latest.group_id, ...ids)
-            .all()
-        ).results.map((m: any) => ({
-          ...m,
-          meta: JSON.parse(m.metadata || "{}"),
+        Object.assign(p, await loadChatContext(e, {
+          groupId: latest.group_id,
+          latestId: p.latestId,
+          batchIds: p.batchIds.slice(0, 60),
         }));
-        p.recent = (
-          await e.DB.prepare(
-            "SELECT id,sender,substr(body,1,3500) AS body,ts FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 16",
-          )
-            .bind(latest.group_id)
-            .all()
-        ).results.reverse();
       }
       const answer = await agentAnswer(e, p);
       if (decodeVoice(answer).text !== "[[SILENT]]")
@@ -571,7 +581,7 @@ async function processJob(e: Env, id: string) {
       }
     }
     if (claim.kind === "voice_notice") {
-      const m = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
+      const m = await e.DB.prepare("SELECT m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=?")
         .bind(p.message)
         .first();
       if (m) {
@@ -583,7 +593,7 @@ async function processJob(e: Env, id: string) {
               p.status ||
               "资料已整理；只报告实际结果，附件是否送达以交付状态为准。正式通知最多3句。",
           },
-          { latest: m },
+          { latest: m, latestView: viewMessage(m, new Map(), new Map()) },
         );
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
@@ -607,31 +617,12 @@ async function processJob(e: Env, id: string) {
           .run();
         return;
       }
-      const recent = (
-        await e.DB.prepare(
-          "SELECT m.rowid AS ordinal,m.id,m.group_id,m.sender,m.body,m.ts,m.mentioned,mm.json AS metadata,n.body AS analysed_media FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id LEFT JOIN media_notes n ON n.id=m.id WHERE m.group_id=? ORDER BY m.rowid DESC LIMIT 24",
-        )
-          .bind(m.group_id)
-          .all()
-      ).results.reverse();
-      const pendingRows = (
-        await e.DB.prepare(
-          "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? AND m.rowid>? ORDER BY m.rowid LIMIT 60",
-        )
-          .bind(m.group_id, cursor)
-          .all()
-      ).results;
-      const batch = pendingRows.map((r: any) => ({
-        ...r,
-        meta: JSON.parse(r.metadata || "{}"),
-      }));
-      if (!batch.length) return;
-      const latest = batch[batch.length - 1];
+      const context = await loadChatContext(e, { groupId: m.group_id, cursor });
+      const { batch, latest } = context;
+      if (!batch.length || !latest) return;
       const modelStarted = Date.now();
       const answer = await agentAnswer(e, {
-        recent,
-        batch,
-        latest,
+        ...context,
         mentioned: batch.some((r: any) => r.mentioned),
       });
       if (decodeVoice(answer).text !== "[[SILENT]]")
@@ -900,6 +891,9 @@ async function sendOutbox(e: Env) {
         e.DB.prepare(
           "UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?",
         ).bind(response.status, String(result?.code || ""), o.id),
+        ...(status === "sent" && typeof result?.ext_info?.ref_idx === "string"
+          ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'bot',?,?,?)").bind(result.ext_info.ref_idx, o.id, o.group_id, Date.now())]
+          : []),
       ]);
       if (response.status === 401) qqToken = undefined;
     } catch {

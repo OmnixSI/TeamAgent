@@ -1,5 +1,6 @@
 import settings from "../config/voice.json";
 import { model } from "./runtime";
+import { toPrompt } from "./view";
 /** Independent group voice. Tool results are facts, never a change to this persona. */
 export const VOICE = settings.text;
 export type VoiceMode = "banter" | "work" | "care";
@@ -94,8 +95,8 @@ export async function speakBrief(e: any, brief: any, context: any) {
                   ).first()
                 )?.value
               : undefined,
-            latest: context.latest?.body || context.intent,
-            recent: context.recent?.slice(-6),
+            latest: context.latestView?.text ?? context.latest?.body ?? context.intent,
+            recent: (context.recentViews ?? []).slice(-6).map(toPrompt),
           }),
         },
       ],

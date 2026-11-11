@@ -44,3 +44,6 @@ CREATE TABLE IF NOT EXISTS task_claims(task_id TEXT NOT NULL,version INTEGER NOT
 CREATE TABLE IF NOT EXISTS ci_incidents(id TEXT PRIMARY KEY,scope TEXT NOT NULL,cause TEXT NOT NULL,repo TEXT NOT NULL,check_name TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'open',cycle INTEGER NOT NULL DEFAULT 1,notified_cycle INTEGER NOT NULL DEFAULT 0,check_json TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS ci_observations(repo TEXT NOT NULL,check_name TEXT NOT NULL,incident_id TEXT,conclusion TEXT NOT NULL,check_id TEXT,head_sha TEXT,updated_at INTEGER NOT NULL,PRIMARY KEY(repo,check_name));
 CREATE INDEX IF NOT EXISTS ci_observation_incident ON ci_observations(incident_id,conclusion);
+
+CREATE TABLE IF NOT EXISTS message_refs(ref_idx TEXT PRIMARY KEY,kind TEXT NOT NULL,target_id TEXT NOT NULL,group_id TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS member_names(member_id TEXT PRIMARY KEY,name TEXT NOT NULL,source TEXT NOT NULL,updated_at TEXT NOT NULL);
