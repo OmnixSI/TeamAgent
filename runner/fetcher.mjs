@@ -9,6 +9,7 @@ import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const MIXIN=[46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52];
+const UA='curl/8.7.1';
 const BV=/^BV[0-9A-Za-z]{10}$/;
 const SHORT=/^[0-9A-Za-z]{4,12}$/;
 const blocked=new BlockList();
@@ -52,21 +53,21 @@ function allowed(raw,kind){
  if(!ok)throw Error('blocked host');return u;
 }
 export function createFetchClient(options={}){
- const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random;
+ const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random,log=options.log||(()=>{});
  const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
  const knownSecrets=new Set(Object.values(cookies).filter(x=>typeof x==='string'&&x));
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
- const rate=()=>{const slot=serial.then(async()=>{if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
- function risk(hit){riskCount=hit?riskCount+1:0;if(riskCount>=2)pausedUntil=now()+600000;}
+ const rate=()=>{const slot=serial.then(async()=>{if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
+ function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2)pausedUntil=now()+600000;}
  async function get(raw,kind){
    const u=allowed(raw,kind);await rate();
    // Fresh headers per request: never reuse the API Cookie for a subtitle/short URL.
-   const headers={'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36','Referer':'https://www.bilibili.com/','Accept':'application/json','Accept-Encoding':'identity'};
+   const headers={'User-Agent':UA,'Referer':'https://www.bilibili.com/','Accept':'application/json','Accept-Encoding':'identity'};
    if(kind==='api'){const values=['buvid3','SESSDATA'].filter(k=>typeof cookies[k]==='string'&&cookies[k]);if(values.length)headers.Cookie=values.map(k=>k+'='+cookies[k]).join('; ');}
    return new Promise((resolveResult,reject)=>{
      let settled=false,timer;
-     const fail=()=>{if(!settled){settled=true;clearTimeout(timer);reject(Error(now()<pausedUntil?'风控':'抓取失败'));}};
+     const fail=(error)=>{if(!settled){settled=true;clearTimeout(timer);reject(error instanceof Error?error:Error(now()<pausedUntil?'风控':'抓取失败'));}};
      const req=request({host:u.hostname,servername:u.hostname,path:u.pathname+u.search,method:'GET',headers,lookup,agent:false,timeout:8000},res=>{
        const chunks=[];let size=0;
        res.on('error',fail);res.on('aborted',fail);
@@ -75,8 +76,9 @@ export function createFetchClient(options={}){
          if(settled)return;
          const status=res.statusCode;
          let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
-         const hit=status===412||[-352,-412].includes(data?.code);risk(hit);
-         if(hit||(!(status>=200&&status<300)&&!(kind==='short'&&status>=300&&status<400))){fail();return;}
+         log('fetch '+kind+' '+u.pathname+' status='+status);
+         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
+         if(hit||(!(status>=200&&status<300)&&!(kind==='short'&&status>=300&&status<400))){const error=Error(now()<pausedUntil?'风控':'抓取失败');error.status=status;error.code=data?.code;fail(error);return;}
          settled=true;clearTimeout(timer);resolveResult({status,headers:res.headers,data});
        });
      });
@@ -103,27 +105,37 @@ export function createFetchClient(options={}){
      if(target.hostname!=='b23.tv')throw Error('短链无效');u=target;
    }throw Error('短链无效');
  }
+ async function refreshBuvid(force=false){
+   if(!force&&cookies.buvid3&&now()-buvidAt<86400000)return;
+   const spi=await biliApi('/x/frontend/finger/spi');
+   if(typeof spi.data?.b_3==='string'){cookies.buvid3=spi.data.b_3;knownSecrets.add(spi.data.b_3);buvidAt=now();}
+ }
  async function biliLight(ref){
    if(!BV.test(ref)&&!SHORT.test(ref))throw Error('无效视频编号');
    const bvid=BV.test(ref)?ref:await resolveShort(ref);
-   if(now()-buvidAt>=86400000){const spi=await biliApi('/x/frontend/finger/spi');if(typeof spi.data?.b_3==='string'){cookies.buvid3=spi.data.b_3;knownSecrets.add(spi.data.b_3);buvidAt=now();}}
+   await refreshBuvid();
    if(!wbi||now()-wbiAt>=43200000){const nav=await biliApi('/x/web-interface/nav');const keys=nav.data?.wbi_img;if(keys){wbi=[keys.img_url,keys.sub_url].map(x=>new URL(x).pathname.split('/').at(-1).split('.')[0]);wbiAt=now();}}
-   const view=await biliApi('/x/web-interface/view',{bvid});if(view.code!==0||!view.data)throw Error('视频信息未读到');
+   let view;
+   try{view=await biliApi('/x/web-interface/view',{bvid});}
+   catch(error){if(error.status!==412&&error.code!==-412)throw error;await refreshBuvid(true);view=await biliApi('/x/web-interface/view',{bvid});}
+   if(view.code!==0||!view.data)throw Error('视频信息未读到');
    const v=view.data,cid=v.pages?.[0]?.cid||v.cid;
-   let subtitle=null,subtitle_lang=null;
+   let subtitle=null,subtitle_lang=null,subtitle_status='unavailable';
    if(wbi&&cid){
+     subtitle_status='none';
      try{
        const player=await biliApi('/x/player/wbi/v2',wbiSign({bvid,cid},...wbi,Math.floor(now()/1000)));
        if(player.code===0){
          const list=player.data?.subtitle?.subtitles||[];
          const selected=list.find(s=>['zh-CN','zh-Hans','ai-zh'].includes(s.lan))||list[0];
-         if(selected?.subtitle_url){const url=selected.subtitle_url.startsWith('//')?'https:'+selected.subtitle_url:selected.subtitle_url;const sub=await biliSubtitle(url);subtitle=(sub.body||[]).map(x=>String(x.content||'')).join(' ').slice(0,6000)||null;subtitle_lang=selected.lan||null;}
-       }
-     }catch(error){if(now()<pausedUntil)throw error;}
+         if(selected?.subtitle_url){const url=selected.subtitle_url.startsWith('//')?'https:'+selected.subtitle_url:selected.subtitle_url;const sub=await biliSubtitle(url);subtitle=(sub.body||[]).map(x=>String(x.content||'')).join(' ').slice(0,6000)||null;subtitle_lang=selected.lan||null;subtitle_status=subtitle?'ok':'none';}
+         else if(player.data?.need_login_subtitle)subtitle_status='login_required';
+       }else subtitle_status='unavailable';
+     }catch(error){if(now()<pausedUntil)throw error;subtitle_status='unavailable';}
    }
    let comments=[];
    try{const reply=await biliApi('/x/v2/reply',{type:1,oid:v.aid,sort:1,ps:20});if(reply.code===0){const list=[...(reply.data?.hots||[]),...(reply.data?.replies||[])];const unique=[...new Map(list.map(x=>[x.rpid??(x.member?.uname+'\0'+x.content?.message),x])).values()];comments=unique.sort((a,b)=>(b.like||0)-(a.like||0)).slice(0,8).map(c=>({uname:String(c.member?.uname||'').slice(0,100),message:String(c.content?.message||'').slice(0,120)}));}}catch(error){if(now()<pausedUntil)throw error;}
-   return safe({bvid,title:String(v.title||'').slice(0,300),desc:String(v.desc||'').slice(0,1500),owner:String(v.owner?.name||'').slice(0,100),tname:String(v.tname||'').slice(0,100),duration:v.duration||0,pubdate:v.pubdate||0,stat:Object.fromEntries(['view','like','coin','favorite','reply'].map(k=>[k,v.stat?.[k]||0])),subtitle,subtitle_lang,comments,tier:'light',fetched_at:new Date(now()).toISOString()});
+   return safe({bvid,title:String(v.title||'').slice(0,300),desc:String(v.desc||'').slice(0,1500),owner:String(v.owner?.name||'').slice(0,100),tname:String(v.tname||'').slice(0,100),duration:v.duration||0,pubdate:v.pubdate||0,stat:Object.fromEntries(['view','like','coin','favorite','reply'].map(k=>[k,v.stat?.[k]||0])),subtitle,subtitle_lang,subtitle_status,comments,tier:'light',fetched_at:new Date(now()).toISOString()});
  }
  return {biliApi,biliSubtitle,resolveShort,biliLight,sanitize:safe};
 }
@@ -141,7 +153,8 @@ async function main(){
  const config=JSON.parse(await readFile(resolve(home,'config.json'),'utf8'));
  const base=new URL(config.url);if(base.protocol!=='https:'||base.username||base.password)throw Error('invalid cloud URL');
  let cookies={};try{cookies=JSON.parse(await readFile(resolve(home,'secrets/bili-cookie.json'),'utf8'));}catch{}
- const client=createFetchClient({cookies}),log=x=>console.log(client.sanitize(x));
+ const log=x=>console.log(x);
+ const client=createFetchClient({cookies,log});
  log('fetcher start '+createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).digest('hex').slice(0,12));
  const cloud=async(path,body)=>{
    const r=await fetch(new URL('/api/runner/fetch/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
