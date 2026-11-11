@@ -8,7 +8,10 @@ export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_w
 /** Once external material enters a turn, later tool calls cannot shed its taint. */
 export function tainted(context: any, messages: any[]): boolean {
   if (context.videoWaited || context.materials?.length || context.authz?.tainted) return true;
-  if ((context.batch || []).some((r: any) => r.meta?.quoted || r.meta?.forwarded?.length || r.meta?.cardView || r.meta?.replyTo)) return true;
+  if ((context.batch || []).some((r: any) => {
+    const meta = metaOf(r);
+    return meta.quoted || meta.forwarded?.length || meta.cardView || meta.replyTo || String(r.body || "").includes(UNTRUSTED_MARK);
+  })) return true;
   const names = new Map<string, string>();
   for (const m of messages) {
     if (m.role === "assistant") for (const call of m.tool_calls || []) names.set(call.id, call.function.name);
@@ -24,16 +27,16 @@ export const STRONG: Record<WriteTool, RegExp> = {
   remember_correction: /记住|记一下|记下来|以后(要|别|不要)|不是.{1,20}是|纠正(一下)?|说错了|搞错了/,
 };
 
-// Clean project work needs a request tone plus an action, not a task noun.
-// These broader forms must never authorize a tainted turn.
-const REQUEST_TONE = /^(?:(?:请|麻烦)(?:你)?|帮我|帮忙|给我|你来|去|劳驾|能不能(?:帮我|帮忙|帮|请你)?|可以(?:帮我|帮忙|帮|请你)|能帮我)/;
+// Both work tools use this language contract on clean turns. No artifact nouns.
+const REQUEST_TONE = /^(?:请问(?:你)?)?(?:(?:请|麻烦)(?:你)?|帮我|帮忙|给我|你来|去|劳驾|能不能(?:帮我|帮忙|帮|请你)?|可以(?:帮我|帮忙|帮|请你)|能帮我|把)/;
 const STRICT_REQUEST_TONE = /^(?:(?:请|麻烦)(?:你)?|帮我|帮忙|劳驾|能不能(?:帮我|帮忙|请你)?|(?:可以|能)帮我)/;
-const DEVELOPMENT_ACTION = /修复|修|实现|开发|写|做|出|整理|改|加|排查|重构|测试|部署|规划|设计|方案|文档/;
-const CLEAN_TASK = /记(一?[个条])?任务/;
+const WORK_ACTION = /修复|修|实现|开发|写|做|出|整理|改|加|排查|重构|测试|部署|规划|设计|方案|文档|看看|查一下|检查|看下/;
+const TASK_REQUEST = new RegExp(STRONG.prepare_project_task.source + "|记(一?[个条])?任务", "i");
+const CORRECTION = /^(?:(?:请|麻烦)(?:你)?(?:帮我)?|帮我)?(?:纠正(?:一下)?|不是.{1,80}是|应该叫|名字改成|其实是)/;
 const COMMAND_EXCLUSIONS = {
   statementTail: /^(?:了|过|的|很|挺|真|太|是|会|不|效果)|的(?:人)?是/,
   negatedLead: /(?:没有|不要|别|不用|不必|无需|不想|不需要|记住|记一下|记下来)/,
-  commentQuestion: /^(?:请问|为什么)|(?:有必要|合适|合理|值得|难不难|好不好|怎么样|是谁|是不是|对不对)(?:吗|呢|么)?$/,
+  commentQuestion: /^为什么|(?:有必要|合适|合理|值得|难不难|好不好|怎么样|是谁|是不是|对不对)(?:吗|呢|么)?$/,
   reportedLead: /^(?:上次|昨天|之前|曾经|已经|刚才)/,
 };
 
@@ -45,24 +48,42 @@ function imperativeMatch(clause: string, match: RegExpExecArray, dirty: boolean)
     /^(?:看完|读完|看了)[\s\S]{0,60}(?:帮我|帮忙|请你)$/.test(lead);
 }
 
-/** An action mentioned in a statement is not an instruction to perform it. */
-function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
+function ownClauses(text: string): string[] {
   // Reported speech and code are evidence, never the speaker's own command.
   const own = text.replace(/```[\s\S]*?```|`[^`]*`|“[^”]*”|「[^」]*」|"[^"]*"|'[^']*'/g, "");
-  return own.split(/[，,。！？!?；;\n]/).some(part => {
-    const clause = part.trim().replace(/^@\S+\s+/, "");
+  return own.split(/[，,。！？!?；;\n]/).map(part => part.trim().replace(/^@\S+\s+/, ""));
+}
+
+/** The only clean-turn work predicate, shared by file and project tools. */
+export function cleanWorkRequest(text: string): boolean {
+  return ownClauses(text).some(clause => {
     if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
-    const strict = STRONG[tool].exec(clause);
-    if (strict && imperativeMatch(clause, strict, dirty)) return true;
-    if (dirty || tool !== "prepare_project_task") return false;
-    const task = CLEAN_TASK.exec(clause);
+    const task = TASK_REQUEST.exec(clause);
     if (task && imperativeMatch(clause, task, false)) return true;
     const tone = REQUEST_TONE.exec(clause);
     if (!tone) return false;
-    const action = DEVELOPMENT_ACTION.exec(clause.slice(tone[0].length));
+    const action = WORK_ACTION.exec(clause.slice(tone[0].length));
     if (!action) return false;
     action.index += tone[0].length;
     return imperativeMatch(clause, action, false);
+  });
+}
+
+/** Clean work, explicit correction, and strict tainted authorization are separate intents. */
+function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
+  if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
+  return ownClauses(text).some(clause => {
+    if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
+    if (tool === "remember_correction") {
+      const correction = CORRECTION.exec(clause);
+      if (!correction || COMMAND_EXCLUSIONS.statementTail.test(clause.slice(correction[0].length))) return false;
+      // External material still cannot grant new forms of memory authorization.
+      if (!dirty) return true;
+      const strict = STRONG.remember_correction.exec(clause);
+      return !!strict && imperativeMatch(clause, strict, true);
+    }
+    const strict = STRONG[tool].exec(clause);
+    return !!strict && imperativeMatch(clause, strict, true);
   });
 }
 

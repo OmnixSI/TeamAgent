@@ -636,7 +636,7 @@ export async function agentAnswer(e: any, context: any) {
       function: {
         name: "remember_correction",
         description:
-          "仅在当前成员明确纠正项目代称、既有事实或你的习惯，或明确解释本群黑话时，用原话立即记住。普通推测不调用。",
+          "仅在当前成员用不是…是、应该叫、名字改成、纠正、其实是等明确纠正语气修正项目代称、既有事实或你的习惯时，用原话保存纠正。普通记住某个现象的陈述、转述和推测不调用。",
         parameters: {
           type: "object",
           properties: {

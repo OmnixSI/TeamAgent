@@ -671,7 +671,7 @@ async function processJob(e: Env, id: string) {
       }
       const sw = await loadSwitches(e);
       const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
-        && !preloaded.some(isDirectRequest)
+        && !preloaded.some((row: any) => isDirectRequest(row, { batch: preloaded }))
         && await unansweredProactive(e, m.group_id);
       const picks = !hardStop && visionProvider(e)
         ? pickImages(

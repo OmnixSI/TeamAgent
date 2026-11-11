@@ -1,4 +1,4 @@
-import { explicitWriteRequest } from "./authz";
+import { explicitWriteRequest, tainted } from "./authz";
 import { addressee, metaOf } from "./view";
 import { parseDecision } from "./rhythm";
 import { UNTRUSTED_RULE } from "./untrusted";
@@ -36,8 +36,9 @@ export function alreadySaid(text: string, recent: any[]) {
 }
 
 /** Routing hint only: tool execution still requires authorizeWrite and its original checks. */
-export function isDirectRequest(row: any): boolean {
+export function isDirectRequest(row: any, context: any = { batch: [row] }): boolean {
   const meta = metaOf(row), recipient = addressee(meta, new Map());
   if ((recipient && recipient !== "你") || meta.addressedOther) return false;
-  return explicitWriteRequest("create_file_task", row) || explicitWriteRequest("prepare_project_task", row);
+  const dirty = tainted(context, []);
+  return explicitWriteRequest("create_file_task", row, context.names, dirty) || explicitWriteRequest("prepare_project_task", row, context.names, dirty);
 }

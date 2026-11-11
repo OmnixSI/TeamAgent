@@ -55,7 +55,7 @@ test("A2 empty card/image/voice bodies stay empty; placeholders and ASR live in 
 test("A3 ASR cannot be correction evidence", async () => {
   await assert.rejects(rememberCorrection(env(), { repo: "team", quote: "明天开会", subject: "日程", predicate: "时间", value: "明天" }, { id: "voice", body: "", meta: { direct: true, media: [{ asr: "明天开会" }] } }), /需要当前发言中的逐字纠正依据/);
 });
-const evidenceRequest = { create_file_task: "帮我整理成文档", prepare_project_task: "帮我建个任务整理文档", remember_correction: "记住负责人是小王" };
+const evidenceRequest = { create_file_task: "帮我整理成文档", prepare_project_task: "帮我建个任务整理文档", remember_correction: "纠正负责人是小王" };
 async function taskEvidence(tool, quote, mentionName = "小王") {
   const e = await setup(), source = row("evidence", "U1", "<@U2> " + evidenceRequest[tool], { group_id: group, meta: { direct: true, can_request_artifact: true, mentions: [{ id: "U2", name: mentionName, isBot: false }], placeholder: "[图片]", cardView: card("卡片标题") } });
   await e.DB.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,0)").bind(source.id, group, source.sender, source.body, source.ts, 0).run();
