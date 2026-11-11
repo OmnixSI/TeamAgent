@@ -559,3 +559,15 @@ test('timing CLI is offline in rules-only mode, writes private results and fails
   const absent=cli(['--output',missing]);assert.equal(absent.status,1);assert.equal(existsSync(missing),false);
   assert.ok(!absent.stderr.includes('Bearer'));assert.ok(!absent.stderr.includes('sk-'));
 });
+test('P2-1 unparseable oldest timestamp cannot starve an older queued message',async()=>{
+  const e=await bound();
+  await qq(e,{...msg('invalid-oldest','问题的开头'),timestamp:'not-a-date'});
+  await qq(e,msg('invalid-middle','还有一个补充'));await qq(e,msg('invalid-newest','最后一句'));
+  await withAnswer(async seen=>{
+    await queue(e,'chat-invalid-middle');
+    const decisions=seen.filter(b=>!b.messages[0].content.includes('最后的嘴替模块'));
+    assert.equal(decisions.length,1);
+    assert.deepEqual(JSON.parse(decisions[0].messages[1].content).conversation.map(v=>v.id),['invalid-oldest','invalid-middle','invalid-newest']);
+  });
+  assert.equal(await setting(e,'chat_cursor'),'3');
+});

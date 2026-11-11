@@ -261,3 +261,31 @@ test('I12 video handoff is recorded before the W7 recovery path runs',async()=>{
   const decision=await e.DB.prepare("SELECT gate,action,forced FROM chat_decisions WHERE id='chat-question'").first();
   assert.equal(decision.gate,'video');assert.equal(decision.action,'reply');assert.equal(decision.forced,1);
 });
+test('P2-2 interrupted video handoff survives a newer latest message without another reply',async()=>{
+  const e=await setup();
+  await qq(e,msg('handoff-old','视频讲了啥 https://www.bilibili.com/video/'+BV),'GROUP_AT_MESSAGE_CREATE');
+  const prepare=e.DB.prepare.bind(e.DB);let crash=true;
+  e.DB.prepare=sql=>{
+    const statement=prepare(sql),bind=statement.bind;
+    statement.bind=(...args)=>{
+      if(crash&&sql.startsWith('INSERT INTO settings')&&args[0]==='chat_cursor'){
+        crash=false;throw Error('interrupted after video wait commit');
+      }
+      return bind(...args);
+    };
+    return statement;
+  };
+  try{await queue(e,'chat-handoff-old');}finally{e.DB.prepare=prepare;}
+  const wait=(await rows(e,'video_waits'))[0];assert.ok(wait);
+  assert.equal((await rows(e,'jobs')).find(j=>j.id==='chat-handoff-old').status,'pending');
+  await qq(e,{...msg('handoff-new','收到，请继续'),author:{id:'member2'}});
+  await mockModel(async seen=>{
+    await queue(e,'chat-handoff-old');await queue(e,'chat-handoff-new');
+    const prematureModelCalls=seen.length;
+    await report(e);await queue(e,'video-'+wait.id);
+    assert.equal((await rows(e,'outbox')).length,1,'the original video question must produce just one reply');
+    assert.equal(prematureModelCalls,0,'a committed video handoff still owns the whole pending batch');
+    assert.equal((await rows(e,'outbox'))[0].msg_id,'handoff-old');
+    assert.equal((await rows(e,'video_waits')).length,1);
+  });
+});

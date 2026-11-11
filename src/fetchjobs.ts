@@ -54,9 +54,11 @@ export async function requestBili(e: any, ref: string, tier: string, waiter: str
   await fetchStatement(e, ref, tier, waiter).run();
 }
 /** A committed handoff remains authoritative even after its reply finishes. */
-export async function videoWaitExists(e: any, groupId: string, latestId: string): Promise<boolean> {
-  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id=? LIMIT 1")
-    .bind(groupId, latestId).first());
+export async function videoWaitExists(e: any, groupId: string, latestId: string | string[]): Promise<boolean> {
+  const ids = Array.isArray(latestId) ? latestId : [latestId];
+  if (!ids.length) return false;
+  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id IN (" + ids.map(() => "?").join(",") + ") LIMIT 1")
+    .bind(groupId, ...ids).first());
 }
 export async function startVideoWait(e: any, x: { groupId: string; ref: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
   if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;

@@ -650,7 +650,7 @@ async function processJob(e: Env, id: string) {
         "SELECT (SELECT id FROM messages WHERE group_id=?1 ORDER BY rowid DESC LIMIT 1) AS newest_id,(SELECT ts FROM messages WHERE group_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 1) AS oldest_ts",
       ).bind(m.group_id, cursor).first();
       const newest = head.newest_id ? { id: head.newest_id } : null;
-      const oldestAt = Date.parse(head.oldest_ts) || Date.now();
+      const oldestAt = Date.parse(head.oldest_ts) || 0;
       if (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() })) {
         await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
@@ -696,7 +696,7 @@ async function processJob(e: Env, id: string) {
       const { batch, latest } = context;
       if (!batch.length || !latest) return;
       const mentioned = batch.some((r: any) => r.mentioned);
-      const transferred = await videoWaitExists(e, m.group_id, latest.id);
+      const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
