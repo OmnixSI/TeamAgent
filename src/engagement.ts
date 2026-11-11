@@ -1,5 +1,5 @@
-import { STRONG } from "./authz";
-import { addressee, displayText, metaOf } from "./view";
+import { explicitWriteRequest } from "./authz";
+import { addressee, metaOf } from "./view";
 import { parseDecision } from "./rhythm";
 import { UNTRUSTED_RULE } from "./untrusted";
 import settings from "../config/participation.json";
@@ -38,7 +38,6 @@ export function alreadySaid(text: string, recent: any[]) {
 /** Routing hint only: tool execution still requires authorizeWrite and its original checks. */
 export function isDirectRequest(row: any): boolean {
   const meta = metaOf(row), recipient = addressee(meta, new Map());
-  if (recipient && recipient !== "你" || meta.addressedOther) return false;
-  const text = displayText(String(row.body || ""), meta.mentions || []);
-  return Object.values(STRONG).some(rule => rule.test(text));
+  if ((recipient && recipient !== "你") || meta.addressedOther) return false;
+  return explicitWriteRequest("create_file_task", row) || explicitWriteRequest("prepare_project_task", row);
 }

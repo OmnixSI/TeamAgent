@@ -145,3 +145,36 @@ test('Authorization errors are specific while unrelated tool exceptions stay fil
     assert.ok(!JSON.stringify(seen).includes('private-diagnostic-must-not-escape'));
   });
 });
+
+
+test('review clean tool calls cannot promote history or a cropped quote into execution',async()=>{
+  for(const [body,quote] of [['上次我交给本地做了，效果不错','上次我交给本地做了，效果不错'],['上次我交给本地做了，效果不错','交给本地做'],['记住昨天创建任务的事','创建任务'],['我没有请你建个任务','请你建个任务'],['他说“帮我建个任务”','帮我建个任务']]){
+    const e=env(),context=await source(e,body);
+    await mocked([project(quote)],()=>agentAnswer(e,context));
+    assert.equal((await rows(e,'tasks')).length,0,body+' / '+quote);
+    assert.ok((await rows(e,'activity')).some(a=>a.kind==='authz.denied'),body);
+  }
+});
+test('review clean writes require source and quote to carry the same explicit tool request',async()=>{
+  for(const [body,name,args,accepted] of [
+    ['昨天整理成文档了','create_file_task',{request_quote:'整理成文档'},false],
+    ['帮我整理成文档','create_file_task',{request_quote:'帮我整理成文档'},true],
+    ['我记住他叫小王了','remember_correction',{quote:'记住他叫小王'},false],
+    ['记住我叫小王','remember_correction',{quote:'记住我叫小王'},true],
+  ]){
+    const e=env(),context=await source(e,body);
+    await mocked([call(name,{source_id:'current',title:'文档',instructions:'整理',repo:'team',subject:'我',predicate:'名字',value:'小王',...args})],()=>agentAnswer(e,context));
+    const count=name==='create_file_task'?(await rows(e,'jobs')).filter(j=>j.kind==='media').length:(await rows(e,'facts')).length;
+    assert.equal(count,accepted?1:0,body);
+  }
+});
+test('review authorization validates complete original text even when the model crops out past tense',()=>{
+  for(const body of ['上次我交给本地做了，效果不错','我已经建个任务了','建个任务挺难的','记住昨天创建任务的事']){
+    const source={id:'current',body,meta:{direct:true}};
+    for(const quote of [body,body.includes('建个任务')?'建个任务':'交给本地做'])assert.equal(az.authorize('prepare_project_task',quote,source,{batch:[source]},[]).ok,false,body);
+  }
+  for(const body of ['建个任务','帮我建个任务','请交给本地做','把视频内容整理成文档','看完这个视频帮我建个任务跟进一下']){
+    const tool=body.includes('文档')?'create_file_task':'prepare_project_task',source={id:'current',body,meta:{direct:true}};
+    assert.equal(az.authorize(tool,body,source,{batch:[source]},[]).ok,true,body);
+  }
+});
