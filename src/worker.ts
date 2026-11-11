@@ -1,3 +1,4 @@
+import { isDirectRequest } from "./engagement";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -670,6 +671,7 @@ async function processJob(e: Env, id: string) {
       }
       const sw = await loadSwitches(e);
       const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
+        && !preloaded.some(isDirectRequest)
         && await unansweredProactive(e, m.group_id);
       const picks = !hardStop && visionProvider(e)
         ? pickImages(
