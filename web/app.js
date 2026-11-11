@@ -42,7 +42,17 @@ function el(tag, text, cls) {
 }
 function button(text, fn, cls) {
   const b = el("button", text, cls);
-  b.onclick = () => Promise.resolve().then(fn).catch(error);
+  b.onclick = async () => {
+    if (b.disabled) return;
+    b.disabled = true;
+    try {
+      await fn();
+    } catch (e) {
+      error(e);
+    } finally {
+      b.disabled = false;
+    }
+  };
   return b;
 }
 function link(text, url) {
@@ -217,7 +227,7 @@ function renderStatus() {
   if (c.chatTiming)
     $("connection").append(
       badge(
-        "最近一轮 " +
+        "最近快聊处理 " +
           Math.round((c.chatTiming.queueMs + c.chatTiming.modelMs) / 1000) +
           " 秒",
       ),

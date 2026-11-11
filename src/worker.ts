@@ -1,5 +1,6 @@
+import { queueFor } from "./lanes";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
-import { model, activity, redact, promptData } from "./runtime";
+import { model, activity, redact, promptData, utilityText } from "./runtime";
 import {
   enqueueVoice,
   messageSequence,
@@ -20,6 +21,7 @@ type Env = {
   DB: any;
   WORK?: any;
   CHAT?: any;
+  TOOLS?: any;
   ADMIN_TOKEN: string;
   RUNNER_TOKEN: string;
   DEEPSEEK_API_KEY: string;
@@ -89,8 +91,7 @@ async function job(e: Env, id: string, kind: string, payload: any) {
   )
     .bind(id, kind, JSON.stringify(payload), Date.now())
     .run();
-  const queue =
-    ["chat", "voice_notice"].includes(kind) && e.CHAT ? e.CHAT : e.WORK;
+  const queue = queueFor(e, kind, payload);
   if (queue) await queue.send({ id });
 }
 async function qqKey(secret: string) {
@@ -469,15 +470,20 @@ async function processJob(e: Env, id: string) {
       const text = await llm(
         e,
         "chat",
-        "根据实际CI检查和已同步项目资料做一次只读初步排查，最多450字。分清已知错误与可能原因，给最便宜的核实步骤；没有日志时只说明可确认的检查状态，不编造根因。不要说已经修复或主动开发。",
+        "根据实际CI检查和已同步项目资料做一次只读初步排查，最多450字。分清已知错误与可能原因，给最便宜的核实步骤；优先引用annotation中的具体失败信息；没有证据时不罗列猜测，不编造根因。不要说已经修复或主动开发。",
         { repo: p.repo, check: p.check, context },
       );
       const urls = publicCIUrl(p.check.html_url) ? [p.check.html_url] : [];
+      const previous = await e.DB.prepare(
+        "SELECT id FROM discoveries WHERE repo=? AND title=? AND urls=? LIMIT 1",
+      )
+        .bind(p.repo, "CI排查 · " + p.check.name, JSON.stringify(urls))
+        .first();
       await e.DB.prepare(
-        "INSERT OR IGNORE INTO discoveries(id,repo,title,body,urls,created_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO discoveries(id,repo,title,body,urls,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,created_at=excluded.created_at",
       )
         .bind(
-          id,
+          previous?.id || p.incident || id,
           p.repo,
           "CI排查 · " + p.check.name,
           text,
@@ -959,19 +965,14 @@ async function scheduled(e: Env) {
   }
   const pending = (
     await e.DB.prepare(
-      "SELECT id FROM jobs WHERE kind!='media' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) LIMIT 5",
+      "SELECT id,kind,payload FROM jobs WHERE kind!='media' AND attempts<3 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now())
       .all()
   ).results;
   for (const j of pending) {
     if (e.WORK) {
-      const row = await e.DB.prepare("SELECT kind FROM jobs WHERE id=?")
-        .bind(j.id)
-        .first();
-      await (
-        ["chat", "voice_notice"].includes(row.kind) && e.CHAT ? e.CHAT : e.WORK
-      ).send(j);
+      await queueFor(e, j.kind, JSON.parse(j.payload)).send({ id: j.id });
     } else await processJob(e, j.id);
   }
   await e.DB.prepare(
@@ -1322,13 +1323,7 @@ async function api(r: Request, e: Env) {
             : "资料分析已完成",
         b.id + "-processing",
       );
-      const rawBody = redact(String(b.result));
-      const body =
-        /timed out|Traceback|\/Users\/|Command \[|--permission-mode/.test(
-          rawBody,
-        )
-          ? "这份资料暂时没处理完，输入已保留，可以在看板接手。不会自动重复开工。"
-          : rawBody.slice(0, 18000);
+      const body = utilityText(b.result).slice(0, 18000);
       await e.DB.prepare("INSERT OR REPLACE INTO media_notes VALUES(?,?,?)")
         .bind(p.message, body, iso())
         .run();
@@ -1382,11 +1377,19 @@ async function api(r: Request, e: Env) {
               Date.now(),
             )
             .first();
-          if (fresh)
-            await job(e, key + "-triage", "ci_triage", {
+          const evidence = check.evidence || {};
+          if (
+            evidence.title ||
+            evidence.summary ||
+            evidence.annotations?.length
+          ) {
+            const digest = (await hash(JSON.stringify(evidence))).slice(0, 16);
+            await job(e, key + "-triage-" + digest, "ci_triage", {
               repo: b.repo,
               check: promptData(check),
+              incident: key,
             });
+          }
         }
       const old = await e.DB.prepare(
         "SELECT json,updated_at FROM repo_cache WHERE repo=?",
@@ -1658,7 +1661,7 @@ async function api(r: Request, e: Env) {
       title: payload.title,
       instructions: payload.instructions,
       source_id: payload.message,
-      result: task.result,
+      result: utilityText(task.result),
       delivery,
     });
   }
@@ -1791,7 +1794,10 @@ async function api(r: Request, e: Env) {
       facts: facts.results,
       dreams: dreams.results,
       expressions: expressions.results,
-      utilities: utilities.results,
+      utilities: utilities.results.map((r: any) => ({
+        ...r,
+        result: utilityText(r.result),
+      })),
       members: who.role === "owner" ? members.results : [],
       connection: {
         bound: !!(await setting(e, "group_id")),
@@ -1933,8 +1939,8 @@ async function api(r: Request, e: Env) {
         .bind(b.id)
         .run();
       await activity(e, "member.revoked", b.id, who.name, "撤销成员的所有会话");
-      await e.DB.prepare("UPDATE members SET revoked=1 WHERE id=?")
-        .bind(b.id)
+      await e.DB.prepare("UPDATE members SET revoked=1,token_hash=? WHERE id=?")
+        .bind(await hash(crypto.randomUUID() + crypto.randomUUID()), b.id)
         .run();
       return json({ ok: true });
     }

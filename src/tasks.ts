@@ -1,3 +1,4 @@
+import { queueFor } from "./lanes";
 import { activity, redact } from "./runtime";
 import { REPOS, validStatus } from "./policy";
 const iso = () => new Date().toISOString();
@@ -26,7 +27,8 @@ export async function requestPlan(
       "INSERT INTO task_plans VALUES(?,?,'pending','',?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,state='pending',updated_at=excluded.updated_at WHERE task_plans.job_id!=excluded.job_id",
     ).bind(t.id, id, iso()),
   ]);
-  if (e.WORK) await e.WORK.send({ id });
+  const lane = queueFor(e, "plan", { effort: important ? "max" : "high" });
+  if (lane) await lane.send({ id });
   await activity(
     e,
     "plan.queued",

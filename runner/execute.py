@@ -277,12 +277,15 @@ def main():
         heartbeat(t)
         run(["git", "push", "-u", "origin", branch], work)
         body = H / "pr-body.txt"
-        body.write_text(
-            "## 任务\n"
-            + t["title"]
-            + "\n\n"
-            + summary[:3000]
-            + "\n\n## 验证\n目录：`"
+        # Describe the published result, not the agent's earlier pre-commit lifecycle.
+        description = (
+            t["title"]
+            + "\n\n在独立任务分支完成变更，并运行以下自动验证。请评审后合并。\n\n"
+            + "## 任务与验收\n"
+            + t["detail"][:4000]
+            + "\n\n## 变更范围\n```text\n"
+            + diff
+            + "\n```\n\n## 验证\n目录：`"
             + str(test_dir.relative_to(work))
             + "`\n\n```text\n"
             + test.stdout[-4000:]
@@ -290,8 +293,14 @@ def main():
             + t["id"]
             + " · v"
             + str(t["version"])
-            + "\n\n[团队开发台](https://inkboard-team.inkboard-server.workers.dev) · 请评审后合并。"
+            + "\n\n[团队开发台](https://inkboard-team.inkboard-server.workers.dev)"
         )
+        description = re.sub(
+            r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,})",
+            "[凭据已隐藏]",
+            description,
+        )
+        body.write_text(description)
         existing = json.loads(
             run(
                 [

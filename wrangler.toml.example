@@ -31,3 +31,13 @@ max_retries = 2
 
 [build]
 command = "npm run build:web"
+
+[[queues.producers]]
+binding = "TOOLS"
+queue = "team-agent-tools"
+[[queues.consumers]]
+queue = "team-agent-tools"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 2

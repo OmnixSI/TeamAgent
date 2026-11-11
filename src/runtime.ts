@@ -14,6 +14,12 @@ export function redact(text: string): string {
 export function promptData(data: any) {
   return JSON.parse(redact(JSON.stringify(data)));
 }
+export function utilityText(value: any) {
+  const text = redact(String(value || ""));
+  if (/timed out|Traceback|Command \[|--permission-mode/.test(text))
+    return "这份资料处理超时或工具中断，原始输入与已有成果保留在开发台，需要成员接手。";
+  return text.replace(/\/Users\/[^\s\"'`<>，。\n]+/g, "[本机文件]");
+}
 export async function activity(
   e: any,
   kind: string,

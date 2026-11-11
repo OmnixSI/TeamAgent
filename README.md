@@ -59,7 +59,7 @@ npm run test:runner
 npm run check:ui
 ```
 
-Cloudflare 配置从 `wrangler.toml.example` 复制；先建 D1、两条免费档 Queues，再初始化 `schema.sql`。部署不自动写入密钥。
+Cloudflare 配置从 `wrangler.toml.example` 复制；先建 D1、三条免费档 Queues，再初始化 `schema.sql`。部署不自动写入密钥。
 
 ```sh
 cp wrangler.toml.example wrangler.toml

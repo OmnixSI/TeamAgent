@@ -1,5 +1,6 @@
+import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
-import { model, activity, redact } from "./runtime";
+import { model, activity, redact, utilityText } from "./runtime";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
@@ -404,6 +405,21 @@ export async function agentAnswer(e: any, context: any) {
     {
       type: "function",
       function: {
+        name: "get_work_status",
+        description:
+          "核对真实任务进度与已经处理的视频、PDF、表格结果。被问还没好、刚才资料讲什么时先查，不凭旧承诺猜。query用一个关键短语，可不填。",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            source_id: { type: "string" },
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
         name: "remember_correction",
         description:
           "仅在当前成员明确纠正项目代称、既有事实或你的习惯，或明确解释本群黑话时，用原话立即记住。普通推测不调用。",
@@ -617,11 +633,14 @@ export async function agentAnswer(e: any, context: any) {
           ).first()
         )?.value,
         conversation: [
-          ...(context.recent || []).map((m: any) => ({
+          ...(context.recent || []).map((m: any, i: number) => ({
             role: "member",
             id: m.id,
             sender: m.sender,
-            body: String(m.body).slice(0, 1800),
+            body: String(m.body).slice(
+              0,
+              i >= (context.recent || []).length - 4 ? 1800 : 500,
+            ),
             at: Date.parse(m.ts),
           })),
           ...recentBot.map((m: any) => ({
@@ -658,10 +677,14 @@ export async function agentAnswer(e: any, context: any) {
     }
     if (!m) throw Error("agent empty response");
     if (
-      m.tool_calls?.some((c: any) =>
-        ["search_web", "read_web"].includes(c.function.name),
+      m.tool_calls?.some(
+        (c: any) =>
+          !["remember_correction", "recall_memory", "get_work_status"].includes(
+            c.function.name,
+          ),
       ) &&
-      !context.background
+      !context.background &&
+      context.latest?.id
     ) {
       const id = "research-" + context.latest.id;
       const payload = {
@@ -677,7 +700,8 @@ export async function agentAnswer(e: any, context: any) {
       )
         .bind(id, "research", JSON.stringify(payload), Date.now())
         .run();
-      if (e.WORK) await e.WORK.send({ id });
+      const lane = queueFor(e, "research");
+      if (lane) await lane.send({ id });
       await activity(
         e,
         "research.queued",
@@ -691,7 +715,7 @@ export async function agentAnswer(e: any, context: any) {
       return speakBrief(
         e,
         {
-          facts: "已开始后台查资料，结果稍后单独回这条消息。不要写报告。",
+          facts: "已开始后台处理这件事，结果稍后单独回这条消息。不要写报告。",
           acceptedActions: [{ tool: "research", task: id }],
         },
         context,
@@ -730,6 +754,31 @@ export async function agentAnswer(e: any, context: any) {
         if (index >= 3) throw Error("本轮工具额度已用完");
         const a = JSON.parse(call.function.arguments);
         switch (call.function.name) {
+          case "get_work_status": {
+            const tasks = (
+              await e.DB.prepare(
+                "SELECT t.id,t.repo,t.title,t.status,t.assignee,p.state AS plan_state,t.updated_at FROM tasks t LEFT JOIN task_plans p ON p.task_id=t.id ORDER BY t.updated_at DESC LIMIT 5",
+              ).all()
+            ).results;
+            const query = String(a.query || "").slice(0, 150),
+              sourceId = String(a.source_id || "");
+            const materials = (
+              await e.DB.prepare(
+                "SELECT j.id,json_extract(j.payload,'$.title') AS title,json_extract(j.payload,'$.message') AS source_id,j.status,n.body AS result,d.status AS delivery_status,d.sent_count FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') LEFT JOIN deliveries d ON d.job_id=j.id LEFT JOIN messages m ON m.id=json_extract(j.payload,'$.message') WHERE j.kind='media' AND (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(COALESCE(m.body,''),?)>0) ORDER BY j.created_at DESC LIMIT 5",
+              )
+                .bind(sourceId, sourceId, query, query, query)
+                .all()
+            ).results;
+            result = {
+              tasks,
+              materials: materials.map((r: any) => ({
+                ...r,
+                result: utilityText(r.result).slice(0, 6000),
+              })),
+              board: "https://inkboard-team.inkboard-server.workers.dev",
+            };
+            break;
+          }
           case "remember_correction": {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||

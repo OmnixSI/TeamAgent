@@ -39,6 +39,7 @@ def cloud(path, body):
 
 
 last_sync = 0
+check_evidence = {}
 
 
 def sync_repos():
@@ -147,6 +148,40 @@ def sync_repos():
                     "title": str(output.get("title") or "")[:300],
                     "summary": str(output.get("summary") or "")[:3500],
                 }
+            if check.get("conclusion") in ["failure", "timed_out", "action_required"]:
+                evidence_key = (repo, check["id"], check.get("head_sha"))
+                if evidence_key not in check_evidence:
+                    annotation = subprocess.run(
+                        [
+                            "gh",
+                            "api",
+                            "repos/"
+                            + repo
+                            + "/check-runs/"
+                            + str(check["id"])
+                            + "/annotations?per_page=10",
+                        ],
+                        text=True,
+                        capture_output=True,
+                        timeout=20,
+                    )
+                    if annotation.returncode == 0:
+                        check_evidence[evidence_key] = [
+                            {
+                                "message": str(a.get("message") or "")[:1800],
+                                "path": a.get("path"),
+                                "level": a.get("annotation_level"),
+                            }
+                            for a in json.loads(annotation.stdout)
+                            if a.get("annotation_level") == "failure"
+                        ][:3]
+                if evidence_key in check_evidence:
+                    check.setdefault("evidence", {})["annotations"] = check_evidence[
+                        evidence_key
+                    ]
+        if len(check_evidence) > 100:
+            for k in list(check_evidence)[:-60]:
+                check_evidence.pop(k, None)
         cloud("context", {"repo": repo, "context": context})
     last_sync = time.time()
 

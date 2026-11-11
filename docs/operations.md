@@ -4,7 +4,7 @@
 
 ## 云端
 
-Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat 两条免费队列；聊天消费者并发1，工作消费者并发2，batch size1。工作任务不进入聊天消费者。
+Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条免费队列；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
 
 服务端密钥：ADMIN_TOKEN、RUNNER_TOKEN、DEEPSEEK_API_KEY、QQ_APP_ID、QQ_APP_SECRET。用 Wrangler 交互配置或权限0600文件的 secret bulk；不要写进源码、构建变量和 shell 参数。无需把本机 GitHub OAuth令牌上传云端。
 
@@ -13,7 +13,7 @@ Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1
 1. 在私密目录导出 D1 备份；D1免费档另有7天Time Travel。
 2. npm run check、npm test、npm run test:runner、npm run check:ui。
 3. npm run db:migrate。只增表、索引和兼容的方案状态，不删除历史数据。
-4. 提交并推送源码，等待 GitHub Check。
+4. 提交并推送源码，检查 GitHub Check。当前组织托管任务受账单/额度限制无法启动，本轮由同一套本机检查验收并提交明确的本机状态；不更改账单、不升档。
 5. npm run deploy。脚本要求工作区已提交，把准确提交号写入 /health。
 6. 检查 /health、成员登录、工作台与原有任务；需要时回滚 Worker 版本。新增表可保留，不要反向删除数据来“回滚”。
 
