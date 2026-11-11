@@ -31,7 +31,7 @@ function stamp(at: number) {
   const p = Object.fromEntries(parts.map(v => [v.type, v.value]));
   return { date: `${p.year}-${p.month}-${p.day}`, label: `${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
 }
-export function viewMessage(row: any, names: Map<string, string>, refs: Map<string, RefTarget>): ViewMsg {
+export function viewMessage(row: any, names: Map<string, string>, refs: Map<string, RefTarget>, imageNotes?: Map<string, string[]>, imagePicks?: Set<string>): ViewMsg {
   const meta = metaOf(row), reply = meta.replyTo;
   const reId = reply?.kind === "bot" ? "b:" + reply.targetId : reply?.kind === "member" ? reply.targetId : undefined;
   const target = reId ? refs.get(reId) : undefined;
@@ -41,7 +41,18 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   if (meta.cardView) material.card = meta.cardView;
   if (target) material.quote = { from: target.from, text: target.text.slice(0, 200) };
   else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
-  if (meta.media?.length) material.media = meta.media.map((m: any) => m.kind === "image" ? "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "") : m.kind === "voice" ? m.asr ? "语音转写：" + m.asr : "语音" : m.kind === "video" ? "视频" : "文件" + (m.filename ? " " + m.filename : ""));
+  if (meta.media?.length) {
+    let imageIdx = -1;
+    material.media = meta.media.map((m: any) => {
+      if (m.kind !== "image")
+        return m.kind === "voice" ? m.asr ? "语音转写：" + m.asr : "语音" : m.kind === "video" ? "视频" : "文件" + (m.filename ? " " + m.filename : "");
+      imageIdx++;
+      const note = imageNotes?.get(row.id)?.[imageIdx];
+      if (note) return note;
+      if (imagePicks?.has(row.id + ":" + imageIdx)) return "图片（未查看）";
+      return "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
+    });
+  }
   const links = [...new Set<string>([...(meta.ownUrls || []), ...(meta.quotedUrls || [])])].slice(0, 5);
   if (links.length) material.links = links;
   if (row.analysed_media) material.analysed = String(row.analysed_media).slice(0, 600);

@@ -1,7 +1,7 @@
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
-import { loadChatContext } from "./context";
-import { viewMessage } from "./view";
+import { loadBatch, loadChatContext } from "./context";
+import { metaOf, viewMessage } from "./view";
 import {
   nameLogin,
   provisionNames,
@@ -20,6 +20,14 @@ import {
   decodeVoice,
   speakBrief,
 } from "./voice";
+import {
+  annotateTurn,
+  imageNotesFor,
+  pickImages,
+  visionProvider,
+  SELFTEST_PNG,
+} from "./vision";
+import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
@@ -585,6 +593,7 @@ async function processJob(e: Env, id: string) {
         .bind(p.message)
         .first();
       if (m) {
+        const notes = await imageNotesFor(e, [m.id]);
         const answer = await speakBrief(
           e,
           {
@@ -593,7 +602,10 @@ async function processJob(e: Env, id: string) {
               p.status ||
               "资料已整理；只报告实际结果，附件是否送达以交付状态为准。正式通知最多3句。",
           },
-          { latest: m, latestView: viewMessage(m, new Map(), new Map()) },
+          {
+            latest: m,
+            latestView: viewMessage(m, new Map(), new Map(), notes),
+          },
         );
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
@@ -617,7 +629,40 @@ async function processJob(e: Env, id: string) {
           .run();
         return;
       }
-      const context = await loadChatContext(e, { groupId: m.group_id, cursor });
+      const preloaded = await loadBatch(e, m.group_id, cursor);
+      if (!preloaded.length) return;
+      const latestPre = preloaded[preloaded.length - 1];
+      const refRows = new Map<string, any>();
+      const refId = latestPre.meta?.replyTo?.targetId;
+      if (refId) {
+        const row = await e.DB.prepare(
+          "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=? AND m.group_id=?",
+        )
+          .bind(refId, m.group_id)
+          .first();
+        if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
+      }
+      const picks = visionProvider(e)
+        ? pickImages(
+            preloaded,
+            latestPre,
+            refRows,
+            TEAM.vision?.turn_max ?? 3,
+          )
+        : [];
+      if (picks.length)
+        await annotateTurn(
+          e,
+          picks,
+          TEAM.vision?.turn_deadline_ms ?? 12000,
+        );
+      const context = await loadChatContext(e, {
+        groupId: m.group_id,
+        cursor,
+        batch: preloaded,
+        latestId: latestPre.id,
+        imagePicks: picks.map((p) => p.messageId + ":" + p.idx),
+      });
       const { batch, latest } = context;
       if (!batch.length || !latest) return;
       const modelStarted = Date.now();
@@ -1020,6 +1065,10 @@ async function scheduled(e: Env) {
   )
     .bind(Date.now() - 7 * 86400000)
     .run();
+  if ((await setting(e, "budget_cleanup_day")) !== date) {
+    await cleanupBudget(e);
+    await set(e, "budget_cleanup_day", date);
+  }
   await sendOutbox(e);
   await e.DB.prepare("DELETE FROM member_sessions WHERE expires<?")
     .bind(Date.now())
@@ -1522,6 +1571,31 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (path === "/api/team/vision/selftest" && method === "GET") {
+    if (who.role !== "owner")
+      return json({ error: "owner only" }, 403);
+    const started = Date.now();
+    try {
+      const provider = visionProvider(e);
+      if (!provider)
+        return json({ ok: false, error: "vision disabled" }, 503);
+      const bytes = Uint8Array.from(atob(SELFTEST_PNG), (c) =>
+        c.charCodeAt(0),
+      );
+      const note = await provider.describe(
+        bytes,
+        "image/png",
+        "64×64 红圆",
+        AbortSignal.timeout(15000),
+      );
+      return json({ ok: true, desc: note.desc, ms: Date.now() - started });
+    } catch (error) {
+      return json(
+        { ok: false, error: String(error).slice(0, 200) },
+        502,
+      );
+    }
+  }
   if (who.via === "ai" && !aiRouteAllowed(path, method))
     return json(
       { error: "本机AI仅可查询项目、创建与领取任务、回填自己的进展" },
