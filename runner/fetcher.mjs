@@ -58,8 +58,8 @@ export function createFetchClient(options={}){
  const knownSecrets=new Set(Object.values(cookies).filter(x=>typeof x==='string'&&x));
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
- const rate=()=>{const slot=serial.then(async()=>{if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
- function risk(hit,reset=true){riskCount=hit?riskCount+1:(reset?0:riskCount);if(riskCount>=2)pausedUntil=now()+600000;}
+ const rate=()=>{const slot=serial.then(async()=>{if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
+ function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2)pausedUntil=now()+600000;}
  async function get(raw,kind){
    const u=allowed(raw,kind);await rate();
    // Fresh headers per request: never reuse the API Cookie for a subtitle/short URL.

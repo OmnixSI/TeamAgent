@@ -7,7 +7,7 @@ function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
  let t=10000; const calls=[],logs=[],times=[]; let destroys=0;
  const request=(o,cb)=>{const req=new EventEmitter();req.end=()=>{o.lookup(o.host,{},(err)=>{if(err){req.emit('error',err);return;}calls.push(o);times.push(t);const r=handler(o,calls.length);const res=new EventEmitter();res.statusCode=r.status||200;res.headers=r.headers||{};cb(res);queueMicrotask(()=>{for(const chunk of r.chunks||[Buffer.from(JSON.stringify(r.body||{}))])res.emit('data',chunk);res.emit('end');});});};req.destroy=(err)=>{destroys++;req.emit('error',err||Error('destroyed'));};return req;};
  const client=createFetchClient({request,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),now:()=>t,sleep:async ms=>{t+=ms;},random:()=>0,log:x=>logs.push(x),...extra});
- return {client,calls,logs,times,get destroys(){return destroys;},get time(){return t;}};
+ return {client,calls,logs,times,get destroys(){return destroys;},get time(){return t;},setTime(v){t=v;}};
 }
 test('N1 WBI public fixed-key example matches published digest',()=>{ // https://github.com/SocialSisterYi/bilibili-API-collect/blob/e99f64c9b5c2bbd156e95ca254620378a22697f7/docs/misc/sign/wbi.md (algorithm example, zab parameter)
 const q=wbiSign({foo:'114',bar:'514',zab:1919810},'7cd084941338484aae1ad9425b84077c','4932caff0ff746eab6f01bf08b70ac45',1702204169);assert.equal(new URLSearchParams(q).get('w_rid'),'8f6f2b5b3d485fe1886cec6a0be8c5d4');assert.equal(new URLSearchParams(wbiSign({foo:"!'()*a b",w_rid:'old',wts:1},'a'.repeat(32),'b'.repeat(32),123)).get('foo'),'a b');});
@@ -94,4 +94,51 @@ test('N14 player code -403 marks subtitle unavailable, not none',async()=>{
  const r=await f.client.biliLight(BV);
  assert.equal(r.subtitle,null);
  assert.equal(r.subtitle_status,'unavailable');
+});
+
+
+/*
+  risk/pause state transitions (checked before adding N15):
+  states: N normal(0,0), R risk1(1,0), P paused(>=2,future), E expired(past)
+  event        N     R          P            E (next request first resets to N)
+  view 412     R     P          no request   R
+  view 200     N     N          no request   N
+  short 302    N     R (keep)   no request   N
+  SPI ok       N     R (keep)   no request   N
+  pause expiry P -> E; only a new view 412 from R may set P again.
+*/
+test('N15 pause expiry: short 302 does not extend; view 200 clears the risk count',async()=>{
+ let views=0,mode='412';
+ const f=fixture(o=>{
+  const p=o.path.split('?')[0];
+  if(p==='/abcd')return {status:302,headers:{location:'https://www.bilibili.com/video/'+BV}};
+  if(p.endsWith('/spi'))return {body:{code:0,data:{b_3:'fresh-b3'}}};
+  if(p.endsWith('/nav'))return {body:{code:-101,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};
+  if(p.endsWith('/view')){
+   views++;
+   if(mode==='412')return {status:412,body:{code:-412}};
+   return {body:{code:0,data:{bvid:BV,title:'T',desc:'D',owner:{name:'UP'},tname:'科技',duration:60,pubdate:1,stat:{view:2},aid:123,pages:[{cid:456}]}}};
+  }
+  if(p.endsWith('/v2'))return {body:{code:0,data:{subtitle:{subtitles:[]}}}};
+  return {body:{code:0,data:{replies:[]}}};
+ },{cookies:{buvid3:'stale-b3'}});
+ await assert.rejects(f.client.biliLight(BV),/风控/);
+ assert.equal(views,2);
+ const beforeShort=f.calls.length;
+ f.setTime(f.time+600001);
+ assert.equal(await f.client.resolveShort('abcd'),BV);
+ assert.equal(f.calls.length,beforeShort+1);
+ mode='200';
+ const ok=await f.client.biliApi('/x/web-interface/view',{bvid:BV});
+ assert.equal(ok.code,0);
+ assert.equal(f.calls.length,beforeShort+2);
+ // After a successful view the counter is zero: one 412 is not enough, two pause.
+ mode='412';
+ await assert.rejects(f.client.biliApi('/x/web-interface/view',{bvid:BV}),/抓取失败/);
+ const beforePause=f.calls.length;
+ await assert.rejects(f.client.biliApi('/x/web-interface/view',{bvid:BV}),/风控/);
+ assert.equal(f.calls.length,beforePause+1);
+ const afterPause=f.calls.length;
+ await assert.rejects(f.client.biliApi('/x/web-interface/view',{bvid:BV}),/风控/);
+ assert.equal(f.calls.length,afterPause);
 });
