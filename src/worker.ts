@@ -1,3 +1,4 @@
+import { TEAM } from "./config";
 import {
   nameLogin,
   provisionNames,
@@ -911,7 +912,7 @@ async function sendOutbox(e: Env) {
 
 async function scheduled(e: Env) {
   const local = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Sydney",
+    timeZone: TEAM.memory.timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -920,12 +921,16 @@ async function scheduled(e: Env) {
   }).format(new Date());
   const hour = Number(
     new Intl.DateTimeFormat("en", {
-      timeZone: "Australia/Sydney",
+      timeZone: TEAM.memory.timezone,
       hour: "2-digit",
       hourCycle: "h23",
     }).format(new Date()),
   );
-  if ([12, 19].includes(hour) && (await setting(e, "group_id"))) {
+  if (
+    TEAM.scout.enabled &&
+    TEAM.scout.hours.includes(hour) &&
+    (await setting(e, "group_id"))
+  ) {
     const key = local.slice(0, 10) + "-" + hour;
     if ((await setting(e, "scout_slot")) !== key) {
       await job(e, "scout-" + key, "scout", { key });
@@ -935,27 +940,30 @@ async function scheduled(e: Env) {
 
   // Nightly consolidation does not compete with interactive chat, and never emits group replies.
   const date = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Sydney",
+    timeZone: TEAM.memory.timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
   const lastMessage = Date.parse((await setting(e, "last_message")) || "");
   if (
-    hour >= 3 &&
-    hour < 6 &&
-    (!lastMessage || Date.now() - lastMessage > 20 * 60000)
+    hour >= TEAM.memory.start_hour &&
+    hour < TEAM.memory.end_hour &&
+    (!lastMessage ||
+      Date.now() - lastMessage > TEAM.memory.quiet_minutes * 60000)
   ) {
     const rows = (
       await e.DB.prepare(
-        "SELECT id,group_id,ts FROM messages WHERE processed=0 ORDER BY ts LIMIT 60",
-      ).all()
+        "SELECT id,group_id,ts FROM messages WHERE processed=0 ORDER BY ts LIMIT ?",
+      )
+        .bind(TEAM.memory.messages_per_batch)
+        .all()
     ).results;
     const batches = Number((await setting(e, "dream_batches_" + date)) || 0);
     const busy = await e.DB.prepare(
       "SELECT id FROM jobs WHERE kind='dream' AND status IN ('pending','running') LIMIT 1",
     ).first();
-    if (rows.length && batches < 8 && !busy) {
+    if (rows.length && batches < TEAM.memory.batches_per_night && !busy) {
       const key = "dream-" + rows[0].id;
       await job(e, key, "dream", {
         messageIds: rows.map((m: any) => m.id),
@@ -1119,7 +1127,23 @@ async function api(r: Request, e: Env) {
     return json({ token });
   }
   if (path === "/api/team/guide" && method === "GET")
-    return json({ guide: GUIDE });
+    return json({
+      guide:
+        GUIDE +
+        "\n当前参数：" +
+        TEAM.model.name +
+        "；普通工作 " +
+        TEAM.model.quick_effort +
+        "；重要工作 " +
+        TEAM.model.important_effort +
+        "；夜间 " +
+        TEAM.memory.timezone +
+        " " +
+        TEAM.memory.start_hour +
+        "–" +
+        TEAM.memory.end_hour +
+        " 点。",
+    });
   if (path === "/health")
     return json({
       ok: true,
@@ -1144,6 +1168,22 @@ async function api(r: Request, e: Env) {
   }
   if (path.startsWith("/api/runner/")) {
     if (!(await runner(r, e))) return json({ error: "unauthorized" }, 401);
+    if (path.endsWith("/idle") && method === "POST") {
+      const b: any = await r.json();
+      if (b.quiesce)
+        await set(e, "runner_pause_until", String(Date.now() + 60000));
+      if (b.resume) await set(e, "runner_pause_until", "0");
+      const busy = await e.DB.prepare(
+        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending') AS n",
+      ).first();
+      if (b.quiesce && busy.n) await set(e, "runner_pause_until", "0");
+      return json({ idle: busy.n === 0 });
+    }
+    if (
+      path.endsWith("/claim") &&
+      Number(await setting(e, "runner_pause_until")) > Date.now()
+    )
+      return json({ task: null, job: null });
 
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
@@ -1534,7 +1574,24 @@ async function api(r: Request, e: Env) {
       .run();
     return json({ ok: true });
   }
-  if (path === "/api/team/guide") return json({ guide: GUIDE });
+  if (path === "/api/team/guide")
+    return json({
+      guide:
+        GUIDE +
+        "\n当前参数：" +
+        TEAM.model.name +
+        "；普通工作 " +
+        TEAM.model.quick_effort +
+        "；重要工作 " +
+        TEAM.model.important_effort +
+        "；夜间 " +
+        TEAM.memory.timezone +
+        " " +
+        TEAM.memory.start_hour +
+        "–" +
+        TEAM.memory.end_hour +
+        " 点。",
+    });
   if (path === "/api/team/pulse") {
     const rows = (
       await e.DB.prepare(
@@ -1729,6 +1786,7 @@ async function api(r: Request, e: Env) {
       ]);
     return json({
       who,
+      configuration: TEAM,
       teammates: (
         await e.DB.prepare(
           "SELECT m.id,m.name FROM members m JOIN member_passwords p ON p.member_id=m.id WHERE m.revoked=0 ORDER BY m.name",

@@ -24,10 +24,7 @@ class RunnerTests(unittest.TestCase):
             home = pathlib.Path(d)
             h = home / ".inkboard-team"
             h.mkdir()
-            (home / ".dsh").mkdir()
-            (home / ".dsh/.credentials.yaml").write_text(
-                "refs:\n  DEEPSEEK_API_KEY: fake-test-key\n"
-            )
+            (h / "worker-secrets.json").write_text('{"DEEPSEEK_API_KEY":"shared-test-key"}')
             (h / "config.json").write_text(
                 json.dumps({"url": "https://test.invalid", "runnerToken": "fake-token"})
             )
@@ -86,7 +83,9 @@ class RunnerTests(unittest.TestCase):
                     text = "https://github.com/example/test/pull/1"
                 return subprocess.CompletedProcess(args, 0, text, "")
 
-            with patch.object(execute, "run_agent", side_effect=fake), patch.object(
+            parameters = execute.settings()
+            parameters["execution"]["repair_rounds"] = 2
+            with patch.object(execute, "settings", return_value=parameters), patch.object(execute, "REPOS", ["OmnixSI/WhalePartner"]), patch.object(execute, "run_agent", side_effect=fake), patch.object(
                 pathlib.Path, "home", return_value=home
             ), patch.object(execute.subprocess, "run", side_effect=fake), patch(
                 "urllib.request.urlopen",

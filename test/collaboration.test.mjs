@@ -35,6 +35,53 @@ async function task(e, title = "协作验收") {
   ).json();
   return id;
 }
+test("runtime reload quiesces new claims and refuses to restart over running work", async () => {
+  const e = env();
+  const id = await task(e);
+  await req(
+    e,
+    "/api/team/task",
+    { id, version: 1, status: "queued" },
+    undefined,
+    "PATCH",
+  );
+  assert.equal((await req(e, "/api/runner/idle", {}, "bad")).status, 401);
+  assert.equal(
+    (
+      await (
+        await req(e, "/api/runner/idle", { quiesce: true }, "runner-secret")
+      ).json()
+    ).idle,
+    true,
+  );
+  assert.equal(
+    (await (await req(e, "/api/runner/claim", {}, "runner-secret")).json())
+      .task,
+    null,
+  );
+  await req(e, "/api/runner/idle", { resume: true }, "runner-secret");
+  assert.equal(
+    (await (await req(e, "/api/runner/claim", {}, "runner-secret")).json()).task
+      .id,
+    id,
+  );
+  assert.equal(
+    (
+      await (
+        await req(e, "/api/runner/idle", { quiesce: true }, "runner-secret")
+      ).json()
+    ).idle,
+    false,
+  );
+  assert.equal(
+    (
+      await e.DB.prepare(
+        "SELECT value FROM settings WHERE key='runner_pause_until'",
+      ).first()
+    ).value,
+    "0",
+  );
+});
 test("three case-insensitive named identities share data without admin privileges or legacy login", async () => {
   const e = env(),
     keys = await members(e),

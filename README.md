@@ -4,7 +4,7 @@
 
 源码、文档、Issue、CI 与后续 PR 统一在 **[OmnixSI/TeamAgent](https://github.com/OmnixSI/TeamAgent)**。本项目从个人 InkBoard 的 `team/` 拆出并保留该目录的提交历史；不依赖墨水屏、账本、邮件或私人记忆。既有服务地址暂时保留，群公告、成员登录和历史任务继续使用。
 
-**[打开团队开发台](https://inkboard-team.inkboard-server.workers.dev)** · [完整复盘](docs/review.md) · [产品决定](docs/decisions.md) · [不再采用的做法](docs/declined.md) · [运维与恢复](docs/operations.md) · [验收记录](docs/verification.md)
+**[打开团队开发台](https://inkboard-team.inkboard-server.workers.dev)** · [完整复盘](docs/review.md) · [产品决定](docs/decisions.md) · [不再采用的做法](docs/declined.md) · [维护与发布](docs/maintenance.md) · [运维与恢复](docs/operations.md) · [验收记录](docs/verification.md)
 
 ## 怎么运转
 
@@ -49,6 +49,12 @@ flowchart LR
 
 群里直接交办数据和文件整理，生成实际附件后回传 QQ。困难工作从任务详情复制接力包，交给自己的本机 AI，完成后回填验证结果与 PR。
 
+## 修改后怎样启用
+
+`config/team.json` 集中模型、推理强度、夜间整理、查新、超时、修复轮数与项目代称；`config/voice.json` 和 `config/participation.json` 分别控制怎么说、何时说。共用 DeepSeek 与团队服务凭据已配置为本仓库 Actions Secrets。推送到 main 后，专用本机 runner 自动检查、发布云端，并在空闲时更新本机服务；成员无需重填 API 或登录 Cloudflare。
+
+完整入口见[维护手册](docs/maintenance.md)，包含配置表、API更新、自动发布、回滚和迁移。
+
 ## 本地开发
 
 Node 24+、Python 3.12+。本仓库有自己的依赖和锁文件。
@@ -61,7 +67,7 @@ npm run test:runner
 npm run check:ui
 ```
 
-Cloudflare 配置从 `wrangler.toml.example` 复制；先建 D1、三条免费档 Queues，再初始化 `schema.sql`。部署不自动写入密钥。
+实际团队部署配置已在 `wrangler.toml`。现有团队直接走 Actions 自动发布；新建独立环境时参考 `wrangler.toml.example` 创建 D1、三条免费档 Queues，再初始化 `schema.sql`。
 
 ```sh
 cp wrangler.toml.example wrangler.toml

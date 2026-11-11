@@ -1,0 +1,5 @@
+DEEPSEEK_API_KEY="fill-in-shared-team-api"
+ADMIN_TOKEN="fill-in-team-admin-token"
+RUNNER_TOKEN="fill-in-team-runner-token"
+QQ_APP_ID="fill-in-bot-app-id"
+QQ_APP_SECRET="fill-in-bot-app-secret"

@@ -2,12 +2,59 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 const output = ".wrangler/test-worker-" + process.pid + ".mjs";
+// Behavior fixtures keep the documented high/max and Sydney scenarios stable.
+// Valid production parameter changes are checked separately in config.test.mjs.
+const fixture = JSON.parse(
+  readFileSync(new URL("../config/team.json", import.meta.url), "utf8"),
+);
+fixture.model.name = "deepseek-flash";
+fixture.model.quick_effort = "high";
+fixture.model.important_effort = "max";
+fixture.model.effort_by_kind = {
+  voice: "high",
+  participation: "high",
+  research: "high",
+  memory: "max",
+  code: "max",
+};
+fixture.memory = {
+  timezone: "Australia/Sydney",
+  start_hour: 3,
+  end_hour: 6,
+  quiet_minutes: 20,
+  batches_per_night: 8,
+  messages_per_batch: 60,
+};
+fixture.scout = { enabled: true, hours: [12, 19] };
+fixture.repositories = [
+  "OmnixSI/NextThought",
+  "OmnixSI/NextThought-Website",
+  "OmnixSI/WhalePartner",
+  "OmnixSI/peiwan-store-platform-blueprint",
+  "OmnixSI/TeamAgent",
+];
+fixture.project_aliases = {
+  "OmnixSI/WhalePartner": ["大肥鱼", "大鲸鱼"],
+  "OmnixSI/NextThought": ["面试软件"],
+  "OmnixSI/TeamAgent": ["群助手"],
+};
 await build({
   entryPoints: ["src/worker.ts"],
   bundle: true,
   format: "esm",
   platform: "browser",
   outfile: output,
+  plugins: [
+    {
+      name: "stable-team-fixture",
+      setup(builder) {
+        builder.onLoad({ filter: /config\/team\.json$/ }, () => ({
+          contents: JSON.stringify(fixture),
+          loader: "json",
+        }));
+      },
+    },
+  ],
 });
 const { default: worker, signature } = await import("../" + output);
 function db() {

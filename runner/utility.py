@@ -1,3 +1,7 @@
+try:
+    from runner.settings import settings, api_key, dsh_program
+except ModuleNotFoundError:
+    from settings import settings, api_key, dsh_program
 #!/usr/bin/env python3
 """Local file/media agent. Separate workspaces, no repository writes or cloud-account credentials."""
 import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client
@@ -165,6 +169,7 @@ def flush_reports():
 
 
 def once():
+    parameters = settings()
     global ACTIVE
     flush_reports()
     job = cloud(
@@ -288,14 +293,10 @@ def once():
             }
         }
         env["PATH"] = str(H / "venv/bin") + ":/opt/homebrew/bin:" + env.get("PATH", "")
-        env["DEEPSEEK_API_KEY"] = re.search(
-            r"^\s*DEEPSEEK_API_KEY:\s*[\"\']?([^\s\"\']+)",
-            (pathlib.Path.home() / ".dsh/.credentials.yaml").read_text(),
-            re.M,
-        ).group(1)
+        env["DEEPSEEK_API_KEY"] = api_key()
         proc = subprocess.Popen(
             [
-                "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+                dsh_program(),
                 "--profile",
                 "headless",
                 "--patch",
@@ -344,7 +345,7 @@ def once():
         threading.Thread(target=watch, daemon=True).start()
         try:
             stdout, stderr = proc.communicate(
-                input=task, timeout=120 if "quick" in os.sys.argv else 480
+                input=task, timeout=parameters["execution"]["quick_file_timeout_seconds" if "quick" in os.sys.argv else "heavy_file_timeout_seconds"]
             )
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGTERM)

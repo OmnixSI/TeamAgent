@@ -215,6 +215,15 @@ async function load() {
   }
 }
 function renderTeam() {
+  const night = state.configuration?.memory;
+  if (night)
+    $("nightdesc").textContent =
+      night.timezone +
+      " " +
+      String(night.start_hour).padStart(2, "0") +
+      ":00–" +
+      String(night.end_hour).padStart(2, "0") +
+      ":00 · 安静时整理";
   const members = state.teammates || [];
   $("teamstrip").replaceChildren(el("small", "一起推进"));
   for (const m of members) {
@@ -259,7 +268,14 @@ function renderStatus() {
       c.fullMessageVerified ? "全量群消息已实测" : "普通群消息待验证",
       c.fullMessageVerified ? "ok" : "warn",
     ),
-    badge("聊天 high · 重要工作 max"),
+    badge(
+      "聊天 " +
+        (state.configuration?.model.effort_by_kind.participation ||
+          state.configuration?.model.quick_effort ||
+          "high") +
+        " · 重要工作 " +
+        (state.configuration?.model.important_effort || "max"),
+    ),
   );
   if (g?.blocked) $("connection").append(badge(g.blocked, "bad"));
   if (c.chatTiming)

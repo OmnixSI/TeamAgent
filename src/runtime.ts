@@ -1,3 +1,4 @@
+import { modelSettings, type Effort } from "./config";
 /** Credentials are never prompt material, query strings, metrics or activity records. */
 export function redact(text: string): string {
   return text
@@ -43,10 +44,13 @@ export async function activity(
 export async function model(
   e: any,
   kind: string,
-  effort: "high" | "max",
+  effort: Effort,
   body: any,
   timeout = 90000,
 ) {
+  const selected = modelSettings(kind, effort, timeout);
+  effort = selected.effort;
+  timeout = selected.timeout;
   const start = Date.now();
   let usage: any = {},
     status = "failed";
@@ -59,8 +63,9 @@ export async function model(
       },
       body: JSON.stringify({
         ...promptData(body),
-        model: e.MODEL || "deepseek-flash",
+        model: selected.model,
         reasoning_effort: effort,
+        thinking: { type: effort === "none" ? "disabled" : "enabled" },
       }),
       signal: AbortSignal.timeout(timeout),
     });

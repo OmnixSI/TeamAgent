@@ -1,14 +1,12 @@
+try:
+    from runner.settings import settings, api_key, dsh_program
+except ModuleNotFoundError:
+    from settings import settings, api_key, dsh_program
 #!/usr/bin/env python3
 import json, os, pathlib, subprocess, time, hashlib, signal, threading, urllib.request, urllib.error, ssl, re
 
 H = pathlib.Path.home() / ".inkboard-team"
-REPOS = [
-    "OmnixSI/NextThought",
-    "OmnixSI/NextThought-Website",
-    "OmnixSI/WhalePartner",
-    "OmnixSI/peiwan-store-platform-blueprint",
-    "OmnixSI/TeamAgent",
-]
+REPOS = settings()["repositories"]
 
 
 def run(args, cwd=None, timeout=300):
@@ -120,6 +118,7 @@ def run_agent(args, *, task, input, cwd, env, timeout=1800):
 
 
 def main():
+    parameters = settings()
     t = json.loads((H / "current.json").read_text())
     repo = t["repo"]
     if repo not in REPOS:
@@ -177,17 +176,11 @@ def main():
         }
         # Existing credentials file is read only inside this process; never place the API key in argv or output.
 
-        env["DEEPSEEK_API_KEY"] = re.search(
-            r"^\s*DEEPSEEK_API_KEY:\s*[\"\']?([^\s\"\']+)",
-            (pathlib.Path.home() / ".dsh/.credentials.yaml").read_text(),
-            re.M,
-        ).group(1)
-        exe = (
-            "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-        )
+        env["DEEPSEEK_API_KEY"] = api_key()
+        exe = dsh_program()
         prompt = task
         outcomes = []
-        for attempt in range(2):
+        for attempt in range(parameters["execution"]["repair_rounds"]):
             r = run_agent(
                 [
                     exe,
@@ -206,7 +199,7 @@ def main():
                 cwd=work,
                 env=env,
                 task=t,
-                timeout=1800,
+                timeout=parameters["execution"]["code_timeout_seconds"],
             )
             events = []
             for line in r.stdout.splitlines():

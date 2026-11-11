@@ -11,10 +11,7 @@ class UtilityTests(unittest.TestCase):
             (h / "config.json").write_text(
                 '{"url":"https://example.invalid","runnerToken":"fake"}'
             )
-            (home / ".dsh").mkdir()
-            (home / ".dsh/.credentials.yaml").write_text(
-                "refs:\n  DEEPSEEK_API_KEY: fake-key\n"
-            )
+            (h / "worker-secrets.json").write_text('{"DEEPSEEK_API_KEY":"shared-test-key"}')
             with patch.object(pathlib.Path, "home", return_value=home):
                 spec = importlib.util.spec_from_file_location(
                     "utility", pathlib.Path(__file__).parents[1] / "runner/utility.py"

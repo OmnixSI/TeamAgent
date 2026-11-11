@@ -1,0 +1,42 @@
+name = "inkboard-team"
+account_id = "fadeed4822ac4e4e518ed6eddc8d35ce"
+main = "src/worker.ts"
+compatibility_date = "2026-11-11"
+[[d1_databases]]
+binding = "DB"
+database_name = "inkboard-team"
+database_id = "42e95fb2-16f8-46d9-bf32-34f3e88a4443"
+[triggers]
+crons = ["* * * * *"]
+[[queues.producers]]
+binding = "WORK"
+queue = "inkboard-team"
+[[queues.consumers]]
+queue = "inkboard-team"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 2
+
+[[queues.producers]]
+binding = "CHAT"
+queue = "inkboard-team-chat"
+[[queues.consumers]]
+queue = "inkboard-team-chat"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 1
+max_retries = 2
+
+[build]
+command = "npm run build:web"
+
+[[queues.producers]]
+binding = "TOOLS"
+queue = "team-agent-tools"
+[[queues.consumers]]
+queue = "team-agent-tools"
+max_batch_size = 1
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 2

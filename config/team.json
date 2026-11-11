@@ -1,0 +1,76 @@
+{
+  "$schema": "./team.schema.json",
+  "model": {
+    "name": "deepseek-flash",
+    "quick_effort": "high",
+    "important_effort": "max",
+    "effort_by_kind": {
+      "voice": "high",
+      "participation": "high",
+      "research": "high",
+      "memory": "max",
+      "code": "max"
+    },
+    "timeouts_ms": {
+      "voice": 60000,
+      "participation": 90000,
+      "research": 180000,
+      "chat": 90000,
+      "plan": 540000,
+      "memory": 540000
+    }
+  },
+  "memory": {
+    "timezone": "Australia/Sydney",
+    "start_hour": 3,
+    "end_hour": 6,
+    "quiet_minutes": 20,
+    "batches_per_night": 8,
+    "messages_per_batch": 60
+  },
+  "scout": {
+    "enabled": true,
+    "hours": [
+      12,
+      19
+    ]
+  },
+  "execution": {
+    "repair_rounds": 2,
+    "code_timeout_seconds": 1800,
+    "quick_file_timeout_seconds": 120,
+    "heavy_file_timeout_seconds": 480
+  },
+  "repositories": [
+    "OmnixSI/NextThought",
+    "OmnixSI/NextThought-Website",
+    "OmnixSI/WhalePartner",
+    "OmnixSI/peiwan-store-platform-blueprint",
+    "OmnixSI/TeamAgent"
+  ],
+  "project_aliases": {
+    "OmnixSI/WhalePartner": [
+      "大肥鱼",
+      "大鲸鱼",
+      "鲸鱼娘",
+      "鲸汐"
+    ],
+    "OmnixSI/NextThought": [
+      "面试软件",
+      "面试助手"
+    ],
+    "OmnixSI/NextThought-Website": [
+      "面试软件官网",
+      "官网"
+    ],
+    "OmnixSI/peiwan-store-platform-blueprint": [
+      "陪玩店",
+      "陪玩店那个项目"
+    ],
+    "OmnixSI/TeamAgent": [
+      "群助手",
+      "群机器人",
+      "团队开发台"
+    ]
+  }
+}

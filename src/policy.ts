@@ -1,10 +1,5 @@
-export const REPOS = [
-  "OmnixSI/NextThought",
-  "OmnixSI/NextThought-Website",
-  "OmnixSI/WhalePartner",
-  "OmnixSI/peiwan-store-platform-blueprint",
-  "OmnixSI/TeamAgent",
-];
+import { TEAM } from "./config";
+export const REPOS: string[] = TEAM.repositories;
 export const EFFORT = {
   chat: "high",
   plan: "max",
@@ -37,13 +32,8 @@ export function validStatus(s: string) {
   ].includes(s);
 }
 // Initial hints only. Learned project facts and corrections are supplied to the model at runtime.
-export const INITIAL_PROJECT_HINTS = {
-  "OmnixSI/WhalePartner": ["大肥鱼", "大鲸鱼", "鲸鱼娘", "鲸汐"],
-  "OmnixSI/NextThought": ["面试软件", "面试助手"],
-  "OmnixSI/NextThought-Website": ["面试软件官网", "官网"],
-  "OmnixSI/peiwan-store-platform-blueprint": ["陪玩店", "陪玩店那个项目"],
-  "OmnixSI/TeamAgent": ["群助手", "群机器人", "团队开发台"],
-};
+export const INITIAL_PROJECT_HINTS: Record<string, string[]> =
+  TEAM.project_aliases;
 
 export function extractUrls(text: string) {
   return [
