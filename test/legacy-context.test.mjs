@@ -31,7 +31,7 @@ test('2.5 chunks and 130 image-note ids stay within D1 binding limit',async()=>{
 });
 test('2.1 displayed face markers and rendered mentions are valid original evidence',()=>{
   const r=row('r','U1','<@U2> 好的[<face,id=1/>]',{mentions:[{id:'U2',name:''}],media:[]}),names=new Map([['U2','张三']]);
-  assert.equal(view.displayText(r.body,[{id:'U2',name:'张三'}]),'@张三 好的[表情]');
+  assert.equal(view.displayText(r.body,[{id:'U2',name:'张三'}]),'@张三 好的[表情（名称未知）]');
   assert.equal(view.quoteIn(r,'好的[表情]',names),true);
   assert.equal(view.quoteIn(r,'@张三 好的[表情]',names),true);
   assert.equal(view.quoteIn(r,'坏的[表情]',names),false);
@@ -110,7 +110,7 @@ test('face-rich displayed quotation remains valid evidence with both supported m
   const r=row('faces','U1','<@U2> 他说：“好的[<face,id=1/>]” <faceType=1,faceId=14>',{mentions:[{id:'U2',name:''}],media:[]}),original=r.body,names=new Map([['U2','张三']]);
   for(let i=0;i<2;i++){
     const displayed=view.viewMessage(r,names,new Map()).text;
-    assert.equal(displayed,'@张三 他说：“好的[表情]” [表情]');
+    assert.equal(displayed,'@张三 他说：“好的[表情（名称未知）]” [表情（名称未知）]');
     assert.ok(view.quoteIn(r,displayed,names));assert.ok(view.quoteIn(r,'“好的[表情]”',names));assert.ok(!view.quoteIn(r,'“坏的[表情]”',names));
   }
   assert.equal(r.body,original);
