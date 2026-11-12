@@ -2,6 +2,8 @@
 
 > 当前状态（v1.5）：按 M0–M4 矩阵选用 W1；真实 HOME 下 DSH 配置转储/帮助启动及 OS 沙箱边界检查通过，S-3/S-27–S-31 本机回归通过、无跳过。真实模型工具事件未完成，因此 `READER_VERIFIED=False`，运行模式仍是方案 B。详情见文末 v1.5；下列 v1.3/v1.4/返工结果是历史记录。
 
+> v1.5 后续修复：仅给 `/dev/null` 增加 literal 写例外，读规则与六读根未改；见文末“空设备写例外”。
+
 基线固定 `0f67b289b2af019572e091254e1b42a9cbaac75a`。本批只实现本机侧，不启动真实服务，不注册 bridge 线程，不改 Worker、schema、CI 或依赖。
 
 ## 接口与取材
@@ -147,3 +149,15 @@ v1.5 测试先红（53 项、13 个失败断言、2 个错误），实现 W1 和
 证据：`.agent/c3-v15-startup.json`、`.agent/c3-v15-step0.json`、`.agent/c3-v15-native-read.json`；JSON 中的 `root` 定位临时输出，真实凭据探针无任何内容日志。根据“第 0 步全过才能启用”的约定，`READER_VERIFIED=False` 保持不变；当前方案 B 仍负责确定性搜读，Worker/bridge 接入与真实模型验收继续留待后续，不推送或部署。
 
 宿主机最终验证（本机 Python 3.14.5，满足项目 ≥3.12）：`npm run check`、`npm test`、`npm run test:runner`、`npm test --prefix clients`、`npm run check:ui`、`npm run config:check` 全部 exit 0；主测试 464、Python 112（原基线 53 + 共享 gitsafe 6 + C3 53）、Node fetcher 51、clients 2，共 629 项，0 skip；`git diff --check` 干净。相对 cb949f0 本批新增 8 项 C3 测试。日志 `.agent/c3-v15-{check,test,runner,clients,ui,config}.log` 不提交。
+
+## 空设备写例外（父提交 aa248225）
+
+按 BINI 拍板，在全局 `deny file-write*` 后只加 `(allow file-write* (literal "/dev/null"))`。未增加任何其他设备或目录；W1 读规则、六个读根与 HOME 内容拒读全部保持原样。用相同路径重新生成新旧 .sb，读规则部分逐字一致。
+
+测试先行：S-27 的逐行期望增加这一行；S-31 增加真实沙箱下读取合成合法文件并重定向至 `/dev/null` 的正例，以及在写根以外新建、截断合成文件均被拒的反例。测试的系统 TMPDIR 单独放在合成 HOME 之外，避免 TMPDIR 写例外意外罩住整个合成 HOME，使反例有效。修复前两项测试均失败，其中真实重定向明确报 `/dev/null: Operation not permitted`；修复后全部通过，原文件内容未被覆盖。
+
+复核 P2-1 的重跑：修改前宿主机 Python 3.14.5 下 `subagent_test.py` 为 **53/53，0 skip**，没有复现报告中的 1 failure/1 error。报告没有附这两项堆栈，本次不猜测它们与 `/dev/null` 或解释器的因果关系，也未为未复现的问题更改无关代码。修改后再次 **53/53，0 skip**。本次扩充既有 S-27/S-31，没有新增测试函数。
+
+完整宿主机回归：check、主测试、Python/Node runner、clients、check:ui、config:check 均 exit 0；计数维持 **464 + 112 + 51 + 2 = 629**，无跳过；`git diff --check` 干净。真实 DSH 配置转储仍 **exit 0，stderr 无 EPERM**，没有报错路径；`READER_VERIFIED=False`、方案 B 不变。真实模型工具事件仍未验收，未推送或部署。
+
+证据均不提交：`.agent/c3-devnull-baseline.log`、`c3-devnull-red.log`、`c3-devnull-green.log`、`c3-devnull-{check,test,runner,clients,ui,config}.log`、`c3-devnull-dsh.json`。最后的 JSON 同时记录读规则一致性和 DSH 启动结果。

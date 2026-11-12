@@ -566,7 +566,8 @@ def sandbox_profile(sub, home, roots=None):
              '  (require-all', '    (subpath ' + json.dumps(str(real_home)) + ')']
     lines += ['    (require-not (subpath ' + json.dumps(str(p)) + '))' for p in directories]
     lines += ['    (require-not (literal ' + json.dumps(str(reader)) + '))))',
-              '(deny file-write* (subpath "/"))']
+              '(deny file-write* (subpath "/"))',
+              '(allow file-write* (literal "/dev/null"))']
     writable = [sandbox_path(sub), sandbox_path(os.environ.get('TMPDIR') or tempfile.gettempdir()), sandbox_path(home)]
     lines.append('(allow file-write* ' + ' '.join('(subpath ' + json.dumps(str(p)) + ')' for p in writable) + ')')
     lines += ['(deny network-outbound)', '(allow network-outbound (remote tcp "*:443"))',

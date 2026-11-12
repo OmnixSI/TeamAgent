@@ -365,6 +365,7 @@ class LocalTests(unittest.TestCase):
                 lines += [f'    (require-not (subpath {json.dumps(str(p.resolve()))}))' for p in directories]
                 lines += [f'    (require-not (literal {json.dumps(str(roots["reader"].resolve()))}))))',
                           '(deny file-write* (subpath "/"))',
+                          '(allow file-write* (literal "/dev/null"))',
                           f'(allow file-write* (subpath {json.dumps(str(self.sub))}) (subpath {json.dumps(str(self.home))}) (subpath {json.dumps(str(home))}))',
                           '(deny network-outbound)','(allow network-outbound (remote tcp "*:443"))',
                           '(allow network-outbound (literal "/private/var/run/mDNSResponder"))']
@@ -441,9 +442,12 @@ class LocalTests(unittest.TestCase):
         fake_dsh=allowed/'dsh';fake_dsh.write_text('synthetic');fake_dsh.chmod(0o700)
         repo=t/'repo';(repo/'.git').mkdir(parents=True)
         temporary=alias/'temp-home';temporary.mkdir()
+        host_tmp=tempfile.TemporaryDirectory(prefix='c3-write-probe-',dir=t.parent)
+        self.addCleanup(host_tmp.cleanup)
         with patch.object(s,'dsh_program',return_value=str(alias/'allowed/dsh')), \
              patch.object(s,'reader_profile',return_value=alias/'conf.yml'), \
-             patch.object(Path,'home',return_value=alias),patch.dict(s._roots,{str(alias/'allowed'):repo}):
+             patch.object(Path,'home',return_value=alias),patch.dict(s._roots,{str(alias/'allowed'):repo}), \
+             patch.dict(os.environ,{'TMPDIR':host_tmp.name}):
             roots=s.sandbox_roots(alias/'allowed',temporary,{'PATH':os.environ['PATH']})
             sb=s.sandbox_profile(alias/'allowed',temporary,roots)
         try:
@@ -463,6 +467,14 @@ class LocalTests(unittest.TestCase):
             # m6 is diagnostic only for W1: preserve its result without constraining it.
             subprocess.run(['sandbox-exec','-f',str(sb),'/usr/bin/xattr','-p','x.k',str(t/'secret.txt')],capture_output=True)
             self.assertEqual(subprocess.run(['sandbox-exec','-f',str(sb),'/bin/echo','ok'],capture_output=True).returncode,0)
+            # /dev/null is a write-only device exception, independent of the read roots.
+            r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/sh','-c','cat "$1" > /dev/null','probe',str(allowed/'ok.txt')],capture_output=True)
+            self.assertEqual(r.returncode,0,r.stderr)
+            for path in [t/'blocked-new.txt',t/'secret.txt']:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/sh','-c','printf overwritten > "$1"','probe',str(path)],capture_output=True)
+                self.assertNotEqual(r.returncode,0,path)
+            self.assertFalse((t/'blocked-new.txt').exists())
+            self.assertEqual((t/'secret.txt').read_text(),files[t/'secret.txt'])
         finally:sb.unlink()
 
     def test_S6_environment_whitelist_and_S12_actual_command(self):
