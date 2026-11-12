@@ -57,7 +57,7 @@ function allowed(raw,kind){
 }
 export function createFetchClient(options={}){
  const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random,log=options.log||(()=>{});
- const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
+ const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,searchPausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
  const knownSecrets=new Set(Object.values(cookies).filter(x=>typeof x==='string'&&x));
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
@@ -162,7 +162,9 @@ export function createFetchClient(options={}){
  }
  const isPaused=()=>now()<pausedUntil;
  const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);};
- return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,prepare,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
+ const isSearchPaused=()=>now()<searchPausedUntil;
+ const pauseSearch=ms=>{searchPausedUntil=Math.max(searchPausedUntil,now()+ms);};
+ return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
 }
 export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
