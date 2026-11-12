@@ -135,16 +135,22 @@ export function createBrowserAuth(options={}){
   }catch(error){throw Error(error.message===BROWSER_MISSING?BROWSER_MISSING:'登录窗口未能完成，请关闭同服务的登录窗口后重试。');}
   finally{if(context)await context.close().catch(()=>{});}
  }
- async function login(service){
+ async function login(service,control={}){
   if(!LOGIN[service])throw Error('请选择 bili 或 x。');
   return locked(service,async()=>{
   if(service==='bili'&&(await client()).isPaused())return 'risk';
   const state=await open(service,false,async(context,page)=>{
-   const deadline=now()+300000;
-   const timer=setTimeout(()=>context.close().catch(()=>{}),300000);
+   const deadline=Math.min(now()+300000,control.deadline??Infinity);
+   const close=()=>context.close().catch(()=>{});
+   const timer=setTimeout(close,Math.max(0,deadline-now()));
+   control.signal?.addEventListener('abort',close,{once:true});
    try{
+    if(control.signal?.aborted)return 'cancelled';
+    if(now()>=deadline)return 'timeout';
+    await control.onOpened?.();
     await page.goto(LOGIN[service],{waitUntil:'domcontentloaded',timeout:15000});
     while(now()<deadline){
+     if(control.signal?.aborted)return 'cancelled';
      let state=null,exported;
      if(service==='bili'){
       const cookies=await context.cookies('https://api.bilibili.com');
@@ -152,13 +158,14 @@ export function createBrowserAuth(options={}){
       await rememberCookies(exported);
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
      }else state=await xState(page);
+     if(control.signal?.aborted)return 'cancelled';
      if(state==='risk'){if(service==='bili')(await client()).pauseForRisk();return 'risk';}
      if(state==='ok'&&now()<deadline){if(service==='bili')await writeBiliCookies(home,Object.values(exported));return 'ok';}
      await sleep(Math.min(2000,Math.max(0,deadline-now())));
     }
     return 'timeout';
-   }catch(error){if(now()>=deadline)return 'timeout';throw error;}
-   finally{clearTimeout(timer);}
+   }catch(error){if(control.signal?.aborted)return 'cancelled';if(now()>=deadline)return 'timeout';throw error;}
+   finally{clearTimeout(timer);control.signal?.removeEventListener('abort',close);}
   });
   if(state==='ok'){await record(service,'ok');await notify(LABELS[service]+'已登录');}
   else if(state==='risk')await record(service,'risk');
@@ -202,6 +209,6 @@ export function createBrowserAuth(options={}){
   for(const service of ['bili','x'])try{if(await check(service)===null)return;}catch{options.log?.('登录探活暂未完成，下次重试。');return;}
   await writeJSON(path,{day});
  }
- return {login,check,prepareBili,daily,record,sanitize:text=>safeLogText(text,[...known])};
+ return {login,check,prepareBili,daily,record,withLoginLock:locked,sanitize:text=>safeLogText(text,[...known])};
 }
 async function asyncNoop(){}

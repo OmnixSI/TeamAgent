@@ -9,6 +9,7 @@ import { queueFor } from "./lanes";
 import { untrusted } from "./untrusted";
 import { redact } from "./runtime";
 import {recordAuthStatus} from './auth-status';
+import {claimLogin,reportLogin,fetcherSeen} from './login-flow';
 export {authReminder} from './auth-status';
 
 type Row = Record<string, any>;
@@ -198,7 +199,12 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   return Response.json({ ok: true });
 }
 export async function fetchRoute(e: any, path: string, b: any): Promise<Response> {
-  if (path.endsWith('/claim')) return Response.json({ job: await claimFetch(e) });
+  if (path.endsWith('/claim')) {
+    await fetcherSeen(e);
+    const login=await claimLogin(e);
+    return Response.json({login,job:login?null:await claimFetch(e)});
+  }
+  if(path.endsWith('/login-state'))return reportLogin(e,b);
   if (path.endsWith('/heartbeat')) { const ok = await heartbeatFetch(e, b.id, b.lease); return Response.json({ ok }, { status: ok ? 200 : 409 }); }
   if (path.endsWith('/report')) return reportFetch(e, b);
   if (path.endsWith('/auth-status')) return recordAuthStatus(e,b);

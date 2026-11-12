@@ -1,5 +1,6 @@
 /** Low-frequency Bilibili fetcher; optional local browser login. */
 import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
+import {runLoginFlow} from './qr-login.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -50,7 +51,7 @@ export function sanitize(value,secrets){
 function allowed(raw,kind){
  const u=new URL(raw);
  if(u.protocol!=='https:'||(u.port&&u.port!=='443')||u.username||u.password)throw Error('blocked URL');
- const ok=kind==='api'?u.hostname==='api.bilibili.com':kind==='subtitle'?u.hostname.endsWith('.hdslb.com'):kind==='short'&&u.hostname==='b23.tv';
+ const ok=kind==='api'?u.hostname==='api.bilibili.com':kind==='fingerprint'?u.hostname==='api.bilibili.com'&&u.pathname==='/x/frontend/finger/spi':kind==='passport'?u.hostname==='passport.bilibili.com':kind==='subtitle'?u.hostname.endsWith('.hdslb.com'):kind==='short'&&u.hostname==='b23.tv';
  if(!ok)throw Error('blocked host');return u;
 }
 export function createFetchClient(options={}){
@@ -78,7 +79,7 @@ export function createFetchClient(options={}){
          const status=res.statusCode;
          let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
          log(safe('fetch '+kind+' '+u.pathname+' status='+status));
-         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
+         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||kind==='fingerprint'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
          if(hit||(!(status>=200&&status<300)&&!(kind==='short'&&status>=300&&status<400))){const error=Error(now()<pausedUntil?'风控':'抓取失败');error.status=status;error.code=data?.code;fail(error);return;}
          settled=true;clearTimeout(timer);resolveResult({status,headers:res.headers,data});
        });
@@ -93,6 +94,17 @@ export function createFetchClient(options={}){
    if(!r.data)throw Error('无效接口响应');return r.data;
  }
  async function biliSubtitle(url){const r=await get(url,'subtitle');if(!r.data)throw Error('无效字幕响应');return r.data;}
+ async function biliPassport(action,key){
+   if(!['generate','poll'].includes(action)||(action==='poll'&&!/^[a-f0-9]{32}$/.test(key)))throw Error('invalid passport action');
+   const r=await get('https://passport.bilibili.com/x/passport-login/web/qrcode/'+action+(action==='poll'?'?qrcode_key='+key:''),'passport');
+   if(!r.data)throw Error('无效登录响应');return {body:r.data,headers:r.headers};
+ }
+ async function anonymousBuvid(){
+   const r=await get('https://api.bilibili.com/x/frontend/finger/spi','fingerprint');
+   const value=r.data?.code===0&&r.data?.data?.b_3;
+   if(typeof value!=='string'||!value)throw Error('无效设备响应');
+   knownSecrets.add(value);return value;
+ }
  async function resolveShort(code){
    if(!SHORT.test(code))throw Error('短链无效');let u=new URL('https://b23.tv/'+code);
    for(let hop=0;hop<3;hop++){
@@ -145,7 +157,7 @@ export function createFetchClient(options={}){
  }
  const isPaused=()=>now()<pausedUntil;
  const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);};
- return {biliApi,biliSubtitle,resolveShort,biliLight,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
+ return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
 }
 export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
@@ -166,7 +178,7 @@ async function main(){
  log('fetcher start '+createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).digest('hex').slice(0,12));
  const cloud=async(path,body)=>{
    const r=await fetch(new URL('/api/runner/fetch/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
-   if(!r.ok)throw Error('cloud request failed');return r.json();
+   if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
  };
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
@@ -179,7 +191,8 @@ async function main(){
  for(;;){
    try{
      await auth.daily();
-     const {job}=await cloud('claim',{});
+     const {job,login}=await cloud('claim',{});
+     if(login){await runLoginFlow(login,{home,client,auth,cloud});continue;}
      if(!job){await sleep(10000);continue;}
      const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).catch(()=>{}),30000);
      try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client));}finally{clearInterval(heartbeat);}

@@ -113,3 +113,12 @@ test('L16 X explicit login redirect or visible login form expires the session on
   assert.equal(f.notices.length,1);assert.equal(f.reports.at(-1).state,'expired');
  }
 });
+test('L17 owner cancellation closes X during navigation and cannot overwrite auth state',async t=>{
+ const controller=new AbortController(),f=fixture(await temp(t));
+ f.page.goto=async()=>{controller.abort();throw Error('navigation cancelled');};
+ assert.equal(await f.auth.login('x',{signal:controller.signal}),'cancelled');assert.ok(f.closed>=1);assert.equal(f.reports.length,0);
+});
+test('L18 X request deadline closes the window and does not report successful login after expiry',async t=>{
+ const f=fixture(await temp(t));f.page.goto=async()=>{f.setTime(f.time+5000);};
+ assert.equal(await f.auth.login('x',{deadline:f.time+1000}),'timeout');assert.equal(f.closed,1);assert.equal(f.reports.length,0);
+});

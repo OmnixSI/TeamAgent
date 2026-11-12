@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/nayuki/QR-Code-generator/blob/master/python/qrcodegen.py",
+  "version": 10,
+  "error_correction": "L",
+  "mask": 0,
+  "text": "https://passport.bilibili.com/h5-app/passport/login/scan?navhide=1&qrcode_key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&from=",
+  "matrix_sha256": "37cbc308472bf01554c94ffed9cf5975ec3f9d63830b87451dc75652487f89c8"
+}

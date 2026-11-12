@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import './test_browser_auth.mjs';
+import './test_qr_login.mjs';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';

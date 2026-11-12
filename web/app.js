@@ -989,9 +989,148 @@ function table(headers, rows) {
   box.append(t);
   return box;
 }
+// Version 10-L, byte mode, mask 0: sufficient for the validated (<=240 byte) scan URL.
+// Matrices are checked against the independent Nayuki QR reference implementation.
+function loginQrMatrix(text) {
+  const bytes = new TextEncoder().encode(text), bits = [];
+  if (bytes.length > 240) throw Error('二维码内容过长，请重新登录');
+  const push = (value, count) => { for (let i = count - 1; i >= 0; i--) bits.push((value >>> i) & 1); };
+  push(4, 4); push(bytes.length, 16);
+  for (const byte of bytes) push(byte, 8);
+  push(0, 4); while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) data.push(bits.slice(i, i + 8).reduce((v, bit) => v * 2 + bit, 0));
+  for (let pad = 0; data.length < 274; pad++) data.push(pad % 2 ? 0x11 : 0xec);
+  const multiply = (a, b) => {
+    let value = 0;
+    for (; b; b >>>= 1) { if (b & 1) value ^= a; a <<= 1; if (a & 256) a ^= 0x11d; }
+    return value;
+  };
+  let divisor = [1], root = 1;
+  for (let i = 0; i < 18; i++) {
+    const next = Array(divisor.length + 1).fill(0);
+    divisor.forEach((n, j) => { next[j] ^= n; next[j + 1] ^= multiply(n, root); });
+    divisor = next; root = multiply(root, 2);
+  }
+  let offset = 0;
+  const blocks = [68, 68, 69, 69].map(length => {
+    const block = data.slice(offset, offset += length), parity = Array(18).fill(0);
+    for (const byte of block) {
+      const factor = byte ^ parity.shift(); parity.push(0);
+      for (let j = 0; j < 18; j++) parity[j] ^= multiply(divisor[j + 1], factor);
+    }
+    return { block, parity };
+  });
+  const codewords = [];
+  for (let i = 0; i < 69; i++) for (const b of blocks) if (i < b.block.length) codewords.push(b.block[i]);
+  for (let i = 0; i < 18; i++) for (const b of blocks) codewords.push(b.parity[i]);
+  const size = 57, matrix = Array.from({ length: size }, () => Array(size).fill(false)), reserved = matrix.map(row => row.slice());
+  const mark = (x, y, dark) => { if (x >= 0 && y >= 0 && x < size && y < size) { matrix[y][x] = !!dark; reserved[y][x] = true; } };
+  for (let i = 0; i < size; i++) { mark(6, i, i % 2 === 0); mark(i, 6, i % 2 === 0); }
+  for (const [cx, cy] of [[3, 3], [53, 3], [3, 53]]) {
+    for (let y = -4; y <= 4; y++) for (let x = -4; x <= 4; x++) { const d = Math.max(Math.abs(x), Math.abs(y)); mark(cx + x, cy + y, d !== 2 && d !== 4); }
+  }
+  for (const cx of [6, 28, 50]) for (const cy of [6, 28, 50]) {
+    if ((cx === 6 && cy === 6) || (cx === 6 && cy === 50) || (cx === 50 && cy === 6)) continue;
+    for (let y = -2; y <= 2; y++) for (let x = -2; x <= 2; x++) mark(cx + x, cy + y, Math.max(Math.abs(x), Math.abs(y)) !== 1);
+  }
+  let rem = 8;
+  for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+  const format = ((8 << 10) | rem) ^ 0x5412, bit = (value, n) => (value >>> n) & 1;
+  for (let i = 0; i < 6; i++) mark(8, i, bit(format, i));
+  mark(8, 7, bit(format, 6)); mark(8, 8, bit(format, 7)); mark(7, 8, bit(format, 8));
+  for (let i = 9; i < 15; i++) mark(14 - i, 8, bit(format, i));
+  for (let i = 0; i < 8; i++) mark(size - 1 - i, 8, bit(format, i));
+  for (let i = 8; i < 15; i++) mark(8, size - 15 + i, bit(format, i));
+  mark(8, size - 8, true);
+  rem = 10;
+  for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+  const version = (10 << 12) | rem;
+  for (let i = 0; i < 18; i++) { const a = size - 11 + i % 3, b = Math.floor(i / 3); mark(a, b, bit(version, i)); mark(b, a, bit(version, i)); }
+  let index = 0;
+  for (let right = size - 1; right > 0; right -= 2) {
+    if (right === 6) right--;
+    for (let step = 0; step < size; step++) {
+      const y = ((right + 1) & 2) === 0 ? size - 1 - step : step;
+      for (let j = 0; j < 2; j++) {
+        const x = right - j;
+        if (!reserved[y][x]) { const dark = bit(codewords[index >>> 3] || 0, 7 - (index & 7)); index++; matrix[y][x] = !!(dark ^ ((x + y) % 2 === 0)); }
+      }
+    }
+  }
+  return matrix;
+}
+function loginQr(text) {
+  const matrix = loginQrMatrix(text), ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 65 65'); svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'B 站登录二维码，请用 B 站手机 App 扫描并确认');
+  svg.setAttribute('class', 'login-qr'); svg.setAttribute('shape-rendering', 'crispEdges');
+  const background = document.createElementNS(ns, 'rect');
+  background.setAttribute('width', '65'); background.setAttribute('height', '65'); background.setAttribute('fill', '#fff');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('fill', '#000');
+  path.setAttribute('d', matrix.flatMap((row, y) => row.flatMap((dark, x) => dark ? ['M' + (x + 4) + ',' + (y + 4) + 'h1v1h-1z'] : [])).join(''));
+  svg.append(background, path); return svg;
+}
+let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot;
+async function renderServiceLogins(box) {
+  if (state?.who.role !== 'owner') return;
+  const panel = el('section', undefined, 'panel'); panel.id = 'service-logins';
+  panel.setAttribute('aria-label', '本机服务登录'); box.append(panel);
+  await refreshServiceLogins(panel);
+}
+async function refreshServiceLogins(panel) {
+  if (loginRefreshBusy) return;
+  loginRefreshBusy = true;
+  try {
+    const snapshot = await api('/api/team/service-login');
+    if (!panel.isConnected || state?.who.role !== 'owner') return;
+    loginSnapshot = snapshot; lastLoginRefresh = Date.now();
+    // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
+    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services}, (key, value) => key === 'updated_at' ? undefined : value);
+    if (panel.loginSignature === visual) return;
+    panel.loginSignature = visual;
+    panel.replaceChildren(el('h2', '本机服务登录'));
+    panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
+    if (!snapshot.online) panel.append(el('p', '本机服务没在线，请检查', 'error'));
+    const cards = el('div', undefined, 'grid');
+    for (const service of ['bili', 'x']) {
+      const label = service === 'bili' ? 'B 站' : 'X', entry = snapshot.services[service], flow = entry.flow;
+      const active = flow && ['waiting', 'scanned'].includes(flow.phase) && flow.expires_at > Date.now();
+      const card = el('article', undefined, 'card');
+      card.append(el('h3', label));
+      let status = ({ok:'已登录',missing:'未登录',expired:'已过期',risk:'登录需要验证'})[entry.auth?.state] || '未登录';
+      if (flow) status = ({waiting:'等待本机服务领取',scanned:'已扫码待确认',ok:'已登录',expired:'已过期',failed:'登录失败',cancelled:'已取消'})[flow.phase];
+      if (active && service === 'bili' && flow.qr_url) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
+      if (active && service === 'x' && flow.started) status = '已在你的电脑上打开登录窗口';
+      else if (active && flow.claimed && !flow.qr_url) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
+      if (flow?.reason === 'risk') status = 'B 站暂时限制，请稍后再试';
+      const message = el('p', status); message.setAttribute('role', 'status'); card.append(message);
+      card.append(el('small', '最近检查：' + date(entry.auth?.checked_at)));
+      if (active && service === 'bili' && flow.qr_url) card.append(loginQr(flow.qr_url));
+      const actions = el('div', undefined, 'actions');
+      const start = button('登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
+      start.disabled = !!active || !snapshot.online; actions.append(start);
+      if (active) actions.append(button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }));
+      card.append(actions); cards.append(card);
+    }
+    panel.append(cards);
+  } catch (e) {
+    panel.loginSignature = '';
+    panel.replaceChildren(el('h2', '本机服务登录'), el('p', e.message, 'error'));
+  } finally { loginRefreshBusy = false; }
+}
+setInterval(async () => {
+  if (document.hidden || $('app').hidden || view !== 'system' || state?.who.role !== 'owner' || loading || loginRefreshBusy) return;
+  const panel = $('service-logins'); if (!panel) return;
+  const active = Object.values(loginSnapshot?.services || {}).some(s => s.flow && ['waiting','scanned'].includes(s.flow.phase));
+  if (Date.now() - lastLoginRefresh >= (active ? 2000 : 30000)) await refreshServiceLogins(panel);
+}, 2000);
+
 async function renderSystem() {
   const box = $("system");
   box.replaceChildren();
+  await renderServiceLogins(box);
   const model = el("section", undefined, "panel");
   model.append(
     el("h2", "最近 24 小时 · 模型调用"),

@@ -84,3 +84,16 @@ fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天�
 回滚本机服务：`python3 scripts/install-local.py --apply --remove-fetch`。Worker 设置 `bili.enabled=false` 后停止新建续答，已有等待仍会答完。首次部署与升级需核验 PID、启动哈希及群消息，文件复制成功不代表已启用。
 
 视频续答最多尝试 3 轮；持续失败时只发送一次固定降级说明并进入 `failed`，不会无限重跑。`npm run db:migrate` 会为已有 `video_waits` 表幂等补上 attempts 列并保留等待记录；新建环境直接使用 schema.sql。登录状态接口仅记录状态，本轮未接入登录过期提醒。卸载时若无法停止 team-fetch，会打印警告并保留 plist，需核实进程后再处理。
+
+## 网页登录 B 站和 X（仅本机 owner）
+
+打开现有管理员开发台 `http://127.0.0.1:3391`，进入「运行状态」→「本机服务登录」。普通成员名字登录看不到此卡片，也不能调用对应接口。
+
+- 「登录 B 站」把扫码链接直接画成浏览器内的二维码，用 B 站 App 扫描并确认。二维码不经过第三方图片服务。本机 fetcher 调用 passport 的 generate/poll，读取响应的 Set-Cookie，仅把四个允许字段及过期时间写入 `~/.inkboard-team/secrets/bili-cookie.json`（0600）。成功响应的跨域 URL、refresh_token、cookie 值不回传。缺少 buvid3 时匿名调用现有 fingerprint API；风控时保留已保存的会话和空 buvid3，后续抓取再补。
+- 「登录 X」由本机 fetcher 打开 Chrome，账号密码和验证码只在真实 X 窗口内填写；网页仅显示进展。可点「取消登录」关闭窗口。桌面「TeamAgent-登录.command」继续保留。
+- 登录请求五分钟失效，B 站二维码可能更早失效（passport 当前文档为三分钟）。同一服务只能有一个未结束请求；取消或失败后可重新发起。终态和超时不展示二维码。本机风控暂停十分钟，页面提示「B 站暂时限制，请稍后再试」。
+- 本机两分钟无领取或登录进展回报时，卡片提示「本机服务没在线，请检查」，停止接受新的登录操作；最近登录检查时间来自现有 auth 状态。先检查 team-fetch 是否在线，避免反复点击。
+
+云端 `settings` 仅新增固定键 `login-flow:bili`、`login-flow:x`、`fetcher:last-seen`，不加表。owner 的 `/api/team/service-login` 支持 GET 状态、POST 请求、DELETE 取消；runner 使用现有 fetch/claim 和新增 fetch/login-state 回报，暂停领取闸照常生效。前端活动登录每两秒更新、空闲时每三十秒检查；只在运行状态页可见且 owner 登录时运行。所有登录凭证仍只在本机，网页不接收密码、验证码或 cookie。
+
+接口字段核对依据：[B 站 web 扫码接口资料](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/login/login_action/QR.md)（2026-11-12，社区整理；真实扫码仍需发布后在 Mac 验收）。
