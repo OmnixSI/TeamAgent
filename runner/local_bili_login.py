@@ -30,6 +30,7 @@ class LocalBiliLogin:
         self._lock = threading.Lock()
         self._risk_lock = threading.Lock()
         self._bad_risk_until = 0
+        self._finished = {}
 
     def _risk_path(self):
         return self.runtime / RISK_PATH
@@ -53,7 +54,18 @@ class LocalBiliLogin:
     def _pause(self):
         path = self._risk_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self._risk_lock:
+        lock = path.with_name(path.name + ".lock")
+        held = False
+        for _ in range(100):
+            try:
+                os.mkdir(lock, 0o700)
+                held = True
+                break
+            except FileExistsError:
+                time.sleep(0.01)
+            except OSError:
+                break
+        try:
             old = 0
             try:
                 old = int(json.loads(path.read_text()).get("paused_until", 0))
@@ -71,6 +83,12 @@ class LocalBiliLogin:
                 pass
             finally:
                 temp.unlink(missing_ok=True)
+        finally:
+            if held:
+                try:
+                    lock.rmdir()
+                except OSError:
+                    pass
 
     def _http(self, url):
         self._check_pause()
@@ -169,6 +187,8 @@ class LocalBiliLogin:
 
     def status(self, login_id):
         with self._lock:
+            if isinstance(login_id, str) and self._finished.get(login_id) == "ok":
+                return {"phase": "ok"}
             item = self._sessions.get("active") if isinstance(login_id, str) else None
             if not item or item["id"] != login_id:
                 return {"phase": "expired"}
@@ -176,32 +196,33 @@ class LocalBiliLogin:
                 self._sessions = {}
                 return {"phase": "expired"}
             key = item["key"]
-        try:
-            headers, body = self._http(POLL + key)
-            if body.get("code") != 0:
-                return {"phase": "failed"}
-            code = (body.get("data") or {}).get("code")
-            if code == 0:
-                with self._lock:
+            try:
+                headers, body = self._http(POLL + key)
+                if body.get("code") != 0:
+                    return {"phase": "failed"}
+                code = (body.get("data") or {}).get("code")
+                if code == 0:
                     current = self._sessions.get("active")
                     if not current or current is not item or current["expires_at"] <= time.time() * 1000:
                         return {"phase": "expired"}
                     self._sessions = {}
-                self._save(self._cookies(headers, time.time() * 1000))
-                self._report("ok")
-                return {"phase": "ok"}
-            if code == 86090:
-                return {"phase": "scanned"}
-            if code == 86101:
-                return {"phase": "waiting"}
-            with self._lock:
+                    self._finished[login_id] = "ok"
+                    while len(self._finished) > 16:
+                        self._finished.pop(next(iter(self._finished)))
+                    self._save(self._cookies(headers, time.time() * 1000))
+                    self._report("ok")
+                    return {"phase": "ok"}
+                if code == 86090:
+                    return {"phase": "scanned"}
+                if code == 86101:
+                    return {"phase": "waiting"}
                 if self._sessions.get("active") is item:
                     self._sessions = {}
-            return {"phase": "expired" if code == 86038 else "failed"}
-        except BiliPaused:
-            return {"phase": "paused"}
-        except (OSError, ValueError, TypeError, urllib.error.URLError):
-            return {"phase": "failed"}
+                return {"phase": "expired" if code == 86038 else "failed"}
+            except BiliPaused:
+                return {"phase": "paused"}
+            except (OSError, ValueError, TypeError, urllib.error.URLError):
+                return {"phase": "failed"}
 
     def cancel(self, login_id):
         with self._lock:
