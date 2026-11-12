@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shlex
 import ssl
 import time
 import urllib.request
@@ -140,20 +139,30 @@ def _numstat(text):
     return result
 
 
+def _patch_paths(text):
+    # Raw -z records and patch sections follow the same Git diff queue order.
+    parts = text.split('\0'); i = 0; result = []
+    while i < len(parts):
+        part = parts[i]; i += 1
+        if not part.startswith(':'):
+            continue
+        paths = [parts[i]]; i += 1
+        if part.split()[-1].startswith(('R', 'C')):
+            paths.append(parts[i]); i += 1
+        result.append(paths)
+    return result
+
+
 def commit_record(root, sha, known_values=()):
     meta = _git(root, 'show', '--no-patch', '--format=%H%x00%at%x00%an%x00%s%x00%b', sha).split('\0', 4)
     # --raw adds actual file status alongside the same numstat; -z preserves names.
-    files = _numstat(_git(root, 'show', '--raw', '--numstat', '-z', '--format=', '--diff-merges=first-parent', sha))[:100]
+    stats = _git(root, 'show', '--raw', '--numstat', '-z', '--format=', '--diff-merges=first-parent', sha)
+    files = _numstat(stats)[:100]
     raw = _git(root, 'show', '--patch', '--format=', '--diff-merges=first-parent', sha)
     segments = []; truncated = False
-    for segment in re.split(r'(?=^diff --git )', raw, flags=re.M):
-        if not segment.startswith('diff --git '):
-            continue
-        try:
-            names = shlex.split(segment.splitlines()[0][11:])
-        except ValueError:
-            continue
-        if len(names) != 2 or any(denied(name[2:]) for name in names):
+    patches = [s for s in re.split(r'(?=^diff --git )', raw, flags=re.M) if s.startswith('diff --git ')]
+    for paths, segment in zip(_patch_paths(stats), patches, strict=True):
+        if any(denied(path) for path in paths):
             continue
         # Redact before cutting, too: a cut must not expose half a credential.
         safe = redact(segment, known_values)
@@ -278,9 +287,9 @@ def sync_once(now, known_values=()):
             if root.is_dir() and _matches_remote(root, repo) and (repo not in _fetch_at or now-_fetch_at[repo] >= 120):
                 try:
                     gitsafe.run(root,'lifecycle','fetch','--prune','origin'); _fetch_at[repo] = now
-                except gitsafe.GitFailed:
-                    print('repo index: fetch unavailable',repo,flush=True)
-                    return
+                except (gitsafe.GitFailed, TimeoutError) as error:
+                    print('repo index: fetch unavailable',repo,type(error).__name__,flush=True)
+                    continue
             st = state.get(repo, {})
             data = build(repo,st,remaining,known_values)
             if not data:

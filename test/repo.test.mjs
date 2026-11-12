@@ -47,6 +47,13 @@ test('W-5 file-prefix and author filters return only matching commits',async()=>
  const e=env();await api.ingestRepoIndex(e,{repos:[packet([commit(),{...commit('b'.repeat(40)),author:'Bob',files:[{path:'src/code.ts',add:1,del:0}]}])]});
  const r=await api.runRepoTool(e,'repo_changes',{repo,path:'runner/fetcher.mjs',author:'lic'});assert.deepEqual(r.commits.map(c=>c.sha7),[sha.slice(0,7)]);
 });
+for(const filter of [{author:'lic'},{path:'older/'}])test('review filters before limit find older matches beyond fifty commits '+JSON.stringify(filter),async()=>{
+ const e=env(),at=Date.now(),target={...commit(),at:at-100000,files:[{path:'older/code.ts',add:1,del:0}]};
+ const recent=Array.from({length:60},(_,i)=>({...commit((i+1).toString(16).padStart(40,'0')),at:at-i,author:'Bob'}));
+ for(const items of [[target],recent.slice(0,30),recent.slice(30)])await api.ingestRepoIndex(e,{repos:[packet(items)]});
+ const before=e.DB.executed,result=await api.runRepoTool(e,'repo_changes',{repo,...filter,limit:1});
+ assert.deepEqual(result.commits.map(c=>c.sha7),[sha.slice(0,7)]);assert.equal(e.DB.executed-before,2);
+});
 test('W-6 SHA prefixes resolve, ambiguous and missing fail clearly, invalid inputs issue zero SQL',async()=>{
  const e=env();await api.ingestRepoIndex(e,{repos:[packet()]});assert.equal((await api.runRepoTool(e,'repo_commit',{repo,sha:'1234567'})).sha,sha);
  await api.ingestRepoIndex(e,{repos:[packet([commit('1234567'+'b'.repeat(33))])]});assert.equal((await api.runRepoTool(e,'repo_commit',{repo,sha:'1234567'})).error_kind,'ambiguous');

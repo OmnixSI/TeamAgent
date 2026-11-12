@@ -211,6 +211,67 @@ class RepoIndexTests(unittest.TestCase):
                 self.assertEqual((self.h / 'repo-index-state.json').read_bytes(), before)
         index.sync_once(1020); self.assertEqual([c['sha'] for c in self.commits()], [later])
 
+    def test_review_fetch_failure_isolated_to_middle_repo_and_retried(self):
+        self.commit('base')
+        repos = [REPO, 'OmnixSI/Broken', 'OmnixSI/Healthy']
+        roots = [self.root, self.h / 'repos/Broken', self.h / 'repos/Healthy']
+        for repo, root in zip(repos[1:], roots[1:]):
+            self.git('clone', '-q', str(self.root), str(root))
+            self.git('remote', 'set-url', 'origin', 'https://github.com/' + repo + '.git', root=root)
+            self.git('config', 'user.name', 'Index Test', root=root)
+            self.git('config', 'user.email', 'index@example.invalid', root=root)
+        local = index.gitsafe.run.side_effect
+        with patch.object(index, 'settings', return_value={'repositories':repos}):
+            index.sync_once(1000)
+            before = self.state()
+            pending = {}
+            for repo, root in zip(repos, roots):
+                with patch.object(self, 'root', root):
+                    pending[repo] = self.commit('later for ' + repo)
+            for failure in (index.gitsafe.GitFailed('private diagnostic'), TimeoutError('private diagnostic')):
+                attempts = []
+                def fetch(root, cls, *args):
+                    if cls == 'lifecycle':
+                        attempts.append(root)
+                        if root == roots[1]:
+                            raise failure
+                    return local(root, cls, *args)
+                index._offset = 0
+                with self.subTest(failure=type(failure).__name__), patch.object(index.gitsafe, 'run', side_effect=fetch), patch('builtins.print') as log:
+                    index.sync_once(1120)
+                    self.assertEqual(self.state()[repos[1]], before[repos[1]])
+                    self.assertNotIn(repos[1], [r['repo'] for r in self.batches[-1]['repos']])
+                    for repo in (repos[0], repos[2]):
+                        self.assertEqual(self.state()[repo]['frontier']['refs/remotes/origin/main'], pending[repo])
+                    self.assertIn(roots[1], attempts)
+                    self.assertEqual(index._fetch_at[repos[1]], 1000)
+                    self.assertIn(type(failure).__name__, str(log.call_args_list))
+                    self.assertNotIn('private diagnostic', str(log.call_args_list))
+            index.sync_once(1130)
+            self.assertEqual(index._fetch_at[repos[1]], 1130)
+            self.assertEqual(self.state()[repos[1]]['frontier']['refs/remotes/origin/main'], pending[repos[1]])
+            self.assertEqual([c['sha'] for c in self.commits()], [pending[repos[1]]])
+
+    def test_review_filenames_with_spaces_preserve_complete_patch_and_paths(self):
+        for filename in ('my file.txt', 'folder with spaces/my file.txt', '含 空格.txt'):
+            with self.subTest(filename=filename):
+                sha = self.commit('complete patch content\n', filename)
+                record = index.commit_record(self.root, sha)
+                raw = self.git('show', '--patch', '--format=', '--diff-merges=first-parent', sha)
+                self.assertEqual(record['patch'].strip(), raw)
+                self.assertEqual(record['files'][0]['path'], filename)
+                self.assertIn('+complete patch content', record['patch'])
+                self.assertEqual(record['truncated'], 0)
+
+    def test_review_renamed_space_paths_preserve_denied_source_filtering(self):
+        self.commit('private synthetic contents\n', 'private secret.txt')
+        self.git('mv', 'private secret.txt', 'ordinary file.txt')
+        self.git('commit', '-qm', 'rename private file')
+        record = index.commit_record(self.root, self.git('rev-parse', 'HEAD'))
+        self.assertEqual(record['files'][0]['path'], 'ordinary file.txt')
+        self.assertEqual(record['files'][0]['status'], 'R')
+        self.assertEqual(record['patch'], '')
+
     def test_R11_non_allowlisted_repo_remote_and_escaping_directories_are_skipped(self):
         self.commit(); roots = self.h / 'work'; good = self.worktree()
         other = roots / 'other'; other.mkdir()

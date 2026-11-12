@@ -81,7 +81,8 @@ export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
   if (!Number.isFinite(at) || !Number.isInteger(limit) || limit < 1 || limit > 20 || (a.author !== undefined && typeof a.author !== "string") || (a.path !== undefined && typeof a.path !== "string")) return toolFailure(name, null, { kind: "invalid_args" });
   const index = await e.DB.prepare("SELECT json,updated_at,checked_at FROM repo_state WHERE repo=?").bind(a.repo).first();
   if (!index) return toolFailure(name, null, { kind: "not_synced" });
-  const rows = (await e.DB.prepare("SELECT sha,at,author,subject,files,truncated FROM repo_commits WHERE repo=? AND at>=? ORDER BY at DESC LIMIT 50").bind(a.repo, at).all()).results;
+  const scanLimit = a.author || a.path ? "" : " LIMIT 50";
+  const rows = (await e.DB.prepare("SELECT sha,at,author,subject,files,truncated FROM repo_commits WHERE repo=? AND at>=? ORDER BY at DESC" + scanLimit).bind(a.repo, at).all()).results;
   const data = JSON.parse(index.json), age = Math.max(0, Math.floor((Date.now() - index.checked_at) / 60000)), stale = Date.now() - index.checked_at > 600000;
   return { repo: a.repo, indexedAt: index.updated_at, stale, ...(stale ? { staleReason: `本机同步端 ${age} 分钟没上报，以下是 ${age} 分钟前的状态` } : {}),
     head: { sha7: data.head.sha.slice(0, 7), at: data.head.at, ago: ago(data.head.at) },
