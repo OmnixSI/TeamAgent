@@ -65,6 +65,19 @@ def redact(text, known_values=()):
     return PATTERN.sub('[REDACTED]', TOKEN_PATTERN.sub('[REDACTED]', text))
 
 
+def _config_secrets(value, sensitive=False):
+    # Inspect only the config already loaded for this round, never secret files.
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _config_secrets(item, sensitive or bool(re.search(
+                r'token|secret|password|passwd|key|cookie|authorization|credential', key, re.I)))
+    elif isinstance(value, list):
+        for item in value:
+            yield from _config_secrets(item, sensitive)
+    elif sensitive and isinstance(value, str) and value:
+        yield value
+
+
 def cut_bytes(s, n):
     return s.encode('utf-8')[:n].decode('utf-8', 'ignore')
 
@@ -273,7 +286,7 @@ def sync_once(now, known_values=()):
     config = _config()
     if config.get('index', {}).get('enabled', True) is False:
         return
-    known_values = (*known_values, config.get('runnerToken', ''))
+    known_values = (*known_values, *_config_secrets(config))
     state = _json(H/'repo-index-state.json', {})
     repositories = list(settings()['repositories'])
     if not repositories:

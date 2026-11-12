@@ -157,6 +157,27 @@ class RepoIndexTests(unittest.TestCase):
             self.assertIn('[REDACTED]', record[field])
         self.assertNotIn('synthetic-run', record['patch'])
 
+    def test_sync_redacts_all_config_secret_values_in_patch_and_commit_message(self):
+        values = ['opaque-admin.+value', 'opaque-source-key', 'opaque-api-value',
+                  'opaque-client-value', 'opaque-password', 'opaque-cookie-value', 'opaque-list-token']
+        config = {'url':'https://cloud.invalid', 'runnerToken':'synthetic-runner',
+                  'adminToken':values[0], 'sourceKey':values[1],
+                  'service':{'api_key':values[2], 'clientSecret':values[3], 'password':values[4], 'cookie':values[5]},
+                  'accounts':[{'access_token':values[6]}]}
+        (self.h / 'config.json').write_text(json.dumps(config))
+        text = ' '.join(values)
+        self.commit(text)
+        self.git('commit', '--amend', '-qm', text, '-m', text)
+        self.git('update-ref', 'refs/remotes/origin/main', self.git('rev-parse', 'HEAD'))
+        index.sync_once(1000)
+        record = self.commits()[0]
+        for field in ('patch', 'subject', 'body'):
+            self.assertIn('[REDACTED]', record[field])
+            for value in values:
+                self.assertNotIn(value, record[field])
+        for value in values:
+            self.assertNotIn(value, json.dumps(self.batches[-1]))
+
     def test_R6_R16_chinese_patch_and_request_are_bounded_in_utf8_bytes(self):
         for i in range(4): self.commit('中'*11000, 'src/p'+str(i)+'.ts')
         record = index.commit_record(self.root, self.git('rev-parse', 'HEAD'))

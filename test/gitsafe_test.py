@@ -96,16 +96,107 @@ class GitSafeTests(unittest.TestCase):
         self.assertNotIn('not-a-ref', str(failure.exception))
 
     def test_git_prefix_environment_and_fetch_arguments(self):
-        with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'ok', '')) as started:
+        def result(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, '' if 'config' in args else 'ok', '')
+        with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe.subprocess, 'run', side_effect=result) as started:
             self.assertEqual(gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin'), 'ok')
         args, opts = started.call_args
-        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','core.askPass=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'fetch','--prune','origin'])
+        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'fetch','--prune','origin'])
         self.assertEqual(opts['env']['GIT_CONFIG_NOSYSTEM'], '1')
         self.assertEqual(opts['env']['GIT_CONFIG_GLOBAL'], '/dev/null')
         self.assertEqual(opts['env']['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(opts['env']['GIT_ASKPASS'], '/usr/bin/false')
         self.assertEqual(opts['env']['GIT_OPTIONAL_LOCKS'], '0')
         self.assertNotIn('GIT_CONFIG_COUNT', opts['env'])
         self.assertFalse(opts.get('shell', False))
+
+    def test_fetch_restores_only_system_and_global_helpers_after_local_reset(self):
+        def result(args, **kwargs):
+            if 'config' not in args:
+                return subprocess.CompletedProcess(args, 0, 'fetched', '')
+            self.assertNotEqual(Path(kwargs['cwd']), self.root)
+            self.assertNotIn('GIT_CONFIG_COUNT', kwargs['env'])
+            self.assertNotIn('GIT_CONFIG_GLOBAL', kwargs['env'])
+            self.assertNotIn('GIT_CONFIG_SYSTEM', kwargs['env'])
+            self.assertIn('--includes', args)
+            data = ('credential.helper\nsystem-helper\0' if '--system' in args else
+                    'credential.https://github.com.helper\n\0credential.https://github.com.helper\n!/fixed/gh auth git-credential\0')
+            return subprocess.CompletedProcess(args, 0, data, '')
+        with patch.dict(os.environ, {'GIT_CONFIG_GLOBAL':str(self.root / '.git/config'), 'GIT_CONFIG_SYSTEM':str(self.root / '.git/config')}), patch.object(gitsafe.subprocess, 'run', side_effect=result) as started:
+            self.assertEqual(gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin'), 'fetched')
+        queries = [call.args[0] for call in started.call_args_list[:-1]]
+        self.assertEqual(len(queries), 2)
+        self.assertIn('--system', queries[0]); self.assertIn('--global', queries[1])
+        argv = started.call_args.args[0]
+        config = [argv[i+1] for i, arg in enumerate(argv) if arg == '-c']
+        helpers = [value for value in config if value.startswith('credential.')]
+        self.assertEqual(helpers, ['credential.helper=', 'credential.helper=system-helper',
+                                  'credential.https://github.com.helper=',
+                                  'credential.https://github.com.helper=!/fixed/gh auth git-credential'])
+        self.assertEqual([v for v in config if v.startswith('safe.directory=')], ['safe.directory=' + str(self.root.resolve())])
+
+    def test_fetch_authenticates_with_global_helper_without_running_local_helpers(self):
+        import base64
+        from functools import partial
+        from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        public = self.home / 'public'; public.mkdir()
+        remote = public / 'origin.git'
+        self.git('clone', '--bare', str(self.root), str(remote))
+        self.git('--git-dir=' + str(remote), 'update-server-info')
+        expected = 'Basic ' + base64.b64encode(b'synthetic-user:synthetic-password').decode()
+        class AuthGit(SimpleHTTPRequestHandler):
+            def do_GET(self):
+                if self.headers.get('Authorization') != expected:
+                    self.send_response(401); self.send_header('WWW-Authenticate', 'Basic realm="unit"'); self.end_headers()
+                else:
+                    super().do_GET()
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), partial(AuthGit, directory=str(public)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        url = 'http://127.0.0.1:' + str(server.server_port)
+        trusted = self.home / 'trusted-helper.sh'; trusted_marker = self.home / 'trusted-ran'
+        trusted.write_text('#!/bin/sh\nif [ "$1" = get ]; then\n  touch "' + str(trusted_marker) + '"\n  printf "username=synthetic-user\\npassword=synthetic-password\\n"\nfi\n')
+        trusted.chmod(0o700)
+        evil = self.home / 'evil-helper.sh'; evil_marker = self.home / 'evil-ran'
+        evil.write_text('#!/bin/sh\ntouch "' + str(evil_marker) + '"\nexit 1\n'); evil.chmod(0o700)
+        included = self.home / 'helpers.gitconfig'
+        self.git('config', '--file', str(included), 'credential.' + url + '.helper', '!' + str(trusted))
+        self.git('config', '--global', 'include.path', str(included))
+        self.git('remote', 'add', 'origin', url + '/origin.git')
+        self.git('config', 'credential.helper', '!' + str(evil))
+        self.git('config', 'credential.' + url + '.helper', '!' + str(evil))
+        self.git('config', 'core.askPass', str(evil))
+        real_run = subprocess.run
+        def isolated(args, **kwargs):
+            # Do not consult this machine's system credential store in a fixture.
+            if 'config' in args and '--system' in args:
+                return subprocess.CompletedProcess(args, 1, '', '')
+            return real_run(args, **kwargs)
+        try:
+            with patch.object(gitsafe.subprocess, 'run', side_effect=isolated):
+                gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
+            self.assertTrue(trusted_marker.exists())
+            self.assertFalse(evil_marker.exists())
+            branch = self.git('symbolic-ref', '--short', 'HEAD').strip()
+            self.assertEqual(self.git('rev-parse', 'refs/remotes/origin/' + branch), self.git('rev-parse', 'HEAD'))
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+    def test_helper_discovery_shares_the_round_budget_and_is_not_used_for_reads(self):
+        clock = [100.0]
+        def slow(args, **kwargs):
+            clock[0] += 2
+            return subprocess.CompletedProcess(args, 1, '', '')
+        with patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe.subprocess, 'run', side_effect=slow) as started:
+            with gitsafe.time_budget(1), self.assertRaises(TimeoutError):
+                gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
+            self.assertEqual(started.call_count, 1)
+            self.assertIn('--system', started.call_args.args[0])
+        with patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+            gitsafe.run(self.root, 'read', 'status')
+            self.assertEqual(started.call_count, 1)
+            self.assertNotIn('config', started.call_args.args[0])
 
     def test_git_round_has_one_shared_timeout_budget(self):
         clock = [100.0]

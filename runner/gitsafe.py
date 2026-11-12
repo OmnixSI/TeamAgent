@@ -23,7 +23,7 @@ class GitFailed(RuntimeError):
 PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
           '-c', 'diff.external=', '-c', 'core.pager=cat',
           '-c', 'core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5',
-          '-c', 'credential.helper=', '-c', 'core.askPass=', '-c', 'protocol.ext.allow=never']
+          '-c', 'credential.helper=', '-c', 'protocol.ext.allow=never']
 READ = {'log', 'show', 'rev-list', 'rev-parse', 'merge-base', 'for-each-ref',
         'status', 'diff', 'cat-file', 'ls-files', 'grep', 'config', 'worktree'}
 _clock = threading.local()
@@ -97,20 +97,45 @@ def _validate(root, cls, args):
     raise GitDenied('Unknown Git command class')
 
 
+def _timeout():
+    deadline = getattr(_clock, 'deadline', None)
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    if timeout <= 0:
+        raise TimeoutError('Git round timed out')
+    return timeout
+
+
+def _credential_helpers(env):
+    # Only fetch needs credentials. Replay trusted system/global helpers after
+    # the empty helper reset; never enable repository helpers or other host config.
+    # Explicit scopes and a neutral cwd keep .git/config out of helper discovery.
+    flags = []
+    for scope in ('--system', '--global'):
+        result = subprocess.run(['git', 'config', scope, '--includes', '--null', '--get-regexp',
+                                 r'^credential(\..*)?\.helper$'], cwd=Path.home(), env=env,
+                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=_timeout())
+        if result.returncode not in (0, 1):
+            raise GitFailed('Git command failed')
+        for entry in result.stdout.split('\0'):
+            if entry:
+                key, value = entry.split('\n', 1)
+                flags += ['-c', key + '=' + value]
+    return flags
+
+
 def run(root, cls, *args):
     """Return stdout for a permitted Git command; errors never include output."""
     _validate(root, cls, args)
     command, *rest = args
     flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else ['--no-includes'] if command == 'config' else []
     env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in ('SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
-    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
-    deadline = getattr(_clock, 'deadline', None)
-    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
-    if timeout <= 0:
-        raise TimeoutError('Git round timed out')
     try:
-        result = subprocess.run(PREFIX + ['-c', 'safe.directory=' + str(Path(root).resolve())] + [command] + flags + rest, cwd=root, env=env,
-                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=timeout)
+        helpers = _credential_helpers(env) if command == 'fetch' else []
+        # Block repo-local askPass execution as well as interactive terminal prompts.
+        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
+                   GIT_ASKPASS='/usr/bin/false', GIT_OPTIONAL_LOCKS='0')
+        result = subprocess.run(PREFIX + helpers + ['-c', 'safe.directory=' + str(Path(root).resolve())] + [command] + flags + rest, cwd=root, env=env,
+                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=_timeout())
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None
     if result.returncode:
