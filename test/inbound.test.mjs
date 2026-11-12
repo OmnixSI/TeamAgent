@@ -14,6 +14,76 @@ const ib = await bundle("inbound"), view = await bundle("view"), context = await
 const { redact } = await bundle("runtime"), { extractUrls } = await bundle("policy");
 const { rememberCorrection } = await bundle("memory"), { phraseCandidates } = await bundle("learning");
 const { agentAnswer, proactiveReply } = await bundle("semantic");
+const inferredCard = JSON.parse(readFileSync('test/fixtures/bili-card-inferred.json','utf8'));
+test('I-B1 inferred no-link miniapp is explicit card-only material, with clean bounded title',async()=>{
+  assert.match(inferredCard.provenance,/未找到真实样本，测试结构为推测/);
+  const parsed=ib.parseInbound('GROUP_MESSAGE_CREATE',inferredCard.event);
+  assert.equal(parsed.biliCard?.title,inferredCard.event.ark_data.fields.title);
+  assert.match(parsed.card.note,/仅卡片（标题\+预览）.*未读取视频内容/);assert.deepEqual(parsed.bili,[]);assert.equal(parsed.body,'');
+  const titles=await bundle('bilititle');
+  for(const [input,expected] of JSON.parse(readFileSync('test/fixtures/bili-title-vectors.json','utf8')))assert.equal(titles.normTitle(input),expected);
+  assert.equal(titles.titleRef(' Ａ  B '),titles.titleRef('A B'));assert.notEqual(titles.titleRef('a,b'),titles.titleRef('ab'));assert.notEqual(titles.titleRef('A'),titles.titleRef('a'));
+  for(const field of ['ark_name','prompt']){
+    const ark={ark_type:'miniapp',fields:{title:'标题'},[field]:'哔哩哔哩'};
+    assert.equal(ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:ark}).biliCard.title,'标题');
+  }
+  assert.equal(ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{title:'标题',source:'腾讯视频'}}}).biliCard,undefined);
+  const cleaned=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{source:'B站',title:'a\u0000b\u202ec\n\n d'}}}).biliCard.title;
+  assert.equal(cleaned,'abc d');
+  assert.equal([...ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{source:'B站',title:'😀'.repeat(200)}}}).biliCard.title].length,100);
+  assert.equal(ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{source:'B站',title:'！？！！'}}}).biliCard,undefined);
+});
+test('I-B2 recursive JSON/escaped/bare BV and b23 links reach the correct own or quoted scope',()=>{
+  const bv='BV1xx411c7mD';
+  for(const value of [bv,'https://www.bilibili.com/video/'+bv,'https://player.bilibili.com/player.html?bvid='+bv,'https:\\/\\/www.bilibili.com\\/video\\/'+bv]){
+    const parsed=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{nested:JSON.stringify({unknown:{value}})}}});
+    assert.ok(parsed.bili.some(x=>x.bvid===bv),value);
+  }
+  const short=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:JSON.stringify({ark_type:'miniapp',fields:{unexpected:{url:'b23.tv/AbCd12'}}})});
+  assert.equal(short.bili[0].short,'AbCd12');
+  const quoted=ib.parseInbound('GROUP_MESSAGE_CREATE',{msg_elements:[{content:JSON.stringify({payload:{url:'https://b23.tv/AbCd12'}})}]});
+  assert.deepEqual(quoted.bili,[]);assert.ok(quoted.quotedUrls.includes('https://b23.tv/AbCd12'));
+  const preview=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:{preview:'https://www.bilibili.com/video/'+bv,source_logo:JSON.stringify({url:'https://b23.tv/AbCd12'})}}});
+  assert.deepEqual(preview.bili,[]);
+  const previewArray=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{fields:[{key:'preview',value:'https://www.bilibili.com/video/'+bv},{key:'source_logo',value:'https://b23.tv/AbCd12'}]}});
+  assert.deepEqual(previewArray.bili,[]);
+  assert.deepEqual(ib.parseInbound('GROUP_MESSAGE_CREATE',{content:'https://evil.test/'+bv}).bili,[]);
+});
+test('I-B3 card-only note survives storage and model view, linked cards skip title lookup',async()=>{
+  const e=await setup();await qq(e,{...msg('miniapp',''),...inferredCard.event});
+  const m=await meta(e,'miniapp');assert.equal(m.biliCard.title,inferredCard.event.ark_data.fields.title);
+  const row=await e.DB.prepare('SELECT * FROM messages WHERE id=?').bind('miniapp').first();row.meta=m;
+  assert.match(view.viewMessage(row,names,new Map()).material.card.note,/仅卡片.*未读取视频内容/);
+  const linked=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{...inferredCard.event.ark_data,fields:{...inferredCard.event.ark_data.fields,url:'https://b23.tv/AbCd12'}}});
+  assert.equal(linked.biliCard,undefined);assert.equal(linked.card.note,undefined);assert.equal(linked.bili[0].short,'AbCd12');
+});
+test('I-B4 nested owned cards retain title fallback while nested quoted cards stay quoted',()=>{
+ const ark=inferredCard.event.ark_data;
+ const own=ib.parseInbound('GROUP_MESSAGE_CREATE',{ark_data:{wrapper:JSON.stringify({ark_data:ark})}});
+ assert.equal(own.biliCard?.title,ark.fields.title);
+ const quoted=ib.parseInbound('GROUP_MESSAGE_CREATE',{msg_elements:[{ark_data:{wrapper:JSON.stringify({ark_data:ark})}}]});
+ assert.equal(quoted.biliCard,undefined);assert.equal(quoted.quoted.biliCard?.title,ark.fields.title);
+ assert.match(quoted.quoted.card.note,/未读取视频内容/);
+  const nested=ib.parseInbound('GROUP_MESSAGE_CREATE',{content:JSON.stringify({msg_elements:[{ark_data:ark}]})});
+  assert.equal(nested.biliCard,undefined);assert.equal(nested.quoted?.biliCard?.title,ark.fields.title);
+});
+test('P2-1 attachment credentials never enter own links or model links; recursive video candidates stay separate',async()=>{
+ const signed='https://multimedia.nt.qq.com.cn/download?rkey=SECRET';
+ const e=await setup(),event={...msg('signed-attachment','正文 https://example.com/public'),attachments:[{content_type:'image/png',url:signed},{content_type:'image/png',url:'https://www.bilibili.com/video/BV1234567890'}],extra:{download:signed,nested:JSON.stringify({link:'https:\\/\\/b23.tv\\/AbCd12'})}};
+ const parsed=ib.parseInbound('GROUP_MESSAGE_CREATE',event);
+ assert.deepEqual(parsed.ownUrls,extractUrls(parsed.body+' '+JSON.stringify(event.ark_data||{})));
+ assert.ok(!JSON.stringify(parsed.ownUrls).includes('SECRET'));
+ assert.deepEqual(parsed.biliUrls,['https://b23.tv/AbCd12']);assert.equal(parsed.bili[0].short,'AbCd12');assert.ok(!parsed.bili.some(b=>b.bvid));
+ await qq(e,event);const stored=await meta(e,'signed-attachment');
+ assert.deepEqual(stored.biliUrls,parsed.biliUrls);
+ const current=await e.DB.prepare('SELECT * FROM messages WHERE id=?').bind('signed-attachment').first();current.meta=stored;
+ const links=view.viewMessage(current,names,new Map()).material.links;
+ assert.deepEqual(links,['https://example.com/public']);assert.ok(!JSON.stringify(links).includes('rkey=SECRET'));
+ const quoted=ib.parseInbound('GROUP_MESSAGE_CREATE',{msg_elements:[{content:'https:\\/\\/b23.tv\\/Qwer12',attachments:[{url:signed}]}]});
+ assert.deepEqual(quoted.biliUrls,[]);assert.deepEqual(quoted.quotedBiliUrls,['https://b23.tv/Qwer12']);
+ const fetchjobs=await bundle('fetchjobs');
+ assert.equal(fetchjobs.needsVideo([],{id:'quoted-candidate',body:'这个',meta:quoted},[],{bili:{enabled:true}}),'Qwer12');
+});
 const group = "GROUP000001", names = new Map([["U1", "阿明"], ["U2", "小王"]]);
 const card = (title = "T", url = "https://b23.tv/new") => ({ ark_type: "miniapp", ark_name: "哔哩哔哩", fields: { title, jump_url: url } });
 async function setup() { const e = env(); await req(e, "/api/admin/bind", { groupId: group }); return e; }

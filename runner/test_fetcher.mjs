@@ -10,6 +10,86 @@ import https from 'node:https';
 import {createBrowserAuth,writeBiliCookies} from './browser-auth.mjs';
 import {createFetchClient,createSafeLookup,isPublic,wbiSign,sanitize,runJob} from './fetcher.mjs';
 const BV='BV1xx411c7mD';
+const titleModule=()=>import('./bili-title.mjs');
+test('N-T1 title matching preserves punctuation/case and checks every candidate after the fifth',async()=>{
+ const {normTitle,pickByTitle}=await titleModule(),vectors=JSON.parse(await readFile('test/fixtures/bili-title-vectors.json','utf8'));
+ for(const [input,expected] of vectors)assert.equal(normTitle(input),expected);
+ const candidate=(bvid,title)=>({type:'video',bvid,title,author:'合成UP'});
+ assert.equal(pickByTitle([candidate(BV,'<em class="keyword">Ａ</em> &amp; B')],'A & B').bvid,BV);
+ assert.equal(pickByTitle([candidate(BV,'<em>A</em> &#x26; B')],'A & B').bvid,BV);
+ for(const title of ['a & B','A&B','A & B!'])assert.equal(pickByTitle([candidate(BV,title)],'A & B').miss,'near');
+ const list=Array.from({length:5},(_,i)=>candidate('BV123456789'+i,'其它标题'));
+ assert.equal(pickByTitle([...list,candidate(BV,'标题')],'标题').bvid,BV);
+ assert.equal(pickByTitle([...list,candidate(BV,'标题'),candidate('BV1234567899','标题')],'标题').miss,'multiple');
+ assert.equal(pickByTitle([candidate(BV,'标题'),candidate(BV,'标题')],'标题').bvid,BV);
+ assert.equal(pickByTitle([],'标题').miss,'none');
+});
+test('N-T2 title search signs all parameters, is anonymous, then preserves logged-in light reads',async()=>{
+ const {biliByTitle}=await titleModule();
+ const f=fixture(o=>{
+  if(o.path.includes('/spi'))return {body:{code:0,data:{b_3:'anon-device'}}};
+  if(o.path.includes('/nav'))return {body:{code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+ 'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};
+  if(o.path.includes('/search/type'))return {body:{code:0,data:{result:[{type:'video',bvid:BV,title:'标题'}]}}};
+  if(o.path.includes('/view'))return {body:{code:0,data:{title:'标题',aid:1,cid:1,owner:{name:'合成UP'}}}};
+  return {body:{code:0,data:{}}};
+ },{cookies:{SESSDATA:'private-session',buvid3:'anon-device'}});
+ assert.equal((await biliByTitle(f.client,'标题')).bvid,BV);
+ const search=f.calls.find(o=>o.path.includes('/search/type')),q=new URL('https://api.bilibili.com'+search.path).searchParams;
+ assert.equal(q.get('search_type'),'video');assert.equal(q.get('keyword'),'标题');assert.equal(q.get('page'),'1');assert.equal(q.get('order'),'totalrank');
+ assert.equal(search.path.split('?')[1],wbiSign({search_type:'video',keyword:'标题',page:1,order:'totalrank'},'a'.repeat(32),'b'.repeat(32),Number(q.get('wts'))));
+ assert.ok(!search.headers.Cookie.includes('SESSDATA'));assert.ok(search.headers.Cookie.includes('buvid3='));
+ assert.ok(f.calls.find(o=>o.path.includes('/view')).headers.Cookie.includes('SESSDATA=private-session'));
+ assert.ok(f.times.slice(1).every((value,i)=>value-f.times[i]>=1000));
+});
+test('N-T3 vouchers cool down search only while HTTP 412 and risk codes keep the global pause',async()=>{
+ const {biliByTitle}=await titleModule();let calls=0,searchPaused=false,globalPauses=0;
+ const client={isPaused:()=>false,isSearchPaused:()=>searchPaused,prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>{calls++;return {code:0,data:{v_voucher:'redacted-challenge'}};},pauseForRisk:()=>globalPauses++,pauseSearch:ms=>{assert.equal(ms,6*3600000);searchPaused=true;},biliLight:async()=>{throw Error('must not read a video');}};
+ await assert.rejects(biliByTitle(client,'标题'),/风控/);assert.equal(calls,1);assert.equal(globalPauses,0);assert.equal(searchPaused,true);
+ await assert.rejects(biliByTitle(client,'标题'),/风控/);assert.equal(calls,1);
+ for(const code of [412,-352,-412]){
+  const f=fixture(o=>o.path.includes('/search/type')?(code===412?{status:412}:{body:{code}}):o.path.includes('/nav')?{body:{data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:{body:{code:0,data:{b_3:'anon'}}});
+  await assert.rejects(biliByTitle(f.client,'标题'));await assert.rejects(biliByTitle(f.client,'标题'));
+  assert.equal(f.client.isPaused(),true);assert.equal(f.client.isSearchPaused(),false);const n=f.calls.length;
+  await assert.rejects(biliByTitle(f.client,'标题'));assert.equal(f.calls.length,n);
+ }
+});
+test('N-T4 title injection stays in the fixed signed query and never in headers or logs',async()=>{
+ const {biliByTitle}=await titleModule(),title='标题\r\n; Cookie:evil ../ $(x)';
+ const f=fixture(o=>o.path.includes('/search/type')?{body:{code:0,data:{result:[]}}}:o.path.includes('/nav')?{body:{data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:{body:{code:0,data:{b_3:'anon'}}});
+ assert.equal((await biliByTitle(f.client,title)).miss,'none');const search=f.calls.find(o=>o.path.includes('/search/type'));
+ assert.equal(new URL('https://api.bilibili.com'+search.path).pathname,'/x/web-interface/wbi/search/type');
+ assert.ok(search.path.includes('%0D%0A'));assert.ok(!JSON.stringify(f.calls.map(o=>o.headers)).includes('Cookie:evil'));assert.ok(!JSON.stringify(f.logs).includes('Cookie:evil'));
+});
+test('N-T5 title jobs reject invalid titles and direct short jobs expand before light video reads',async()=>{
+ const reports=[],cloud=async(_path,body)=>reports.push(body),client={sanitize:x=>x,biliLight:async()=>{throw Error('must not fetch');}};
+ for(const title of [undefined,'x'.repeat(101),'a\nb'])await runJob({id:'invalid',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title}},client,cloud);
+ assert.ok(reports.every(r=>r.success===false));
+ const f=fixture(o=>o.host==='b23.tv'?{status:302,headers:{location:'https://www.bilibili.com/video/'+BV}}:o.path.includes('/spi')?{body:{data:{b_3:'anon'}}}:o.path.includes('/nav')?{body:{data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:o.path.includes('/view')?{body:{code:0,data:{title:'标题',aid:1,cid:1,owner:{name:'合成UP'}}}}:{body:{code:0,data:{}}});
+ await runJob({id:'short',payload:{type:'bili',tier:'light',ref:'AbCd12'}},f.client,cloud);
+ assert.equal(reports.at(-1).success,true);assert.equal(reports.at(-1).result.bvid,BV);assert.equal(reports.at(-1).result.subtitle_status,'none');assert.equal(f.calls[0].host,'b23.tv');
+});
+test('N-T6 valid title jobs search exactly once and report matches or misses without title logs',async()=>{
+ for(const matches of [[],[{type:'video',bvid:BV,title:'标题'}]]){
+  let searches=0,lights=0;const reports=[],logs=[];
+  const client={isPaused:()=>false,isSearchPaused:()=>false,prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>{searches++;return {code:0,data:{result:matches}};},biliLight:async bvid=>{lights++;return {bvid};},sanitize:x=>x};
+  await runJob({id:'title-task',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title:'标题'}},client,async(_path,body)=>reports.push(body),s=>logs.push(s));
+  assert.equal(searches,1);assert.equal(lights,matches.length);assert.equal(reports[0].success,true);assert.ok(!JSON.stringify(logs).includes('标题'));
+ }
+});
+test('N-T7 voucher leaves BV reads running, blocks all title requests for six hours and then retries once',async()=>{
+ const f=fixture(o=>o.path.includes('/search/type')?{body:{code:0,data:{v_voucher:'synthetic-challenge'}}}:o.path.includes('/spi')?{body:{code:0,data:{b_3:'anon'}}}:o.path.includes('/nav')?{body:{code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:o.path.includes('/view')?{body:{code:0,data:{title:'标题',aid:1,cid:1,owner:{name:'合成UP'}}}}:{body:{code:0,data:{}}});
+ const reports=[],cloud=async(_path,body)=>reports.push(body),task=title=>({id:'search-task',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title}});
+ await runJob(task('标题'),f.client,cloud);const challengedAt=f.time;
+ assert.equal(reports.at(-1).success,false);assert.equal(f.client.isPaused(),false);assert.equal(f.client.isSearchPaused(),true);
+ assert.equal((await f.client.biliLight(BV)).bvid,BV);assert.ok(f.calls.some(o=>o.path.startsWith('/x/web-interface/view?')));
+ const count=f.calls.length,searches=()=>f.calls.filter(o=>o.path.includes('/search/type')).length;
+ assert.equal(searches(),1);
+ for(const title of ['标题','另一个标题']){await runJob(task(title),f.client,cloud);assert.equal(reports.at(-1).success,false);assert.equal(reports.at(-1).reason,'风控');}
+ assert.equal(f.calls.length,count);
+ f.setTime(challengedAt+6*3600000-1);await runJob(task('标题'),f.client,cloud);assert.equal(f.calls.length,count);
+ f.setTime(challengedAt+6*3600000);assert.equal(f.client.isSearchPaused(),false);
+ await runJob(task('标题'),f.client,cloud);assert.equal(searches(),2);assert.equal(f.calls.length,count+1);assert.equal(f.client.isPaused(),false);
+});
 function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
  let t=10000; const calls=[],logs=[],times=[]; let destroys=0;
  const request=(o,cb)=>{const req=new EventEmitter();req.end=()=>{o.lookup(o.host,{},(err)=>{if(err){req.emit('error',err);return;}calls.push(o);times.push(t);const r=handler(o,calls.length);const res=new EventEmitter();res.statusCode=r.status||200;res.headers=r.headers||{};cb(res);queueMicrotask(()=>{for(const chunk of r.chunks||[Buffer.from(JSON.stringify(r.body||{}))])res.emit('data',chunk);res.emit('end');});});};req.destroy=(err)=>{destroys++;req.emit('error',err||Error('destroyed'));};return req;};

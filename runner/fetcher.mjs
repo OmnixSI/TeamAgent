@@ -1,6 +1,7 @@
 /** Low-frequency Bilibili fetcher; optional local browser login. */
 import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
 import {runLoginFlow} from './qr-login.mjs';
+import {biliByTitle} from './bili-title.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -56,17 +57,17 @@ function allowed(raw,kind){
 }
 export function createFetchClient(options={}){
  const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random,log=options.log||(()=>{});
- const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
+ const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,searchPausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
  const knownSecrets=new Set(Object.values(cookies).filter(x=>typeof x==='string'&&x));
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
  const rate=()=>{const slot=serial.then(async()=>{if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
  function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2)pausedUntil=now()+600000;}
- async function get(raw,kind){
+ async function get(raw,kind,anonymous=false){
    const u=allowed(raw,kind);await rate();
    // Fresh headers per request: never reuse the API Cookie for a subtitle/short URL.
    const headers={'User-Agent':UA,'Referer':'https://www.bilibili.com/','Accept':'application/json','Accept-Encoding':'identity'};
-   if(kind==='api'){const values=['buvid3','SESSDATA'].filter(k=>typeof cookies[k]==='string'&&cookies[k]);if(values.length)headers.Cookie=values.map(k=>k+'='+cookies[k]).join('; ');}
+   if(kind==='api'){const values=(anonymous?['buvid3']:['buvid3','SESSDATA']).filter(k=>typeof cookies[k]==='string'&&cookies[k]);if(values.length)headers.Cookie=values.map(k=>k+'='+cookies[k]).join('; ');}
    return new Promise((resolveResult,reject)=>{
      let settled=false,timer;
      const fail=(error)=>{if(!settled){settled=true;clearTimeout(timer);reject(error instanceof Error?error:Error(now()<pausedUntil?'风控':'抓取失败'));}};
@@ -87,10 +88,10 @@ export function createFetchClient(options={}){
      req.on('error',fail);req.on('timeout',()=>{fail();req.destroy();});timer=setTimeout(()=>{fail();req.destroy();},8000);req.end();
    });
  }
- async function biliApi(path,params={}){
+ async function biliApi(path,params={},options={}){
    if(typeof path!=='string'||!path.startsWith('/')||path.startsWith('//'))throw Error('blocked API path');
    const query=typeof params==='string'?params:new URLSearchParams(Object.entries(params).map(([k,v])=>[k,String(v)])).toString();
-   const r=await get('https://api.bilibili.com'+path+(query?'?'+query:''),'api');
+   const r=await get('https://api.bilibili.com'+path+(query?'?'+query:''),'api',options.anonymous===true);
    if(!r.data)throw Error('无效接口响应');return r.data;
  }
  async function biliSubtitle(url){const r=await get(url,'subtitle');if(!r.data)throw Error('无效字幕响应');return r.data;}
@@ -118,16 +119,20 @@ export function createFetchClient(options={}){
      if(target.hostname!=='b23.tv')throw Error('短链无效');u=target;
    }throw Error('短链无效');
  }
- async function refreshBuvid(force=false){
+ async function refreshBuvid(force=false,anonymous=false){
    if(!force&&cookies.buvid3&&now()-buvidAt<86400000)return;
-   const spi=await biliApi('/x/frontend/finger/spi');
+   const spi=await biliApi('/x/frontend/finger/spi',{}, {anonymous});
    if(typeof spi.data?.b_3==='string'){cookies.buvid3=spi.data.b_3;knownSecrets.add(spi.data.b_3);buvidAt=now();}
+ }
+ async function prepare(anonymous=false){
+   await refreshBuvid(false,anonymous);
+   if(!wbi||now()-wbiAt>=43200000){const nav=await biliApi('/x/web-interface/nav',{}, {anonymous});const keys=nav.data?.wbi_img;if(keys){wbi=[keys.img_url,keys.sub_url].map(x=>new URL(x).pathname.split('/').at(-1).split('.')[0]);wbiAt=now();}}
+   return wbi;
  }
  async function biliLight(ref){
    if(!BV.test(ref)&&!SHORT.test(ref))throw Error('无效视频编号');
    const bvid=BV.test(ref)?ref:await resolveShort(ref);
-   await refreshBuvid();
-   if(!wbi||now()-wbiAt>=43200000){const nav=await biliApi('/x/web-interface/nav');const keys=nav.data?.wbi_img;if(keys){wbi=[keys.img_url,keys.sub_url].map(x=>new URL(x).pathname.split('/').at(-1).split('.')[0]);wbiAt=now();}}
+   await prepare();
    let view;
    try{view=await biliApi('/x/web-interface/view',{bvid});}
    catch(error){if(error.status!==412&&error.code!==-412)throw error;await refreshBuvid(true);view=await biliApi('/x/web-interface/view',{bvid});}
@@ -157,15 +162,19 @@ export function createFetchClient(options={}){
  }
  const isPaused=()=>now()<pausedUntil;
  const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);};
- return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
+ const isSearchPaused=()=>now()<searchPausedUntil;
+ const pauseSearch=ms=>{searchPausedUntil=Math.max(searchPausedUntil,now()+ms);};
+ return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
 }
 export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
  let report={id:job.id,lease:p.lease,success:false};
  try{
-   if(p.type!=='bili'||p.tier!=='light'||typeof p.ref!=='string'||(!BV.test(p.ref)&&!SHORT.test(p.ref)))throw Error('无效任务');
+   const titleRef=typeof p.ref==='string'&&/^t-[0-9a-f]{16}$/.test(p.ref);
+   if(p.type!=='bili'||p.tier!=='light'||typeof p.ref!=='string'||(!BV.test(p.ref)&&!SHORT.test(p.ref)&&!titleRef))throw Error('无效任务');
+   if(titleRef&&(typeof p.title!=='string'||![...p.title].length||[...p.title].length>100||/[\p{Cc}\p{Cf}]/u.test(p.title)))throw Error('无效任务');
    await beforeUse();
-   report={...report,success:true,result:await client.biliLight(p.ref)};
+   report={...report,success:true,result:titleRef?await biliByTitle(client,p.title):await client.biliLight(p.ref)};
  }catch(error){report.reason=error.message==='风控'?'风控':'视频内容未读到';log(client.sanitize('fetch '+report.reason));}
  await cloud('report',client.sanitize(report));
 }

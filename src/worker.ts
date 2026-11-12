@@ -5,7 +5,7 @@ import { isDirectRequest } from "./engagement";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { needsVideo, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
+import { videoTarget, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -294,6 +294,9 @@ async function receive(r: Request, e: Env) {
           cardView: ib.card,
           media: ib.media,
           bili: ib.bili,
+          biliCard: ib.biliCard,
+          biliUrls: ib.biliUrls,
+          quotedBiliUrls: ib.quotedBiliUrls,
           ownUrls: ib.ownUrls,
           quotedUrls: ib.quotedUrls,
           placeholder: ib.placeholder,
@@ -709,10 +712,10 @@ async function processJob(e: Env, id: string) {
       if (!batch.length || !latest) return;
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
-      const ref = transferred ? null : needsVideo(batch, latest, context.recent, TEAM);
+      const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
-      if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+      if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, title: target?.title, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
         await recordDecision(e, { ...decisionRow, gate: "video", action: "reply", forced: true });
         await advanceCursor(e, m.group_id, cursor, batch);
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
@@ -733,7 +736,7 @@ async function processJob(e: Env, id: string) {
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
-        ...(cached ? { materials: [videoMaterial(cached)] } : {}),
+        ...(cached ? { materials: [videoMaterial(cached,ref || '')] } : {}),
       });
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
