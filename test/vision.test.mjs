@@ -630,7 +630,7 @@ test("V12 daily budget allows only one of three parallel images", async () => {
   const user = JSON.parse(state.participation.messages[1].content);
   const media = user.context.batch.flatMap((x) => x.material?.media || []);
   assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 1);
-  assert.ok(media.some((x) => String(x) === "图片（未查看）"));
+  assert.ok(media.some((x) => /图片（未分析：今日看图预算已用完/.test(String(x))));
 });
 
 test("V13 research reuses cached image notes without fetching or describing", async () => {

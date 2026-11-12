@@ -9,7 +9,7 @@ import { videoTarget, biliCached, startVideoWait, runVideoWait, sweepVideoWaits,
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
-import { metaOf, viewMessage } from "./view";
+import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
 import {
   nameLogin,
   provisionNames,
@@ -32,6 +32,7 @@ import {
   annotateTurn,
   coldPicks,
   imageNotesFor,
+  applyImageOutcomes,
   pickImages,
   visionProvider,
   SELFTEST_PNG,
@@ -311,7 +312,7 @@ async function receive(r: Request, e: Env) {
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
   if (TEAM.stickers.enabled && TEAM.stickers.collect) {
-    const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!text.trim())).slice(0,2);
+    const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text))).slice(0,2);
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
       for (const {media, idx} of candidates) await job(e, "sticker-"+m.id+"-"+idx, "sticker", {url:media.url,sender:ib.senderId,message:m.id,idx});
   }
@@ -696,8 +697,8 @@ async function processJob(e: Env, id: string) {
         : [];
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
-        await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
-        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true });
+        const imageOutcomes = await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
+        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true, imageOutcomes });
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
       }
@@ -709,6 +710,7 @@ async function processJob(e: Env, id: string) {
         imagePicks: picks.map((p) => p.messageId + ":" + p.idx),
       });
       const { batch, latest } = context;
+      applyImageOutcomes(context.imageNotes, p.imageOutcomes);
       if (!batch.length || !latest) return;
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));

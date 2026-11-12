@@ -1,5 +1,5 @@
 import { UNTRUSTED_MARK } from "./untrusted";
-import { displayText, metaOf, quoteIn } from "./view";
+import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
 export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
@@ -57,6 +57,14 @@ function ownClauses(text: string): string[] {
   return own.split(/[，,。！？!?；;\n]/).map(part => part.trim().replace(/^@\S+\s+/, ""));
 }
 
+// A face alone between 不是 and 是 is the corrected old value: keep a one-char,
+// non-space, non-punctuation gap there. Everywhere else faces vanish, so
+// contiguous phrases and negative guards see the member's prose unchanged.
+const FACE_GAP = /(不是)(?:\s*\[表情\])+\s*(?=是)/g;
+function neutralFaces(text: string): string {
+  return text.replace(FACE_GAP, "$1￼").replaceAll("[表情]", "").trim();
+}
+
 /** The only clean-turn work predicate, shared by file and project tools. */
 export function cleanWorkRequest(text: string): boolean {
   if (COMPLETED_WORK.test(text)) return false;
@@ -75,6 +83,7 @@ export function cleanWorkRequest(text: string): boolean {
 
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
+  text = neutralFaces(text);
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {
@@ -96,7 +105,7 @@ function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean
 export function explicitWriteRequest(tool: WriteTool, source: any, names = new Map<string, string>(), dirty?: boolean): boolean {
   const meta = metaOf(source);
   const mentions = (meta.mentions || []).map((m: any) => ({ ...m, name: m.name || names.get(m.id) || "" }));
-  const text = displayText(String(source.body || ""), mentions).replace(/^@\S+\s+/, "");
+  const text = evidenceText(String(source.body || ""), mentions).replace(/^@\S+\s+/, "");
   return explicitCommand(tool, text, dirty ?? tainted({ batch: [{ meta }] }, [{ role: "user", content: source.body }]));
 }
 
@@ -106,8 +115,9 @@ export function authorize(tool: WriteTool, quote: unknown, source: any, context:
   if (typeof quote !== "string" || !source?.id || !(context.batch?.some((r: any) => r.id === source.id) || source.id === context.latest?.id))
     return { ok: false, reason: "外部资料不能作为交办依据" };
   if (!quoteIn(source, quote, context.names)) return { ok: false, reason: "原话不在成员发言里" };
-  if (quote.replace(/[\s\p{P}]/gu, "").length < 4) return { ok: false, reason: "原话太短" };
-  if (!explicitCommand(tool, quote, dirty) || !explicitWriteRequest(tool, source, context.names, dirty))
+  const evidence = quoteEvidence(String(source.body || ""), quote);
+  if (evidence.replace(/[\s\p{P}]/gu, "").length < 4) return { ok: false, reason: "原话太短" };
+  if (!explicitCommand(tool, evidence, dirty) || !explicitWriteRequest(tool, source, context.names, dirty))
     return { ok: false, reason: "成员原话里没有明确交办" };
   return { ok: true, tainted: dirty };
 }

@@ -22,16 +22,45 @@ export function metaOf(row: any): any {
   if (row.meta) return withLegacy(row.meta);
   try { return withLegacy(JSON.parse(row.metadata || "{}")); } catch { return {}; }
 }
-const FACE = /\[<face,id=\d+\/>\]|<faceType=[^>]*>/g;
+// ext may contain raw JSON or escaped JSON; a > inside its text is not a tag end.
+const FACE = /\[<face,id=\d+\/>\]|<faceType=(?:ext="\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\}"|"(?:\\.|[^"\\])*"|[^">])*>/g;
+export function withoutFaces(body: string): string {
+  return body.replace(FACE, "");
+}
+export function hasFace(body: string): boolean {
+  return withoutFaces(body) !== body;
+}
+function faceName(tag: string): string {
+  // QQ supplies URI-encoded JSON or a JSON string escaped inside ext="…".
+  const match = tag.match(/\bext="(.*)"\s*>$/);
+  if (!match) return "[表情（名称未知）]";
+  try {
+    let raw = match[1].startsWith("{") ? match[1] : decodeURIComponent(match[1]);
+    if (raw.startsWith("{\\\"")) raw = JSON.parse('"' + raw + '"');
+    const text = JSON.parse(raw)?.text;
+    const name = typeof text === "string" ? text.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
+    return name ? "[表情：" + name + "]" : "[表情（名称未知）]";
+  } catch { return "[表情（名称未知）]"; }
+}
 export function displayText(body: string, mentions: Mention[]): string {
-  return renderMentions(body, mentions).replace(FACE, "[表情]");
+  return renderMentions(body, mentions).replace(FACE, faceName);
+}
+/** Attachment attributes and decoded labels are display material, not member prose. */
+export function evidenceText(body: string, mentions: Mention[]): string {
+  return renderMentions(body.replace(FACE, "[表情]"), mentions);
+}
+/** Only labels actually rendered from this message can become neutral evidence markers. */
+export function quoteEvidence(body: string, quote: string): string {
+  for (const tag of body.match(FACE) || []) quote = quote.replaceAll(faceName(tag), "[表情]");
+  return quote;
 }
 function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
   return (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
 }
 export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
   const mentions = resolvedMentions(metaOf(row), names);
-  return row.body.includes(quote) || renderMentions(row.body, mentions).includes(quote) || displayText(row.body, mentions).includes(quote);
+  const evidence = quoteEvidence(row.body, quote);
+  return row.body.replace(FACE, "[表情]").includes(evidence) || evidenceText(row.body, mentions).includes(evidence);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {
@@ -69,7 +98,7 @@ export function mediaViews(
     imageIdx++;
     const note = imageNotes?.get(messageId)?.[imageIdx];
     if (note) return note;
-    if (imagePicks?.has(messageId + ":" + imageIdx)) return "图片（未查看）";
+    if (imagePicks?.has(messageId + ":" + imageIdx)) return "图片（未分析：没有可用结果，原因未记录）";
     return "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
   });
 }
@@ -81,12 +110,17 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   const sortAt = Date.parse(row.ts) || 0;
   const material: ViewMsg["material"] = {};
   if (meta.cardView) material.card = meta.cardView;
-  if (target)
+  if (target) {
+    let imageIdx = -1;
+    const media = target.media?.map(item => item.startsWith("图片")
+      ? imageNotes?.get(target.id)?.[++imageIdx] || item
+      : item);
     material.quote = {
       from: target.from,
       text: target.text.slice(0, 200),
-      ...(target.media?.length ? { media: target.media } : {}),
+      ...(media?.length ? { media } : {}),
     };
+  }
   else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
   const media = mediaViews(meta, row.id, imageNotes, imagePicks);
   if (media) material.media = media;
