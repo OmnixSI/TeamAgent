@@ -1575,7 +1575,7 @@ async function api(r: Request, e: Env) {
         b.id,
         "资料助手",
         b.success === false
-          ? "资料处理未完成，保留输入供接手"
+          ? "资料处理未完成，本机临时输入将自动清理"
           : files.length
             ? "已生成 " + files.length + " 个文件，等待QQ交付"
             : "资料分析已完成",
@@ -1979,7 +1979,7 @@ async function api(r: Request, e: Env) {
         "utility.cancelled",
         b.id,
         who.name,
-        "停止资料处理，保留现有输入和成果",
+        "停止资料处理并清理本机临时缓存",
       );
     return json({ ok: !!row }, row ? 200 : 409);
   }

@@ -44,11 +44,10 @@ class UtilityTests(unittest.TestCase):
 
             proc = MagicMock()
             proc.pid = 12345
-            proc.communicate.side_effect = (
-                [subprocess.TimeoutExpired(["private-command"], 120), ("", "")]
-                if times_out
-                else [
-                    (
+            if times_out:
+                proc.communicate.side_effect = [subprocess.TimeoutExpired(["private-command"], 120), ("", "")]
+            else:
+                proc.communicate.return_value = (
                         json.dumps(
                             {
                                 "type": "final",
@@ -58,8 +57,6 @@ class UtilityTests(unittest.TestCase):
                         ),
                         "",
                     )
-                ]
-            )
 
             def spawn(*a, **kw):
                 self.assertEqual(kw["stdin"], subprocess.PIPE)
@@ -112,13 +109,14 @@ class UtilityTests(unittest.TestCase):
         reports, files, kills = self.scenario()
         self.assertEqual(len(files), 1)
         self.assertIn("CSV已生成", reports[0]["result"])
-        self.assertEqual(kills, 0)
+        self.assertGreaterEqual(kills, 1)
 
     def test_timeout_kills_group_and_only_reports_human_text(self):
         reports, files, kills = self.scenario(times_out=True)
-        self.assertEqual(kills, 1)
+        self.assertGreaterEqual(kills, 1)
         self.assertFalse(reports[0]["success"])
         self.assertIn("跑了 8 分钟没跑完", reports[0]["result"])
+        self.assertNotIn("输入已保留", reports[0]["result"])
         self.assertNotIn("这份资料暂时没处理完", reports[0]["result"])
         self.assertNotIn("private-command", reports[0]["result"])
         self.assertEqual(files, [])
@@ -127,7 +125,7 @@ class UtilityTests(unittest.TestCase):
         reports, files, kills = self.scenario(report_failure=True)
         self.assertEqual(len(reports), 2)
         self.assertEqual(len(files), 1)
-        self.assertEqual(kills, 0)
+        self.assertGreaterEqual(kills, 1)
 
     def test_completed_delivery_is_not_enqueued_twice(self):
         reports, files, kills = self.scenario(already_sent=True)

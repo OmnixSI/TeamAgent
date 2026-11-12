@@ -6,6 +6,24 @@ const write = (file, data) => {
   fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
   fs.renameSync(tmp, file);
 };
+function cleanSentOutputs(d, root) {
+  if (d.status !== "sent") return;
+  const base = fs.realpathSync(root);
+  for (const file of d.files || []) {
+    const relative = path.relative(path.resolve(root), path.resolve(file)).split(path.sep);
+    if (relative.length !== 4 || relative[0] !== "_deliveries" ||
+        !/^[a-f0-9]{32}$/.test(relative[1]) || relative[2] !== "outputs") continue;
+    try {
+      const real = fs.realpathSync(file);
+      if (real !== path.join(base, ...relative)) continue;
+      fs.unlinkSync(real);
+      fs.rmdirSync(path.dirname(real));
+      fs.rmdirSync(path.dirname(path.dirname(real)));
+    } catch (error) {
+      if (!["ENOENT", "ENOTEMPTY"].includes(error.code)) throw error;
+    }
+  }
+}
 export function recoverDeliveries(dir) {
   if (!fs.existsSync(dir)) return;
   for (const name of fs
@@ -26,6 +44,7 @@ export async function deliverFiles({ dir, root, target, sendFile, report }) {
     .filter((x) => /\.json\.(sent|failed|unknown)$/.test(x))) {
     const file = path.join(dir, name),
       d = JSON.parse(fs.readFileSync(file));
+    cleanSentOutputs(d, root);
     if (d.reported || !d.id) continue;
     try {
       await report({
@@ -78,6 +97,7 @@ export async function deliverFiles({ dir, root, target, sendFile, report }) {
     }
     write(active, d);
     fs.renameSync(active, file + "." + d.status);
+    cleanSentOutputs(d, root);
     try {
       await report({ id: d.id, status: d.status, sent_count: d.sent_count });
       d.reported = true;

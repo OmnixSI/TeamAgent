@@ -4,10 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { recoverDeliveries, deliverFiles } from "../runner/delivery.mjs";
-function fixture() {
+function fixture(staged = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-delivery-")),
     root = path.join(dir, "utility"),
-    outputs = path.join(root, "job", "outputs"),
+    outputs = path.join(root, ...(staged ? ["_deliveries", "a".repeat(32)] : ["job"]), "outputs"),
     queue = path.join(dir, "deliveries");
   fs.mkdirSync(outputs, { recursive: true });
   fs.mkdirSync(queue);
@@ -23,6 +23,7 @@ function fixture() {
     root,
     queue,
     manifest,
+    file,
     clean() {
       fs.rmSync(dir, { recursive: true, force: true });
     },
@@ -56,6 +57,38 @@ test("file success is sent once even when cloud receipt fails and the gateway re
     );
   } finally {
     f.clean();
+  }
+});
+test("confirmed native send cleans staged outputs while its cloud receipt remains retryable", async () => {
+  const f = fixture(true);
+  let sends = 0, reports = 0;
+  const options = {
+    dir: f.queue, root: f.root, target: async () => ({ group_id: "G" }),
+    sendFile: async (_group, file) => { assert.ok(fs.readFileSync(file, "utf8").includes("大肥鱼")); sends++; },
+    report: async () => { if (++reports === 1) throw Error("report outage"); },
+  };
+  try {
+    await deliverFiles(options);
+    assert.equal(sends, 1);
+    assert.ok(!fs.existsSync(f.file), "confirmed output must not remain cached");
+    assert.ok(!fs.existsSync(path.dirname(path.dirname(f.file))), "empty controlled spool directory is removed");
+    assert.ok(!JSON.parse(fs.readFileSync(f.manifest + ".sent")).reported);
+    await deliverFiles(options);
+    assert.equal(sends, 1, "retry cloud receipt only, with no access to deleted output");
+    assert.equal(reports, 2);
+    assert.equal(JSON.parse(fs.readFileSync(f.manifest + ".sent")).reported, true);
+  } finally { f.clean(); }
+});
+test("failed or uncertain native sends preserve the unconfirmed staged artifact", async () => {
+  for (const attempted of [false, true]) {
+    const f = fixture(true);
+    try {
+      await deliverFiles({dir:f.queue,root:f.root,
+        target:async()=>{if(!attempted)throw Error("no target");return {group_id:"G"};},
+        sendFile:async()=>{throw Error("send outcome unknown");},report:async()=>{}});
+      assert.ok(fs.existsSync(f.file));
+      assert.ok(fs.existsSync(f.manifest + (attempted ? ".unknown" : ".failed")));
+    } finally { f.clean(); }
   }
 });
 test("a crash during SDK send becomes unknown and never resends", async () => {
