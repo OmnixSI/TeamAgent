@@ -1,4 +1,5 @@
 import { left } from "./d1";
+import { stage, flushTail } from "./timing";
 import { TEAM } from "./config";
 import { extractBili } from "./inbound";
 import { metaOf } from "./view";
@@ -88,7 +89,9 @@ export async function startVideoWait(e: any, x: { groupId: string; ref: string; 
       .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
     fetchStatement(e, x.ref, "light", id, now, x.title),
   ]);
-  return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first());
+  const created = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first();
+  if (created) stage(e, x.latest.id, "bili_wait_start");
+  return !!created;
 }
 export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
   const now = Date.now(), id = "video-" + waitId;
@@ -100,7 +103,10 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
     ON CONFLICT(id) DO UPDATE SET status='pending',attempts=0,lease_until=0,error=NULL
     RETURNING id`)
     .bind(id, JSON.stringify({ wait: waitId }), now, waitId, now, now).first();
-  if (row) await queueFor(e, "video_reply")?.send({ id });
+  if (row) {
+    await queueFor(e, "video_reply")?.send({ id });
+    stage(e, waitId.slice(3), "wait_woken");
+  }
 }
 export function biliNoteText(r: BiliResult): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
@@ -118,6 +124,7 @@ export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
   return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
 }
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
+  e.timingTurn = waitId.slice(3);
   const now = Date.now();
   const w = await e.DB.prepare(`UPDATE video_waits SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND attempts<3 AND
     ((status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?)) RETURNING *`)
@@ -216,18 +223,26 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
     .bind(b.id, b.lease, status).first();
   if (!committed) return Response.json({ error: "lease conflict" }, { status: 409 });
   const waiters: string[] = [...new Set<string>((JSON.parse(committed.payload).waiters || []).filter((s: any) => typeof s === "string"))];
+  for (const waiter of waiters.slice(0, 3)) stage(e, waiter.slice(3), "fetch_reported");
   for (const waiter of waiters) await wakeVideoWait(e, waiter);
   return Response.json({ ok: true });
 }
-export async function fetchRoute(e: any, path: string, b: any): Promise<Response> {
+async function dispatchFetch(e: any, path: string, b: any): Promise<Response> {
   if (path.endsWith('/claim')) {
     await fetcherSeen(e);
     const login=await claimLogin(e);
-    return Response.json({login,job:login?null:await claimFetch(e)});
+    const job=login?null:await claimFetch(e);
+    for (const waiter of (job?.payload?.waiters || []).slice(0,3)) stage(e, waiter.slice(3), "fetch_claimed");
+    return Response.json({login,job});
   }
   if(path.endsWith('/login-state'))return reportLogin(e,b);
   if (path.endsWith('/heartbeat')) { const ok = await heartbeatFetch(e, b.id, b.lease); return Response.json({ ok }, { status: ok ? 200 : 409 }); }
   if (path.endsWith('/report')) return reportFetch(e, b);
   if (path.endsWith('/auth-status')) return recordAuthStatus(e,b);
   return Response.json({ error: "not found" }, { status: 404 });
+}
+export async function fetchRoute(e: any, path: string, b: any): Promise<Response> {
+  const result = await dispatchFetch(e, path, b);
+  await flushTail(e);
+  return result;
 }

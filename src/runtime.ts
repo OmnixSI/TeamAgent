@@ -1,4 +1,5 @@
 import { modelSettings, type Effort } from "./config";
+import { stage } from "./timing";
 /** Credentials are never prompt material, query strings, metrics or activity records. */
 export function redact(text: string): string {
   return text
@@ -53,6 +54,7 @@ export async function model(
   effort = selected.effort;
   timeout = selected.timeout;
   const start = Date.now();
+  stage(e, e.timingTurn, "model_start", { kind }, start);
   let usage: any = {},
     status = "failed";
   const controller = new AbortController();
@@ -91,6 +93,7 @@ export async function model(
     status = "ok";
     return data;
   } finally {
+    stage(e, e.timingTurn, "model_end", { kind });
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
     if (e.DB)

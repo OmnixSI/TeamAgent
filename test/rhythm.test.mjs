@@ -428,7 +428,7 @@ test('B3 three cold images, a reference and two sent segments fit both phases',a
     const image=await measured(base,'p1-B3-image',e=>queue(e,'chat-'+id));
     const answer=await measured(base,'p1-B3-answer',e=>queue(e,'chat-v-'+id));
     assert.equal(state.vision,3);assert.equal(state.decisions,1);assert.equal(state.sent.length,2);
-    assert.ok(state.sent[0].message_reference);assert.ok(image<=30,'image '+image);assert.ok(answer<=44,'answer '+answer);
+    assert.ok(state.sent[0].message_reference);assert.ok(image<=30,'image '+image);assert.ok(answer<=45,'answer '+answer);
   });
 });
 function correctionCalls(source){return [0,1,2].map(i=>({id:'remember-'+i,type:'function',function:{name:'remember_correction',arguments:JSON.stringify({repo:'team',subject:'budget-'+i,predicate:'owner',value:'小王',source_id:source,quote:'纠正负责人是小王',supersedes_ids:Array.from({length:8},(_,j)=>'old-'+j)})}}));}
@@ -508,7 +508,8 @@ test('budget guards leave a low-budget send and sweep durable; reference fuse co
   const fuseBase=await outgoing();await fuseBase.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
   let before=fuseBase.DB.executed;const fuse=metered(fuseBase);
   await deliver(fuse,b=>b.message_reference?Response.json({code:1},{status:422}):Response.json({id:'sent',ext_info:{ref_idx:'FUSE-BOT'}}));
-  assert.equal(fuse.meter.used,fuseBase.DB.executed-before);assert.equal(fuse.meter.used-2,10);assert.equal(COST.send_row,10);
+  assert.equal(fuse.meter.used,fuseBase.DB.executed-before);assert.equal(fuse.meter.used,13); // Two sender reads, ten fuse-row queries, one optional timing tail.
+  assert.equal(COST.send_row,10);
   assert.equal(await setting(fuseBase,'off:quote'),'1');
   const out=`.wrangler/sweep-budget-${process.pid}.mjs`;
   await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});

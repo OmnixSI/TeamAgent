@@ -38,7 +38,8 @@ export async function cancelLogin(e:any,b:any):Promise<Response>{
  return row?json({flow:display(read(row.value),now)}):json({error:'登录请求已变化，请刷新'},409);
 }
 export async function fetcherSeen(e:any):Promise<void>{
- await e.DB.prepare("INSERT INTO settings VALUES('fetcher:last-seen',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
+ const now=Date.now();
+ await e.DB.prepare("INSERT INTO settings VALUES('fetcher:last-seen',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(settings.value AS INTEGER) < ?").bind(String(now),now-30000).run();
 }
 export async function claimLogin(e:any):Promise<any>{
  const now=Date.now();

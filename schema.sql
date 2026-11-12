@@ -59,3 +59,5 @@ CREATE TABLE IF NOT EXISTS outbox_meta(id TEXT PRIMARY KEY,json TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS stickers(sha TEXT PRIMARY KEY,mime TEXT NOT NULL,bytes INTEGER NOT NULL,data BLOB NOT NULL,desc TEXT,tags TEXT,state INTEGER NOT NULL DEFAULT 0,senders TEXT NOT NULL DEFAULT '[]',seen INTEGER NOT NULL DEFAULT 1,source_message TEXT,tagged_at INTEGER,used_at INTEGER,uses INTEGER NOT NULL DEFAULT 0,file_info TEXT,file_info_expires INTEGER,created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS stickers_state ON stickers(state,used_at);
+CREATE TABLE IF NOT EXISTS stage_timings(turn_id TEXT NOT NULL, stage TEXT NOT NULL, at INTEGER NOT NULL, extra TEXT);
+CREATE INDEX IF NOT EXISTS stage_timings_turn ON stage_timings(turn_id);
