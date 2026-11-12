@@ -26,6 +26,9 @@ class GitFailed(RuntimeError):
 
 PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
           '-c', 'diff.external=', '-c', 'core.pager=cat',
+          '-c', 'log.showSignature=false', '-c', 'gpg.program=/usr/bin/false',
+          '-c', 'gpg.openpgp.program=/usr/bin/false', '-c', 'gpg.x509.program=/usr/bin/false',
+          '-c', 'gpg.ssh.program=/usr/bin/false',
           '-c', 'core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5',
           '-c', 'credential.helper=', '-c', 'protocol.ext.allow=never']
 DEFAULT_REFSPEC = '+refs/heads/*:refs/remotes/origin/*'
@@ -248,11 +251,25 @@ def _fetch(root, env):
         return output
 
 
+def _check_filters(root, env):
+    # Local includes participate in status/diff, so this query must follow them.
+    result = subprocess.run(PREFIX + ['-c', 'safe.directory=' + str(Path(root).resolve()),
+                                     'config', '--includes', '--name-only', '--get-regexp', r'^filter\.'],
+                            cwd=root, env=env, text=True, encoding='utf-8', errors='replace',
+                            capture_output=True, timeout=_timeout())
+    if result.returncode == 0:
+        raise GitDenied('Git filter drivers denied')
+    if result.returncode != 1:  # rc 1 means no matching keys; other errors fail closed.
+        raise GitFailed('Git command failed')
+
+
 def run(root, cls, *args):
     """Return stdout for a permitted Git command; errors never include output."""
     _validate(root, cls, args)
     command, *rest = args
     flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else ['--no-includes'] if command == 'config' else []
+    if command in ('status', 'diff'):
+        flags += ['--ignore-submodules=all']
     env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in ('SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
     try:
         # Block repo-local askPass execution as well as interactive terminal prompts.
@@ -260,6 +277,10 @@ def run(root, cls, *args):
                    GIT_ASKPASS='/usr/bin/false', GIT_OPTIONAL_LOCKS='0')
         if command == 'fetch':
             return _fetch(root, env)
+        if cls == 'read':
+            env['GIT_ALLOW_PROTOCOL'] = 'none'
+        if command in ('status', 'diff'):
+            _check_filters(root, env)
         return _invoke(root, env, [command] + flags + rest)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None

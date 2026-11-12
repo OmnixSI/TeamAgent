@@ -240,7 +240,7 @@ def worktrees(roots, repo):
                 result.append({'label':candidate.name, 'branch':_git(resolved, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
                                'base':_git(resolved, 'rev-parse', 'HEAD').strip(), 'files':files[:100],
                                'untracked':sum(f['status']=='??' for f in files), 'updatedAt':int(time.time()*1000)})
-            except gitsafe.GitFailed:
+            except (gitsafe.GitFailed, gitsafe.GitDenied):
                 continue
             if len(result) == 20:
                 return result

@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from runner import gitsafe
+from runner import gitsafe, repo_index
 
 
 class GitSafeTests(unittest.TestCase):
@@ -37,6 +37,95 @@ class GitSafeTests(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(['git', *args], cwd=self.root, text=True, capture_output=True, check=True).stdout
+
+    def marker_script(self, name):
+        marker = self.home / (name + '-executed')
+        script = self.home / (name + '.sh')
+        script.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 1\n')
+        script.chmod(0o700)
+        return script, marker
+
+    def index_remote(self):
+        repo = 'OmnixSI/TeamAgent'
+        self.git('remote', 'add', 'origin', 'https://github.com/' + repo + '.git')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+        return repo
+
+    def test_T1_signed_commit_build_never_executes_local_gpg_programs(self):
+        repo = self.index_remote()
+        script, marker = self.marker_script('gpg')
+        for key in ('gpg.program', 'gpg.openpgp.program', 'gpg.x509.program', 'gpg.ssh.program'):
+            self.git('config', key, str(script))
+        self.git('config', 'log.showSignature', 'true')
+        signers = self.home / 'allowed-signers'
+        signers.write_text('')
+        self.git('config', 'gpg.ssh.allowedSignersFile', str(signers))
+        original = self.git('cat-file', 'commit', 'HEAD')
+        headers = original.split('\n\n', 1)[0]
+        for format, label in (('openpgp', 'PGP'), ('ssh', 'SSH')):
+            with self.subTest(format=format):
+                self.git('config', 'gpg.format', format)
+                signature = ('gpgsig -----BEGIN ' + label + ' SIGNATURE-----\n'
+                             ' c3ludGhldGlj\n -----END ' + label + ' SIGNATURE-----')
+                raw = headers + '\n' + signature + '\n\nsigned ' + format + '\n'
+                sha = subprocess.run(['git', 'hash-object', '-t', 'commit', '-w', '--stdin'],
+                                     cwd=self.root, input=raw, text=True, capture_output=True, check=True).stdout.strip()
+                self.git('update-ref', 'refs/remotes/origin/main', sha)
+                marker.unlink(missing_ok=True)
+                with patch.object(repo_index, 'repo_root', return_value=self.root), \
+                     patch.object(repo_index, 'H', self.home / '.inkboard-team'):
+                    result = repo_index.build(repo, {}, 30)
+                self.assertFalse(marker.exists(), format + ' verifier executed')
+                record = next(c for c in result['commits'] if c['sha'] == sha)
+                self.assertEqual(record['subject'], 'signed ' + format)
+                self.assertEqual(record['author'], 'Index Test')
+                self.assertEqual(result['head']['sha'], sha)
+
+    def filter_worktree_is_skipped(self, include):
+        repo = self.index_remote()
+        script, marker = self.marker_script('filter')
+        (self.root / '.gitattributes').write_text('* filter=evil\n')
+        if include:
+            config = self.home / 'filter.gitconfig'
+            self.git('config', '--file', str(config), 'filter.evil.clean', str(script))
+            self.git('config', '--file', str(config), 'filter.evil.process', str(script))
+            self.git('config', 'include.path', str(config))
+        else:
+            self.git('config', 'filter.evil.clean', str(script))
+            self.git('config', 'filter.evil.process', str(script))
+        (self.root / 'data.txt').write_text('modified tracked file\n')
+        result = repo_index.worktrees([self.home], repo)
+        self.assertFalse(marker.exists(), 'filter driver executed')
+        self.assertEqual(result, [])
+        for command in ('status', 'diff'):
+            with self.subTest(command=command):
+                with self.assertRaises(gitsafe.GitDenied):
+                    gitsafe.run(self.root, 'read', command)
+        self.assertFalse(marker.exists())
+
+    def test_T2_local_filter_driver_is_not_run_and_worktree_is_skipped(self):
+        self.filter_worktree_is_skipped(include=False)
+
+    def test_T2b_included_filter_driver_is_not_run_and_worktree_is_skipped(self):
+        self.filter_worktree_is_skipped(include=True)
+
+    def test_T3_missing_promisor_blob_never_executes_local_uploadpack(self):
+        remote = self.home / 'promisor.git'
+        self.git('clone', '--bare', str(self.root), str(remote))
+        sha = self.git('rev-parse', 'HEAD').strip()
+        blob = self.git('rev-parse', 'HEAD:data.txt').strip()
+        script, marker = self.marker_script('uploadpack')
+        self.git('config', 'core.repositoryFormatVersion', '1')
+        self.git('config', 'extensions.partialClone', 'origin')
+        self.git('config', 'remote.origin.url', str(remote))
+        self.git('config', 'remote.origin.promisor', 'true')
+        self.git('config', 'remote.origin.partialCloneFilter', 'blob:none')
+        self.git('config', 'remote.origin.uploadpack', str(script))
+        (self.root / '.git/objects' / blob[:2] / blob[2:]).unlink()
+        with self.assertRaises(gitsafe.GitFailed):
+            gitsafe.run(self.root, 'read', 'show', sha + ':data.txt')
+        self.assertFalse(marker.exists(), 'lazy fetch uploadpack executed')
 
     def hardened_env(self):
         env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in ('SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
@@ -152,16 +241,20 @@ class GitSafeTests(unittest.TestCase):
 
     def test_git_prefix_and_read_environment(self):
         def result(args, **kwargs):
-            return subprocess.CompletedProcess(args, 0, '' if 'config' in args else 'ok', '')
+            return subprocess.CompletedProcess(args, 1 if 'config' in args else 0, '' if 'config' in args else 'ok', '')
         with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe.subprocess, 'run', side_effect=result) as started:
             self.assertEqual(gitsafe.run(self.root, 'read', 'status'), 'ok')
         args, opts = started.call_args
-        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'status'])
+        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat',
+                                  '-c','log.showSignature=false','-c','gpg.program=/usr/bin/false','-c','gpg.openpgp.program=/usr/bin/false',
+                                  '-c','gpg.x509.program=/usr/bin/false','-c','gpg.ssh.program=/usr/bin/false',
+                                  '-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'status','--ignore-submodules=all'])
         self.assertEqual(opts['env']['GIT_CONFIG_NOSYSTEM'], '1')
         self.assertEqual(opts['env']['GIT_CONFIG_GLOBAL'], '/dev/null')
         self.assertEqual(opts['env']['GIT_TERMINAL_PROMPT'], '0')
         self.assertEqual(opts['env']['GIT_ASKPASS'], '/usr/bin/false')
         self.assertEqual(opts['env']['GIT_OPTIONAL_LOCKS'], '0')
+        self.assertEqual(opts['env']['GIT_ALLOW_PROTOCOL'], 'none')
         self.assertNotIn('GIT_CONFIG_COUNT', opts['env'])
         self.assertFalse(opts.get('shell', False))
 
@@ -254,6 +347,7 @@ class GitSafeTests(unittest.TestCase):
             else:
                 self.assertNotIn('TEAMAGENT_GIT_PASSWORD', kwargs['env'])
             if 'fetch' in args:
+                self.assertNotIn('GIT_ALLOW_PROTOCOL', kwargs['env'])
                 for key, value in [('proxy', ''), ('sslVerify', 'true'), ('extraHeader', ''), ('followRedirects', 'false')]:
                     self.assertIn('http.' + key + '=' + value, args)
                 # No URL-scoped/local CA, header, credential or rewrite settings
@@ -526,10 +620,10 @@ class GitSafeTests(unittest.TestCase):
             with gitsafe.time_budget(1), self.assertRaises(TimeoutError):
                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
             self.assertEqual(sum(c.args[0][:3] == ['git', 'credential', 'fill'] for c in started.call_args_list), 1)
-        with patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+        with patch.object(gitsafe.subprocess, 'run', wraps=real_run) as started:
             gitsafe.run(self.root, 'read', 'status')
-            self.assertEqual(started.call_count, 1)
-            self.assertNotIn('credential', started.call_args.args[0])
+            self.assertEqual(started.call_count, 2)
+            self.assertTrue(all('credential' not in c.args[0] for c in started.call_args_list))
 
     def test_git_round_has_one_shared_timeout_budget(self):
         clock = [100.0]
@@ -539,10 +633,10 @@ class GitSafeTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, '', '')
         with patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe.subprocess, 'run', side_effect=slow) as started:
             with gitsafe.time_budget(120):
-                gitsafe.run(self.root, 'read', 'status')
-                gitsafe.run(self.root, 'read', 'status')
+                gitsafe.run(self.root, 'read', 'log')
+                gitsafe.run(self.root, 'read', 'log')
                 with self.assertRaises(TimeoutError):
-                    gitsafe.run(self.root, 'read', 'status')
+                    gitsafe.run(self.root, 'read', 'log')
             self.assertEqual(started.call_count, 2)
 
     def test_review_P1_fetch_cannot_execute_repository_ssh_command(self):
@@ -594,7 +688,7 @@ class GitSafeTests(unittest.TestCase):
             self.assertEqual(started.call_count, 0)
 
     def test_review_P2_safe_directory_trusts_only_current_canonical_root(self):
-        with patch.dict(os.environ, {'SSH_ASKPASS':'synthetic-untrusted-helper','GIT_SSH_COMMAND':'synthetic-untrusted-command'}), patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+        with patch.dict(os.environ, {'SSH_ASKPASS':'synthetic-untrusted-helper','GIT_SSH_COMMAND':'synthetic-untrusted-command'}), patch.object(gitsafe.subprocess, 'run', wraps=subprocess.run) as started:
             gitsafe.run(self.root, 'read', 'status')
         args, opts = started.call_args
         directories = [arg for arg in args[0] if arg.startswith('safe.directory=')]
