@@ -15,7 +15,7 @@ import {fileURLToPath} from 'node:url';
 const MIXIN=[46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52];
 const UA='curl/8.7.1';
 const BV=/^BV[0-9A-Za-z]{10}$/;
-const SHORT=/^[0-9A-Za-z]{4,12}$/;
+const SHORT=/^[0-9A-Za-z_-]{4,32}$/;
 const blocked=new BlockList();
 for(const [ip,bits] of [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.0.0.0',24],['192.0.2.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4]])blocked.addSubnet(ip,bits,'ipv4');
 for(const [ip,bits] of [['::',128],['::1',128],['fc00::',7],['fe80::',10],['ff00::',8],['64:ff9b::',96],['2001:db8::',32],['2002::',16],['2001::',32]])blocked.addSubnet(ip,bits,'ipv6');
@@ -115,8 +115,11 @@ export function createFetchClient(options={}){
      if(!(r.status>=300&&r.status<400)||!r.headers.location)throw Object.assign(Error('短链无效'),{reason:'not_found'});
      const target=new URL(r.headers.location,u);
      if(target.protocol!=='https:'||(target.port&&target.port!=='443')||target.username||target.password)throw Error('短链无效');
-     if(['www.bilibili.com','m.bilibili.com'].includes(target.hostname)){
-       const bv=target.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0];if(bv)return bv;throw Object.assign(Error('短链无效'),{reason:'unsupported'});
+     if(['bilibili.com','www.bilibili.com','m.bilibili.com'].includes(target.hostname)){
+       const bv=target.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0];if(bv)return bv;
+       const av=target.pathname.match(/\bav(\d+)\b/i)?.[1];
+       if(av){try{const view=await biliApi('/x/web-interface/view',{aid:Number(av)});const bvid=view.data?.bvid;if(typeof bvid==='string'&&BV.test(bvid))return bvid;}catch{}}
+       throw Object.assign(Error('短链无效'),{reason:'unsupported'});
      }
      if(target.hostname!=='b23.tv')throw Object.assign(Error('短链无效'),{reason:'unsupported'});u=target;
    }throw Error('短链无效');

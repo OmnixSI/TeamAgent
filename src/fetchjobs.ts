@@ -3,6 +3,7 @@ import { left } from "./d1";
 import { stage, flushTail } from "./timing";
 import { TEAM } from "./config";
 import { extractBili } from "./inbound";
+import { SHORT_CODE } from './bili-links';
 import { metaOf } from "./view";
 import { loadChatContext } from "./context";
 import { agentAnswer } from "./semantic";
@@ -24,9 +25,9 @@ export type BiliResult = {
   comments: { uname: string; message: string }[]; tier: "light"; fetched_at: string;
 };
 const BV = /^BV[0-9A-Za-z]{10}$/;
-const validRef = (s: string) => BV.test(s) || /^[0-9A-Za-z]{4,12}$/.test(s);
+const validRef = (s: string) => BV.test(s) || SHORT_CODE.test(s);
 function refIn(bili: any[]): string | null {
-  return bili?.find(b => BV.test(b.bvid || ""))?.bvid || bili?.find(b => /^[0-9A-Za-z]{4,12}$/.test(b.short || ""))?.short || null;
+  return bili?.find(b => BV.test(b.bvid || ""))?.bvid || bili?.find(b => SHORT_CODE.test(b.short || ""))?.short || null;
 }
 type VideoTarget = {ref:string;title?:string};
 function targetOf(meta: any): VideoTarget | null {
@@ -126,7 +127,7 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
 }
 export function biliNoteText(r: BiliResult): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
-  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
+  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`BV号：${r.bvid}`,`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
     `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
     hasSubtitle
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
@@ -134,10 +135,34 @@ export function biliNoteText(r: BiliResult): string {
         ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
         : r.subtitle_status === "unavailable"
           ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
-          : "无 CC 字幕；未查看画面或听取音轨。"].join("\n").slice(0, 6000);
+          : "无 CC 字幕；本条没有字幕；画面和音轨目前读不了。"].join("\n").slice(0, 6000);
 }
 export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
   return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
+}
+/** Cached Bili notes already fetched for this turn; never invent missing content. */
+export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
+  const rows = [...(context.batch || []), ...(context.recent || []), context.latest].filter(Boolean);
+  const refs = new Set<string>();
+  const add = (value: any) => {
+    if (typeof value !== 'string') return;
+    if (BV.test(value) || SHORT_CODE.test(value)) refs.add(value);
+  };
+  for (const row of rows) {
+    const meta = row.meta || {};
+    for (const b of meta.bili || []) { add(b?.bvid); add(b?.short); }
+    for (const url of [...(meta.biliUrls || []), ...(meta.quotedBiliUrls || []), ...(meta.quotedUrls || [])]) {
+      for (const b of extractBili([url], '')) { add(b.bvid); add(b.short); }
+    }
+  }
+  const materials: string[] = [];
+  for (const ref of refs) {
+    const cached = await biliCached(e, ref);
+    if (cached) { materials.push(videoMaterial(cached, ref)); continue; }
+    const outcome = await fetchOutcome(e, ref);
+    if (outcome && outcome !== 'timeout') materials.push(biliFailMaterial(outcome, {title:isTitleRef(ref), titleFallback:TITLE_FALLBACK}));
+  }
+  return [...new Set(materials)];
 }
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   e.timingTurn = waitId.slice(3);

@@ -18,7 +18,7 @@ async function mockModel(run,fail=false){const old=globalThis.fetch,seen=[]; glo
 async function report(e,videoResult=result){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:videoResult});}
 
 test('F-T1 recursive card BV, short and ordinary links transfer to the existing video fetch chain',async()=>{
- for(const [value,ref] of [[BV,BV],['https://b23.tv/AbCd12','AbCd12'],['https://www.bilibili.com/video/'+BV,BV]]){
+ for(const [value,ref] of [[BV,BV],['https://b23.tv/AbCd12','AbCd12'],['https://bili2233.cn/Ab-Cd_12','Ab-Cd_12'],['https://www.bilibili.com/video/'+BV,BV]]){
   const e=await setup();await mockModel(async()=>{
    await qq(e,{...msg('deep-card','这个视频讲了啥'),ark_data:{ark_type:'miniapp',fields:{unknown:JSON.stringify({nested:{value}})}}},'GROUP_AT_MESSAGE_CREATE');
    await queue(e,'chat-deep-card');
@@ -30,6 +30,52 @@ test('F-T1 recursive card BV, short and ordinary links transfer to the existing 
   await mockModel(async seen=>{await queue(e,'video-'+wait.id);assert.match(JSON.stringify(seen),/已读元数据\/热评/);assert.match(JSON.stringify(seen),/无 CC 字幕/);});
  }
 });
+
+test('F-T1b research injects cached Bili material for short and BV refs, without inventing when absent', async () => {
+  const material = {...result,bvid:'BV1GN4p6pEEP',title:'10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了',owner:'超哥超车',duration:695,subtitle:null,subtitle_lang:null,subtitle_status:'none'};
+  for (const [id, body, note] of [
+    ['research-short', '总结 https://b23.tv/MV29F7r', 'bili:MV29F7r'],
+    ['research-bv', '总结 https://www.bilibili.com/video/' + BV, 'bili:' + BV],
+  ]) {
+    const e = await setup();
+    await qq(e, msg(id, body), 'GROUP_AT_MESSAGE_CREATE');
+    await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind(note, JSON.stringify(material), new Date().toISOString()).run();
+    await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-' + id, 'research', JSON.stringify({latestId:id,batchIds:[id],mentioned:true,background:true}), now()).run();
+    await mockModel(async seen => {
+      await queue(e, 'research-' + id);
+      const prompt = seen.map(x => JSON.parse(x.messages[1].content)).find(x => x.materials);
+      assert.ok(prompt, id);
+      const joined = JSON.stringify(prompt.materials);
+      assert.match(joined, /10月鸿蒙智行销量暴跌/, id);
+      assert.match(joined, /BV1GN4p6pEEP/, id);
+      assert.match(joined, /本条没有字幕；画面和音轨目前读不了/, id);
+    });
+  }
+  const e = await setup();
+  await qq(e, msg('research-pending', '总结 https://b23.tv/MV29F7r'), 'GROUP_AT_MESSAGE_CREATE');
+  await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-research-pending', 'research', JSON.stringify({latestId:'research-pending',batchIds:['research-pending'],mentioned:true,background:true}), now()).run();
+  await mockModel(async seen => {
+    await queue(e, 'research-research-pending');
+    assert.ok(!seen.some(x => x.materials));
+  });
+});
+
+
+test('F-T1c research resume path receives cached Bili material after tool handoff', async () => {
+  const e = await setup();
+  await qq(e, msg('research-resume', '总结 https://b23.tv/MV29F7r'), 'GROUP_AT_MESSAGE_CREATE');
+  const material = {...result,bvid:'BV1GN4p6pEEP',title:'10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了',owner:'超哥超车',duration:695,subtitle:null,subtitle_lang:null,subtitle_status:'none'};
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:MV29F7r', JSON.stringify(material), new Date().toISOString()).run();
+  await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-research-resume', 'research', JSON.stringify({latestId:'research-resume',batchIds:['research-resume'],mentioned:true,background:true,resume:{messages:[{role:'user',content:'历史'}],pending:null,turn:0}}), now()).run();
+  await mockModel(async seen => {
+    await queue(e, 'research-research-resume');
+    const all = JSON.stringify(seen);
+    assert.match(all, /10月鸿蒙智行销量暴跌/);
+    assert.match(all, /BV1GN4p6pEEP/);
+    assert.match(all, /本条没有字幕；画面和音轨目前读不了/);
+  });
+});
+
 test('F-T2 inferred no-link card selects a title target only under the existing trigger rules',async()=>{
  const event=JSON.parse(readFileSync('test/fixtures/bili-card-inferred.json','utf8')).event,e=await setup();
  await qq(e,{...msg('title-card',''),...event});
