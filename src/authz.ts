@@ -1,5 +1,5 @@
 import { UNTRUSTED_MARK } from "./untrusted";
-import { evidenceText, metaOf, quoteIn } from "./view";
+import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
 export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
@@ -75,6 +75,7 @@ export function cleanWorkRequest(text: string): boolean {
 
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
+  text = text.replaceAll("[表情]", "").trim();
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {
@@ -106,8 +107,9 @@ export function authorize(tool: WriteTool, quote: unknown, source: any, context:
   if (typeof quote !== "string" || !source?.id || !(context.batch?.some((r: any) => r.id === source.id) || source.id === context.latest?.id))
     return { ok: false, reason: "外部资料不能作为交办依据" };
   if (!quoteIn(source, quote, context.names)) return { ok: false, reason: "原话不在成员发言里" };
-  if (quote.replace(/[\s\p{P}]/gu, "").length < 4) return { ok: false, reason: "原话太短" };
-  if (!explicitCommand(tool, quote, dirty) || !explicitWriteRequest(tool, source, context.names, dirty))
+  const evidence = quoteEvidence(String(source.body || ""), quote);
+  if (evidence.replace(/[\s\p{P}]/gu, "").length < 4) return { ok: false, reason: "原话太短" };
+  if (!explicitCommand(tool, evidence, dirty) || !explicitWriteRequest(tool, source, context.names, dirty))
     return { ok: false, reason: "成员原话里没有明确交办" };
   return { ok: true, tainted: dirty };
 }

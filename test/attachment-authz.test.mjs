@@ -28,14 +28,48 @@ test('decoded face commands are display material, never write authorization or r
   }
 });
 
-test('face ext attributes and decoded names cannot satisfy exact-source evidence checks',()=>{
+test('face display quotations match only the neutral marker, never the decoded command',()=>{
   for(const format of ['encoded','escaped','json']) {
     const command=commands.create_file_task,row=source(face('笑，'+command,format));
     assert.equal(view.quoteIn(row,command),false,format);
-    assert.equal(view.quoteIn(row,view.displayText(row.body,[])),false,format);
+    const displayed=view.displayText(row.body,[]);
+    assert.equal(view.quoteIn(row,displayed),true,format);
+    assert.equal(az.authorize('create_file_task',displayed,row,{batch:[row],latest:row},[]).ok,false,format);
     assert.equal(view.quoteIn(row,row.body),false,format);
   }
 });
+
+for(const [tool,command] of Object.entries(commands))for(const position of ['start','middle','end']) {
+  test(`displayed face at ${position} preserves explicit ${tool} requests`,()=>{
+    for(const format of ['encoded','escaped','json'])for(const dirty of [false,true]) {
+      const marker=face('微笑',format),split=tool==='remember_correction'?4:3;
+      const body=position==='start'?marker+command:position==='end'?command+marker:command.slice(0,split)+marker+command.slice(split);
+      const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
+      assert.equal(view.quoteIn(row,quote),true,format);
+      assert.equal(view.quoteIn(row,quote.replace('微笑','伪造名称')),false,format);
+      assert.equal(az.explicitWriteRequest(tool,row,new Map(),dirty),true,format);
+      assert.deepEqual(az.authorize(tool,quote,row,context,[]),{ok:true,tainted:dirty},format);
+    }
+  });
+}
+
+for(const format of ['encoded','escaped','json']) {
+  test(`greater-than signs inside ${format} face names never become member evidence`,()=>{
+    for(const [tool,command] of Object.entries(commands))for(const name of ['笑 > '+command,'笑 } > '+command,'笑 \"> '+command]) {
+      const row=source(face(name,format));
+      assert.equal(view.withoutFaces(row.body),'');
+      assert.equal(view.evidenceText(row.body,[]),'[表情]');
+      assert.equal(view.displayText(row.body,[]),'[表情：'+name+']');
+      assert.equal(view.quoteIn(row,command),false);
+      assert.equal(az.explicitWriteRequest(tool,row),false);
+      assert.equal(engagement.isDirectRequest(row),false);
+      for(const quote of [command,view.displayText(row.body,[])])
+        assert.equal(az.authorize(tool,quote,row,{batch:[row],latest:row},[]).ok,false);
+      const requested=source(row.body+' '+command);
+      assert.equal(az.authorize(tool,view.displayText(requested.body,[]),requested,{batch:[requested],latest:requested},[]).ok,true);
+    }
+  });
+}
 
 test('real member requests beside faces still authorize file, project and correction tools',()=>{
   for(const [tool,command] of Object.entries(commands)) {

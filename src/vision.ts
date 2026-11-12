@@ -265,6 +265,7 @@ export function pickImages(
   const reply = meta.replyTo;
   if (
     mentioned ||
+    asksImage ||
     reply?.kind === "bot" ||
     /[？?]|吗|啥|什么|怎么|哪/.test(body)
   )

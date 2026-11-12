@@ -45,6 +45,11 @@ test('VF3 explicit image question without @ selects an earlier image in the curr
   assert.deepEqual(vision.pickImages([image,{...ask,body:'今天吃什么？'}],{...ask,body:'今天吃什么？'},new Map()),[]);
 });
 
+test('VF3 latest attachment is selected before older images for a plain image request',()=>{
+  const older={id:'older',body:face,meta:{media:[jpeg]}},latest={id:'latest',body:'看看这张图',meta:{media:[jpeg]}};
+  assert.deepEqual(vision.pickImages([older,latest],latest,new Map(),1).map(p=>p.messageId),['latest']);
+});
+
 test('VF4 HTTP, MIME, oversize, empty and network failures retain safe phase results',async()=>{
   const cases=[
     [()=>new Response('denied',{status:403}),'http',403],
@@ -63,7 +68,7 @@ test('VF4 HTTP, MIME, oversize, empty and network failures retain safe phase res
   }
 });
 
-test('VF5 deadline cancels a stalled body even when the stream ignores the fetch signal',async()=>{
+test('VF5 deadline cancels a stalled body even when the stream ignores the fetch signal',{timeout:1000},async()=>{
   let cancelled=false;
   const events=[];
   const started=Date.now();

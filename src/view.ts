@@ -22,7 +22,8 @@ export function metaOf(row: any): any {
   if (row.meta) return withLegacy(row.meta);
   try { return withLegacy(JSON.parse(row.metadata || "{}")); } catch { return {}; }
 }
-const FACE = /\[<face,id=\d+\/>\]|<faceType=[^>]*>/g;
+// ext may contain raw JSON or escaped JSON; a > inside its text is not a tag end.
+const FACE = /\[<face,id=\d+\/>\]|<faceType=(?:ext="\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\}"|"(?:\\.|[^"\\])*"|[^">])*>/g;
 export function withoutFaces(body: string): string {
   return body.replace(FACE, "");
 }
@@ -48,13 +49,18 @@ export function displayText(body: string, mentions: Mention[]): string {
 export function evidenceText(body: string, mentions: Mention[]): string {
   return renderMentions(body.replace(FACE, "[表情]"), mentions);
 }
+/** Only labels actually rendered from this message can become neutral evidence markers. */
+export function quoteEvidence(body: string, quote: string): string {
+  for (const tag of body.match(FACE) || []) quote = quote.replaceAll(faceName(tag), "[表情]");
+  return quote;
+}
 function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
   return (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
 }
 export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
   const mentions = resolvedMentions(metaOf(row), names);
-  return row.body.replace(FACE, "[表情]").includes(quote) || evidenceText(row.body, mentions).includes(quote)
-    || renderMentions(row.body.replace(FACE, "[表情（名称未知）]"), mentions).includes(quote);
+  const evidence = quoteEvidence(row.body, quote);
+  return row.body.replace(FACE, "[表情]").includes(evidence) || evidenceText(row.body, mentions).includes(evidence);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {
