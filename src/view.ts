@@ -44,13 +44,17 @@ function faceName(tag: string): string {
 export function displayText(body: string, mentions: Mention[]): string {
   return renderMentions(body, mentions).replace(FACE, faceName);
 }
+/** Attachment attributes and decoded labels are display material, not member prose. */
+export function evidenceText(body: string, mentions: Mention[]): string {
+  return renderMentions(body.replace(FACE, "[表情]"), mentions);
+}
 function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
   return (meta.mentions || []).map((m: Mention) => ({ ...m, name: m.name || names.get(m.id) || "" }));
 }
 export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
   const mentions = resolvedMentions(metaOf(row), names);
-  return row.body.includes(quote) || renderMentions(row.body, mentions).includes(quote) || displayText(row.body, mentions).includes(quote)
-    || renderMentions(row.body, mentions).replace(FACE, "[表情]").includes(quote);
+  return row.body.replace(FACE, "[表情]").includes(quote) || evidenceText(row.body, mentions).includes(quote)
+    || renderMentions(row.body.replace(FACE, "[表情（名称未知）]"), mentions).includes(quote);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {

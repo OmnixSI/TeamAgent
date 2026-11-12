@@ -1,5 +1,5 @@
 import { UNTRUSTED_MARK } from "./untrusted";
-import { displayText, metaOf, quoteIn } from "./view";
+import { evidenceText, metaOf, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
 export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
@@ -96,7 +96,7 @@ function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean
 export function explicitWriteRequest(tool: WriteTool, source: any, names = new Map<string, string>(), dirty?: boolean): boolean {
   const meta = metaOf(source);
   const mentions = (meta.mentions || []).map((m: any) => ({ ...m, name: m.name || names.get(m.id) || "" }));
-  const text = displayText(String(source.body || ""), mentions).replace(/^@\S+\s+/, "");
+  const text = evidenceText(String(source.body || ""), mentions).replace(/^@\S+\s+/, "");
   return explicitCommand(tool, text, dirty ?? tainted({ batch: [{ meta }] }, [{ role: "user", content: source.body }]));
 }
 
