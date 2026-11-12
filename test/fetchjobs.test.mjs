@@ -99,7 +99,7 @@ test('auth-status records only allowed state fields without claiming reminders',
   const state = JSON.parse((await e.DB.prepare("SELECT value FROM settings WHERE key='auth:bili'").first()).value);
   assert.equal(state.state, 'expired');
   assert.ok(!JSON.stringify(await rows(e, 'settings')).includes('never-copy-this'));
-  assert.equal(f.authReminder, undefined);
+  assert.equal(typeof f.authReminder, 'function', 'login support now connects reminders to real replies');
 });
 test('expired running video wakes even when outer job still has its longer lease',async()=>{const e=await setup(),w=await first(e);await report(e);await e.DB.prepare("UPDATE video_waits SET status='running',lease_until=?").bind(now()-1).run();await e.DB.prepare("UPDATE jobs SET status='running',lease_until=?,attempts=2 WHERE kind='video_reply'").bind(now()+600000).run();await cron(e);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
 test('early wake and concurrent starts do not duplicate or prematurely answer',async()=>{const e=await setup();await qq(e,msg('one','hello'));const x={groupId:group,ref:BV,latest:{id:'one'},batchIds:['one'],mentioned:true};const started=await Promise.all([f.startVideoWait(e,x),f.startVideoWait(e,{...x,latest:{id:'two'}})]);assert.equal(started.filter(Boolean).length,2);assert.equal((await rows(e,'video_waits')).length,2);const w=(await rows(e,'video_waits'))[0];await f.wakeVideoWait(e,w.id);await f.runVideoWait(e,w.id);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));assert.equal((await rows(e,'outbox')).length,0);});

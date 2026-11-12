@@ -72,6 +72,25 @@ class FetchInstallTests(unittest.TestCase):
         self.assertFalse((self.home / 'Library/LaunchAgents/com.inkboard.team-fetch.plist').exists())
         self.assertTrue(any(x[:2] == ['launchctl','bootout'] for x in self.commands))
 
+    def test_login_launcher_is_private_idempotent_and_removable(self):
+        self.apply()
+        path = self.home / 'Desktop/TeamAgent-登录.command'
+        self.assertTrue(path.exists())
+        before = path.stat().st_mtime_ns
+        content = path.read_text()
+        self.assertIn('osascript', content)
+        self.assertIn(str(self.runtime / 'fetcher.mjs'), content)
+        self.assertIn('login', content)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+        for directory in ['browser/bili', 'browser/x', 'secrets']:
+            self.assertEqual((self.runtime / directory).stat().st_mode & 0o777, 0o700)
+        self.apply()
+        self.assertEqual(path.stat().st_mtime_ns, before)
+        with patch('sys.argv', ['install-local.py', '--remove']):
+            runpy.run_path(str(ROOT / 'scripts/install-local.py'), run_name='__main__')
+        self.assertFalse(path.exists())
+        self.assertTrue((self.runtime / 'browser/x').exists(), 'rollback preserves user login data')
+
     def test_L5_reload_fetch_failure_optional_other_services_required(self):
         module = runpy.run_path(str(ROOT / 'runner/reload_runtime.py'))
         self.assertIn('com.inkboard.team-fetch', module['SERVICES'])

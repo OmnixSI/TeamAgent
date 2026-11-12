@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install reviewed source into the existing private runtime. No secrets are created or printed."""
 from pathlib import Path
-import shutil, subprocess, json, sys, os, plistlib, re
+import shutil, subprocess, json, sys, os, plistlib, re, shlex
 
 root = Path(__file__).resolve().parents[1]
 FETCH_LABEL = "com.inkboard.team-fetch"
@@ -71,7 +71,45 @@ def install_fetch_service():
         if not launchctl("bootstrap", target, str(path)):
             print("警告：team-fetch 加载失败")
 
+def install_login_launcher():
+    node = find_node()
+    if not node:
+        print("未安装登录入口：缺 Node ≥22")
+        return
+    runtime = Path.home() / ".inkboard-team"
+    for name in ["browser", "browser/bili", "browser/x", "secrets"]:
+        path = runtime / name
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.chmod(0o700)
+    path = Path.home() / "Desktop/TeamAgent-登录.command"
+    content = """#!/bin/zsh
+# TeamAgent managed login launcher
+choice=$(/usr/bin/osascript -e 'choose from list {"B 站", "X"} with title "TeamAgent 登录" with prompt "选择要登录的服务"') || exit 0
+case "$choice" in
+  "B 站") service=bili ;;
+  "X") service=x ;;
+  *) exit 0 ;;
+esac
+""" + "exec " + shlex.quote(node) + " " + shlex.quote(str(runtime / "fetcher.mjs")) + ' login "$service"\n'
+    if not path.exists() or path.read_text() != content:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(content)
+        tmp.chmod(0o700)
+        tmp.replace(path)
+    path.chmod(0o700)
+
+def remove_login_launcher():
+    path = Path.home() / "Desktop/TeamAgent-登录.command"
+    if path.exists() and "# TeamAgent managed login launcher" in path.read_text():
+        path.unlink()
+    # Login profiles and cookies are user data and survive launcher rollback.
+
 def main():
+    if "--remove" in sys.argv:
+        remove_login_launcher()
+        print("已移除 TeamAgent 桌面登录入口；保留本机登录数据。")
+        return
     home = Path.home() / ".inkboard-team"
     if not (home / "config.json").exists() or not (home / "worker-secrets.json").exists():
         sys.exit("先按 docs/operations.md 配置本机私密文件；本脚本不会生成或显示凭据。")
@@ -119,6 +157,7 @@ def main():
         remove_fetch_service()
     else:
         install_fetch_service()
+    install_login_launcher()
     print("已安装本机执行文件与独立 QQ SDK；确认没有运行中任务后重启相应 launchd 服务。")
 
 if __name__ == "__main__":

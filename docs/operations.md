@@ -39,6 +39,24 @@ QQ SDK单独锁定在 runner/sdk/，安装到私密运行目录，不再依赖 D
 
 电脑需登录、联网、保持唤醒。当前 QQ 入口仍是本机官方长连接；电脑离线时，QQ收信、文件与代码执行均暂停。Web端与已保存资料留在Cloudflare。
 
+## B 站 / X 一次性登录
+
+经审查安装本机版本（`python3 scripts/install-local.py --apply`）后，双击桌面「TeamAgent-登录.command」，选 B 站或 X，在弹出的浏览器中自行扫码或输入。登录成功后自动关窗并通知；五分钟内未完成则关闭窗口。也可在终端分别运行：
+
+```sh
+node ~/.inkboard-team/fetcher.mjs login bili
+node ~/.inkboard-team/fetcher.mjs login x
+```
+
+Playwright 固定在 `runner/sdk` 的本地依赖中，安装脚本通过 `npm ci --ignore-scripts` 安装。优先使用系统 Chrome，缺少时使用本机 Playwright 缓存中已有的 Chromium；两者都没有时提示需要安装一次浏览器，不自动全局安装。持久化配置与 Cookie 使用 [Playwright 浏览器上下文接口](https://playwright.dev/docs/api/class-browsercontext)。
+
+浏览器配置位于 `~/.inkboard-team/browser/bili/`、`browser/x/`，目录权限 0700；B 站只导出 `SESSDATA`、`bili_jct`、`DedeUserID`、`buvid3`，每项为 `{value, expires}`，写入 `secrets/bili-cookie.json`（文件 0600、目录 0700）。X 不导出 Cookie。导出的 B 站登录 Cookie 只随 `api.bilibili.com` 请求发送，短链和字幕下载不携带 Cookie。账号密码无需交给机器人，Cookie 不进入上报或日志。
+
+fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天检查会补查；使用 B 站登录态前也会探活。仅从已登录变为过期或风控时弹本机提醒；群里等下一次正常回复附一行，每个服务最多每 24 小时一次，恢复登录后清除提醒标记。缺少登录不催促；检查期间网络失败不会被认定为登录过期。登录窗口打开时，同服务后台检查暂缓。
+
+这一步只提供登录入口、状态探活和提醒，尚不增加 B 站 AI 字幕接口或 X 搜索、时间线读取。
+回滚桌面入口：`python3 scripts/install-local.py --remove`；保留用户登录数据及现有后台服务。需撤销登录时由用户在对应网站退出登录或撤销设备。
+
 ## 恢复原则
 
 - **QQ断连**：看工作台网关时间和状态，再查qq.log。READY和RESUMED都表示连接恢复；session落盘可跨进程恢复。平台4914/4915拒绝连接时显示阻塞，不无限重启；修正应用状态后人工重启。
