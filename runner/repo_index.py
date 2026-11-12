@@ -18,25 +18,28 @@ except ModuleNotFoundError:
     from settings import settings
 
 H = Path.home() / '.inkboard-team'
+MAX_PATCH_BYTES = 1_048_576
 MAX_BODY = 900_000  # Paired with worker.ts /api/runner/repo_index's 1 MiB limit.
 DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed25519*',
         '.npmrc', '.netrc', '.pypirc', '*secret*', '*credential*', '*cookie*',
         'worker-secrets.json', '.git/*', '.dev.vars', 'wrangler.toml.local')
-PATTERN = re.compile(r'ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+')
+PATTERN = re.compile(r'gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+')
 TOKEN_PATTERN = re.compile(
     r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
     r'|\bBearer\s+[A-Za-z0-9._~+/-]+=*'
     r'|\b(?:Cookie|Set-Cookie|Authorization)\s*:\s*[^\r\n]+'
     r'|[\"\']?\b(?:runner[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|'
-    r'cookie|SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0|session(?:id|_id)?|sid)\b[\"\']?\s*[:=]\s*'
-    r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,\'"}]+)', re.I)
+    r'cookie|SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0|session(?:id|_id))\b[\"\']?\s*[:=]\s*'
+    r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,\'"}]+)'
+    r'|[\"\']?\b(?:sid|session)\b[\"\']?\s*=\s*'
+    r'(?:"[A-Za-z0-9_-]{32,}"|\'[A-Za-z0-9_-]{32,}\'|[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-]))', re.I)
 _fetch_at = {}
 _offset = 0
 _backlog = False
 CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'accesstoken', 'refreshtoken',
                               'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
                               'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0',
-                              'token', 'secret', 'privatekey', 'credential'))
+                              'token', 'secret', 'privatekey', 'credential', 'credentials', 'accesskey', 'secretkey', 'passwd'))
 
 
 def _json(path, default):
@@ -86,8 +89,8 @@ def cut_bytes(s, n):
     return s.encode('utf-8')[:n].decode('utf-8', 'ignore')
 
 
-def _git(root, *args):
-    return gitsafe.run(root, 'read', *args)
+def _git(root, *args, max_bytes=None):
+    return gitsafe.run(root, 'read', *args, max_bytes=max_bytes)
 
 
 def _default_ref(root):
@@ -175,10 +178,15 @@ def commit_record(root, sha, known_values=()):
     # --raw adds actual file status alongside the same numstat; -z preserves names.
     stats = _git(root, 'show', '--raw', '--numstat', '-z', '--format=', '--diff-merges=first-parent', sha)
     files = _numstat(stats)[:100]
-    raw = _git(root, 'show', '--patch', '--format=', '--diff-merges=first-parent', sha)
-    segments = []; truncated = False
+    try:
+        raw = _git(root, 'show', '--patch', '--format=', '--diff-merges=first-parent', sha, max_bytes=MAX_PATCH_BYTES)
+        truncated = False
+    except gitsafe.GitOutputTooLarge:
+        raw = ''
+        truncated = True
+    segments = []
     patches = [s for s in re.split(r'(?=^diff --git )', raw, flags=re.M) if s.startswith('diff --git ')]
-    for paths, segment in zip(_patch_paths(stats), patches, strict=True):
+    for paths, segment in zip(_patch_paths(stats) if not truncated else [], patches, strict=True):
         if any(denied(path) for path in paths):
             continue
         # Redact before cutting, too: a cut must not expose half a credential.
@@ -240,6 +248,8 @@ def worktrees(roots, repo):
                 result.append({'label':candidate.name, 'branch':_git(resolved, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
                                'base':_git(resolved, 'rev-parse', 'HEAD').strip(), 'files':files[:100],
                                'untracked':sum(f['status']=='??' for f in files), 'updatedAt':int(time.time()*1000)})
+            except gitsafe.GitFiltersConfigured:
+                result.append({'label':candidate.name, 'skipReason':'filters_configured'})
             except (gitsafe.GitFailed, gitsafe.GitDenied):
                 continue
             if len(result) == 20:
@@ -300,15 +310,15 @@ def sync_once(now, known_values=()):
     body = {'repos':[]}; built = {}; remaining = 30; _backlog = False
     with gitsafe.time_budget(120):
         for repo in repositories:
-            root = repo_root(repo)
-            if root.is_dir() and _matches_remote(root, repo) and (repo not in _fetch_at or now-_fetch_at[repo] >= 120):
-                try:
+            try:
+                root = repo_root(repo)
+                if root.is_dir() and _matches_remote(root, repo) and (repo not in _fetch_at or now-_fetch_at[repo] >= 120):
                     gitsafe.run(root,'lifecycle','fetch','--prune','origin'); _fetch_at[repo] = now
-                except (gitsafe.GitFailed, TimeoutError) as error:
-                    print('repo index: fetch unavailable',repo,type(error).__name__,flush=True)
-                    continue
-            st = state.get(repo, {})
-            data = build(repo,st,remaining,known_values)
+                st = state.get(repo, {})
+                data = build(repo,st,remaining,known_values)
+            except (gitsafe.GitFailed, TimeoutError, OSError) as error:
+                print('repo index: repository unavailable',repo,type(error).__name__,flush=True)
+                continue
             if not data:
                 continue
             pending = data['_pending']; _backlog |= bool(pending)

@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, Thread
 from pathlib import Path
 import shutil
 import ssl
+import sys
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -97,7 +99,8 @@ class GitSafeTests(unittest.TestCase):
         (self.root / 'data.txt').write_text('modified tracked file\n')
         result = repo_index.worktrees([self.home], repo)
         self.assertFalse(marker.exists(), 'filter driver executed')
-        self.assertEqual(result, [])
+        self.assertEqual(result, [{'label':self.root.name, 'skipReason':'filters_configured'}])
+        self.assertNotIn(str(script), str(result))
         for command in ('status', 'diff'):
             with self.subTest(command=command):
                 with self.assertRaises(gitsafe.GitDenied):
@@ -160,7 +163,7 @@ class GitSafeTests(unittest.TestCase):
             def log_message(self, *args): pass
         server = ThreadingHTTPServer(('127.0.0.1', 0), partial(GitHTTP, directory=str(public)))
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        real_run = subprocess.run
+        real_run = gitsafe._run_process
         def isolated(args, **kwargs):
             if args[:3] == ['git', 'credential', 'fill']:
                 kwargs['env']['GIT_CONFIG_NOSYSTEM'] = '1'
@@ -169,7 +172,7 @@ class GitSafeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 1, '', '')
             return real_run(args, **kwargs)
         try:
-            with patch.object(gitsafe, '_origin_url', return_value='http://127.0.0.1:' + str(server.server_port) + '/origin.git'), patch.object(gitsafe.subprocess, 'run', side_effect=isolated) as started:
+            with patch.object(gitsafe, '_origin_url', return_value='http://127.0.0.1:' + str(server.server_port) + '/origin.git'), patch.object(gitsafe, '_run_process', side_effect=isolated) as started:
                 yield remote, started
         finally:
             server.shutdown(); server.server_close(); thread.join()
@@ -209,7 +212,7 @@ class GitSafeTests(unittest.TestCase):
             ('read', ('cat-file', '--filters', 'HEAD:data.txt')),
             ('unknown', ('log',)),
         ]
-        with patch.object(gitsafe.subprocess, 'run') as started:
+        with patch.object(gitsafe, '_run_process') as started:
             for cls, args in denied:
                 with self.subTest(cls=cls, args=args):
                     with self.assertRaises(gitsafe.GitDenied):
@@ -225,7 +228,7 @@ class GitSafeTests(unittest.TestCase):
         gitsafe.run(self.root, 'lifecycle', 'worktree', 'prune')
         self.assertFalse(sub.exists())
         sub.symlink_to(self.home, target_is_directory=True)
-        with patch.object(gitsafe.subprocess, 'run') as started:
+        with patch.object(gitsafe, '_run_process') as started:
             with self.assertRaises(gitsafe.GitDenied):
                 gitsafe.run(self.root, 'lifecycle', 'worktree', 'add', '--detach', str(sub / 'escape'), 'HEAD')
             self.assertEqual(started.call_count, 0)
@@ -242,10 +245,10 @@ class GitSafeTests(unittest.TestCase):
     def test_git_prefix_and_read_environment(self):
         def result(args, **kwargs):
             return subprocess.CompletedProcess(args, 1 if 'config' in args else 0, '' if 'config' in args else 'ok', '')
-        with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe.subprocess, 'run', side_effect=result) as started:
+        with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe, '_run_process', side_effect=result) as started:
             self.assertEqual(gitsafe.run(self.root, 'read', 'status'), 'ok')
         args, opts = started.call_args
-        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat',
+        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','color.ui=false',
                                   '-c','log.showSignature=false','-c','gpg.program=/usr/bin/false','-c','gpg.openpgp.program=/usr/bin/false',
                                   '-c','gpg.x509.program=/usr/bin/false','-c','gpg.ssh.program=/usr/bin/false',
                                   '-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'status','--ignore-submodules=all'])
@@ -323,7 +326,7 @@ class GitSafeTests(unittest.TestCase):
         self.git('config', 'core.askPass', str(evil))
         malicious_include = self.home / 'network.gitconfig'
         self.git('config', '--file', str(malicious_include), 'http.proxy', attacker_url)
-        real_run = subprocess.run
+        real_run = gitsafe._run_process
         calls = []
         def isolated(args, **kwargs):
             # Do not consult this machine's system credential store in a fixture.
@@ -377,7 +380,7 @@ class GitSafeTests(unittest.TestCase):
                     try:
                         # HTTP loopback substitutes for the separately tested
                         # production GitHub allowlist; no external service is used.
-                        with patch.dict(os.environ, {'NO_PROXY':'', 'no_proxy':''}), patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe.subprocess, 'run', side_effect=isolated):
+                        with patch.dict(os.environ, {'NO_PROXY':'', 'no_proxy':''}), patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe, '_run_process', side_effect=isolated):
                             try:
                                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
                             finally:
@@ -397,7 +400,7 @@ class GitSafeTests(unittest.TestCase):
                              'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'remote change').strip()
             self.git('--git-dir=' + str(remote), 'update-ref', 'refs/heads/' + branch, later)
             self.git('--git-dir=' + str(remote), 'update-server-info')
-            with patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe.subprocess, 'run', side_effect=isolated):
+            with patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe, '_run_process', side_effect=isolated):
                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
             self.assertEqual(self.git('rev-parse', 'refs/remotes/origin/' + branch).strip(), later)
             self.assertEqual(self.git('rev-parse', 'HEAD').strip(), original)
@@ -405,7 +408,7 @@ class GitSafeTests(unittest.TestCase):
             self.assertEqual(self.git('symbolic-ref', 'refs/remotes/origin/HEAD').strip(), 'refs/remotes/origin/' + branch)
             self.assertNotIn('obsolete', self.git('for-each-ref', '--format=%(refname)', 'refs/remotes/origin'))
             expected = 'Basic intentionally-invalid'
-            with patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe.subprocess, 'run', side_effect=isolated), self.assertRaises(gitsafe.GitFailed) as failure:
+            with patch.object(gitsafe, '_origin_url', return_value=url + '/origin.git'), patch.object(gitsafe, '_run_process', side_effect=isolated), self.assertRaises(gitsafe.GitFailed) as failure:
                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
             self.assertNotIn('synthetic-password', str(failure.exception))
             self.assertTrue(any(args[:3] == ['git', 'credential', 'fill'] for args, _ in calls))
@@ -430,14 +433,14 @@ class GitSafeTests(unittest.TestCase):
                 self.assertTrue(any(c.args[0][:3] == ['git', 'credential', 'fill'] for c in started.call_args_list))
 
     def test_ssh_fetch_does_not_request_http_credentials(self):
-        real_run = subprocess.run
+        real_run = gitsafe._run_process
         def isolated(args, **kwargs):
             if 'fetch' in args:
                 return subprocess.CompletedProcess(args, 1, '', '')
             if 'config' in args and '--system' in args:
                 return subprocess.CompletedProcess(args, 1, '', '')
             return real_run(args, **kwargs)
-        with patch.object(gitsafe, '_origin_url', return_value='git@github.com:a/b'), patch.object(gitsafe.subprocess, 'run', side_effect=isolated) as started:
+        with patch.object(gitsafe, '_origin_url', return_value='git@github.com:a/b'), patch.object(gitsafe, '_run_process', side_effect=isolated) as started:
             with self.assertRaises(gitsafe.GitFailed):
                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
         self.assertFalse(any(c.args[0][:3] == ['git', 'credential', 'fill'] for c in started.call_args_list))
@@ -495,8 +498,8 @@ class GitSafeTests(unittest.TestCase):
         neutral = self.home / 'neutral.git'
         self.git('init', '--bare', '--template=', str(neutral))
         env = self.hardened_env()
-        real_run = subprocess.run
-        with patch.object(gitsafe.subprocess, 'run', wraps=real_run) as started:
+        real_run = gitsafe._run_process
+        with patch.object(gitsafe, '_run_process', wraps=real_run) as started:
             for spec in valid + invalid:
                 with self.subTest(spec=spec):
                     expected = [default, spec] if spec.startswith('^') and spec in valid else [spec] if spec in valid else [default]
@@ -562,7 +565,7 @@ class GitSafeTests(unittest.TestCase):
                             ('http.https://github.invalid.sslVerify', 'false'),
                             ('http.https://github.invalid.sslCAInfo', str(cert)), ('http.proxy', proxy_url)]:
             self.git('config', name, value)
-        real_run = subprocess.run
+        real_run = gitsafe._run_process
         def isolated(args, **kwargs):
             if args[:3] == ['git', 'credential', 'fill']:
                 kwargs['env']['GIT_CONFIG_NOSYSTEM'] = '1'
@@ -570,7 +573,7 @@ class GitSafeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 1, '', '')
             return real_run(args, **kwargs)
         try:
-            with patch.dict(os.environ, {'NO_PROXY':'', 'no_proxy':''}), patch.object(gitsafe, '_origin_url', return_value=url), patch.object(gitsafe.subprocess, 'run', side_effect=isolated):
+            with patch.dict(os.environ, {'NO_PROXY':'', 'no_proxy':''}), patch.object(gitsafe, '_origin_url', return_value=url), patch.object(gitsafe, '_run_process', side_effect=isolated):
                 with self.assertRaises(gitsafe.GitFailed):
                     gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
             self.assertEqual(connections, [])
@@ -578,7 +581,7 @@ class GitSafeTests(unittest.TestCase):
             self.assertEqual(marker.read_text().splitlines(), ['get'])
             control_env = self.hardened_env()
             control_env.update(NO_PROXY='', no_proxy='')
-            control = real_run(['git', '-c', 'http.proxy=' + proxy_url, '-c', 'http.sslVerify=false',
+            control = subprocess.run(['git', '-c', 'http.proxy=' + proxy_url, '-c', 'http.sslVerify=false',
                                 '-c', 'credential.helper=', '-c', 'credential.helper=!' + str(helper),
                                 'ls-remote', url], cwd=self.home, env=control_env,
                                capture_output=True, text=True, timeout=10)
@@ -604,7 +607,7 @@ class GitSafeTests(unittest.TestCase):
 
     def test_credential_lookup_shares_the_round_budget_and_is_not_used_for_reads(self):
         clock = [100.0]
-        real_run = subprocess.run
+        real_run = gitsafe._run_process
         def slow(args, **kwargs):
             if args[:3] == ['git', 'credential', 'fill']:
                 self.assertLessEqual(kwargs['timeout'], 1)
@@ -616,11 +619,11 @@ class GitSafeTests(unittest.TestCase):
             if 'config' in args and '--system' in args:
                 return subprocess.CompletedProcess(args, 1, '', '')
             return real_run(args, **kwargs)
-        with patch.object(gitsafe, '_origin_url', return_value='https://github.com/a/b'), patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe.subprocess, 'run', side_effect=slow) as started:
+        with patch.object(gitsafe, '_origin_url', return_value='https://github.com/a/b'), patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe, '_run_process', side_effect=slow) as started:
             with gitsafe.time_budget(1), self.assertRaises(TimeoutError):
                 gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
             self.assertEqual(sum(c.args[0][:3] == ['git', 'credential', 'fill'] for c in started.call_args_list), 1)
-        with patch.object(gitsafe.subprocess, 'run', wraps=real_run) as started:
+        with patch.object(gitsafe, '_run_process', wraps=real_run) as started:
             gitsafe.run(self.root, 'read', 'status')
             self.assertEqual(started.call_count, 2)
             self.assertTrue(all('credential' not in c.args[0] for c in started.call_args_list))
@@ -628,16 +631,17 @@ class GitSafeTests(unittest.TestCase):
     def test_git_round_has_one_shared_timeout_budget(self):
         clock = [100.0]
         def slow(args, **kwargs):
-            self.assertLessEqual(kwargs['timeout'], 120)
+            self.assertLessEqual(kwargs['timeout'], 30)
             clock[0] += 65
-            return subprocess.CompletedProcess(args, 0, '', '')
-        with patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe.subprocess, 'run', side_effect=slow) as started:
+            return subprocess.CompletedProcess(args, 1 if '--get-regexp' in args else 0, '', '')
+        with patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe, '_run_process', side_effect=slow) as started:
             with gitsafe.time_budget(120):
-                gitsafe.run(self.root, 'read', 'log')
-                gitsafe.run(self.root, 'read', 'log')
+                gitsafe.run(self.root, 'read', 'status')
                 with self.assertRaises(TimeoutError):
                     gitsafe.run(self.root, 'read', 'log')
             self.assertEqual(started.call_count, 2)
+            self.assertIn('--get-regexp', started.call_args_list[0].args[0])
+            self.assertIn('status', started.call_args_list[1].args[0])
 
     def test_review_P1_fetch_cannot_execute_repository_ssh_command(self):
         marker = self.home / 'ssh-executed'
@@ -681,16 +685,87 @@ class GitSafeTests(unittest.TestCase):
                   ('config', '--get', 'include.path'), ('config', '--get', 'Include.Path'),
                   ('config', '--get-regexp', '.*'), ('config', '--get-regexp', '^include'),
                   ('cat-file', '--batch'), ('cat-file', '--batch-check'), ('cat-file', '--batch-command'), ('cat-file', '--bat')]
-        with patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+        with patch.object(gitsafe, '_run_process', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
             for args in denied:
                 with self.subTest(args=args), self.assertRaises(gitsafe.GitDenied):
                     gitsafe.run(self.root, 'read', *args)
             self.assertEqual(started.call_count, 0)
 
     def test_review_P2_safe_directory_trusts_only_current_canonical_root(self):
-        with patch.dict(os.environ, {'SSH_ASKPASS':'synthetic-untrusted-helper','GIT_SSH_COMMAND':'synthetic-untrusted-command'}), patch.object(gitsafe.subprocess, 'run', wraps=subprocess.run) as started:
+        with patch.dict(os.environ, {'SSH_ASKPASS':'synthetic-untrusted-helper','GIT_SSH_COMMAND':'synthetic-untrusted-command'}), patch.object(gitsafe, '_run_process', wraps=gitsafe._run_process) as started:
             gitsafe.run(self.root, 'read', 'status')
         args, opts = started.call_args
         directories = [arg for arg in args[0] if arg.startswith('safe.directory=')]
         self.assertEqual(directories, ['safe.directory=' + str(self.root.resolve())])
         self.assertNotIn('GIT_SSH_COMMAND', opts['env']); self.assertNotIn('SSH_ASKPASS', opts['env'])
+
+    def test_followup_diff_always_ignores_submodules(self):
+        with patch.object(gitsafe, '_invoke', wraps=gitsafe._invoke) as started:
+            gitsafe.run(self.root, 'read', 'diff', 'HEAD')
+        self.assertIn('--ignore-submodules=all', started.call_args.args[2])
+
+    def test_followup_filter_check_has_thirty_second_and_remaining_round_budget(self):
+        clock = [100.0]
+        def checked(args, **kwargs):
+            self.assertIn('--get-regexp', args)
+            self.assertEqual(kwargs['timeout'], expected)
+            return subprocess.CompletedProcess(args, 1, '', '')
+        with patch.object(gitsafe.time, 'monotonic', side_effect=lambda:clock[0]), patch.object(gitsafe, '_run_process', side_effect=checked):
+            expected = 30
+            gitsafe._check_filters(self.root, self.hardened_env())
+            with gitsafe.time_budget(120):
+                gitsafe._check_filters(self.root, self.hardened_env())
+                clock[0] = 215.0
+                expected = 5
+                gitsafe._check_filters(self.root, self.hardened_env())
+                clock[0] = 220.0
+                with self.assertRaises(TimeoutError):
+                    gitsafe._check_filters(self.root, self.hardened_env())
+
+    def test_followup_timeout_kills_git_and_credential_helper_descendants(self):
+        helper = self.home / 'slow.py'
+        marker = self.home / 'descendant-survived'
+        helper.write_text('import subprocess, sys, time\n'
+                          'subprocess.Popen([sys.executable, "-c", '
+                          '"import time; from pathlib import Path; time.sleep(0.8); Path(" + repr(sys.argv[1]) + ").touch()"] )\n'
+                          'time.sleep(10)\n')
+        command = shlex.quote(sys.executable) + ' ' + shlex.quote(str(helper)) + ' ' + shlex.quote(str(marker))
+        self.git('config', '--global', 'credential.helper', '!' + command)
+        neutral = self.home / 'neutral.git'
+        self.git('init', '--bare', '--template=', str(neutral))
+        for kind in ('invoke', 'credential'):
+            with self.subTest(kind=kind), patch.object(gitsafe, '_timeout', return_value=0.3), patch.object(gitsafe.os, 'killpg', wraps=os.killpg) as killed:
+                began = time.monotonic()
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    if kind == 'invoke':
+                        gitsafe._invoke(self.root, self.hardened_env(), ['-c', 'alias.slow=!' + command, 'slow'])
+                    else:
+                        env = self.hardened_env()
+                        trusted = gitsafe._credential_env(env, neutral)
+                        trusted['GIT_CONFIG_NOSYSTEM'] = '1'
+                        with patch.object(gitsafe, '_credential_env', return_value=trusted):
+                            gitsafe._lookup_credential('https://github.com/a/b', neutral, env)
+                self.assertLess(time.monotonic() - began, 1.2)
+                killed.assert_called_once()
+                time.sleep(0.9)
+                self.assertFalse(marker.exists(), 'helper descendant survived the timeout')
+
+    def test_followup_patch_byte_cap_stops_a_streaming_process_and_reaps_it(self):
+        args = [sys.executable, '-c', 'import os, time; os.write(1, b"x" * 65536); time.sleep(10)']
+        processes = []
+        real_popen = subprocess.Popen
+        def started(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+        with patch.object(gitsafe.subprocess, 'Popen', side_effect=started):
+            with self.assertRaises(gitsafe.GitOutputTooLarge):
+                gitsafe._run_process(args, cwd=self.root, env=self.hardened_env(), timeout=2, max_bytes=256)
+        self.assertIsNotNone(processes[0].poll())
+
+    def test_followup_bounded_output_preserves_unicode_and_exact_limit(self):
+        for text in ('a' * 256, '中' * 85):
+            args = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(' + repr(text.encode()) + ')']
+            result = gitsafe._run_process(args, cwd=self.root, env=self.hardened_env(), timeout=2, max_bytes=256)
+            self.assertEqual(result.stdout, text)
+            self.assertEqual(result.returncode, 0)

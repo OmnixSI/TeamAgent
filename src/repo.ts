@@ -34,7 +34,7 @@ function state(item: any) {
   return {
     head: { sha: sha40(item.head?.sha) ? item.head.sha.toLowerCase() : "", branch: text(item.head?.branch), at: number(item.head?.at) },
     branches: (Array.isArray(item.branches) ? item.branches : []).slice(0, 30).map((b: any) => ({ name: text(b?.name), sha: sha40(b?.sha) ? b.sha.toLowerCase() : "", ahead: number(b?.ahead), behind: number(b?.behind), at: number(b?.at) })),
-    worktrees: (Array.isArray(item.worktrees) ? item.worktrees : []).slice(0, 20).map((w: any) => ({ label: text(w?.label), branch: text(w?.branch), base: sha40(w?.base) ? w.base.toLowerCase() : "", files: files(w?.files), untracked: number(w?.untracked), updatedAt: number(w?.updatedAt) })),
+    worktrees: (Array.isArray(item.worktrees) ? item.worktrees : []).slice(0, 20).map((w: any) => w?.skipReason === "filters_configured" ? { label: text(w?.label), skipReason: "filters_configured" } : ({ label: text(w?.label), branch: text(w?.branch), base: sha40(w?.base) ? w.base.toLowerCase() : "", files: files(w?.files), untracked: number(w?.untracked), updatedAt: number(w?.updatedAt) })),
   };
 }
 export async function ingestRepoIndex(e: any, body: any): Promise<{ ok: true; stored: number }> {
@@ -88,7 +88,7 @@ export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
     head: { sha7: data.head.sha.slice(0, 7), at: data.head.at, ago: ago(data.head.at) },
     commits: rows.map((r: any) => ({ ...r, files: JSON.parse(r.files) })).filter((r: any) => (!a.author || r.author.toLowerCase().includes(a.author.toLowerCase())) && (!a.path || r.files.some((f: any) => f.path.startsWith(a.path)))).slice(0, limit).map((r: any) => ({ sha7: r.sha.slice(0, 7), author: r.author, ago: ago(r.at), subject: r.subject, ...totals(r.files) })),
     branches: data.branches.map((b: any) => ({ name: b.name, sha7: b.sha.slice(0, 7), ahead: b.ahead, behind: b.behind, ago: ago(b.at) })),
-    inProgress: data.worktrees.map((w: any) => { const summary = totals(w.files); return { label: w.label, branch: w.branch, ...summary, untracked: w.untracked, summary: `+${summary.add}/−${summary.del}，另有 ${w.untracked} 个新文件未计行数`, ago: ago(w.updatedAt) }; }),
+    inProgress: data.worktrees.map((w: any) => { if (w.skipReason === "filters_configured") return { label: w.label, skipReason: w.skipReason, summary: "已跳过：仓库配置了过滤器" }; const summary = totals(w.files); return { label: w.label, branch: w.branch, ...summary, untracked: w.untracked, summary: `+${summary.add}/−${summary.del}，另有 ${w.untracked} 个新文件未计行数`, ago: ago(w.updatedAt) }; }),
   };
 }
 export async function cleanupRepoIndex(e: any) {

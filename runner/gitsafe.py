@@ -8,6 +8,8 @@ process loads only command-line policy and a temporary bare repository's config.
 from contextlib import contextmanager
 import os
 import re
+import selectors
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,8 +26,16 @@ class GitFailed(RuntimeError):
     pass
 
 
+class GitOutputTooLarge(GitFailed):
+    pass
+
+
+class GitFiltersConfigured(GitDenied):
+    pass
+
+
 PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-          '-c', 'diff.external=', '-c', 'core.pager=cat',
+          '-c', 'diff.external=', '-c', 'core.pager=cat', '-c', 'color.ui=false',
           '-c', 'log.showSignature=false', '-c', 'gpg.program=/usr/bin/false',
           '-c', 'gpg.openpgp.program=/usr/bin/false', '-c', 'gpg.x509.program=/usr/bin/false',
           '-c', 'gpg.ssh.program=/usr/bin/false',
@@ -116,6 +126,48 @@ def _timeout():
     return timeout
 
 
+def _run_process(args, *, cwd, env, timeout, input=None, max_bytes=None):
+    """Reap Git after every run; kill its entire process group on timeout."""
+    with subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True,
+                          stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+        try:
+            if max_bytes is None:
+                output, _ = process.communicate(None if input is None else input.encode('utf-8'), timeout=timeout)
+            else:
+                # Patch reads have no stdin. Read at most cap+1 bytes so a large
+                # tracked file cannot first be buffered in full in memory.
+                deadline = time.monotonic() + timeout
+                output = bytearray()
+                with selectors.DefaultSelector() as ready:
+                    ready.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not ready.select(remaining):
+                            raise subprocess.TimeoutExpired(args, timeout)
+                        block = os.read(process.stdout.fileno(), min(65536, max_bytes + 1 - len(output)))
+                        if not block:
+                            break
+                        output.extend(block)
+                        if len(output) > max_bytes:
+                            raise GitOutputTooLarge('Git output exceeded byte limit')
+                process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
+        except GitOutputTooLarge:
+            # This bounded path is a read-only Git patch command with helpers
+            # disabled. Kill/reap Git directly, including when it just exited.
+            process.kill()
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(args, process.returncode, output.decode('utf-8', errors='replace'), '')
+
+
 def _credential_env(env, gitdir):
     trusted = dict(env)
     trusted.pop('GIT_CONFIG_NOSYSTEM', None)
@@ -132,9 +184,8 @@ def _lookup_credential(url, gitdir, env):
     if parts.scheme not in ('https', 'http') or not parts.netloc:
         return None
     request = 'protocol=%s\nhost=%s\npath=%s\n\n' % (parts.scheme, parts.netloc, parts.path.lstrip('/'))
-    result = subprocess.run(['git', 'credential', 'fill'], cwd=gitdir, env=_credential_env(env, gitdir),
-                            input=request, text=True, encoding='utf-8', errors='replace',
-                            capture_output=True, timeout=_timeout())
+    result = _run_process(['git', 'credential', 'fill'], cwd=gitdir, env=_credential_env(env, gitdir),
+                            input=request, timeout=_timeout())
     if result.returncode:
         return None
     fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
@@ -142,10 +193,9 @@ def _lookup_credential(url, gitdir, env):
     return (user, password) if user and password else None
 
 
-def _invoke(root, env, args, extra=(), input=None):
-    result = subprocess.run(PREFIX + list(extra) + ['-c', 'safe.directory=' + str(Path(root).resolve())] + list(args),
-                            cwd=root, env=env, input=input, text=True, encoding='utf-8', errors='replace',
-                            capture_output=True, timeout=_timeout())
+def _invoke(root, env, args, extra=(), input=None, max_bytes=None):
+    result = _run_process(PREFIX + list(extra) + ['-c', 'safe.directory=' + str(Path(root).resolve())] + list(args),
+                            cwd=root, env=env, input=input, timeout=_timeout(), max_bytes=max_bytes)
     if result.returncode:
         raise GitFailed('Git command failed')
     return result.stdout
@@ -253,17 +303,16 @@ def _fetch(root, env):
 
 def _check_filters(root, env):
     # Local includes participate in status/diff, so this query must follow them.
-    result = subprocess.run(PREFIX + ['-c', 'safe.directory=' + str(Path(root).resolve()),
+    result = _run_process(PREFIX + ['-c', 'safe.directory=' + str(Path(root).resolve()),
                                      'config', '--includes', '--name-only', '--get-regexp', r'^filter\.'],
-                            cwd=root, env=env, text=True, encoding='utf-8', errors='replace',
-                            capture_output=True, timeout=_timeout())
+                            cwd=root, env=env, timeout=_timeout())
     if result.returncode == 0:
-        raise GitDenied('Git filter drivers denied')
+        raise GitFiltersConfigured('Git filter drivers denied')
     if result.returncode != 1:  # rc 1 means no matching keys; other errors fail closed.
         raise GitFailed('Git command failed')
 
 
-def run(root, cls, *args):
+def run(root, cls, *args, max_bytes=None):
     """Return stdout for a permitted Git command; errors never include output."""
     _validate(root, cls, args)
     command, *rest = args
@@ -281,6 +330,6 @@ def run(root, cls, *args):
             env['GIT_ALLOW_PROTOCOL'] = 'none'
         if command in ('status', 'diff'):
             _check_filters(root, env)
-        return _invoke(root, env, [command] + flags + rest)
+        return _invoke(root, env, [command] + flags + rest, max_bytes=max_bytes)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None
