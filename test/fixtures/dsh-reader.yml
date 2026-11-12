@@ -1,0 +1,20 @@
+# 关掉：派生、工作流、shell、后台任务、网络、技能、插件管理、切目录、目标循环
+- { id: tool-subagent,          disabled: true }
+- { id: tool-subagent-fork,     disabled: true }
+- { id: tool-subagent-control,  disabled: true }
+- { id: tool-workflow,          disabled: true }
+- { id: workflow-ptc,           disabled: true }
+- { id: tool-executor-ptc,      disabled: true }
+- { id: tool-bash,              disabled: true }
+- { id: tool-pwsh,              disabled: true }
+- { id: tool-jobs,              disabled: true }
+- { id: tool-web,               disabled: true }
+- { id: tool-skill,             disabled: true }
+- { id: tool-plugin-manager,    disabled: true }
+- { id: tool-working-directory, disabled: true }
+- { id: tool-goal,              disabled: true }
+# 保留：只读文件工具 + 搜索
+- id: tool-fs
+  config: { read: true, readImage: false, write: false, edit: false, applyPatch: false }
+- id: tool-fs-search
+  config: { sampleOverCapGlobResults: false }
