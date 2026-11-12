@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import {readFileSync} from 'node:fs';
 import { worker, env, req, qq, msg } from './support.mjs';
 await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:`.wrangler/fetchjobs-${process.pid}.mjs`});
 const f = await import(`../.wrangler/fetchjobs-${process.pid}.mjs`);
@@ -15,6 +16,77 @@ async function setup(){const e=env(); await req(e,'/api/admin/bind',{groupId:gro
 async function first(e,id='question'){await qq(e,msg(id,'视频讲了啥 https://www.bilibili.com/video/'+BV),'GROUP_AT_MESSAGE_CREATE'); await queue(e,'chat-'+id); return (await rows(e,'video_waits'))[0];}
 async function mockModel(run,fail=false){const old=globalThis.fetch,seen=[]; globalThis.fetch=async(_url,o)=>{const b=JSON.parse(o.body);seen.push(b);if(fail)throw Error('model interrupted');return Response.json({choices:[{message:{content:b.messages[0].content.includes('最后的嘴替模块')?'{"mode":"work","text":"UP 主介绍了新方法。"}':'{"should_reply":false,"kind":"proactive","brief":"测试视频标题"}'}}]});};try{return await run(seen);}finally{globalThis.fetch=old;}}
 async function report(e,videoResult=result){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:videoResult});}
+
+test('F-T1 recursive card BV, short and ordinary links transfer to the existing video fetch chain',async()=>{
+ for(const [value,ref] of [[BV,BV],['https://b23.tv/AbCd12','AbCd12'],['https://www.bilibili.com/video/'+BV,BV]]){
+  const e=await setup();await mockModel(async()=>{
+   await qq(e,{...msg('deep-card','这个视频讲了啥'),ark_data:{ark_type:'miniapp',fields:{unknown:JSON.stringify({nested:{value}})}}},'GROUP_AT_MESSAGE_CREATE');
+   await queue(e,'chat-deep-card');
+  });
+  const wait=(await rows(e,'video_waits'))[0];assert.equal(wait?.ref,ref);
+  assert.equal(JSON.parse((await rows(e,'jobs')).find(j=>j.kind==='fetch').payload).ref,ref);
+  const {runJob}=await import('../runner/fetcher.mjs'),claimed=(await(await runner(e,'claim',{})).json()).job;
+  await runJob(claimed,{sanitize:x=>x,biliLight:async value=>{assert.equal(value,ref);return {...result,subtitle:null,subtitle_status:'none'};}},async(path,body)=>{assert.equal((await runner(e,path,body)).status,200);});
+  await mockModel(async seen=>{await queue(e,'video-'+wait.id);assert.match(JSON.stringify(seen),/已读元数据\/热评/);assert.match(JSON.stringify(seen),/无 CC 字幕/);});
+ }
+});
+test('F-T2 inferred no-link card selects a title target only under the existing trigger rules',async()=>{
+ const event=JSON.parse(readFileSync('test/fixtures/bili-card-inferred.json','utf8')).event,e=await setup();
+ await qq(e,{...msg('title-card',''),...event});
+ assert.equal((await rows(e,'jobs')).filter(j=>j.kind==='fetch').length,0);
+ await mockModel(async()=>{await qq(e,msg('ask-card','这个视频讲了啥'),'GROUP_AT_MESSAGE_CREATE');await queue(e,'chat-ask-card');});
+ const wait=(await rows(e,'video_waits'))[0];assert.match(wait?.ref||'',/^t-[0-9a-f]{16}$/);
+ const payload=JSON.parse((await rows(e,'jobs')).find(j=>j.kind==='fetch').payload);assert.equal(payload.title,event.ark_data.fields.title);
+ const target=f.videoTarget([],{id:'q',body:'这个',meta:{quoted:{biliCard:{title:'引用标题'}}}},[],{bili:{enabled:true}});
+ assert.equal(target.title,'引用标题');assert.match(target.ref,/^t-/);
+});
+test('F-T3 title successes retain source uncertainty and subtitle truth; success and miss caches last 24 hours',async()=>{
+ const ref=f.videoTarget([],{mentioned:1,meta:{biliCard:{title:'标题'}}},[],{bili:{enabled:true}}).ref;
+ for(const miss of [null,'none','near','multiple']){
+  const e=await setup();await qq(e,{...msg('title-ask','这个视频讲啥'),ark_data:{fields:{source:'哔哩哔哩',title:'标题'}}},'GROUP_AT_MESSAGE_CREATE');
+  await mockModel(()=>queue(e,'chat-title-ask'));assert.equal((await rows(e,'video_waits'))[0].ref,ref);
+  const response=await report(e,miss?{miss}:{...result,subtitle:null,subtitle_status:'none'});assert.equal(response.status,200);
+  const notes=await rows(e,'media_notes');assert.equal(notes.length,miss?1:2);
+  const cached=await f.biliCached(e,ref);const material=f.videoMaterial(cached,ref);
+  if(miss){assert.match(material,/仅卡片.*未读取视频内容/);assert.match(material,/请在 B 站点“复制链接”发来/);if(miss==='multiple')assert.match(material,/多个同名/);}
+  else {assert.match(material,/按标题检索匹配，非链接直达/);assert.match(material,/UP 主.*BV1xx411c7mD/);assert.match(material,/可能不是/);assert.match(material,/已读元数据\/热评/);}
+  await mockModel(async seen=>{await queue(e,'video-vw-title-ask');assert.ok(JSON.stringify(seen).includes(miss?'仅卡片':'非链接直达'));});
+  await mockModel(async seen=>{
+   await qq(e,{...msg('cache-ask','这个视频讲啥'),ark_data:{fields:{source:'哔哩哔哩',title:'标题'}}},'GROUP_AT_MESSAGE_CREATE');
+   await queue(e,'chat-cache-ask');assert.ok(JSON.stringify(seen).includes(miss?'仅卡片':'非链接直达'));
+  });
+  assert.equal((await rows(e,'jobs')).filter(j=>j.kind==='fetch').length,1);assert.equal((await rows(e,'video_waits')).length,1);
+  await e.DB.prepare('UPDATE media_notes SET created_at=? WHERE id=?').bind(new Date(now()-25*3600000).toISOString(),'bili:'+ref).run();
+  assert.equal(await f.biliCached(e,ref),null);
+  await mockModel(async()=>{await qq(e,{...msg('stale-ask','这个视频讲啥'),ark_data:{fields:{source:'哔哩哔哩',title:'标题'}}},'GROUP_AT_MESSAGE_CREATE');await queue(e,'chat-stale-ask');});
+  assert.equal((await rows(e,'jobs')).find(j=>j.kind==='fetch').status,'pending');
+ }
+ assert.match(f.videoMaterial({...result,subtitle_status:'ok'},'t-0123456789abcdef'),/已取得字幕/);
+ assert.doesNotMatch(f.videoMaterial({...result,subtitle_status:'none'},'t-0123456789abcdef'),/已取得字幕/);
+});
+test('F-T4 title misses are guarded by ref and lease; missing titles cannot create a wait',async()=>{
+ const e=await setup();await qq(e,msg('missing-title','提问'),'GROUP_AT_MESSAGE_CREATE');
+ assert.equal(await f.startVideoWait(e,{groupId:group,ref:'t-0123456789abcdef',latest:{id:'missing-title'},batchIds:['missing-title'],mentioned:true}),false);
+ await f.requestBili(e,BV,'light','unknown');const {job}=await(await runner(e,'claim',{})).json();
+ assert.equal((await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:{miss:'none'}})).status,400);
+ assert.equal((await runner(e,'report',{id:job.id,lease:'wrong',success:true,result})).status,409);
+ assert.equal((await rows(e,'media_notes')).length,0);
+ const titled=await setup();await qq(titled,msg('invalid-miss','提问'),'GROUP_AT_MESSAGE_CREATE');
+ await f.startVideoWait(titled,{groupId:group,ref:'t-0123456789abcdef',title:'标题',latest:{id:'invalid-miss'},batchIds:['invalid-miss'],mentioned:true});
+ const claimed=(await(await runner(titled,'claim',{})).json()).job;
+ assert.equal((await runner(titled,'report',{id:claimed.id,lease:claimed.payload.lease,success:true,result:{miss:'unknown'}})).status,400);
+ assert.equal((await runner(titled,'report',{id:claimed.id,lease:claimed.payload.lease,success:true,result:{...result,miss:'unknown'}})).status,400);
+});
+test('F-T5 title wait timeout is card-only fallback and title chat stays within 48 D1 statements',async()=>{
+ const e=await setup();await qq(e,msg('timeout-title','视频讲啥'),'GROUP_AT_MESSAGE_CREATE');
+ await f.startVideoWait(e,{groupId:group,ref:'t-0123456789abcdef',title:'标题',latest:{id:'timeout-title'},batchIds:['timeout-title'],mentioned:true});
+ await e.DB.prepare('UPDATE video_waits SET due_at=?').bind(now()-1).run();
+  await f.wakeVideoWait(e,'vw-timeout-title');
+ await mockModel(async seen=>{await queue(e,'video-vw-timeout-title');assert.match(JSON.stringify(seen),/仅卡片.*未读取视频内容/);});
+ const event=JSON.parse(readFileSync('test/fixtures/bili-card-inferred.json','utf8')).event,other=await setup();
+ await qq(other,{...msg('count-title','视频讲啥'),...event,content:'视频讲啥'},'GROUP_AT_MESSAGE_CREATE');
+ const before=other.DB.executed;await mockModel(()=>queue(other,'chat-count-title'));assert.ok(other.DB.executed-before<=48);
+});
 
 test('F1 cron excludes fetch but dispatches ordinary jobs',async()=>{const e=env(),sent=[];e.WORK={async send(b){sent.push(b.id);}};await insertJob(e,'fetch','fetch');await insertJob(e,'plain','discussion');await cron(e);assert.ok(sent.includes('plain'));assert.ok(!sent.includes('fetch'));assert.equal((await rows(e,'jobs')).find(x=>x.id==='fetch').attempts,0);});
 test('F2 misdelivered fetch is not claimed by generic worker',async()=>{const e=env();await f.requestBili(e,BV,'light','w');await queue(e,'fetch-bili-'+BV);const j=(await rows(e,'jobs'))[0];assert.equal(j.status,'pending');assert.equal(j.attempts,0);assert.ok((await (await runner(e,'claim',{})).json()).job);});

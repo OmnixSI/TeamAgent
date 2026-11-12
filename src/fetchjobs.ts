@@ -11,6 +11,7 @@ import { redact } from "./runtime";
 import {recordAuthStatus} from './auth-status';
 import {claimLogin,reportLogin,fetcherSeen} from './login-flow';
 export {authReminder} from './auth-status';
+import {isTitleRef,titleRef,titleMissOf,titleMaterial,titleMissMaterial,TITLE_FALLBACK,type TitleMiss} from './bilititle';
 
 type Row = Record<string, any>;
 export type BiliResult = {
@@ -25,25 +26,35 @@ const validRef = (s: string) => BV.test(s) || /^[0-9A-Za-z]{4,12}$/.test(s);
 function refIn(bili: any[]): string | null {
   return bili?.find(b => BV.test(b.bvid || ""))?.bvid || bili?.find(b => /^[0-9A-Za-z]{4,12}$/.test(b.short || ""))?.short || null;
 }
-export function needsVideo(_batch: Row[], latest: Row, recent: Row[], cfg: any): string | null {
+type VideoTarget = {ref:string;title?:string};
+function targetOf(meta: any): VideoTarget | null {
+  const direct = refIn(meta.bili); if (direct) return {ref:direct};
+  const title = meta.biliCard?.title, ref = typeof title === 'string' ? titleRef(title) : null;
+  return ref ? {ref,title} : null;
+}
+export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any): VideoTarget | null {
   if (!cfg.bili?.enabled) return null;
   const meta = metaOf(latest);
-  if (latest.mentioned) { const ref = refIn(meta.bili); if (ref) return ref; }
+  if (latest.mentioned) { const target = targetOf(meta); if (target) return target; }
   const quoted = recent.find(r => r.id === meta.replyTo?.targetId);
-  const ref = refIn(quoted ? metaOf(quoted).bili : []) || refIn(extractBili(meta.quotedUrls || [], ""));
-  if (ref) return ref;
+  const quotedTarget = quoted ? targetOf(metaOf(quoted)) : null;
+  if (quotedTarget) return quotedTarget;
+  const ref = refIn(extractBili(meta.quotedUrls || [], ""));
+  if (ref) return {ref};
+  const embedded = targetOf(meta.quoted || {}); if (embedded) return embedded;
   if (/视频|讲了?啥|讲的什么|说了什么|总结|值得看|up主/i.test(latest.body || "")) {
     const candidates = recent.some(r => r.id === latest.id) ? recent : [...recent, latest];
-    for (const r of candidates.slice(-10).reverse()) { const ref = refIn(metaOf(r).bili); if (ref) return ref; }
+    for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
   }
   return null;
 }
-export async function biliCached(e: any, ref: string): Promise<BiliResult | null> {
+export const needsVideo = (batch: Row[], latest: Row, recent: Row[], cfg: any) => videoTarget(batch,latest,recent,cfg)?.ref ?? null;
+export async function biliCached(e: any, ref: string): Promise<BiliResult | TitleMiss | null> {
   const row = await e.DB.prepare("SELECT body,created_at FROM media_notes WHERE id=?").bind("bili:" + ref).first();
-  if (!row || !(Date.parse(row.created_at) >= Date.now() - 7 * 86400000)) return null;
-  try { return cleanResult(JSON.parse(row.body)); } catch { return null; }
+  if (!row || !(Date.parse(row.created_at) >= Date.now() - (isTitleRef(ref) ? 86400000 : 7 * 86400000))) return null;
+  try { const value = JSON.parse(row.body); return isTitleRef(ref) && titleMissOf(value) || cleanResult(value); } catch { return null; }
 }
-function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitCreated?: number) {
+function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitCreated?: number, title?: string) {
   return e.DB.prepare(`INSERT INTO jobs(id,kind,payload,created_at)
     SELECT ?,'fetch',?,? ${waitCreated === undefined ? "" : "WHERE EXISTS(SELECT 1 FROM video_waits WHERE id=? AND created_at=?)"}
     ON CONFLICT(id) DO UPDATE SET
@@ -51,7 +62,7 @@ function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitC
       status=CASE WHEN jobs.status IN ('pending','running') THEN jobs.status ELSE 'pending' END,
       attempts=CASE WHEN jobs.status IN ('pending','running') THEN jobs.attempts ELSE 0 END,
       lease_until=CASE WHEN jobs.status IN ('pending','running') THEN jobs.lease_until ELSE 0 END,error=NULL`)
-    .bind("fetch-bili-" + ref, JSON.stringify({ type: "bili", tier, ref, waiters: [waiter] }), Date.now(), ...(waitCreated === undefined ? [] : [waiter, waitCreated]), waiter);
+    .bind("fetch-bili-" + ref, JSON.stringify({ type: "bili", tier, ref, ...(isTitleRef(ref) ? {title} : {}), waiters: [waiter] }), Date.now(), ...(waitCreated === undefined ? [] : [waiter, waitCreated]), waiter);
 }
 export async function requestBili(e: any, ref: string, tier: string, waiter: string): Promise<void> {
   if (!validRef(ref) || tier !== "light") throw Error("invalid fetch request");
@@ -64,7 +75,8 @@ export async function videoWaitExists(e: any, groupId: string, latestId: string 
   return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id IN (" + ids.map(() => "?").join(",") + ") LIMIT 1")
     .bind(groupId, ...ids).first());
 }
-export async function startVideoWait(e: any, x: { groupId: string; ref: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
+export async function startVideoWait(e: any, x: { groupId: string; ref: string; title?: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
+  if (isTitleRef(x.ref) && (!x.title || !titleRef(x.title))) return false;
   if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;
   const active = await e.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')").bind(x.groupId, x.ref).first();
   if (active.n >= 3) return false;
@@ -74,7 +86,7 @@ export async function startVideoWait(e: any, x: { groupId: string; ref: string; 
       SELECT ?,?,?,?,?,?,COALESCE((SELECT MIN(due_at) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')),?),?
       WHERE (SELECT COUNT(*) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')) < 3`)
       .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
-    fetchStatement(e, x.ref, "light", id, now),
+    fetchStatement(e, x.ref, "light", id, now, x.title),
   ]);
   return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first());
 }
@@ -91,9 +103,10 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
   if (row) await queueFor(e, "video_reply")?.send({ id });
 }
 export function biliNoteText(r: BiliResult): string {
-  return [`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
+  const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
+  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
     `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
-    r.subtitle
+    hasSubtitle
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
       : r.subtitle_status === "login_required"
         ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
@@ -101,7 +114,9 @@ export function biliNoteText(r: BiliResult): string {
           ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
           : "无 CC 字幕；未查看画面或听取音轨。"].join("\n").slice(0, 6000);
 }
-export const videoMaterial = (r: BiliResult) => untrusted("bilibili", biliNoteText(r), r.fetched_at);
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
+  return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
+}
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   const now = Date.now();
   const w = await e.DB.prepare(`UPDATE video_waits SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND attempts<3 AND
@@ -111,7 +126,7 @@ export async function runVideoWait(e: any, waitId: string): Promise<void> {
   try {
     const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
     const cached = await biliCached(e, w.ref);
-    const materials = cached ? [videoMaterial(cached)] : ["视频内容暂时没读到（本机抓取端可能离线），只依据卡片信息作答。"];
+    const materials = cached ? [videoMaterial(cached,w.ref)] : [isTitleRef(w.ref) ? TITLE_FALLBACK : "视频内容暂时没读到（本机抓取端可能离线），只依据卡片信息作答。"];
     const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
     // A timed-out old attempt must not finish a newer lease.
     const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
@@ -169,8 +184,13 @@ function cleanResult(r: any): BiliResult {
     comments: (Array.isArray(r.comments) ? r.comments : []).slice(0, 8).map((c: any) => ({ uname: text(c?.uname, 100), message: text(c?.message, 120) })), tier: "light", fetched_at: Number.isFinite(Date.parse(r.fetched_at)) ? new Date(r.fetched_at).toISOString() : new Date().toISOString() };
 }
 export async function reportFetch(e: any, b: any): Promise<Response> {
-  let result: BiliResult | null = null;
-  if (b.success === true) { try { result = cleanResult(b.result); } catch { return Response.json({ error: "invalid video result" }, { status: 400 }); } }
+  let result: BiliResult | TitleMiss | null = null;
+  if (b.success === true) {
+    try {
+      if (b.result && Object.hasOwn(b.result,'miss')) { result = titleMissOf(b.result); if (!result) throw Error('invalid title miss'); }
+      else result = cleanResult(b.result);
+    } catch { return Response.json({ error: "invalid video result" }, { status: 400 }); }
+  }
   const now = Date.now();
   // Repeat reports can finish cache/waiter writes after an interrupted response.
   const row = await e.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='fetch' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status IN ('done','failed'))").bind(b.id, b.lease, now).first();
@@ -178,12 +198,13 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   if (row.status !== "running" && (row.status === "done") !== (b.success === true))
     return Response.json({ error: "lease conflict" }, { status: 409 });
   const p = JSON.parse(row.payload), status = result ? "done" : "failed";
+  if (result && 'miss' in result && !isTitleRef(p.ref)) return Response.json({error:'invalid title result'}, {status:400});
   // Fence every write, not only the initial read: another runner may acquire the
   // expired lease between reading the payload and committing this batch.
   const guard = "id=? AND kind='fetch' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status=?)";
   const leaseArgs = [b.id, b.lease, now, status];
   const writes = [];
-  if (result) for (const ref of new Set([p.ref, result.bvid]))
+  if (result) for (const ref of new Set('miss' in result ? [p.ref] : [p.ref,result.bvid]))
     writes.push(e.DB.prepare("INSERT OR REPLACE INTO media_notes SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE " + guard + ")")
       .bind("bili:" + ref, JSON.stringify(result), new Date(now).toISOString(), ...leaseArgs));
   writes.push(e.DB.prepare("UPDATE video_waits SET ready=1 WHERE status='waiting' AND id IN (SELECT value FROM jobs,json_each(jobs.payload,'$.waiters') WHERE " + guard.replace("id=?", "jobs.id=?") + ")")
