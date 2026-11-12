@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,stat,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createBrowserAuth,allowedBrowserUrl,browserOptions,writeBiliCookies,loadBiliCookies,safeLogText} from './browser-auth.mjs';
+import {createBrowserAuth,allowedBrowserUrl,browserOptions,browserLaunchOptions,writeBiliCookies,loadBiliCookies,safeLogText} from './browser-auth.mjs';
 import {createFetchClient,runJob} from './fetcher.mjs';
 
 const values={SESSDATA:'fixture-session-private',bili_jct:'fixture-csrf-private',DedeUserID:'fixture-user-private',buvid3:'fixture-buvid-private'};
@@ -44,8 +44,9 @@ test('L4 browser routing confines exact service hosts and denies third-party, lo
  const f=fixture(await temp(t));await f.auth.login('x');let aborted=0,continued=0;
  await f.ctx.handler({request:()=>({url:()=> 'https://evil.test'}),abort:async()=>aborted++,continue:async()=>continued++});assert.equal(aborted,1);assert.equal(continued,0);
 });
-test('L5 browser selection prefers system Chrome, then cached Chromium, then gives an actionable error',async()=>{
+test('L5 browser selection prefers Edge, then Chrome, then cached Chromium, then gives an actionable error',async()=>{
  const chromium={executablePath:()=>'/cache/chromium/chrome'};
+ assert.equal((await browserOptions(chromium,{exists:p=>p.includes('Microsoft Edge.app'),cacheEntries:async()=>[]})).channel,'msedge');
  assert.equal((await browserOptions(chromium,{exists:p=>p.includes('Google Chrome.app'),cacheEntries:async()=>[]})).channel,'chrome');
  assert.equal((await browserOptions(chromium,{exists:p=>p==='/cache/chromium/chrome',cacheEntries:async()=>[]})).executablePath,'/cache/chromium/chrome');
  await assert.rejects(browserOptions(chromium,{exists:()=>false,cacheEntries:async()=>[]}),/需要装一次/);
@@ -121,4 +122,14 @@ test('L17 owner cancellation closes X during navigation and cannot overwrite aut
 test('L18 X request deadline closes the window and does not report successful login after expiry',async t=>{
  const f=fixture(await temp(t));f.page.goto=async()=>{f.setTime(f.time+5000);};
  assert.equal(await f.auth.login('x',{deadline:f.time+1000}),'timeout');assert.equal(f.closed,1);assert.equal(f.reports.length,0);
+});
+
+
+test('L5b launch options enable Chromium sandbox and remove automation defaults',()=>{
+ const options=browserLaunchOptions({channel:'msedge'},false);
+ assert.equal(options.chromiumSandbox,true);
+ assert.ok(options.ignoreDefaultArgs.includes('--enable-automation'));
+ assert.ok(options.args.includes('--disable-blink-features=AutomationControlled'));
+ assert.ok(!options.args.includes('--no-sandbox'));
+ assert.equal(options.headless,false);
 });

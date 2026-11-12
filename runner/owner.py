@@ -2,10 +2,12 @@
 """Loopback-only owner view. Team invitations use the separate authenticated cloud site."""
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-import os, json, re, urllib.request, urllib.error, ssl
-from urllib.parse import urlsplit
+import os, json, re, urllib.request, urllib.error, ssl, shutil, subprocess
+from urllib.parse import urlsplit, parse_qs
 from local_login_qr import read_local_qr, clear_local_qr
-from owner_unlock import redeem_code, OwnerSessions
+from local_bili_login import BiliPaused, LocalBiliLogin
+from local_login_page import PAGE
+from owner_unlock import redeem_code, mint_code, OwnerSessions
 
 C = json.loads((Path.home() / ".inkboard-team/config.json").read_text())
 
@@ -13,6 +15,7 @@ C = json.loads((Path.home() / ".inkboard-team/config.json").read_text())
 class Handler(BaseHTTPRequestHandler):
     runtime = Path.home() / '.inkboard-team'
     sessions = OwnerSessions()
+    bili_login = None
     def log_message(self, *a):
         pass
 
@@ -48,6 +51,53 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def local_page(self):
+        data = PAGE.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html;charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def bili(self):
+        if self.__class__.bili_login is None:
+            self.__class__.bili_login = LocalBiliLogin(self.runtime, C)
+        return self.__class__.bili_login
+
+    def local_action(self):
+        if self.headers.get('X-TeamAgent-Local') != '1' or not self.sessions.valid(self.headers.get('X-TeamAgent-Session')):
+            self.local_json(401, {'error':'本机开发台未解锁'})
+            return False
+        return True
+
+    def open_login(self):
+        code = mint_code(self.runtime)
+        url = 'http://127.0.0.1:3391/login#unlock=' + code
+        edge = '/Applications/Microsoft Edge.app'
+        try:
+            if Path(edge).exists():
+                subprocess.run(['/usr/bin/open', '-a', 'Microsoft Edge', url], timeout=5, check=True)
+            else:
+                subprocess.run(['/usr/bin/open', url], timeout=5, check=True)
+        except (OSError, subprocess.SubprocessError):
+            return self.local_json(503, {'error':'无法打开浏览器'})
+        return self.local_json(200, {'opened': True})
+
+    def open_x(self):
+        node = shutil.which('node') or '/opt/homebrew/bin/node'
+        fetcher = self.runtime / 'fetcher.mjs'
+        if not Path(node).exists() or not fetcher.exists():
+            return self.local_json(503, {'error':'X 登录组件未安装'})
+        try:
+            subprocess.Popen([node, str(fetcher), 'login', 'x'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return self.local_json(503, {'error':'X 登录组件未安装'})
+        return self.local_json(200, {'opened': True})
+
     def unlock(self):
         message = {'error':'解锁码无效或已过期'}
         if self.headers.get('Origin') != 'http://127.0.0.1:3391' or self.headers.get('X-TeamAgent-Local') != '1':
@@ -72,8 +122,32 @@ class Handler(BaseHTTPRequestHandler):
         ):
             self.send_error(403)
             return
+        if self.route_path == '/login' and self.command == 'GET':
+            return self.local_page()
         if self.route_path == '/api/local/session' and self.command == 'POST':
             return self.unlock()
+        if self.route_path in ('/api/local/bili/start','/api/local/bili/status','/api/local/x/open','/api/local/open-login'):
+            if not self.local_action():
+                return
+            if self.route_path == '/api/local/bili/start':
+                if self.command != 'POST':
+                    return self.send_error(405)
+                try:
+                    return self.local_json(200, self.bili().start())
+                except BiliPaused:
+                    return self.local_json(503, {'error':'B 站暂时限制，请稍后再试'})
+                except Exception:
+                    return self.local_json(502, {'error':'B 站二维码获取失败，请稍后重试'})
+            if self.route_path == '/api/local/bili/status':
+                if self.command != 'GET':
+                    return self.send_error(405)
+                query = parse_qs(self.route_query, keep_blank_values=True)
+                if set(query) != {'id'} or len(query['id']) != 1:
+                    return self.local_json(400, {'error':'无效登录'})
+                return self.local_json(200, self.bili().status(query['id'][0]))
+            if self.command != 'POST':
+                return self.send_error(405)
+            return self.open_login() if self.route_path == '/api/local/open-login' else self.open_x()
         if self.route_path not in ('/', '/guide') and not self.sessions.valid(self.headers.get('X-TeamAgent-Session')):
             return self.local_json(401, {'error':'本机开发台未解锁'})
         if self.route_path == '/api/local/service-login/qr':

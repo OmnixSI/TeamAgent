@@ -1095,6 +1095,15 @@ function loginQr(text) {
 let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot, loginQrDeadline;
 const loginStartBusy = new Set();
 async function startServiceLogin(panel, service, flow) {
+  if (service === 'bili' && localOwner()) {
+    try {
+      const response = await fetch('/api/local/open-login', {
+        method: 'POST',
+        headers: {'X-TeamAgent-Local': '1', ...(localSession ? {'X-TeamAgent-Session': localSession} : {})},
+      });
+      if (response.ok && (await response.json()).opened === true) return;
+    } catch {}
+  }
   if (loginStartBusy.has(service)) return;
   loginStartBusy.add(service);
   try {
