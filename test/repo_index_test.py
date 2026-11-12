@@ -24,12 +24,12 @@ class RepoIndexTests(unittest.TestCase):
         self.h = self.home / '.inkboard-team'
         self.root = self.h / 'repos/TeamAgent'
         self.root.mkdir(parents=True)
-        self.env = patch.dict(os.environ, {'HOME':str(self.home), 'DEEPSEEK_API_KEY':'synthetic-known-key'})
+        self.env = patch.dict(os.environ, {'HOME':str(self.home)})
         self.env.start(); self.addCleanup(self.env.stop)
         self.patches = [patch.object(index, 'H', self.h), patch.object(index, 'settings', return_value={'repositories':[REPO]})]
         for p in self.patches: p.start(); self.addCleanup(p.stop)
         (self.h / 'config.json').write_text(json.dumps({'url':'https://cloud.invalid','runnerToken':'synthetic-runner'}))
-        index._fetch_at = {}; index._offset = 0; index._known = None; index._backlog = False
+        index._fetch_at = {}; index._offset = 0; index._backlog = False
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Index Test'); self.git('config', 'user.email', 'index@example.invalid')
         self.git('remote', 'add', 'origin', 'https://github.com/' + REPO + '.git')
@@ -95,8 +95,8 @@ class RepoIndexTests(unittest.TestCase):
             self.assertTrue(paths[path]['hidden']); self.assertNotIn(value, json.dumps(record))
         self.assertIn('allowed-code', record['patch'])
 
-    def test_R5_regular_and_known_values_are_redacted_from_the_entire_payload(self):
-        values = ['ghp_'+'a'*36, 'sk-'+'b'*25, '-----BEGIN PRIVATE KEY-----\nsecret-body\n-----END PRIVATE KEY-----', 'SESSDATA=abc', 'synthetic-known-key', 'synthetic-runner']
+    def test_R5_pattern_values_are_redacted_from_the_entire_payload(self):
+        values = ['ghp_'+'a'*36, 'sk-'+'b'*25, '-----BEGIN PRIVATE KEY-----\nsecret-body\n-----END PRIVATE KEY-----', 'SESSDATA=abc']
         self.commit('\n'.join(values)); index.sync_once(1000)
         body = json.dumps(self.batches[-1])
         for value in values: self.assertNotIn(value, body)
@@ -223,3 +223,37 @@ class RepoIndexTests(unittest.TestCase):
                 result = index.cut_bytes(text,n)
                 self.assertLessEqual(len(result.encode()),n); self.assertTrue(text.startswith(result)); self.assertNotIn('\ufffd',result)
                 if len(text.encode()[:n].decode('utf-8',errors='ignore').encode()) == n: self.assertEqual(len(result.encode()), n)
+
+    def test_review_P2_missing_origin_head_falls_back_and_acknowledges_main_or_master(self):
+        sha = self.commit()
+        self.git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
+        for branch in ('main', 'master'):
+            with self.subTest(branch=branch):
+                if branch == 'master':
+                    self.git('update-ref', 'refs/remotes/origin/master', sha)
+                    self.git('update-ref', '-d', 'refs/remotes/origin/main')
+                self.assertEqual(index._default_ref(self.root), 'refs/remotes/origin/' + branch)
+                index.sync_once(1000 if branch == 'main' else 1400)
+                self.assertEqual(self.batches[-1]['repos'][0]['head']['sha'], sha)
+                self.assertEqual(self.state()[REPO]['frontier'], {'refs/remotes/origin/' + branch:sha})
+
+    def test_review_P2_index_redacts_patterns_without_opening_secret_files_or_environment_keys(self):
+        self.commit('sk-' + 'q'*25 + '\nSESSDATA=synthetic\n')
+        read = Path.read_text
+        def guarded(path, *args, **kwargs):
+            self.assertNotIn(path.name, ('worker-secrets.json','bili-cookie.json','.env'))
+            return read(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', guarded), patch.object(index.os.environ, 'get', side_effect=AssertionError('index must not inspect credential environment values')):
+            index.sync_once(1000)
+        payload = json.dumps(self.batches[-1])
+        self.assertNotIn('q'*25, payload); self.assertNotIn('SESSDATA=synthetic', payload)
+        self.assertIn('[REDACTED]', payload)
+
+    def test_review_P2_denied_workspace_paths_are_metadata_only_as_K2_allows(self):
+        self.commit('ordinary code\n')
+        work = self.worktree()
+        (work / '.env').write_text('SYNTHETIC-DENIED-CONTENT')
+        result = index.build(REPO, {}, 30)
+        entry = next(f for f in result['worktrees'][0]['files'] if f['path'] == '.env')
+        self.assertTrue(entry['hidden']); self.assertIsNone(entry['add'])
+        self.assertNotIn('SYNTHETIC-DENIED-CONTENT', json.dumps(result))

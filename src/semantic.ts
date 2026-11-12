@@ -1234,8 +1234,8 @@ export async function agentAnswer(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: call.function.name === "read_web"
-          ? untrusted("read_web", JSON.stringify(result), undefined, 40000)
+        content: ["read_web", "repo_changes", "repo_commit"].includes(call.function.name)
+          ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });
     }

@@ -26,7 +26,6 @@ DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed2
 PATTERN = re.compile(r'ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+')
 _fetch_at = {}
 _offset = 0
-_known = None
 _backlog = False
 
 
@@ -41,20 +40,6 @@ def _config():
     return _json(H / 'config.json', {})
 
 
-def _load_known(config):
-    global _known
-    if _known is not None:
-        return
-    values = [os.environ.get('DEEPSEEK_API_KEY'), config.get('runnerToken')]
-    deployed = _json(H / 'worker-secrets.json', {})
-    if isinstance(deployed, dict):
-        values.append(deployed.get('DEEPSEEK_API_KEY'))
-    cookies = _json(H / 'secrets/bili-cookie.json', {})
-    if isinstance(cookies, dict):
-        values.extend(c.get('value') for c in cookies.values() if isinstance(c, dict))
-    _known = sorted({v for v in values if isinstance(v, str) and v}, key=len, reverse=True)
-
-
 def repo_root(repo):
     if repo not in settings()['repositories']:
         raise ValueError('Repository denied')
@@ -67,8 +52,6 @@ def denied(path):
 
 
 def redact(text):
-    for value in _known or ():
-        text = text.replace(value, '[REDACTED]')
     return PATTERN.sub('[REDACTED]', text)
 
 
@@ -81,7 +64,16 @@ def _git(root, *args):
 
 
 def _default_ref(root):
-    return _git(root, 'rev-parse', '--symbolic-full-name', 'refs/remotes/origin/HEAD').strip()
+    try:
+        return _git(root, 'rev-parse', '--verify', '--symbolic-full-name', 'refs/remotes/origin/HEAD').strip()
+    except gitsafe.GitFailed:
+        for ref in ('refs/remotes/origin/main', 'refs/remotes/origin/master'):
+            try:
+                _git(root, 'rev-parse', '--verify', ref + '^{commit}')
+                return ref
+            except gitsafe.GitFailed:
+                pass
+    raise gitsafe.GitFailed('Remote default branch unavailable')
 
 
 def tracked_refs(root):
@@ -261,7 +253,6 @@ def sync_once(now):
     config = _config()
     if config.get('index', {}).get('enabled', True) is False:
         return
-    _load_known(config)
     state = _json(H/'repo-index-state.json', {})
     repositories = list(settings()['repositories'])
     if not repositories:

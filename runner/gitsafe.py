@@ -5,6 +5,7 @@ module cannot commit/push, install hooks, or invoke repository diff helpers.
 """
 from contextlib import contextmanager
 import os
+import re
 from pathlib import Path
 import subprocess
 import threading
@@ -20,7 +21,9 @@ class GitFailed(RuntimeError):
 
 
 PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-          '-c', 'diff.external=', '-c', 'core.pager=cat', '-c', 'safe.directory=*']
+          '-c', 'diff.external=', '-c', 'core.pager=cat',
+          '-c', 'core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5',
+          '-c', 'credential.helper=', '-c', 'core.askPass=', '-c', 'protocol.ext.allow=never']
 READ = {'log', 'show', 'rev-list', 'rev-parse', 'merge-base', 'for-each-ref',
         'status', 'diff', 'cat-file', 'ls-files', 'grep', 'config', 'worktree'}
 _clock = threading.local()
@@ -60,6 +63,22 @@ def _validate(root, cls, args):
             raise GitDenied('Git read option denied')
         if command == 'config' and not (len(args) == 3 and args[1] in ('--get', '--get-regexp') and not args[2].startswith('-')):
             raise GitDenied('Git config is read-only')
+        if command == 'config':
+            key = args[2].lower()
+            if key.startswith(('include.', 'includeif.')):
+                raise GitDenied('Git config include access denied')
+            if args[1] == '--get-regexp':
+                try:
+                    includes = 'include' in key or re.search(args[2], 'include.path', re.I) is not None
+                except re.error:
+                    includes = True
+                if includes:
+                    raise GitDenied('Git config include access denied')
+        if command == 'diff' and any(a.startswith('--') and len(a.split('=')[0]) > 2
+                and ('--no-index'.startswith(a.split('=')[0]) or a.startswith('--no-index=')) for a in args[1:]):
+            raise GitDenied('Git diff must stay in the repository')
+        if command == 'cat-file' and not (len(args) == 3 and args[1] in ('-e', '-p', '-t', '-s') and not args[2].startswith('-')):
+            raise GitDenied('Git cat-file mode denied')
         if command == 'merge-base' and not (len(args) == 4 and args[1] == '--is-ancestor' and all(not a.startswith('-') for a in args[2:])):
             raise GitDenied('Git merge-base mode denied')
         if command == 'worktree' and not (len(args) >= 2 and args[1] == 'list' and all(a in ('--porcelain', '-z') for a in args[2:])):
@@ -82,15 +101,15 @@ def run(root, cls, *args):
     """Return stdout for a permitted Git command; errors never include output."""
     _validate(root, cls, args)
     command, *rest = args
-    flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else []
-    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+    flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else ['--no-includes'] if command == 'config' else []
+    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in ('SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
     deadline = getattr(_clock, 'deadline', None)
     timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
     if timeout <= 0:
         raise TimeoutError('Git round timed out')
     try:
-        result = subprocess.run(PREFIX + [command] + flags + rest, cwd=root, env=env,
+        result = subprocess.run(PREFIX + ['-c', 'safe.directory=' + str(Path(root).resolve())] + [command] + flags + rest, cwd=root, env=env,
                                 text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None

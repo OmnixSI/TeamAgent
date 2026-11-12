@@ -17,7 +17,7 @@ class GitSafeTests(unittest.TestCase):
         self.home = Path(self.temp.name)
         self.root = self.home / 'repo'
         self.root.mkdir()
-        self.env = patch.dict(os.environ, {'HOME':str(self.home)})
+        self.env = patch.dict(os.environ, {'HOME':str(self.home),'NO_PROXY':'127.0.0.1,localhost','no_proxy':'127.0.0.1,localhost'})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.git('init', '-q')
@@ -70,7 +70,7 @@ class GitSafeTests(unittest.TestCase):
                 with self.subTest(cls=cls, args=args):
                     with self.assertRaises(gitsafe.GitDenied):
                         gitsafe.run(self.root, cls, *args)
-            started.assert_not_called()
+            self.assertEqual(started.call_count, 0)
 
     def test_lifecycle_allows_only_detached_private_worktrees(self):
         sub = self.home / '.inkboard-team/sub/ok'
@@ -84,7 +84,7 @@ class GitSafeTests(unittest.TestCase):
         with patch.object(gitsafe.subprocess, 'run') as started:
             with self.assertRaises(gitsafe.GitDenied):
                 gitsafe.run(self.root, 'lifecycle', 'worktree', 'add', '--detach', str(sub / 'escape'), 'HEAD')
-            started.assert_not_called()
+            self.assertEqual(started.call_count, 0)
 
     def test_read_config_and_ancestor_checks_remain_available(self):
         self.assertIn('Index Test', gitsafe.run(self.root, 'read', 'config', '--get', 'user.name'))
@@ -99,7 +99,7 @@ class GitSafeTests(unittest.TestCase):
         with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'ok', '')) as started:
             self.assertEqual(gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin'), 'ok')
         args, opts = started.call_args
-        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','safe.directory=*','fetch','--prune','origin'])
+        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','core.askPass=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'fetch','--prune','origin'])
         self.assertEqual(opts['env']['GIT_CONFIG_NOSYSTEM'], '1')
         self.assertEqual(opts['env']['GIT_CONFIG_GLOBAL'], '/dev/null')
         self.assertEqual(opts['env']['GIT_TERMINAL_PROMPT'], '0')
@@ -120,3 +120,59 @@ class GitSafeTests(unittest.TestCase):
                 with self.assertRaises(TimeoutError):
                     gitsafe.run(self.root, 'read', 'status')
             self.assertEqual(started.call_count, 2)
+
+    def test_review_P1_fetch_cannot_execute_repository_ssh_command(self):
+        marker = self.home / 'ssh-executed'
+        script = self.home / 'ssh-evil.sh'
+        script.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 1\n'); script.chmod(0o700)
+        self.git('remote', 'add', 'origin', 'ssh://127.0.0.1:1/nonexistent')
+        self.git('config', 'core.sshCommand', str(script))
+        with self.assertRaises(gitsafe.GitFailed):
+            gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
+        self.assertFalse(marker.exists(), 'repo-local core.sshCommand executed')
+
+    def test_review_P1_fetch_cannot_execute_credential_helper_or_ext_transport(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        class AuthOnly(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(401); self.send_header('WWW-Authenticate', 'Basic realm="unit"'); self.end_headers()
+            def log_message(self, *args): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), AuthOnly)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        marker = self.home / 'credential-executed'
+        script = self.home / 'credential-evil.sh'
+        script.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\nexit 1\n'); script.chmod(0o700)
+        self.git('remote', 'add', 'origin', 'http://127.0.0.1:' + str(server.server_port) + '/fake')
+        self.git('config', 'credential.helper', '!' + str(script))
+        self.git('config', 'core.askPass', str(script))
+        try:
+            with self.assertRaises(gitsafe.GitFailed):
+                gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
+            self.assertFalse(marker.exists(), 'repo-local credential.helper executed')
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+        self.git('remote', 'set-url', 'origin', 'ext::' + str(script))
+        self.git('config', 'protocol.ext.allow', 'always')
+        with self.assertRaises(gitsafe.GitFailed):
+            gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
+        self.assertFalse(marker.exists(), 'repo-local ext transport executed')
+
+    def test_review_P2_repository_escape_modes_are_rejected_before_spawn(self):
+        denied = [('diff', '--no-index', 'a', 'b'), ('diff', '--no-ind', 'a', 'b'),
+                  ('config', '--get', 'include.path'), ('config', '--get', 'Include.Path'),
+                  ('config', '--get-regexp', '.*'), ('config', '--get-regexp', '^include'),
+                  ('cat-file', '--batch'), ('cat-file', '--batch-check'), ('cat-file', '--batch-command'), ('cat-file', '--bat')]
+        with patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+            for args in denied:
+                with self.subTest(args=args), self.assertRaises(gitsafe.GitDenied):
+                    gitsafe.run(self.root, 'read', *args)
+            self.assertEqual(started.call_count, 0)
+
+    def test_review_P2_safe_directory_trusts_only_current_canonical_root(self):
+        with patch.dict(os.environ, {'SSH_ASKPASS':'synthetic-untrusted-helper','GIT_SSH_COMMAND':'synthetic-untrusted-command'}), patch.object(gitsafe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as started:
+            gitsafe.run(self.root, 'read', 'status')
+        args, opts = started.call_args
+        directories = [arg for arg in args[0] if arg.startswith('safe.directory=')]
+        self.assertEqual(directories, ['safe.directory=' + str(self.root.resolve())])
+        self.assertNotIn('GIT_SSH_COMMAND', opts['env']); self.assertNotIn('SSH_ASKPASS', opts['env'])
