@@ -157,6 +157,73 @@ test('T10 repeated unclosed private-key headers have linear redaction cost',()=>
  const start=performance.now();api.redactPatch(input);api.redactKnown(e,input);
  assert.ok(performance.now()-start<200,'250KB redaction exceeded 200ms');
 });
+test('review redacts Bearer and long base64 in files and commit patches, retaining short code literals',async()=>{
+ const bearer='opaque-token-1234567890._~+/=',encoded=Buffer.from('secret material '.repeat(10)).toString('base64');
+ const short='const sample = "'+Buffer.from('example').toString('base64')+'";',text='Authorization: Bearer '+bearer+'\nconst data = "'+encoded+'";\n'+short;
+ assert.ok(encoded.length>=128);
+ for(const prefix of ['Bearer ','bearer\t','Authorization: Bearer '])assert.ok(!api.redactPatch(prefix+bearer).includes(bearer));
+ const output=api.redactPatch(text);assert.ok(!output.includes(encoded));assert.ok(output.includes(short));
+ assert.equal(api.redactPatch('"'+'Y'.repeat(124)+'"'),'"'+'Y'.repeat(124)+'"');
+ assert.equal(api.redactPatch('"'+'Y'.repeat(128)+'"'),'"[REDACTED]"');
+ await network(async()=>{
+  const r=await file(ready());assert.ok(!r.text.includes(bearer));assert.ok(!r.text.includes(encoded));assert.ok(r.text.includes(short));
+ },url=>url.includes('/git/blobs/')?Response.json(blob(text)):undefined);
+ await network(async()=>{
+  const r=await api.runRepoTool(ready(),'repo_commit',{repo:'cli/cli',sha:SHA});
+  const output=JSON.stringify(r);assert.ok(!output.includes(bearer));assert.ok(!output.includes(encoded));assert.ok(r.files[0].patch.includes(short));
+ },url=>url.includes('/commits/'+SHA)?Response.json({sha:SHA,commit:{message:'change'},files:[{filename:'code.ts',patch:text}]}):undefined);
+});
+test('review truncated PEM redacts through EOF while preserving file line coordinates',async()=>{
+ for(const kind of ['','RSA ','EC ','ENCRYPTED ']){
+  const input='before\n-----BEGIN '+kind+'PRIVATE KEY-----\nTRUNCATED-KEY-BODY\nlast-secret-line';
+  assert.equal(api.redactPatch(input),'before\n[REDACTED]');
+  const preserved=api.redactPatch(input,true);assert.equal(preserved,'before\n[REDACTED]\n\n');
+  await network(async()=>{
+   const r=await file(ready(),{start_line:3,max_lines:2});assert.equal(r.total_lines,4);assert.equal(r.text,'\n');
+  },url=>url.includes('/git/blobs/')?Response.json(blob(input)):undefined);
+ }
+ const repeated=('-----BEGIN PRIVATE KEY-----\n').repeat(10000).slice(0,250000);
+ assert.equal(api.redactPatch(repeated),'[REDACTED]');
+});
+test('review DENY protects every nested component and all three input modes before requests',async()=>{
+ const paths=['foo/.git/config','a/b/.git/HEAD','foo/.git','foo/.git/','a/.env/file','a/.env.local/file','a/id_rsa.pub/file',
+  'a/id_ed25519.pub/file','a/.npmrc/file','a/.netrc/file','a/.pypirc/file','a/secrets/file','a/credentials/file','a/cookies/file',
+  'a/worker-secrets.json/file','a/.dev.vars/file','a/wrangler.toml.local/file',...['pem','key','p12','pfx'].map(ext=>'a/cert.'+ext+'/file')];
+ await network(async calls=>{
+  for(const path of paths){
+   assert.equal(api.deniedPath(path),true,path);
+   for(const mode of ['read','list','find'])assert.equal((await file(ready(),{path,mode,query:'file'})).error_kind,'denied',mode+' '+path);
+  }
+  assert.equal(calls.length,0);
+ });
+ for(const path of ['foo/git/config','foo/.github/HEAD','foo/normal.key.ts','foo/src/private.ts'])assert.equal(api.deniedPath(path),false,path);
+});
+test('review nested protected paths are hidden from directory, find and commit outputs',async()=>{
+ const paths=['foo/.git/config','a/b/.git/HEAD','foo/.env/file','normal.ts'];
+ await network(async()=>{
+  const r=await file(ready(),{path:'',mode:'find',query:'.'});assert.deepEqual(r.paths,['normal.ts']);
+  const listing=await file(ready(),{path:''});assert.equal(listing.hidden,3);assert.deepEqual(listing.entries.map(e=>e.name),['normal.ts']);
+ },url=>url.includes('/git/trees/')?Response.json({tree:paths.map(p=>entry(p))}):undefined);
+ await network(async()=>{
+  const r=await api.runRepoTool(ready(),'repo_commit',{repo:'cli/cli',sha:SHA});assert.equal(r.hidden,3);assert.deepEqual(r.files.map(f=>f.path),['normal.ts']);
+ },url=>url.includes('/commits/'+SHA)?Response.json({sha:SHA,commit:{message:'change'},files:paths.map(filename=>({filename,patch:'code'}))}):undefined);
+});
+test('review path normalization precedes DENY and rejects encoded or ambiguous paths without requests',async()=>{
+ assert.equal(api.validPath('foo/./bar'),'foo/bar');assert.equal(api.validPath('./foo/./bar/'),'foo/bar');
+ await network(async calls=>{
+  for(const path of ['%2e%2e','%2E%2E','foo/%2e%2e/bar','foo/%252e%252e/bar','foo%2f.git/config','foo%5cbar','foo//bar','foo\\bar',' foo/bar','foo/bar ','foo/../bar']){
+   assert.equal(api.validPath(path),null,path);
+   for(const mode of ['read','list','find'])assert.equal((await file(ready(),{path,mode,query:'bar'})).error_kind,'invalid_args',mode+' '+path);
+  }
+  for(const path of ['foo/./.git/config','./foo/./.env'])for(const mode of ['read','list','find'])
+   assert.equal((await file(ready(),{path,mode,query:'bar'})).error_kind,'denied',path);
+  assert.equal(calls.length,0);
+ });
+ await network(async calls=>{
+  assert.equal((await file(ready(),{path:'foo/./README.md'})).text,'one\ntwo\nthree');
+  assert.ok(calls.some(c=>decodeURIComponent(new URL(c.url).pathname).endsWith(SHA+':foo')));assert.ok(calls.every(c=>!c.url.includes('%2E')));
+ });
+});
 test('T10 selecting middle lines cannot bypass a multi-line key or known-value redaction',async()=>{
  const e=ready();e.RUNNER_TOKEN='SyntheticFirstLine\nSyntheticSecondLine';
  const text='before\n-----BEGIN PRIVATE KEY-----\nPRIVATE-BODY\n-----END PRIVATE KEY-----\nafter\n'+e.RUNNER_TOKEN;
