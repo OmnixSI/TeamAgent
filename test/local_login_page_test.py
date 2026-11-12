@@ -114,6 +114,29 @@ class LocalLoginPageTests(unittest.TestCase):
         self.assertEqual(first['id'], second['id'])
         self.assertEqual(len(calls), 1)
 
+
+    def test_local_bili_save_failure_never_claims_ok(self):
+        spec = importlib.util.spec_from_file_location('local_bili_unit3', ROOT / 'runner/local_bili_login.py')
+        module = importlib.util.module_from_spec(spec); sys.path.insert(0, str(ROOT / 'runner')); spec.loader.exec_module(module)
+        login = module.LocalBiliLogin(self.runtime, {'url':'https://cloud.test','runnerToken':'runner'})
+        headers = Message(); url = 'https://account.bilibili.com/h5/account-h5/auth/scan-web?navhide=1&callback=close&qrcode_key=' + 'c'*32 + '&from='
+        login._http = lambda path: (headers, {'code':0,'data':{'url':url,'qrcode_key':'c'*32}}) if 'generate' in path else (headers, {'code':0,'data':{'code':0}})
+        headers.add_header('Set-Cookie', 'SESSDATA=x; Max-Age=3600'); headers.add_header('Set-Cookie', 'bili_jct=y; Max-Age=3600'); headers.add_header('Set-Cookie', 'DedeUserID=z; Max-Age=3600')
+        login._report = lambda state: None
+        login._save = lambda fresh: (_ for _ in ()).throw(OSError('disk full'))
+        started = login.start()
+        self.assertEqual(login.status(started['id']), {'phase':'failed'})
+        self.assertEqual(login.status(started['id']), {'phase':'failed'})
+        self.assertFalse((self.runtime / 'secrets/bili-cookie.json').exists())
+
+    def test_local_bili_lock_timeout_does_not_write_and_stale_lock_recovers(self):
+        spec = importlib.util.spec_from_file_location('local_bili_unit4', ROOT / 'runner/local_bili_login.py')
+        module = importlib.util.module_from_spec(spec); sys.path.insert(0, str(ROOT / 'runner')); spec.loader.exec_module(module)
+        login = module.LocalBiliLogin(self.runtime, {'url':'https://cloud.test','runnerToken':'runner'})
+        risk = self.runtime / 'state/bili-risk.json'; risk.parent.mkdir(parents=True); lock = risk.with_name(risk.name + '.lock')
+        lock.mkdir(); started = time.time(); login._pause(); self.assertFalse(risk.exists()); self.assertGreaterEqual(time.time()-started, 0.9)
+        os.utime(lock, (time.time()-60, time.time()-60)); login._pause(); self.assertTrue(risk.exists()); self.assertFalse(lock.exists())
+
     def test_local_bili_generate_and_ok_poll_write_0600_cookie_file(self):
         spec = importlib.util.spec_from_file_location('local_bili_unit', ROOT / 'runner/local_bili_login.py')
         module = importlib.util.module_from_spec(spec)

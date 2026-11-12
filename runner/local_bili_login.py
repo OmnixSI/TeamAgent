@@ -62,9 +62,18 @@ class LocalBiliLogin:
                 held = True
                 break
             except FileExistsError:
+                try:
+                    if time.time() - lock.stat().st_mtime > 30:
+                        lock.rmdir()
+                        continue
+                except OSError:
+                    pass
                 time.sleep(0.01)
             except OSError:
                 break
+        if not held:
+            self._bad_risk_until = time.time() * 1000 + 60000
+            return
         try:
             old = 0
             try:
@@ -205,11 +214,11 @@ class LocalBiliLogin:
                     current = self._sessions.get("active")
                     if not current or current is not item or current["expires_at"] <= time.time() * 1000:
                         return {"phase": "expired"}
+                    self._save(self._cookies(headers, time.time() * 1000))
                     self._sessions = {}
                     self._finished[login_id] = "ok"
                     while len(self._finished) > 16:
                         self._finished.pop(next(iter(self._finished)))
-                    self._save(self._cookies(headers, time.time() * 1000))
                     self._report("ok")
                     return {"phase": "ok"}
                 if code == 86090:

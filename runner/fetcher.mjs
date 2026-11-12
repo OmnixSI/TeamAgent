@@ -7,7 +7,7 @@ import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {readFileSync,writeFileSync,renameSync,mkdirSync,rmdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,renameSync,mkdirSync,rmdirSync,statSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -63,7 +63,7 @@ export function createFetchClient(options={}){
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
  const rate=()=>{const slot=serial.then(async()=>{refreshPause();if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);refreshPause();if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
- function persistPause(until){if(!riskPath)return;try{mkdirSync(dirname(riskPath),{recursive:true,mode:0o700});const lock=riskPath+'.lock';let held=false;for(let i=0;i<100;i++){try{mkdirSync(lock,{mode:0o700});held=true;break;}catch(error){if(error.code!=='EEXIST')break;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}}try{let old=0;try{old=Number(JSON.parse(readFileSync(riskPath,'utf8'))?.paused_until)||0;}catch{}const value=Math.max(until,old);const tmp=riskPath+'.tmp-'+process.pid+'-'+Math.random().toString(36).slice(2);writeFileSync(tmp,JSON.stringify({paused_until:value}),{mode:0o600});renameSync(tmp,riskPath);}finally{if(held)try{rmdirSync(lock);}catch{}}}catch{}}
+ function persistPause(until){if(!riskPath)return;try{mkdirSync(dirname(riskPath),{recursive:true,mode:0o700});const lock=riskPath+'.lock';let held=false;for(let i=0;i<100;i++){try{mkdirSync(lock,{mode:0o700});held=true;break;}catch(error){if(error.code!=='EEXIST')break;try{if(Date.now()-statSync(lock).mtimeMs>30000){rmdirSync(lock);continue;}}catch{}Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}}if(!held)return;try{let old=0;try{old=Number(JSON.parse(readFileSync(riskPath,'utf8'))?.paused_until)||0;}catch{}const value=Math.max(until,old);const tmp=riskPath+'.tmp-'+process.pid+'-'+Math.random().toString(36).slice(2);writeFileSync(tmp,JSON.stringify({paused_until:value}),{mode:0o600});renameSync(tmp,riskPath);}finally{if(held)try{rmdirSync(lock);}catch{}}}catch{}}
  function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2){pausedUntil=now()+600000;persistPause(pausedUntil);}}
  async function get(raw,kind,anonymous=false){
    const u=allowed(raw,kind);await rate();
