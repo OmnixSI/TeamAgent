@@ -74,10 +74,10 @@ export async function macNotification(text){
  if(process.platform!=='darwin')return;
  await new Promise(resolve=>execFile('osascript',['-e','display notification '+JSON.stringify(text)+' with title "TeamAgent"'],{timeout:5000},()=>resolve()));
 }
-async function defaultBiliProbe(cookies){
- const {createFetchClient}=await import('./fetcher.mjs');
+async function defaultBiliProbe(client,cookies){
  try{
-  const nav=await createFetchClient({cookies}).biliApi('/x/web-interface/nav');
+  client.setSessionCookies(cookies);
+  const nav=await client.biliApi('/x/web-interface/nav');
   if([-352,-412].includes(nav.code))return 'risk';
   if(nav.data?.isLogin===true)return 'ok';
   if(nav.code===-101||nav.data?.isLogin===false)return 'expired';
@@ -87,11 +87,19 @@ async function defaultBiliProbe(cookies){
 async function xState(page){
  if(await page.locator('[data-testid="captcha"], iframe[src*="captcha"], iframe[src*="arkoselabs"]').first().isVisible())return 'risk';
  if(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').isVisible())return 'ok';
- return 'expired';
+ if(/^\/(?:login|i\/flow\/login)(?:\/|$)/.test(new URL(page.url()).pathname))return 'expired';
+ if(await page.locator('input[autocomplete="username"], input[name="password"], [data-testid="LoginForm_Login_Button"]').first().isVisible())return 'expired';
+ return null; // An empty/error page does not establish that the session expired.
 }
 export function createBrowserAuth(options={}){
  const home=options.home||resolve(homedir(),'.inkboard-team'),now=options.now||Date.now,sleep=options.sleep||wait;
- const launch=options.launch||launchBrowser,probeBili=options.probeBili||defaultBiliProbe,report=options.report||asyncNoop,notify=options.notify||macNotification;
+ const launch=options.launch||launchBrowser,report=options.report||asyncNoop,notify=options.notify||macNotification;
+ let biliClient=options.client;
+ async function client(){
+  if(!biliClient){const {createFetchClient}=await import('./fetcher.mjs');biliClient=createFetchClient({now,sleep,log:options.log});}
+  return biliClient;
+ }
+ const probeBili=options.probeBili||(async cookies=>defaultBiliProbe(await client(),cookies));
  const statePath=service=>resolve(home,'state/auth-'+service+'.json'),known=new Set();
  async function locked(service,work,busy=null){
   const path=resolve(home,'state/login-'+service+'.lock');await privateDir(dirname(path));
@@ -130,6 +138,7 @@ export function createBrowserAuth(options={}){
  async function login(service){
   if(!LOGIN[service])throw Error('请选择 bili 或 x。');
   return locked(service,async()=>{
+  if(service==='bili'&&(await client()).isPaused())return 'risk';
   const state=await open(service,false,async(context,page)=>{
    const deadline=now()+300000;
    const timer=setTimeout(()=>context.close().catch(()=>{}),300000);
@@ -143,6 +152,7 @@ export function createBrowserAuth(options={}){
       await rememberCookies(exported);
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
      }else state=await xState(page);
+     if(state==='risk'){if(service==='bili')(await client()).pauseForRisk();return 'risk';}
      if(state==='ok'&&now()<deadline){if(service==='bili')await writeBiliCookies(home,Object.values(exported));return 'ok';}
      await sleep(Math.min(2000,Math.max(0,deadline-now())));
     }
@@ -151,6 +161,7 @@ export function createBrowserAuth(options={}){
    finally{clearTimeout(timer);}
   });
   if(state==='ok'){await record(service,'ok');await notify(LABELS[service]+'已登录');}
+  else if(state==='risk')await record(service,'risk');
   return state;
   },'登录窗口正在使用，请完成或关闭已有窗口后重试。');
  }
@@ -159,6 +170,7 @@ export function createBrowserAuth(options={}){
   return locked(service,async()=>{
   let state;
   if(service==='bili'){
+   if((await client()).isPaused())return (await readJSON(statePath('bili'))).state||null;
    const cookies=await rememberCookies(await loadBiliCookies(home));
    const session=cookies.SESSDATA;
    if(!session?.value)state='missing';
@@ -168,15 +180,17 @@ export function createBrowserAuth(options={}){
    const old=await readJSON(statePath('x'));
    if(!old?.had_ok&&!existsSync(resolve(home,'browser/x/Default')))state='missing';
    else state=await open('x',true,async(_context,page)=>{
-    await page.goto('https://x.com/home',{waitUntil:'domcontentloaded',timeout:15000});
+    const response=await page.goto('https://x.com/home',{waitUntil:'domcontentloaded',timeout:15000});
+    if(response?.status()>=400)return null;
     if(!/\/(?:login|i\/flow\/login)/.test(new URL(page.url()).pathname))await page.waitForSelector?.('[data-testid="SideNav_AccountSwitcher_Button"], [data-testid="captcha"], iframe[src*="captcha"]',{timeout:8000}).catch(()=>{});
     return xState(page);
-   });
+   }).catch(()=>null);
   }
   return state?record(service,state):null;
   });
  }
  async function prepareBili(client){
+  if(!biliClient)biliClient=client;
   const state=await check('bili');
   const cookies=state==='ok'?flatCookies(await rememberCookies(await loadBiliCookies(home))):{};
   client.setSessionCookies(cookies);

@@ -65,7 +65,7 @@ test('L7 daily checks run once after local 09:00 and again the next day',async t
 });
 test('L8 pre-use check removes expired session and preserves anonymous fetch fallback',async t=>{
  const home=await temp(t);await writeBiliCookies(home,cookies());let current='ok';const f=fixture(home,{probeBili:async()=>current});let prepared;
- const client={setSessionCookies:c=>{prepared=c;}};await f.auth.prepareBili(client);assert.equal(prepared.SESSDATA,values.SESSDATA);
+ const client={setSessionCookies:c=>{prepared=c;},isPaused:()=>false};await f.auth.prepareBili(client);assert.equal(prepared.SESSDATA,values.SESSDATA);
  current='expired';await f.auth.prepareBili(client);assert.equal(prepared.SESSDATA,undefined);
  const reports=[];let before=0;await runJob({id:'j',payload:{type:'bili',ref:'BV1xx411c7mD',tier:'light',lease:'l'}},{biliLight:async()=>({title:'anonymous'}),sanitize:x=>x},async(_p,b)=>reports.push(b),()=>{},async()=>{before++;});assert.equal(before,1);assert.equal(reports[0].success,true);
 });
@@ -91,4 +91,25 @@ test('L11 background checks do not overwrite status while the user is logging in
 test('L12 deadline closing the browser during a probe still returns a clean timeout',async t=>{
  const f=fixture(await temp(t),{probeBili:async()=>{f.setTime(f.time+300000);throw Error('browser closed at deadline');}});
  assert.equal(await f.auth.login('bili'),'timeout');assert.equal(f.closed,1);assert.equal(f.reports.length,0);
+});
+test('L15 X service errors, empty pages and navigation failures preserve the prior status without notices',async t=>{
+ for(const mode of ['503','empty','timeout']){
+  const home=await temp(t),f=fixture(home);await f.auth.record('x','ok');
+  const before=await readFile(join(home,'state/auth-x.json'),'utf8');
+  f.page.locator=()=>({first(){return this;},isVisible:async()=>false});
+  f.page.goto=async()=>{if(mode==='timeout')throw Error('navigation timeout');return {status:()=>mode==='503'?503:200};};
+  assert.equal(await f.auth.check('x'),null,mode);
+  assert.equal(await readFile(join(home,'state/auth-x.json'),'utf8'),before,mode);
+  assert.equal(f.notices.length,0);assert.equal(f.reports.length,1);assert.equal(f.closed,1);
+ }
+});
+test('L16 X explicit login redirect or visible login form expires the session once',async t=>{
+ for(const mode of ['redirect','form']){
+  const f=fixture(await temp(t));await f.auth.record('x','ok');
+  f.page.goto=async()=>({status:()=>200});
+  f.page.url=()=>mode==='redirect'?'https://x.com/i/flow/login':'https://x.com/home';
+  f.page.locator=selector=>({first(){return this;},isVisible:async()=>mode==='form'&&selector.includes('input[autocomplete="username"]')});
+  assert.equal(await f.auth.check('x'),'expired',mode);await f.auth.check('x');
+  assert.equal(f.notices.length,1);assert.equal(f.reports.at(-1).state,'expired');
+ }
 });

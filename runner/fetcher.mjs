@@ -143,7 +143,9 @@ export function createFetchClient(options={}){
    for(const key of ['SESSDATA','bili_jct','DedeUserID','buvid3'])if(typeof next[key]==='string'&&next[key]){cookies[key]=next[key];knownSecrets.add(next[key]);}
    if(next.buvid3)buvidAt=now();
  }
- return {biliApi,biliSubtitle,resolveShort,biliLight,setSessionCookies,sanitize:safe};
+ const isPaused=()=>now()<pausedUntil;
+ const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);};
+ return {biliApi,biliSubtitle,resolveShort,biliLight,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
 }
 export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
@@ -167,10 +169,10 @@ async function main(){
    if(!r.ok)throw Error('cloud request failed');return r.json();
  };
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
- const auth=createBrowserAuth({home,report:body=>cloud('auth-status',body),log});
+ const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
  if(process.argv[2]==='login'){
    const state=await auth.login(process.argv[3]);
-   log(state==='ok'?'登录已保存在本机。':'五分钟内未完成登录，窗口已关闭。');
+   log(state==='ok'?'登录已保存在本机。':state==='risk'?'登录受到限制，请稍后再试。':'五分钟内未完成登录，窗口已关闭。');
    if(state!=='ok')process.exitCode=1;
    return;
  }

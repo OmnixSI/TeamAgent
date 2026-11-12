@@ -2,6 +2,11 @@ import {test} from 'node:test';
 import './test_browser_auth.mjs';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import https from 'node:https';
+import {createBrowserAuth,writeBiliCookies} from './browser-auth.mjs';
 import {createFetchClient,createSafeLookup,isPublic,wbiSign,sanitize,runJob} from './fetcher.mjs';
 const BV='BV1xx411c7mD';
 function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
@@ -10,6 +15,29 @@ function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
  const client=createFetchClient({request,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),now:()=>t,sleep:async ms=>{t+=ms;},random:()=>0,log:x=>logs.push(x),...extra});
  return {client,calls,logs,times,get destroys(){return destroys;},get time(){return t;},setTime(v){t=v;}};
 }
+test('L13 a paused fetch client suppresses auth probes and preserves the last local status',async t=>{
+ t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
+ const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ await writeBiliCookies(home,[{name:'SESSDATA',value:'private-session',expires:2000000000}]);
+ const f=fixture(()=>({status:412})),reports=[];
+ const auth=createBrowserAuth({home,client:f.client,report:async b=>reports.push(b),notify:async()=>{}});
+ await auth.record('bili','ok');
+ await assert.rejects(f.client.biliApi('/x'));await assert.rejects(f.client.biliApi('/x'));
+ assert.equal(await auth.check('bili'),'ok');assert.equal(f.calls.length,2);assert.equal(reports.length,1);
+});
+test('L14 login nav shares the fetch limiter and stops on its first risk response',async t=>{
+ t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
+ const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ let mode='ok',closed=0;
+ const f=fixture(()=>mode==='ok'?{body:{code:0}}:{body:{code:-352}});
+ await f.client.biliApi('/x');mode='risk';
+ const page={goto:async()=>{}},context={pages:()=>[page],route:async()=>{},cookies:async()=>[{name:'SESSDATA',value:'private-session',expires:2000000000}],close:async()=>closed++};
+ const auth=createBrowserAuth({home,client:f.client,now:()=>f.time,sleep:async ms=>f.setTime(f.time+ms),launch:async()=>context,notify:async()=>{}});
+ assert.equal(await auth.login('bili'),'risk');assert.equal(f.calls.length,2);assert.equal(closed,1);
+ assert.ok(f.times[1]-f.times[0]>=1000);assert.equal(f.client.isPaused(),true);
+ assert.equal(await auth.check('bili'),'risk');assert.equal(f.calls.length,2);
+ await assert.rejects(readFile(join(home,'secrets/bili-cookie.json')));
+});
 test('N1 WBI public fixed-key example matches published digest',()=>{ // https://github.com/SocialSisterYi/bilibili-API-collect/blob/e99f64c9b5c2bbd156e95ca254620378a22697f7/docs/misc/sign/wbi.md (algorithm example, zab parameter)
 const q=wbiSign({foo:'114',bar:'514',zab:1919810},'7cd084941338484aae1ad9425b84077c','4932caff0ff746eab6f01bf08b70ac45',1702204169);assert.equal(new URLSearchParams(q).get('w_rid'),'8f6f2b5b3d485fe1886cec6a0be8c5d4');assert.equal(new URLSearchParams(wbiSign({foo:"!'()*a b",w_rid:'old',wts:1},'a'.repeat(32),'b'.repeat(32),123)).get('foo'),'a b');});
 test('N2 light fetch joins metadata, preferred subtitles, hot comments; missing sections degrade',async()=>{for(const empty of [false,true]){const f=fixture(o=>{const p=o.path.split('?')[0];if(p.endsWith('/spi'))return {body:{code:0,data:{b_3:'anon'}}};if(p.endsWith('/nav'))return {body:{code:-101,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};if(p.endsWith('/view'))return {body:{code:0,data:{bvid:BV,title:'T',desc:'D',owner:{name:'UP'},tname:'科技',duration:60,pubdate:1,stat:{view:2},aid:123,pages:[{cid:456}]}}};if(p.endsWith('/v2'))return {body:{code:0,data:{subtitle:{subtitles:empty?[]:[{lan:'en',subtitle_url:'//a.hdslb.com/en'},{lan:'zh-CN',subtitle_url:'//a.hdslb.com/zh'}]}}}};if(p==='/zh')return {body:{body:[{content:'中文'},{content:'字幕'}]}};return {body:empty?{code:-404}:{code:0,data:{replies:[{like:1,member:{uname:'A'},content:{message:'低'}},{like:8,member:{uname:'B'},content:{message:'高'}}]}}};});const r=await f.client.biliLight(BV);assert.equal(r.owner,'UP');assert.equal(r.tier,'light');assert.equal(r.bvid,BV);assert.equal(r.subtitle,empty?null:'中文 字幕');assert.equal(r.subtitle_status,empty?'none':'ok');assert.deepEqual(r.comments,empty?[]:[{uname:'B',message:'高'},{uname:'A',message:'低'}]);}});
