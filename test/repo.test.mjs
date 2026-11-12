@@ -41,7 +41,8 @@ test('W-2 missing and incorrect runner tokens return 401 and never write',async(
  assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM repo_commits').first()).n,0);
 });
 test('W-3 invalid repositories and SHAs are skipped, total commits and patch bytes are capped',async()=>{
- const e=env();await api.ingestRepoIndex(e,{repos:[packet([commit()],'other/private'),packet([commit('bad'),...Array.from({length:31},(_,i)=>({...commit(i.toString(16).padStart(40,'0')),patch:'x'.repeat(20000)}))])]});
+ // Use code lines: a long uninterrupted alphabetic run is now redacted as base64.
+ const e=env();await api.ingestRepoIndex(e,{repos:[packet([commit()],'other/private'),packet([commit('bad'),...Array.from({length:31},(_,i)=>({...commit(i.toString(16).padStart(40,'0')),patch:'+ const value = 1;\n'.repeat(1200)}))])]});
  const rows=(await e.DB.prepare('SELECT repo,sha,patch FROM repo_commits').all()).results;
  assert.equal(rows.length,30);assert.ok(rows.every(r=>r.repo===repo&&r.patch.length===12000));
 });

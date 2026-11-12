@@ -8,8 +8,9 @@ export const DENY_GLOBS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
 const denyPatterns = DENY_GLOBS.map(s => new RegExp("^" + [...s].map(c =>
   c === "*" ? ".*" : c === "?" ? "." : c.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&")).join("") + "$", "s"));
 export function deniedPath(path: string): boolean {
-  const lower = path.toLowerCase(), base = lower.split("/").at(-1)!;
-  return denyPatterns.some(r => r.test(lower) || r.test(base));
+  const lower = path.toLowerCase(), parts = lower.split("/");
+  // A protected directory hides its descendants, including nested .git trees.
+  return parts.includes(".git") || denyPatterns.some(r => r.test(lower) || parts.some(part => r.test(part)));
 }
 export function parseRepo(value: unknown): { owner: string; repo: string; full: string; listed: boolean } | null {
   if (typeof value !== "string") return null;
@@ -34,8 +35,10 @@ export function parseRepo(value: unknown): { owner: string; repo: string; full: 
 export function validPath(value: unknown): string | null {
   if (value === undefined || value === "" || value === "." || value === "./") return "";
   if (typeof value !== "string" || value.length > 300 || value.startsWith("/") ||
-      /[\\\0]/.test(value) || value.includes("//") || value.split("/").includes("..")) return null;
-  return value.replace(/^\.\//, "").replace(/\/$/, "");
+      value !== value.trim() || /[\\\0]/.test(value) || value.includes("//") ||
+      /%[0-9a-f]{2}/i.test(value) || value.split("/").includes("..")) return null;
+  // Callers supply decoded paths. Normalize dot segments before DENY checks.
+  return value.split("/").filter(part => part !== "." && part !== "").join("/");
 }
 const validRef = (r: any) => r === undefined || typeof r === "string" &&
   /^[A-Za-z0-9._/-]{1,100}$/.test(r) && !/^[-/]/.test(r) && !r.includes("..");

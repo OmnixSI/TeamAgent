@@ -29,7 +29,17 @@ export function redactPatch(s: string, preserveLines = false): string {
       cursor = end; start = -1;
     }
   }
-  return (safe.join("") + s.slice(cursor)).replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]");
+  if (start >= 0) {
+    safe.push(s.slice(cursor, start), "[REDACTED]", preserveLines ? "\n".repeat(s.slice(start).split("\n").length - 1) : "");
+    cursor = s.length;
+  }
+  return (safe.join("") + s.slice(cursor))
+    .replace(/\bBearer[\t ]+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]")
+    // Only complete standard base64 runs >=128 characters (96 decoded bytes).
+    // Keep short examples and surrounding code intact; scan each run just once.
+    .replace(/[A-Za-z0-9+/_-]+={0,2}/g, value => value.length >= 128 && value.length % 4 === 0 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? "[REDACTED]" : value);
 }
 export function cutBytes(s: string, n: number): string {
   const bytes = new TextEncoder().encode(s);
