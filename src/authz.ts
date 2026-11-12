@@ -75,7 +75,7 @@ export function cleanWorkRequest(text: string): boolean {
 
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
-  text = text.replaceAll("[表情]", "").trim();
+  text = text.replaceAll("[表情]", " ").trim();
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {

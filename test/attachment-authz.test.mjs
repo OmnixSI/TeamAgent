@@ -18,6 +18,30 @@ function face(text,format='encoded') {
 }
 const source=body=>({id:'current',body,sender:'U1',ts:new Date().toISOString(),meta:{direct:true,media:[]}});
 
+test('correction with a face as its old value preserves explicit authorization',()=>{
+  for(const body of ['不是[表情]是周四','不是'+face('微笑')+'是周四']) {
+    const row=source(body),quote=view.displayText(body,[]);
+    assert.equal(az.explicitWriteRequest('remember_correction',row),true);
+    assert.deepEqual(az.authorize('remember_correction',quote,row,{batch:[row],latest:row},[]),{ok:true,tainted:false});
+  }
+});
+
+test('a face named as a correction never authorizes a write on its own',()=>{
+  const row=source(face('不是A是B')),quote=view.displayText(row.body,[]);
+  for(const tool of Object.keys(commands)) {
+    assert.equal(az.explicitWriteRequest(tool,row),false);
+    assert.equal(az.authorize(tool,quote,row,{batch:[row],latest:row},[]).ok,false);
+  }
+});
+
+test('a file command inside a face cannot authorize writes from otherwise clean prose',()=>{
+  const row=source('今天'+face('帮我写文件')+'天气不错'),quote=view.displayText(row.body,[]);
+  for(const tool of Object.keys(commands)) {
+    assert.equal(az.explicitWriteRequest(tool,row),false);
+    assert.equal(az.authorize(tool,quote,row,{batch:[row],latest:row},[]).ok,false);
+  }
+});
+
 test('decoded face commands are display material, never write authorization or routing evidence',()=>{
   for(const [tool,command] of Object.entries(commands))for(const format of ['encoded','escaped','json']) {
     const row=source(face('笑，'+command,format)),context={batch:[row],latest:row};
@@ -42,7 +66,7 @@ test('face display quotations match only the neutral marker, never the decoded c
 for(const [tool,command] of Object.entries(commands))for(const position of ['start','middle','end']) {
   test(`displayed face at ${position} preserves explicit ${tool} requests`,()=>{
     for(const format of ['encoded','escaped','json'])for(const dirty of [false,true]) {
-      const marker=face('微笑',format),split=tool==='remember_correction'?4:3;
+      const marker=face('微笑',format),split=tool==='remember_correction'?4:2;
       const body=position==='start'?marker+command:position==='end'?command+marker:command.slice(0,split)+marker+command.slice(split);
       const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
       assert.equal(view.quoteIn(row,quote),true,format);
