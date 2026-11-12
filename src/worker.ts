@@ -1,3 +1,4 @@
+import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
@@ -1070,6 +1071,10 @@ async function sendOutbox(e: Env) {
   }
 }
 
+export async function optionalCron(e: any, fn: () => Promise<any>, cost: number) {
+  if (left(e) < cost + COST.tail) return;
+  await fn();
+}
 async function scheduled(e: Env) {
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
@@ -1203,6 +1208,8 @@ async function scheduled(e: Env) {
   )
     .bind(iso(), Date.now())
     .run();
+  if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
+    await optionalCron(e, () => cleanupRepoIndex(e), 2);
   await retryStickerTags(e);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
@@ -1211,8 +1218,11 @@ async function scheduled(e: Env) {
   await flushTail(e);
 }
 function requestBodyLimit(r: Request) {
-  return r.method === 'POST' && new URL(r.url).pathname === '/api/team/stickers'
-    ? 4 * Math.ceil(TEAM.stickers.max_bytes / 3) + 1024 : 262144;
+  const path = new URL(r.url).pathname;
+  if (r.method === 'POST' && path === '/api/team/stickers') return 4 * Math.ceil(TEAM.stickers.max_bytes / 3) + 1024;
+  // Paired with runner/repo_index.py's 900_000-byte JSON batching limit.
+  if (r.method === 'POST' && path === '/api/runner/repo_index') return 1048576;
+  return 262144;
 }
 async function api(r: Request, e: Env) {
   const u = new URL(r.url),
@@ -1343,6 +1353,7 @@ async function api(r: Request, e: Env) {
   }
   if (path.startsWith("/api/runner/")) {
     if (!(await runner(r, e))) return json({ error: "unauthorized" }, 401);
+    if (path === "/api/runner/repo_index" && method === "POST") return json(await ingestRepoIndex(e, await r.json()));
     if (path.endsWith("/idle") && method === "POST") {
       const b: any = await r.json();
       if (b.quiesce)

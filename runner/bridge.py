@@ -2,6 +2,8 @@
 """One leased task at a time. Source credentials remain local; owner credentials never leave this machine."""
 import threading, json, os, time, urllib.request, urllib.error, pathlib, subprocess, base64, ssl, hashlib
 
+import repo_index
+
 HOME = pathlib.Path.home() / ".inkboard-team"
 CONFIG = json.loads((HOME / "config.json").read_text())
 CURRENT = HOME / "current.json"
@@ -289,6 +291,7 @@ def sync_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=sync_loop, daemon=True).start()
+    threading.Thread(target=repo_index.loop, daemon=True).start()
     while True:
         try:
             tick()

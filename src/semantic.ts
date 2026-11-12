@@ -1,6 +1,8 @@
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
-import { parseDecision } from "./rhythm";
+import { parseDecision, loadSwitches, isOn } from "./rhythm";
+import { repoTools, runRepoTool, toolFailure } from "./repo";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -637,6 +639,7 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 
 export async function agentAnswer(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  const sw = context.switches ?? (context.switches = await loadSwitches(e));
   const facts = (
     await e.DB.prepare(
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
@@ -792,7 +795,7 @@ export async function agentAnswer(e: any, context: any) {
       type: "function",
       function: {
         name: "get_project",
-        description: "读取项目现状、Issue、PR和已同步文档。",
+        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。",
         parameters: {
           type: "object",
           properties: { repo: { type: "string", enum: REPOS } },
@@ -800,6 +803,7 @@ export async function agentAnswer(e: any, context: any) {
         },
       },
     },
+    ...(isOn(sw, "repo_tools") ? repoTools : []),
   ];
   const recentBot = (
     await e.DB.prepare(
@@ -879,9 +883,7 @@ export async function agentAnswer(e: any, context: any) {
     if (
       m.tool_calls?.some(
         (c: any) =>
-          !["remember_correction", "recall_memory", "get_work_status"].includes(
-            c.function.name,
-          ),
+          !LOCAL_TOOLS.has(c.function.name),
       ) &&
       !context.background &&
       context.latest?.id
@@ -1213,6 +1215,10 @@ export async function agentAnswer(e: any, context: any) {
                   ).results,
                 }
               : { unavailable: true };
+            break;
+          case "repo_changes": case "repo_commit":
+            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
+              : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
           default:
             result = { error: "unknown tool" };
