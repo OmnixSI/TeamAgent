@@ -1457,6 +1457,11 @@ async function api(r: Request, e: Env) {
       );
       if (b.status === "sent" && count !== JSON.parse(d.files).length)
         return json({ error: "附件数量未匹配" }, 400);
+      const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
+      const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
+        (b.retention_removed === true
+          ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
+          : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
       const updated = await e.DB.prepare(
         "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
       )
@@ -1470,10 +1475,10 @@ async function api(r: Request, e: Env) {
           "QQ网关",
           b.status === "sent"
             ? "QQ 已确认发送全部附件"
+            : b.status === "unknown"
+              ? unknownNotice
             : b.exhausted === true
               ? "附件交付已停止，临时文件已清理"
-            : b.status === "unknown"
-              ? "发送结果不明，保留成果供人工核对；不自动重发"
               : "附件发送失败，保留成果供接手",
           b.id + "-result",
         );
@@ -1488,7 +1493,7 @@ async function api(r: Request, e: Env) {
                 ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
                 : b.exhausted === true
                   ? b.status === "unknown"
-                    ? "附件发送结果不明，可能已经送达，请先核对群文件；已停止交付，临时文件已清理，不再自动重发。"
+                    ? unknownNotice
                     : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
                 : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
             result: {

@@ -41,25 +41,58 @@ export function recoverDeliveries(dir) {
     fs.renameSync(file, file.replace(/\.sending$/, ".unknown"));
   }
 }
-// Failed before any SDK send may retry up to three times. Unknown may already
-// have sent: NEVER resend, retain through at most three maintenance rounds
-// (including the original send), then discard outputs and report uncertainty.
+// Safe failures retry at most three times. Unknown sends never retry; only
+// confirmed files are removed at that limit. Unconfirmed files expire after
+// 24 hours, or earlier when the global 20-file / 100 MiB budget is exceeded.
 const MAX_ATTEMPTS = 3;
+const RETENTION_MS = 24 * 60 * 60 * 1000;
+const MAX_RETAINED_FILES = 20;
+const MAX_RETAINED_BYTES = 100 * 1024 * 1024;
+function unconfirmed(d) {
+  return (d.files || []).slice(d.sent_count || 0);
+}
+function sweepRetained(dir, root, now) {
+  const retained = fs.readdirSync(dir).filter(name => name.endsWith('.json.unknown')).map(name => {
+    const file = path.join(dir, name), d = JSON.parse(fs.readFileSync(file));
+    d.retain_until ||= now + RETENTION_MS;
+    write(file, d);
+    const files = unconfirmed(d).filter(file => fs.existsSync(file));
+    return {file, d, count: files.length, bytes: files.reduce((sum, file) => sum + fs.lstatSync(file).size, 0)};
+  }).sort((a, b) => a.d.retain_until - b.d.retain_until);
+  let count = retained.reduce((sum, entry) => sum + entry.count, 0);
+  let bytes = retained.reduce((sum, entry) => sum + entry.bytes, 0);
+  for (const entry of retained) {
+    const {file, d} = entry;
+    if (!d.retention_removed && now < d.retain_until && count <= MAX_RETAINED_FILES && bytes <= MAX_RETAINED_BYTES) continue;
+    cleanOutputs(d, root);
+    d.retention_removed = true;
+    count -= entry.count;
+    bytes -= entry.bytes;
+    if (d.reported) fs.unlinkSync(file);
+    else write(file, d); // Keep only an unacknowledged receipt, never resend.
+  }
+}
 async function finishDelivery(file, d, root, report) {
   if (d.status !== "sent" && d.attempts < MAX_ATTEMPTS) return;
   d.exhausted = d.status !== "sent";
   write(file, d);
-  cleanOutputs(d, root);
+  cleanOutputs(d.status === 'unknown' && !d.retention_removed
+    ? {...d, files: d.files.slice(0, d.sent_count || 0)} : d, root);
   if (!d.reported) {
     try {
       await report({id:d.id,status:d.status,sent_count:d.sent_count || 0,
-        attempts:d.attempts,exhausted:d.exhausted});
-    } catch { return; } // Keep only the receipt; retry reporting, never the files.
+        attempts:d.attempts,exhausted:d.exhausted,
+        ...(d.status === 'unknown' ? {unconfirmed_files:unconfirmed(d).map(file => path.basename(file)),
+          retain_until:d.retain_until,retention_removed:!!d.retention_removed} : {})});
+    } catch { return; } // Retry reporting without sending files again.
+    d.reported = true;
+    write(file, d);
   }
-  fs.unlinkSync(file);
+  if (d.status !== 'unknown' || d.retention_removed) fs.unlinkSync(file);
 }
-export async function deliverFiles({ dir, root, target, sendFile, report }) {
+export async function deliverFiles({ dir, root, target, sendFile, report, now = Date.now() }) {
   if (!fs.existsSync(dir)) return;
+  sweepRetained(dir, root, now);
   const pending = [];
   // Maintain every terminal receipt even if three active sends already await work.
   for (const name of fs.readdirSync(dir).filter(x => /\.json(?:\.(sent|failed|unknown))?$/.test(x))) {
@@ -105,6 +138,9 @@ export async function deliverFiles({ dir, root, target, sendFile, report }) {
     write(active, d);
     const terminal = base + "." + d.status;
     fs.renameSync(active, terminal);
-    await finishDelivery(terminal, d, root, report);
+    // Sweep before reporting so a new result that exceeds the budget reports
+    // its actual retention state. Sweep every flush, even without active sends.
+    sweepRetained(dir, root, now);
+    await finishDelivery(terminal, JSON.parse(fs.readFileSync(terminal)), root, report);
   }
 }

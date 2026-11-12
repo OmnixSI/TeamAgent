@@ -96,7 +96,7 @@ test("failed before sending retries at most three times then cleans outputs and 
     await deliverFiles(options);assert.equal(reports.length,1);assert.equal(targets,3);
   } finally {f.clean();}
 });
-test("unknown send is never repeated and expires after three maintenance rounds", async () => {
+test("unknown send is never repeated and is retained for a bounded time", async () => {
   const f = fixture(), reports = [];let sends=0;
   const options={dir:f.queue,root:f.root,target:async()=>({group_id:'G'}),
     sendFile:async()=>{sends++;throw Error('uncertain');},report:async receipt=>reports.push(receipt)};
@@ -108,6 +108,10 @@ test("unknown send is never repeated and expires after three maintenance rounds"
     }
     await deliverFiles(options);assert.equal(sends,1);assert.equal(reports.length,1);
     assert.equal(reports[0].status,'unknown');assert.equal(reports[0].exhausted,true);
+    assert.ok(fs.existsSync(f.file));
+    assert.deepEqual(reports[0].unconfirmed_files,[path.basename(f.file)]);
+    await deliverFiles({...options,now:reports[0].retain_until+1});
+    assert.equal(sends,1);assert.equal(reports.length,1);
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
   } finally {f.clean();}
 });
@@ -122,7 +126,7 @@ test("a safe failure may succeed on the next attempt and leaves no terminal cach
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
   } finally {f.clean();}
 });
-test("partial uncertain delivery never resends any file and removes all outputs at the limit", async () => {
+test("partial uncertain delivery cleans confirmed files and names retained unconfirmed files", async () => {
   const f=fixture(),reports=[];let sends=0;
   try {
     const other=path.join(path.dirname(f.file),'second.csv');fs.writeFileSync(other,'second');
@@ -132,6 +136,13 @@ test("partial uncertain delivery never resends any file and removes all outputs 
     for(let i=0;i<3;i++)await deliverFiles(options);
     assert.equal(sends,2);assert.equal(reports.length,1);assert.equal(reports[0].sent_count,1);
     assert.equal(reports[0].status,'unknown');
+    assert.ok(!fs.existsSync(f.file));assert.ok(fs.existsSync(other));
+    assert.deepEqual(reports[0].unconfirmed_files,['second.csv']);
+    const receipt=JSON.parse(fs.readFileSync(f.manifest+'.unknown'));
+    assert.equal(receipt.reported,true);
+    await deliverFiles({...options,now:receipt.retain_until-1});
+    assert.ok(fs.existsSync(other));assert.equal(sends,2);assert.equal(reports.length,1);
+    await deliverFiles({...options,now:receipt.retain_until});
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
   } finally {f.clean();}
 });
@@ -146,7 +157,7 @@ test("exhausted delivery keeps only its receipt until cloud acknowledgement, wit
   } finally {f.clean();}
 });
 test("already acknowledged terminal manifests are removed with their controlled outputs", async () => {
-  for(const status of ['sent','failed','unknown']) {
+  for(const status of ['sent','failed']) {
     const f=fixture();
     try {
       const d=JSON.parse(fs.readFileSync(f.manifest));Object.assign(d,{status,reported:true,attempts:3});
@@ -175,6 +186,9 @@ test("a crash during SDK send becomes unknown and never resends", async () => {
     assert.equal(sends, 0);
     assert.ok(fs.existsSync(f.manifest + ".unknown"));
     await deliverFiles(options);
+    assert.ok(fs.existsSync(f.file));
+    const receipt=JSON.parse(fs.readFileSync(f.manifest+".unknown"));
+    await deliverFiles({...options,now:receipt.retain_until});
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
   } finally {
     f.clean();
@@ -209,4 +223,36 @@ test("outside-workspace files are rejected before any QQ send", async () => {
   } finally {
     f.clean();
   }
+});
+
+test("retained unknown files obey global count and byte limits", async () => {
+  for (const [jobs,bytes] of [[21,1],[3,40*1024*1024]]) {
+    const f=fixture(),now=Date.now();
+    try {
+      fs.unlinkSync(f.manifest);fs.unlinkSync(f.file);
+      for(let i=0;i<jobs;i++) {
+        const file=path.join(f.root,'_deliveries',i.toString(16).padStart(32,'0'),'outputs','result.csv');
+        fs.mkdirSync(path.dirname(file),{recursive:true});
+        fs.closeSync(fs.openSync(file,'w'));fs.truncateSync(file,bytes);
+        fs.writeFileSync(path.join(f.queue,i+'.json.unknown'),JSON.stringify({id:String(i),files:[file],status:'unknown',sent_count:0,attempts:3,reported:true,retain_until:now+86400000+i}));
+      }
+      await deliverFiles({dir:f.queue,root:f.root,now,target:async()=>assert.fail('no target'),sendFile:async()=>assert.fail('no resend'),report:async()=>assert.fail('already reported')});
+      const retained=fs.readdirSync(f.queue).map(name=>JSON.parse(fs.readFileSync(path.join(f.queue,name))));
+      const files=retained.flatMap(d=>d.files).filter(file=>fs.existsSync(file));
+      assert.ok(files.length<=20);assert.ok(files.reduce((sum,file)=>sum+fs.statSync(file).size,0)<=100*1024*1024);
+      assert.equal(files.length,jobs===21?20:2);
+    } finally {f.clean();}
+  }
+});
+test("unknown retention expires even while cloud reporting is offline", async () => {
+  const f=fixture();let sends=0,reports=0;const now=Date.now();
+  const options={dir:f.queue,root:f.root,now,target:async()=>({group_id:'G'}),sendFile:async()=>{sends++;throw Error('unknown');},report:async()=>{reports++;throw Error('offline');}};
+  try {
+    for(let i=0;i<3;i++)await deliverFiles(options);
+    assert.ok(fs.existsSync(f.file));
+    await deliverFiles({...options,now:now+86400000});
+    assert.ok(!fs.existsSync(f.file));assert.equal(sends,1);
+    await deliverFiles({...options,now:now+86400001,report:async r=>{assert.deepEqual(r.unconfirmed_files,[path.basename(f.file)]);assert.equal(r.retention_removed,true);}});
+    assert.deepEqual(fs.readdirSync(f.queue),[]);
+  } finally {f.clean();}
 });

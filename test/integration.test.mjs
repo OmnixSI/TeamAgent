@@ -1174,14 +1174,33 @@ test("exhausted delivery reports one explicit cleanup notice even when its recei
     await qq(e,msg('exhausted-source','生成CSV'));
     await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
       .bind('delivery-exhausted','file-job','exhausted-source','pending','[{"name":"example.csv","bytes":10}]',0,new Date().toISOString()).run();
-    const receipt={id:'delivery-exhausted',status,sent_count:0,attempts:3,exhausted:true};
+    const receipt={id:'delivery-exhausted',status,sent_count:0,attempts:3,exhausted:true,unconfirmed_files:['example.csv'],retain_until:Date.now()+86400000};
     for(let i=0;i<2;i++)assert.equal((await req(e,'/api/runner/delivery/report',receipt,'runner-secret')).status,200);
     const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
     assert.equal(notices.length,1);
     const notice=JSON.parse(notices[0].payload);
-    assert.match(notice.status,/临时文件已清理/);assert.match(notice.status,/停止|不再/);
-    assert.doesNotMatch(notice.status,/保留成果/);
-    if(status==='unknown')assert.match(notice.status,/群文件|可能.*送达/);
+    assert.match(notice.status,/停止|不再/);
+    if(status==='unknown') {
+      assert.match(notice.status,/example\.csv/);assert.match(notice.status,/24 小时/);
+      assert.match(notice.status,/20 个/);assert.match(notice.status,/100 MiB/);
+      assert.doesNotMatch(notice.status,/临时文件已清理/);
+    } else assert.match(notice.status,/临时文件已清理/);
+  }
+});
+
+test("partial unknown notices name only unconfirmed files and disclose expired retention", async () => {
+  for(const removed of [false,true]) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('partial-source','生成CSV'));
+    await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
+      .bind('partial-delivery','file-job','partial-source','pending',JSON.stringify([{name:'confirmed.csv',bytes:10},{name:'missing.csv',bytes:10}]),0,new Date().toISOString()).run();
+    await req(e,'/api/runner/delivery/report',{id:'partial-delivery',status:'unknown',sent_count:1,attempts:3,exhausted:true,retain_until:Date.now()+86400000,retention_removed:removed},'runner-secret');
+    const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
+    assert.equal(notices.length,1);
+    const notice=JSON.parse(notices[0].payload);
+    assert.match(notice.status,/missing\.csv/);assert.doesNotMatch(notice.status,/confirmed\.csv/);
+    if(removed) {assert.match(notice.status,/到期或保留上限清理/);assert.doesNotMatch(notice.status,/供人工取回/);}
+    else assert.match(notice.status,/24 小时/);
   }
 });
 
