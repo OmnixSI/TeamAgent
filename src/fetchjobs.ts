@@ -137,11 +137,13 @@ export function biliNoteText(r: BiliResult): string {
           ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
           : "无 CC 字幕；本条没有字幕；画面和音轨目前读不了。"].join("\n").slice(0, 6000);
 }
-export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
-  return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
+const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS) {
+  const bodyMax = Math.max(0, max - untrusted('bilibili', '', r.fetched_at).length);
+  return 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
+    : untrusted('bilibili',biliNoteText(r),r.fetched_at,bodyMax);
 }
 /** Cached Bili notes already fetched for this turn; never invent missing content. */
-const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
 export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
   const batch = (context.batch || []).filter(Boolean), latest = context.latest, recent = context.recent || [];
   const refs: string[] = [];
@@ -168,14 +170,13 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
     if (reads + 1 > budget) break;
     const cached = await biliCached(e, ref); reads++;
     let material: string;
-    if (cached) material = videoMaterial(cached, ref);
+    if (cached) material = videoMaterial(cached, ref, Math.min(MATERIAL_CHARS, MATERIALS_CHARS - total));
     else {
       if (reads + 1 > budget) break;
       const outcome = await fetchOutcome(e, ref); reads++;
       if (!outcome || outcome === 'timeout') continue;
       material = biliFailMaterial(outcome, {title:isTitleRef(ref), titleFallback:TITLE_FALLBACK});
     }
-    material = material.slice(0, MATERIAL_CHARS);
     if (materials.includes(material) || total + material.length > MATERIALS_CHARS) continue;
     materials.push(material); total += material.length;
   }
