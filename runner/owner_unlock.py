@@ -97,7 +97,12 @@ class OwnerSessions:
 
 def main():
     code = mint_code(Path.home() / '.inkboard-team')
-    subprocess.run(['/usr/bin/open', 'http://127.0.0.1:3391/#unlock=' + code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = 'http://127.0.0.1:3391/login#unlock=' + code
+    if Path('/Applications/Microsoft Edge.app').exists():
+        args = ['/usr/bin/open', '-a', 'Microsoft Edge', url]
+    else:
+        args = ['/usr/bin/open', url]
+    subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == '__main__':
     main()

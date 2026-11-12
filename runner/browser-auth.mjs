@@ -52,6 +52,7 @@ export function allowedBrowserUrl(service,raw){
 }
 export async function browserOptions(chromium,options={}){
  const exists=options.exists||existsSync;
+ if(exists('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'))return {channel:'msedge'};
  if(exists('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'))return {channel:'chrome'};
  const expected=chromium.executablePath();
  if(exists(expected))return {executablePath:expected};
@@ -68,7 +69,7 @@ async function launchBrowser(_service,options){
  const require=createRequire(import.meta.url);
  const {chromium}=require(resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'));
  const browser=await browserOptions(chromium);
- return chromium.launchPersistentContext(options.profile,{...browser,headless:options.headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000});
+ return chromium.launchPersistentContext(options.profile,{...browser,headless:options.headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000,ignoreDefaultArgs:['--enable-automation'],args:['--disable-blink-features=AutomationControlled']});
 }
 export async function macNotification(text){
  if(process.platform!=='darwin')return;

@@ -86,11 +86,11 @@ def install_login_launcher():
 # TeamAgent managed login launcher
 choice=$(/usr/bin/osascript -e 'choose from list {"打开开发台（B 站扫码）", "X"} with title "TeamAgent 登录" with prompt "选择要登录的服务"') || exit 0
 case "$choice" in
-  "打开开发台（B 站扫码）") exec """ + shlex.quote(sys.executable) + " " + shlex.quote(str(runtime / "owner_unlock.py")) + """ ;;
-  "X") service=x ;;
+  "打开开发台（B 站扫码）"|"X") exec """ + shlex.quote(sys.executable) + " " + shlex.quote(str(runtime / "owner_unlock.py")) + """ ;;
   *) exit 0 ;;
 esac
-""" + "exec " + shlex.quote(node) + " " + shlex.quote(str(runtime / "fetcher.mjs")) + ' login "$service"\n'
+"""
+
     if not path.exists() or path.read_text() != content:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")

@@ -79,8 +79,7 @@ class FetchInstallTests(unittest.TestCase):
         before = path.stat().st_mtime_ns
         content = path.read_text()
         self.assertIn('osascript', content)
-        self.assertIn(str(self.runtime / 'fetcher.mjs'), content)
-        self.assertIn('login', content)
+        self.assertNotIn('fetcher.mjs login', content)
         self.assertIn('owner_unlock.py', content)
         self.assertIn('打开开发台（B 站扫码）', content)
         self.assertTrue((self.runtime / 'owner_unlock.py').exists())

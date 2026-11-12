@@ -82,8 +82,8 @@ class OwnerUnlockTests(unittest.TestCase):
             unlock.main()
         args = run.call_args.args[0]
         self.assertEqual(args[0], '/usr/bin/open')
-        url = urlsplit(args[1])
-        self.assertEqual((url.scheme,url.netloc,url.path,url.query), ('http','127.0.0.1:3391','/',''))
+        url = urlsplit(args[-1])
+        self.assertEqual((url.scheme,url.netloc,url.path,url.query), ('http','127.0.0.1:3391','/login',''))
         self.assertRegex(url.fragment, r'^unlock=[A-Za-z0-9_-]{43}$')
         self.assertEqual(out.getvalue()+err.getvalue(), '')
         self.assertIsNotNone(run.call_args.kwargs.get('stderr'))

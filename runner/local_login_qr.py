@@ -22,13 +22,13 @@ def valid_qr_url(raw):
             return False
         if u.hostname == 'b23.tv':
             return bool(re.fullmatch(r'/[A-Za-z0-9]{4,12}', u.path)) and not u.query
-        if u.hostname not in ('passport.bilibili.com', 'www.bilibili.com') or u.path not in ('/h5-app/passport/login/scan', '/qrcode/h5/login'):
+        if u.hostname not in ('passport.bilibili.com', 'www.bilibili.com', 'account.bilibili.com') or u.path not in ('/h5-app/passport/login/scan', '/qrcode/h5/login', '/h5/account-h5/auth/scan-web'):
             return False
         fields = parse_qs(u.query, keep_blank_values=True)
-        if set(fields) - {'qrcode_key','oauthKey','navhide','from'} or any(len(v) != 1 for v in fields.values()):
+        if set(fields) - {'qrcode_key','oauthKey','navhide','from','callback'} or any(len(v) != 1 for v in fields.values()):
             return False
         key = 'oauthKey' if u.path == '/qrcode/h5/login' else 'qrcode_key'
-        return bool(re.fullmatch(r'[a-f0-9]{32}', fields.get(key, [''])[0])) and ('qrcode_key' if key == 'oauthKey' else 'oauthKey') not in fields and fields.get('navhide', ['1']) == ['1'] and fields.get('from', ['']) == ['']
+        return bool(re.fullmatch(r'[a-f0-9]{32}', fields.get(key, [''])[0])) and ('qrcode_key' if key == 'oauthKey' else 'oauthKey') not in fields and fields.get('navhide', ['1']) == ['1'] and fields.get('from', ['']) == [''] and fields.get('callback', ['close']) == ['close']
     except (ValueError, TypeError):
         return False
 

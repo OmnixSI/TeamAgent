@@ -138,6 +138,7 @@ async function retryUi(t){
   qrs.set(login.id,{id:login.id,qr_url:'https://passport.bilibili.com/h5-app/passport/login/scan?qrcode_key='+String(++qrSequence).repeat(32),expires_at:login.expires_at});
  };
  f=ui(true,{session:'s'.repeat(43),fetch:async(path,options)=>{
+  if(path==='/api/local/open-login')return Response.json({opened:false},{status:503});
   if(path.startsWith('/api/local/service-login/qr')){
    const id=new URL(path,'http://127.0.0.1:3391').searchParams.get('id');qrReads.push(id);
    return qrs.has(id)?Response.json(qrs.get(id)):Response.json({error:'二维码暂未就绪'},{status:404});
@@ -159,7 +160,7 @@ async function retryUi(t){
  const oldQr=all(f.panel).find(n=>n.tagName==='path').attrs.d;
  await f.tick(180000);
  assert.match(text(f.panel),/已过期/);
- return {...f,e,owner,publish,controls,statuses,qrReads,oldFlow:flow,oldQr,retry:()=>all(f.panel).find(n=>n.textContent==='重新获取二维码'),newPosts:()=>f.requests.filter(r=>r.opts.method==='POST')};
+ return {...f,e,owner,publish,controls,statuses,qrReads,oldFlow:flow,oldQr,retry:()=>all(f.panel).find(n=>n.textContent==='重新获取二维码'),newPosts:()=>f.requests.filter(r=>r.opts.method==='POST'&&r.path==='/api/team/service-login')};
 }
 test('expired QR retry cancels the still-active five-minute Worker flow before getting a fresh QR',async t=>{
  const f=await retryUi(t);
@@ -344,10 +345,10 @@ test('login and cancel buttons use the owner API, disabling duplicate starts for
  const {context,requests}=ui();vm.runInContext("state={who:{role:'owner'}}",context);
  context.response={online:true,services:{bili:{auth:null,flow:null},x:{auth:null,flow:null}}};await vm.runInContext('renderServiceLogins(container)',context);
  const start=all(context.container).find(n=>n.tagName==='button'&&n.textContent==='登录 B 站');await start.onclick();
- const posted=requests.find(x=>x.opts.method==='POST');assert.deepEqual(JSON.parse(posted.opts.body),{service:'bili'});
+ const posted=requests.find(x=>x.opts.method==='POST'&&x.path==='/api/team/service-login');assert.deepEqual(JSON.parse(posted.opts.body),{service:'bili'});
  context.container.replaceChildren();context.response.services.bili.flow={id:'flow',phase:'waiting',expires_at:Date.now()+300000};
  await vm.runInContext('renderServiceLogins(container)',context);
  assert.equal(all(context.container).find(n=>n.tagName==='button'&&n.textContent==='登录 B 站').disabled,true);
  await all(context.container).find(n=>n.tagName==='button'&&n.textContent==='取消登录').onclick();
- assert.deepEqual(JSON.parse(requests.find(x=>x.opts.method==='DELETE').opts.body),{service:'bili',id:'flow'});
+ assert.deepEqual(JSON.parse(requests.find(x=>x.opts.method==='DELETE'&&x.path==='/api/team/service-login').opts.body),{service:'bili',id:'flow'});
 });

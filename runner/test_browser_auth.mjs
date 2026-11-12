@@ -44,8 +44,9 @@ test('L4 browser routing confines exact service hosts and denies third-party, lo
  const f=fixture(await temp(t));await f.auth.login('x');let aborted=0,continued=0;
  await f.ctx.handler({request:()=>({url:()=> 'https://evil.test'}),abort:async()=>aborted++,continue:async()=>continued++});assert.equal(aborted,1);assert.equal(continued,0);
 });
-test('L5 browser selection prefers system Chrome, then cached Chromium, then gives an actionable error',async()=>{
+test('L5 browser selection prefers Edge, then Chrome, then cached Chromium, then gives an actionable error',async()=>{
  const chromium={executablePath:()=>'/cache/chromium/chrome'};
+ assert.equal((await browserOptions(chromium,{exists:p=>p.includes('Microsoft Edge.app'),cacheEntries:async()=>[]})).channel,'msedge');
  assert.equal((await browserOptions(chromium,{exists:p=>p.includes('Google Chrome.app'),cacheEntries:async()=>[]})).channel,'chrome');
  assert.equal((await browserOptions(chromium,{exists:p=>p==='/cache/chromium/chrome',cacheEntries:async()=>[]})).executablePath,'/cache/chromium/chrome');
  await assert.rejects(browserOptions(chromium,{exists:()=>false,cacheEntries:async()=>[]}),/需要装一次/);
