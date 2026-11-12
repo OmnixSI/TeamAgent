@@ -32,8 +32,8 @@ def valid_qr_url(raw):
     except (ValueError, TypeError):
         return False
 
-def read_local_qr(runtime, path):
-    query = parse_qs(urlsplit(path).query, keep_blank_values=True)
+def read_local_qr(runtime, query_string):
+    query = parse_qs(query_string, keep_blank_values=True)
     if set(query) != {'id'} or len(query['id']) != 1:
         return 400, {'error':'invalid local login'}
     try:

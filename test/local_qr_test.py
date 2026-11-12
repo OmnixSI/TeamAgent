@@ -11,6 +11,7 @@ import threading
 import time
 import subprocess
 import hashlib
+import socket
 import unittest
 from unittest.mock import patch, Mock
 
@@ -65,6 +66,108 @@ class LocalQrTests(unittest.TestCase):
             return r.status, r.read(), dict(r.getheaders())
         finally:
             conn.close()
+
+    def raw_request(self, target, method='GET', authenticated=False, body=b'{}'):
+        # Preserve the exact request-target: high-level clients may normalize or reject it.
+        headers = 'Host: 127.0.0.1:3391\r\nOrigin: http://127.0.0.1:3391\r\nX-TeamAgent-Local: 1\r\n'
+        if authenticated:
+            headers += 'X-TeamAgent-Session: ' + self.session + '\r\n'
+        packet = (method+' '+target+' HTTP/1.1\r\n'+headers+'Content-Length: '+str(len(body))+'\r\nConnection: close\r\n\r\n').encode('ascii') + body
+        with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=3) as conn:
+            conn.sendall(packet)
+            response = http.client.HTTPResponse(conn)
+            response.begin()
+            return response.status, response.read()
+
+    @staticmethod
+    def target_variants(target):
+        path, sep, query = target.partition('?')
+        suffix = sep+query
+        return {
+            'origin':(target,False),
+            'absolute':('http://127.0.0.1:3391'+target,True),
+            'absolute_https':('https://127.0.0.1:3391'+target,True),
+            'authority':('127.0.0.1:3391',True),
+            'asterisk':('*',True),
+            'network_path':('//127.0.0.1:3391'+target,True),
+            'leading_double':('/'+target,True),
+            'interior_double':(target.replace('/api/','/api//',1),True),
+            'dot':('/./'+target.lstrip('/'),True),
+            'dotdot':('/safe/../'+target.lstrip('/'),True),
+            'encoded_dot':('/%2e/'+target.lstrip('/'),True),
+            'encoded_dotdot':('/safe/%2e%2E/'+target.lstrip('/'),True),
+            'encoded_slash':(target.replace('/api/','/api%2f',1),True),
+            'double_encoded_slash':(target.replace('/api/','/api%252F',1),True),
+            'encoded_backslash':(target.replace('/api/','/api%5c',1),True),
+            'encoded_nul':(path+'%00'+suffix,True),
+            'invalid_percent':(path+'%zz'+suffix,True),
+            'backslash':(target.replace('/api/','/api\\',1),True),
+            'nul':(path+'\x00'+suffix,True),
+            'tab':(path+'\t'+suffix,True),
+            'space':(path+' '+suffix,True),
+            'fragment':(target+'#fragment',True),
+            'case':(path.upper()+suffix,False),
+            'trailing_slash':(path+'/'+suffix,False),
+            'query':(path+'?'+(query or 'probe=1'),False),
+        }
+
+    def test_P1_absolute_form_reproduction_never_releases_qr_without_session(self):
+        with patch('urllib.request.urlopen') as cloud:
+            for target in ['/api/local/service-login/qr?id=flow','http://127.0.0.1:3391/api/local/service-login/qr?id=flow']:
+                status, body = self.raw_request(target)
+                self.assertIn(status,[400,401])
+                self.assertNotIn(b'qr_url',body)
+            cloud.assert_not_called()
+
+    def test_P1_unauthenticated_route_target_and_method_variant_matrix_never_routes_or_proxies(self):
+        endpoints = [('GET','/api/local/service-login/qr?id=flow'),('GET','/api/team/service-login'),('POST','/api/team/service-login'),('DELETE','/api/team/service-login'),('POST','/api/team/ai-tokens'),('POST','/api/admin/pair'),('PATCH','/api/admin/revoke'),('GET','/api/team/state'),('PATCH','/api/team/profile')]
+        with patch('urllib.request.urlopen') as cloud:
+            for method, endpoint in endpoints:
+                for name, (target, invalid) in self.target_variants(endpoint).items():
+                    for verb in [method, method.lower(), method.title()]:
+                        with self.subTest(endpoint=endpoint,variant=name,method=verb):
+                            status,body = self.raw_request(target,verb)
+                            self.assertIn(status,[400,401])
+                            self.assertNotIn(b'qr_url',body)
+            cloud.assert_not_called()
+
+    def test_P1_invalid_targets_are_rejected_even_with_session_before_any_route(self):
+        endpoints = ['/api/local/service-login/qr?id=flow','/api/team/service-login','/api/team/ai-tokens','/api/admin/pair','/api/team/state','/api/local/session']
+        with patch('urllib.request.urlopen') as cloud:
+            for endpoint in endpoints:
+                for name,(target,invalid) in self.target_variants(endpoint).items():
+                    if not invalid:
+                        continue
+                    with self.subTest(endpoint=endpoint,variant=name):
+                        status,body = self.raw_request(target,'POST' if endpoint.endswith('/session') else 'GET',True)
+                        self.assertEqual(status,400)
+                        self.assertNotIn(b'qr_url',body)
+            cloud.assert_not_called()
+
+    def test_P1_canonical_authorized_routes_and_queries_share_auth_dispatch_and_forward_target(self):
+        response = Mock(status=200,headers={'Content-Type':'application/json'})
+        response.read.return_value = b'{}'
+        split = self.module['urlsplit']
+        with patch.dict(self.module['Handler'].proxy.__globals__, {'urlsplit':Mock(wraps=split)}) as globals_, patch('urllib.request.urlopen',return_value=response) as cloud:
+            parser = globals_['urlsplit']
+            for method,path in [('GET','/api/team/service-login?from=web'),('POST','/api/team/service-login?from=web'),('DELETE','/api/team/service-login?from=web'),('POST','/api/team/ai-tokens?label=local'),('POST','/api/admin/pair?from=web'),('PATCH','/api/team/profile?name=%E4%B8%AD%E6%96%87'),('GET','/api/team/project?repo=OmnixSI%2FTeamAgent')]:
+                self.save()
+                before=parser.call_count
+                self.assertEqual(self.raw_request(path,method,True,body=b'{"service":"bili","id":"flow"}')[0],200)
+                self.assertEqual(parser.call_count-before,1)
+                request=cloud.call_args.args[0]
+                self.assertEqual(request.full_url,'https://cloud.test'+path)
+                self.assertEqual(request.get_header('Authorization'),'Bearer fake-owner')
+                self.assertIsNone(request.get_header('X-teamagent-session'))
+                if method=='DELETE':
+                    self.assertFalse(self.path.exists())
+            for path in ['/?view=system','/guide?lang=zh']:
+                self.assertEqual(self.raw_request(path)[0],200)
+                self.assertIsNone(cloud.call_args.args[0].get_header('Authorization'))
+            cloud.reset_mock()
+            self.save()
+            self.assertEqual(self.raw_request('/api/local/service-login/qr?id=flow',authenticated=True)[0],200)
+            cloud.assert_not_called()
 
     def test_qr_is_local_only_and_never_proxied_to_cloud(self):
         with patch('urllib.request.urlopen') as cloud:
