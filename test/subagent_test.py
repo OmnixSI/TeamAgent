@@ -607,8 +607,39 @@ class GitTests(unittest.TestCase):
         (self.root/'.env').write_text('SYNTHETIC_PASSWORD=secret_keyword\n')
         git('add','.');git('commit','-m','fixture');self.sha=git('rev-parse','HEAD')
         git('remote','add','origin',str(remote));git('push','origin','main')
+        url = 'https://github.com/example/Test.git'
+        git('remote', 'set-url', 'origin', url)
+        invoke = s.gitsafe._invoke
+        def local_fetch(root, env, args, extra=(), **kwargs):
+            # gitsafe intentionally ignores source/global URL rewrites. Inject
+            # this exact fixture rewrite only at the test's fetch invocation;
+            # origin validation, neutral repo isolation and real Git stay active.
+            if args == ['fetch', '--prune', 'origin']:
+                extra = [*extra, '-c', 'url.' + remote.as_uri() + '.insteadOf=' + url]
+            return invoke(root, env, args, extra=extra, **kwargs)
+        patch.object(s.gitsafe, '_invoke', side_effect=local_fetch).start()
+        patch.object(s.gitsafe, '_lookup_credential', return_value=None).start()
         self.run={'id':'x','lease':'l','repo':'example/Test','ref':self.sha,'question':'keyword','deadline':(time.time()+400)*1000}
         patch.object(s,'settings',return_value={'repositories':['example/Test']}).start()
+
+    def test_fixture_fetch_refreshes_remote_refs_and_keeps_url_guard(self):
+        url = 'https://github.com/example/Test.git'
+        self.assertEqual(s.gitsafe._origin_url(self.root), url)
+        (self.root/'src/a.ts').write_text('export const fetched = 3;\n')
+        self.git('add', '.');self.git('commit', '-m', 'remote-only fixture change')
+        later = self.git('rev-parse', 'HEAD')
+        self.git('push', str(self.home/'origin.git'), 'HEAD:refs/heads/agent/fixture')
+        self.git('reset', '--hard', self.sha)
+        self.sub.rmdir()
+        sub, sha = s.prepare(dict(self.run, ref='agent/fixture'))
+        self.assertEqual(sha, later)
+        self.assertEqual(self.git('rev-parse', 'refs/remotes/origin/agent/fixture'), later)
+        self.assertIn('fetched = 3', (sub/'src/a.ts').read_text())
+        self.assertEqual(self.git('config', '--get', 'remote.origin.url'), url)
+        s.cleanup(sub)
+        self.git('remote', 'set-url', 'origin', str(self.home/'origin.git'))
+        with self.assertRaises(s.gitsafe.GitFailed):
+            s.gitsafe.run(self.root, 'lifecycle', 'fetch', '--prune', 'origin')
 
     def test_S1_prepare_pins_commit_and_cleanup_removes_worktree(self):
         sub,sha=s.prepare(self.run)
