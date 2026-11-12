@@ -264,3 +264,23 @@ test('N15 pause expiry: short 302 does not extend; view 200 clears the risk coun
  await assert.rejects(f.client.biliApi('/x/web-interface/view',{bvid:BV}),/风控/);
  assert.equal(f.calls.length,afterPause);
 });
+
+
+test('N16 shared risk file makes pauseForRisk block another client and corrupt state pauses conservatively',async t=>{
+ const {mkdtemp,rm,readFile,writeFile}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const home=await mkdtemp(join(tmpdir(),'team-risk-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const risk=join(home,'state/bili-risk.json');
+ const f=fixture(()=>({body:{code:0,data:{}}}),{riskPath:risk});
+ f.client.pauseForRisk();
+ const saved=JSON.parse(await readFile(risk,'utf8'));
+ assert.ok(saved.paused_until>f.time);
+ const g=fixture(()=>({body:{code:0,data:{}}}),{riskPath:risk});
+ await assert.rejects(g.client.biliApi('/x'),/风控/);
+ assert.equal(g.calls.length,0);
+ await writeFile(risk,'{broken');
+ const h=fixture(()=>({body:{code:0,data:{}}}),{riskPath:risk});
+ await assert.rejects(h.client.biliApi('/x'),/风控/);
+ assert.equal(h.calls.length,0);
+});

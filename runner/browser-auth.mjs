@@ -98,7 +98,7 @@ export function createBrowserAuth(options={}){
  const launch=options.launch||launchBrowser,report=options.report||asyncNoop,notify=options.notify||macNotification;
  let biliClient=options.client;
  async function client(){
-  if(!biliClient){const {createFetchClient}=await import('./fetcher.mjs');biliClient=createFetchClient({now,sleep,log:options.log});}
+  if(!biliClient){const {createFetchClient}=await import('./fetcher.mjs');biliClient=createFetchClient({now,sleep,log:options.log,riskPath:resolve(home,'state/bili-risk.json')});}
   return biliClient;
  }
  const probeBili=options.probeBili||(async cookies=>defaultBiliProbe(await client(),cookies));

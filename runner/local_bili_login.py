@@ -28,32 +28,49 @@ class LocalBiliLogin:
         self.config = config
         self._sessions = {}
         self._lock = threading.Lock()
+        self._risk_lock = threading.Lock()
+        self._bad_risk_until = 0
 
     def _risk_path(self):
         return self.runtime / RISK_PATH
 
     def _check_pause(self):
+        now = time.time() * 1000
+        if self._bad_risk_until > now:
+            raise BiliPaused()
         try:
             data = json.loads(self._risk_path().read_text())
-            if float(data.get("paused_until", 0)) > time.time() * 1000:
+            if float(data.get("paused_until", 0)) > now:
                 raise BiliPaused()
-        except (OSError, ValueError, TypeError):
+        except BiliPaused:
+            raise
+        except OSError:
             pass
+        except (ValueError, TypeError):
+            self._bad_risk_until = now + 60000
+            raise BiliPaused()
 
     def _pause(self):
         path = self._risk_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temp = path.with_name(path.name + ".tmp-" + secrets.token_hex(6))
-        try:
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                os.fchmod(stream.fileno(), 0o600)
-                json.dump({"paused_until": int(time.time() * 1000) + 600000}, stream)
-            temp.replace(path)
-        except OSError:
-            pass
-        finally:
-            temp.unlink(missing_ok=True)
+        with self._risk_lock:
+            old = 0
+            try:
+                old = int(json.loads(path.read_text()).get("paused_until", 0))
+            except (OSError, ValueError, TypeError, AttributeError):
+                old = 0
+            value = max(old, int(time.time() * 1000) + 600000)
+            temp = path.with_name(path.name + ".tmp-" + secrets.token_hex(6))
+            try:
+                fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "w") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    json.dump({"paused_until": value}, stream)
+                temp.replace(path)
+            except OSError:
+                pass
+            finally:
+                temp.unlink(missing_ok=True)
 
     def _http(self, url):
         self._check_pause()
@@ -140,17 +157,15 @@ class LocalBiliLogin:
             active = self._sessions.get("active")
             if active and active["expires_at"] > time.time() * 1000:
                 return {"id": active["id"], "qr_url": active["qr_url"], "expires_at": active["expires_at"]}
-            self._sessions = {}
-        headers, body = self._http(GENERATE)
-        data = body.get("data") if body.get("code") == 0 else None
-        qr_url, key = (data or {}).get("url"), (data or {}).get("qrcode_key")
-        if not isinstance(qr_url, str) or not valid_qr_url(qr_url) or not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key):
-            raise ValueError("invalid QR response")
-        login_id = secrets.token_hex(8)
-        expires = int(time.time() * 1000) + 180000
-        with self._lock:
+            headers, body = self._http(GENERATE)
+            data = body.get("data") if body.get("code") == 0 else None
+            qr_url, key = (data or {}).get("url"), (data or {}).get("qrcode_key")
+            if not isinstance(qr_url, str) or not valid_qr_url(qr_url) or not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key):
+                raise ValueError("invalid QR response")
+            login_id = secrets.token_hex(8)
+            expires = int(time.time() * 1000) + 180000
             self._sessions = {"active": {"id": login_id, "key": key, "qr_url": qr_url, "expires_at": expires}}
-        return {"id": login_id, "qr_url": qr_url, "expires_at": expires}
+            return {"id": login_id, "qr_url": qr_url, "expires_at": expires}
 
     def status(self, login_id):
         with self._lock:
