@@ -295,6 +295,8 @@ async function receive(r: Request, e: Env) {
           media: ib.media,
           bili: ib.bili,
           biliCard: ib.biliCard,
+          biliUrls: ib.biliUrls,
+          quotedBiliUrls: ib.quotedBiliUrls,
           ownUrls: ib.ownUrls,
           quotedUrls: ib.quotedUrls,
           placeholder: ib.placeholder,

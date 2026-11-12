@@ -1,6 +1,6 @@
 /** Walk unknown QQ card wrappers without promoting quoted media to the sender. */
 export function scanBiliPayload(raw: unknown) {
-  const ownUrls = new Set<string>(), quotedUrls = new Set<string>();
+  const biliUrls = new Set<string>(), quotedBiliUrls = new Set<string>();
   const cards: any[] = [], quotedCards: any[] = [];
   function visit(value: any, quoted = false, card = false, depth = 0) {
     if (depth > 32 || value == null) return;
@@ -10,9 +10,9 @@ export function scanBiliPayload(raw: unknown) {
       }
       let text = value.replace(/\\u002f/gi, '/');
       for (let i = 0; i < 4 && text.includes('\\/'); i++) text = text.replace(/\\\//g, '/');
-      const urls = quoted ? quotedUrls : ownUrls;
+      const urls = quoted ? quotedBiliUrls : biliUrls;
       const accept = (url: string) => {
-        try { const u = new URL(url); if (!u.username && !u.password && ['http:','https:'].includes(u.protocol)) urls.add(u.href); } catch {}
+        try { const u = new URL(url); if (!u.username && !u.password && ['http:','https:'].includes(u.protocol) && (u.hostname === 'b23.tv' || u.hostname === 'bilibili.com' || u.hostname.endsWith('.bilibili.com'))) urls.add(u.href); } catch {}
       };
       const rest = text.replace(/(?:https?:\/\/|\/\/)[^\s"'<>\\\[\]()（）、，。；]+/gi, match => {
         accept((match.startsWith('//') ? 'https:' : '') + match.replace(/[.,;!?]+$/, '')); return ' ';
@@ -25,13 +25,13 @@ export function scanBiliPayload(raw: unknown) {
     }
     if (Array.isArray(value)) { for (const entry of value) visit(entry, quoted, card, depth + 1); return; }
     if (typeof value !== 'object') return;
-    if (typeof value.key === 'string' && ['preview','source_logo'].includes(value.key.toLowerCase())) return;
+    if (typeof value.key === 'string' && ['preview','source_logo','attachments'].includes(value.key.toLowerCase())) return;
     if (card || value.ark_type || value.ark_name) (quoted ? quotedCards : cards).push(value);
     for (const [key, entry] of Object.entries(value)) {
-      if (['preview','source_logo'].includes(key.toLowerCase())) continue;
+      if (['preview','source_logo','attachments'].includes(key.toLowerCase())) continue;
       visit(entry, quoted || key === 'msg_elements' || key === 'quoted', key === 'ark_data', depth + 1);
     }
   }
   visit(raw);
-  return {ownUrls:[...ownUrls],quotedUrls:[...quotedUrls],cards,quotedCards};
+  return {biliUrls:[...biliUrls],quotedBiliUrls:[...quotedBiliUrls],cards,quotedCards};
 }

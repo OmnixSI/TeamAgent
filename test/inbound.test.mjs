@@ -67,6 +67,23 @@ test('I-B4 nested owned cards retain title fallback while nested quoted cards st
   const nested=ib.parseInbound('GROUP_MESSAGE_CREATE',{content:JSON.stringify({msg_elements:[{ark_data:ark}]})});
   assert.equal(nested.biliCard,undefined);assert.equal(nested.quoted?.biliCard?.title,ark.fields.title);
 });
+test('P2-1 attachment credentials never enter own links or model links; recursive video candidates stay separate',async()=>{
+ const signed='https://multimedia.nt.qq.com.cn/download?rkey=SECRET';
+ const e=await setup(),event={...msg('signed-attachment','正文 https://example.com/public'),attachments:[{content_type:'image/png',url:signed},{content_type:'image/png',url:'https://www.bilibili.com/video/BV1234567890'}],extra:{download:signed,nested:JSON.stringify({link:'https:\\/\\/b23.tv\\/AbCd12'})}};
+ const parsed=ib.parseInbound('GROUP_MESSAGE_CREATE',event);
+ assert.deepEqual(parsed.ownUrls,extractUrls(parsed.body+' '+JSON.stringify(event.ark_data||{})));
+ assert.ok(!JSON.stringify(parsed.ownUrls).includes('SECRET'));
+ assert.deepEqual(parsed.biliUrls,['https://b23.tv/AbCd12']);assert.equal(parsed.bili[0].short,'AbCd12');assert.ok(!parsed.bili.some(b=>b.bvid));
+ await qq(e,event);const stored=await meta(e,'signed-attachment');
+ assert.deepEqual(stored.biliUrls,parsed.biliUrls);
+ const current=await e.DB.prepare('SELECT * FROM messages WHERE id=?').bind('signed-attachment').first();current.meta=stored;
+ const links=view.viewMessage(current,names,new Map()).material.links;
+ assert.deepEqual(links,['https://example.com/public']);assert.ok(!JSON.stringify(links).includes('rkey=SECRET'));
+ const quoted=ib.parseInbound('GROUP_MESSAGE_CREATE',{msg_elements:[{content:'https:\\/\\/b23.tv\\/Qwer12',attachments:[{url:signed}]}]});
+ assert.deepEqual(quoted.biliUrls,[]);assert.deepEqual(quoted.quotedBiliUrls,['https://b23.tv/Qwer12']);
+ const fetchjobs=await bundle('fetchjobs');
+ assert.equal(fetchjobs.needsVideo([],{id:'quoted-candidate',body:'这个',meta:quoted},[],{bili:{enabled:true}}),'Qwer12');
+});
 const group = "GROUP000001", names = new Map([["U1", "阿明"], ["U2", "小王"]]);
 const card = (title = "T", url = "https://b23.tv/new") => ({ ark_type: "miniapp", ark_name: "哔哩哔哩", fields: { title, jump_url: url } });
 async function setup() { const e = env(); await req(e, "/api/admin/bind", { groupId: group }); return e; }

@@ -1,4 +1,5 @@
 import { redact } from "./runtime";
+import {extractUrls} from './policy';
 import {scanBiliPayload} from './bili-links';
 import {BILI_CARD_NOTE,cleanCardTitle,isBiliCard,titleRef} from './bilititle';
 
@@ -11,7 +12,7 @@ export type Inbound = {
   senderId: string; senderName: string; body: string;
   mentions: Mention[]; mentionsBot: boolean; msgIdx?: string; refMsgIdx?: string;
   quoted?: Quoted; card?: Card; media: Media[]; bili: Bili[]; biliCard?: {title:string};
-  ownUrls: string[]; quotedUrls: string[]; placeholder: string;
+  ownUrls: string[]; quotedUrls: string[]; biliUrls: string[]; quotedBiliUrls: string[]; placeholder: string;
 };
 
 export function parseExt(ext: unknown): Record<string, string> {
@@ -86,8 +87,10 @@ export function parseInbound(eventType: string, d: any): Inbound {
     if (!quoted) quoted = {text:'',media:[],card:quotedCard.card};
     else quoted.card = quotedCard.card;
   }
-  const media = mediaOf(d.attachments), ownUrls = scanned.ownUrls, quotedUrls = scanned.quotedUrls;
-  const bili = extractBili(ownUrls,body);
+  const media = mediaOf(d.attachments), biliUrls = scanned.biliUrls, quotedBiliUrls = scanned.quotedBiliUrls;
+  const ownUrls = extractUrls(body + ' ' + JSON.stringify(d.ark_data || {}));
+  const quotedUrls = extractUrls(JSON.stringify(elements));
+  const bili = extractBili(biliUrls,body);
   const titleOf = (c: Card | undefined, raw: any, links: Bili[]) => {
     if (!c || links.some(b => b.bvid || b.short && /^[0-9A-Za-z]{4,12}$/.test(b.short)) || !isBiliCard(c,raw?.prompt)) return undefined;
     const title = cleanCardTitle(c.title || ''); return titleRef(title) ? {title} : undefined;
@@ -95,9 +98,9 @@ export function parseInbound(eventType: string, d: any): Inbound {
   const biliCard = titleOf(card,ownedCard?.raw || d.ark_data,bili);
   if (biliCard && card) card = {...card,note:BILI_CARD_NOTE};
   if (quoted) {
-    quoted.biliCard = titleOf(quoted.card,quotedCard?.raw,extractBili(quotedUrls,''));
+    quoted.biliCard = titleOf(quoted.card,quotedCard?.raw,extractBili(quotedBiliUrls,''));
     if (quoted.biliCard && quoted.card) quoted.card = {...quoted.card,note:BILI_CARD_NOTE};
   }
   const placeholder = body ? "" : card ? "[卡片] " + (card.source || card.name || "") + (card.title ? "：" + card.title : "") : media[0]?.kind === "image" ? "[图片]" : media[0]?.kind === "voice" ? "[语音]" : media[0]?.kind === "video" ? "[视频]" : media[0] ? "[文件]" + (media[0].filename ? " " + media[0].filename : "") : "";
-  return { senderId: String(d.author?.member_openid || d.author?.id || ""), senderName: d.author?.username || "", body, mentions, mentionsBot: eventType === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.isBot), msgIdx: ext.msg_idx, refMsgIdx, quoted, card, media, bili, biliCard, ownUrls, quotedUrls, placeholder };
+  return { senderId: String(d.author?.member_openid || d.author?.id || ""), senderName: d.author?.username || "", body, mentions, mentionsBot: eventType === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.isBot), msgIdx: ext.msg_idx, refMsgIdx, quoted, card, media, bili, biliCard, ownUrls, quotedUrls, biliUrls, quotedBiliUrls, placeholder };
 }

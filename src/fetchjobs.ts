@@ -39,7 +39,7 @@ export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any)
   const quoted = recent.find(r => r.id === meta.replyTo?.targetId);
   const quotedTarget = quoted ? targetOf(metaOf(quoted)) : null;
   if (quotedTarget) return quotedTarget;
-  const ref = refIn(extractBili(meta.quotedUrls || [], ""));
+  const ref = refIn(extractBili(meta.quotedBiliUrls ?? meta.quotedUrls ?? [], ""));
   if (ref) return {ref};
   const embedded = targetOf(meta.quoted || {}); if (embedded) return embedded;
   if (/视频|讲了?啥|讲的什么|说了什么|总结|值得看|up主/i.test(latest.body || "")) {
