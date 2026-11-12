@@ -144,20 +144,22 @@ INSERT INTO settings(key,value) VALUES('off:sticker_collect','1') ON CONFLICT(ke
 
 紧急停发先通过已有、已授权的 D1 管理入口设置上面的 `off:sticker_send=1`，下一次发送检查即生效，不需要部署。长期关闭保持 `config/team.json` 的 `stickers.send=false`（默认值），配置修改需要检查并发布；收集和标注可独立保留。
 
-回滚表情代码之前，先关闭发送，并执行以下语句丢弃尚未发送的表情段，再按上文流程回滚。旧版本可能不检查新开关，因此不能只设开关就回滚；文字和已发送记录保留。已发起的 QQ 请求需要先核对结果，不能靠删除待发表撤回。
+回滚表情代码之前，先关闭发送，并执行以下语句丢弃尚未发送的表情段，再按上文流程回滚。旧版本可能不检查新开关，因此不能只设开关就回滚；文字和已发送记录保留。已发起的 QQ 请求需要先核对结果，不能靠删除待发表撤回。还要检查 `sticker_paused_until`：若它仍在未来 24 小时内，发送仍会被抑制，需等待过期或一并清除（清除语句如下）。
 
 ```sql
 UPDATE outbox SET status='skipped' WHERE status='pending' AND id LIKE '%~s';
+-- 可选：暂停截止在未来的，先清除；否则重新启用发送仍会被抑制
+DELETE FROM settings WHERE key='sticker_paused_until';
 ```
 
-需要清空已收集的图片时，同时设置 `off:sticker_collect=1`，并保持发送关闭、执行上述待发清理。先确认没有正在执行的 `sticker` / `sticker-tag` 任务（`jobs.status='running'`），等已领取任务结束后，再执行以下语句；否则在途收集仍可能把图片写回来。此操作不可恢复，只清空表情图片、标签及富媒体缓存，不删除群消息和其他任务记录。
+需要清空已收集的图片时，同时设置 `off:sticker_collect=1`，并保持发送关闭、执行上述待发清理。先确认没有正在执行的 `sticker` / `sticker-tag` 任务（`jobs.status='running'`），等已领取任务结束后，再执行以下语句；否则在途收集仍可能把图片写回来。此操作不可恢复，只清空 `stickers` 里的表情图片、标签及对应 `file_info`；不会清 `media_notes`（它不是表情专属，视频/资料缓存仍保留），也不删除群消息和其他任务记录。
 
 ```sql
 UPDATE jobs SET status='done' WHERE kind IN ('sticker','sticker-tag') AND status='pending';
 DELETE FROM stickers;
 ```
 
-每天发送预算在 `config/team.json` 的 `stickers.caps.send`（默认 20），标注预算在 `stickers.caps.tag`（默认 40）；只在校验允许的范围内调整，运行 `npm run config:check` 后按正常流程发布。标注还受共用视觉预算限制。恢复收集可删除 `settings` 中的 `off:sticker_collect`；恢复发送需确认 QQ 验收通过、`stickers.send=true`，再删除 `off:sticker_send`，已标为 `skipped` 的段不会重发。
+每天发送预算在 `config/team.json` 的 `stickers.caps.send`（默认 20），标注预算在 `stickers.caps.tag`（默认 40）；只在校验允许的范围内调整，运行 `npm run config:check` 后按正常流程发布。标注还受共用视觉预算限制。恢复收集可删除 `settings` 中的 `off:sticker_collect`；恢复发送需确认 QQ 验收通过、`stickers.send=true`，再删除 `off:sticker_send`，并确认 `sticker_paused_until` 已过期或清除，已标为 `skipped` 的段不会重发。
 
 `~s` 不进入 recentBot、对话视图或 P1 的未接话硬规则。`skipped` 不在待发查询或运行状态告警查询中。D1 余量不足时保留 pending，后续 cron 续发；`COST.sticker=6` 覆盖开关、选图、每日预算和三条事务写入，普通文字的 `COST.send_row=10` 不变。富媒体单行另保留两者之和，覆盖缓存写入及熔断路径。关闭的积压用一条条件 UPDATE 标跳过，避免预算不足时逐条写超过 48。
 
