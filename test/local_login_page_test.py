@@ -67,6 +67,47 @@ class LocalLoginPageTests(unittest.TestCase):
     def test_start_and_status_require_local_session(self):
         self.assertEqual(self.request('/api/local/bili/start', 'POST', {}, session=False)[0], 401)
         self.assertEqual(self.request('/api/local/bili/status?id=abc', session=False)[0], 401)
+        self.assertEqual(self.request('/api/local/x/status', session=False)[0], 401)
+        self.assertEqual(self.request('/api/local/x/confirm', 'POST', {}, session=False)[0], 401)
+
+    def test_x_confirmation_retries_without_claiming_login_or_returning_secrets(self):
+        state = self.runtime / 'state/x-login.json'
+        state.parent.mkdir()
+        state.write_text(json.dumps({'phase':'debug_unavailable','reason':'debug_unavailable','expires_at':int(time.time()*1000)+60000,'error':'Cookie=synthetic-secret','metadata':{'title':'synthetic-secret','http':403,'auth_token_present':None},'cookie':'synthetic-secret'}))
+        state.chmod(0o600)
+        status, body, _ = self.request('/api/local/x/status')
+        self.assertEqual(status, 200)
+        self.assertIn('调试端口不可用', json.loads(body)['error'])
+        self.assertNotIn(b'synthetic-secret', body)
+        status, body, _ = self.request('/api/local/x/confirm', 'POST', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'checking':True})
+        self.assertEqual((self.runtime / 'state/x-login-confirm').stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('ok', body.decode())
+
+    def test_x_waiting_status_preserves_reason_without_error(self):
+        state = self.runtime / 'state/x-login.json'
+        state.parent.mkdir()
+        state.write_text(json.dumps({'phase':'waiting','reason':'not_logged_in','error':'旧版等待错误','expires_at':int(time.time()*1000)+60000}))
+        state.chmod(0o600)
+        status, body, _ = self.request('/api/local/x/status')
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result['phase'], 'waiting')
+        self.assertEqual(result['reason'], 'not_logged_in')
+        self.assertNotIn('error', result)
+
+    def test_bili_certificate_and_pause_errors_keep_fixed_reasons_in_local_response(self):
+        import ssl
+        import urllib.error
+        fake = Mock()
+        self.module['Handler'].bili_login = fake
+        for error, expected in [(urllib.error.URLError(ssl.SSLCertVerificationError('https://secret/qrcode_key=synthetic-secret')), '证书'), (urllib.error.HTTPError('https://secret', 403, 'synthetic-secret', None, None), 'HTTP 403')]:
+            fake.start.side_effect = error
+            status, body, _ = self.request('/api/local/bili/start', 'POST', {})
+            self.assertEqual(status, 502)
+            self.assertIn(expected, json.loads(body)['error'])
+            self.assertNotIn(b'synthetic-secret', body)
 
     def test_start_and_status_are_local_only_and_do_not_return_cookies(self):
         fake = Mock()
@@ -125,8 +166,8 @@ class LocalLoginPageTests(unittest.TestCase):
         login._report = lambda state: None
         login._save = lambda fresh: (_ for _ in ()).throw(OSError('disk full'))
         started = login.start()
-        self.assertEqual(login.status(started['id']), {'phase':'failed'})
-        self.assertEqual(login.status(started['id']), {'phase':'failed'})
+        self.assertEqual(login.status(started['id'])['reason'], 'storage')
+        self.assertEqual(login.status(started['id'])['phase'], 'failed')
         self.assertFalse((self.runtime / 'secrets/bili-cookie.json').exists())
 
     def test_local_bili_lock_timeout_does_not_write_and_stale_lock_recovers(self):
