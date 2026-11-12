@@ -2,6 +2,8 @@
 
 The existing development executor keeps its own Git writer. Callers of this
 module cannot commit/push, install hooks, or invoke repository diff helpers.
+Fetch resolves system/global credentials in a neutral repository; its network
+process loads only command-line policy and a temporary bare repository's config.
 """
 from contextlib import contextmanager
 import os
@@ -11,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 
 
 class GitDenied(ValueError):
@@ -25,6 +28,10 @@ PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPa
           '-c', 'diff.external=', '-c', 'core.pager=cat',
           '-c', 'core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5',
           '-c', 'credential.helper=', '-c', 'protocol.ext.allow=never']
+DEFAULT_REFSPEC = '+refs/heads/*:refs/remotes/origin/*'
+# Constant helper: the secret lives only in the fetch process environment.
+FIXED_HELPER = ('!f() { test "$1" = get || exit 0; '
+                'printf \'username=%s\\npassword=%s\\n\' "$TEAMAGENT_GIT_USERNAME" "$TEAMAGENT_GIT_PASSWORD"; }; f')
 READ = {'log', 'show', 'rev-list', 'rev-parse', 'merge-base', 'for-each-ref',
         'status', 'diff', 'cat-file', 'ls-files', 'grep', 'config', 'worktree'}
 _clock = threading.local()
@@ -106,22 +113,30 @@ def _timeout():
     return timeout
 
 
-def _credential_helpers(env):
-    # Only fetch needs credentials. Replay trusted system/global helpers after
-    # the empty helper reset; never enable repository helpers or other host config.
-    # Explicit scopes and a neutral cwd keep .git/config out of helper discovery.
-    flags = []
-    for scope in ('--system', '--global'):
-        result = subprocess.run(['git', 'config', scope, '--includes', '--null', '--get-regexp',
-                                 r'^credential(\..*)?\.helper$'], cwd=Path.home(), env=env,
-                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=_timeout())
-        if result.returncode not in (0, 1):
-            raise GitFailed('Git command failed')
-        for entry in result.stdout.split('\0'):
-            if entry:
-                key, value = entry.split('\n', 1)
-                flags += ['-c', key + '=' + value]
-    return flags
+def _credential_env(env, gitdir):
+    trusted = dict(env)
+    trusted.pop('GIT_CONFIG_NOSYSTEM', None)
+    trusted.pop('GIT_CONFIG_GLOBAL', None)
+    trusted['GIT_DIR'] = str(gitdir)
+    return trusted
+
+
+def _lookup_credential(url, gitdir, env):
+    # Let Git resolve system/global helpers, URL matching, and includes in an
+    # empty repo. Source gitdir/hasconfig includeIf rules intentionally do not
+    # match here. Only get is sent; never approve/reject a trusted credential.
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ('https', 'http') or not parts.netloc:
+        return None
+    request = 'protocol=%s\nhost=%s\npath=%s\n\n' % (parts.scheme, parts.netloc, parts.path.lstrip('/'))
+    result = subprocess.run(['git', 'credential', 'fill'], cwd=gitdir, env=_credential_env(env, gitdir),
+                            input=request, text=True, encoding='utf-8', errors='replace',
+                            capture_output=True, timeout=_timeout())
+    if result.returncode:
+        return None
+    fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    user, password = fields.get('username'), fields.get('password')
+    return (user, password) if user and password else None
 
 
 def _invoke(root, env, args, extra=(), input=None):
@@ -140,6 +155,43 @@ def _origin_url(root):
     return url
 
 
+def _origin_refspecs(root):
+    try:
+        rows = run(root, 'read', 'config', '--get-regexp', r'^remote\.origin\.fetch$')
+    except GitFailed:  # rc 1 = unset
+        return []
+    return [row.partition(' ')[2] for row in rows.splitlines()]
+
+
+def _ref_pattern_ok(pattern, gitdir, env):
+    if not pattern.startswith('refs/'):
+        return False
+    try:
+        _invoke(gitdir, env, ['check-ref-format', '--refspec-pattern', pattern])
+        return True
+    except GitFailed:
+        return False
+
+
+def _usable_refspecs(raw, gitdir, env):
+    # Invalid entries are skipped independently. An invalid negative entry can
+    # therefore fetch extra branches; retain every valid exclusion unchanged.
+    positive, negative = [], []
+    for spec in raw:
+        if spec.startswith('^'):
+            src = spec[1:]
+            if ':' not in src and '+' not in spec[:2] and _ref_pattern_ok(src, gitdir, env):
+                negative.append(spec)
+            continue
+        body = spec[1:] if spec.startswith('+') else spec
+        src, sep, dst = body.partition(':')
+        if (sep and dst.startswith('refs/remotes/origin/') and ':' not in dst
+                and src.count('*') == dst.count('*') <= 1
+                and _ref_pattern_ok(src, gitdir, env) and _ref_pattern_ok(dst, gitdir, env)):
+            positive.append(spec)
+    return (positive or [DEFAULT_REFSPEC]) + negative
+
+
 def _refs(root, env):
     rows = _invoke(root, env, ['for-each-ref', '--format=%(objectname) %(refname) %(symref)'])
     refs = {}
@@ -151,11 +203,12 @@ def _refs(root, env):
     return refs
 
 
-def _fetch(root, env, helpers):
+def _fetch(root, env):
     url = _origin_url(root)
     objects = run(root, 'read', 'rev-parse', '--path-format=absolute', '--git-path', 'objects').strip()
     object_format = run(root, 'read', 'rev-parse', '--show-object-format').strip()
     before = _refs(root, env)
+    raw_refspecs = _origin_refspecs(root)
     # Fetch never loads the source repository's config: http/credential/url keys
     # (including includes, URL-specific proxy/CA overrides and rewrites) stay out.
     # Share only objects; publish fetched origin refs/tags atomically on success.
@@ -165,10 +218,22 @@ def _fetch(root, env, helpers):
         if before:
             _invoke(temporary, network_env, ['update-ref', '--stdin'],
                     input=''.join('update ' + ref + ' ' + sha + '\n' for ref, sha in before.items()))
-        policy = ['-c', 'remote.origin.url=' + url, '-c', 'remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*',
+        refspecs = _usable_refspecs(raw_refspecs, temporary, env)
+        credential = _lookup_credential(url, temporary, env)
+        # System/global proxy, CA and extraHeader remain unsupported by fetch.
+        policy = ['-c', 'remote.origin.url=' + url]
+        for spec in refspecs:
+            policy += ['-c', 'remote.origin.fetch=' + spec]
+        policy += [
                   '-c', 'http.proxy=', '-c', 'http.sslVerify=true', '-c', 'http.extraHeader=',
                   '-c', 'http.followRedirects=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false']
-        output = _invoke(temporary, network_env, ['fetch', '--prune', 'origin'], extra=policy + helpers)
+        fetch_env = dict(network_env)
+        auth = []
+        if credential:
+            user, password = credential
+            fetch_env.update(TEAMAGENT_GIT_USERNAME=user, TEAMAGENT_GIT_PASSWORD=password)
+            auth = ['-c', 'credential.helper=' + FIXED_HELPER]
+        output = _invoke(temporary, fetch_env, ['fetch', '--prune', 'origin'], extra=policy + auth)
         after = _refs(temporary, network_env)
         updates = []
         for ref in sorted(before.keys() | after.keys()):
@@ -190,12 +255,11 @@ def run(root, cls, *args):
     flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else ['--no-includes'] if command == 'config' else []
     env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in ('SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE')}
     try:
-        helpers = _credential_helpers(env) if command == 'fetch' else []
         # Block repo-local askPass execution as well as interactive terminal prompts.
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
                    GIT_ASKPASS='/usr/bin/false', GIT_OPTIONAL_LOCKS='0')
         if command == 'fetch':
-            return _fetch(root, env, helpers)
+            return _fetch(root, env)
         return _invoke(root, env, [command] + flags + rest)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None

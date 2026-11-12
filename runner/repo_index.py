@@ -35,7 +35,8 @@ _offset = 0
 _backlog = False
 CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'accesstoken', 'refreshtoken',
                               'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
-                              'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0'))
+                              'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0',
+                              'token', 'secret', 'privatekey', 'credential'))
 
 
 def _json(path, default):

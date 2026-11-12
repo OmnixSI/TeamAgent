@@ -190,6 +190,9 @@ class RepoIndexTests(unittest.TestCase):
         self.assertEqual(index.redact(text, index._config_secrets(config)), text)
         for value in tokens:
             self.assertEqual(index.redact(value, index._config_secrets(config)), '[REDACTED]')
+        generic = {'token':'x'*20, 'secret':'y'*20, 'privateKey':'z'*20, 'credential':{'v':'w'*20}}
+        self.assertEqual(set(index._config_secrets(generic)), {c*20 for c in 'xyzw'})
+        self.assertEqual(list(index._config_secrets({'token':'short', 'tokenizer':'t'*20})), [])
 
     def test_R6_R16_chinese_patch_and_request_are_bounded_in_utf8_bytes(self):
         for i in range(4): self.commit('中'*11000, 'src/p'+str(i)+'.ts')
