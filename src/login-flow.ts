@@ -1,7 +1,8 @@
+import {OFFLINE_MS} from './linkfail';
 const SERVICES=['bili','x'];
 const ACTIVE=['waiting','scanned'];
 const PHASES=[...ACTIVE,'ok','expired','failed','cancelled'];
-const TTL=300000,OFFLINE=120000;
+const TTL=300000;
 const read=(raw?:string)=>{try{return JSON.parse(raw||'null');}catch{return null;}};
 const json=(body:any,status=200)=>Response.json(body,{status,headers:{'Cache-Control':'no-store'}});
 function display(s:any,now:number){
@@ -19,7 +20,7 @@ export async function loginState(e:any):Promise<Response>{
   return [service,{auth,flow:display(read(values.get('login-flow:'+service)),now)}];
  }));
  const seen=Number(values.get('fetcher:last-seen'))||0;
- return json({services,online:seen>0&&now-seen<OFFLINE,last_seen:seen?new Date(seen).toISOString():null});
+ return json({services,online:seen>0&&now-seen<OFFLINE_MS,last_seen:seen?new Date(seen).toISOString():null});
 }
 export async function requestLogin(e:any,b:any):Promise<Response>{
  if(!SERVICES.includes(b?.service))return json({error:'invalid service'},400);

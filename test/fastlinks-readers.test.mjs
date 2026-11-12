@@ -68,8 +68,8 @@ test('P0a public GitHub repository reads raw HEAD README before Jina',async()=>{
 test('P0a raw README failure keeps budget for Jina',async()=>mock(async target=>String(target).includes('raw.githubusercontent.com')?new Response('',{status:404}):new Response('Markdown Content:\n'+'公开说明。'.repeat(150)),async()=>{
   const r=await api.readUrl({},'https://github.com/example/project',{purpose:'inline',deadline:Date.now()+3000});assert.equal(r.ok,true);assert.equal(r.source,'jina');
 }));
-test('P0a short Jina maps to not_found outside the reader and inline does not invoke DeepSeek',async()=>mock(async target=>{assert.ok(String(target).includes('jina.ai'));return new Response('x'.repeat(199));},async()=>{
-  assert.deepEqual(await api.readUrl({},'https://example.com/199',{purpose:'inline',deadline:Date.now()+3000}),{ok:false,reason:'not_found'});
+test('W1 P0b short Jina maps to empty outside the reader and inline does not invoke DeepSeek',async()=>mock(async target=>{assert.ok(String(target).includes('jina.ai'));return new Response('x'.repeat(199));},async()=>{
+  assert.deepEqual(await api.readUrl({},'https://example.com/199',{purpose:'inline',deadline:Date.now()+3000}),{ok:false,reason:'empty'});
 }));
 test('P0a failed link materials are also wrapped as untrusted data',async()=>{
   const e=env();await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,0)').bind('failed-link','g','u','看一下',new Date().toISOString(),0).run();

@@ -1,3 +1,4 @@
+import {webFailText,LINK_FAIL_RULE} from './linkfail';
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
@@ -389,7 +390,8 @@ function tweetText(html: string) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-export type ReadReason = 'risk' | 'offline' | 'timeout' | 'not_found' | 'login_required' | 'ambiguous' | 'runner_outdated' | 'invalid';
+export type { ReadReason } from './linkfail';
+import type { ReadReason } from './linkfail';
 export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
 export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research' };
 /** All sources, including response bodies, spend the same absolute budget. */
@@ -420,7 +422,8 @@ export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok:
 export const syndicationToken = (id: string) => ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
 export async function readTweet(url: string, deadline: number): Promise<ReadResult> {
   const tweet = isTweet(url);
-  if (!tweet || !publicUrl(url)) return {ok:false,reason:'invalid'};
+  if (!publicUrl(url)) return {ok:false,reason:'unsupported'};
+  if (!tweet) return {ok:false,reason:'invalid'};
   let reason: ReadReason = 'not_found';
   const sources = [
     {source:'fx' as const,url:'https://api.fxtwitter.com/2/status/'+tweet.id,cap:1200,reserve:1300},
@@ -446,14 +449,14 @@ export async function readTweet(url: string, deadline: number): Promise<ReadResu
         const at=typeof value.created_timestamp==='number'?value.created_timestamp*1000:Date.parse(value.created_at);
         if (Number.isFinite(at)) createdAt=new Date(at).toISOString();
       }
-      if (!text.trim()) {reason='not_found';continue;}
+      if (!text.trim()) {reason='empty';continue;}
       return {ok:true,source:source.source,id:tweet.id,text:author?author+'\n'+text:text,...(createdAt?{createdAt}:{})};
     } catch {reason=signal.aborted?'timeout':'invalid';}
   }
   return {ok:false,reason};
 }
 export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'research'}): Promise<ReadResult> {
-  if (!publicUrl(url)) return {ok:false,reason:'invalid'};
+  if (!publicUrl(url)) return {ok:false,reason:'unsupported'};
   const deadline=opt.deadline ?? Date.now()+({research:15000,inline:3000,prefetch:4000}[opt.purpose]);
   if (isTweet(url)) return readTweet(url,deadline);
   let reason: ReadReason='not_found';
@@ -474,7 +477,7 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
       const raw=await readLimited(r,512*1024,signal),checked=raw===null?{ok:false as const,reason:'invalid' as const}:jinaOk(raw);
       if (r.ok && checked.ok) return {ok:true,source:'jina',text:checked.text};
       if (!checked.ok && 'reason' in checked && checked.reason!=='short') reason=checked.reason;
-      else reason=r.ok?'not_found':httpReason(r.status);
+      else reason=r.ok?'empty':httpReason(r.status);
     } catch {reason=signal.aborted?'timeout':'invalid';}
     else reason='timeout';
   }
@@ -483,7 +486,7 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
       const data=await tool(e,'fetch',{url},Math.floor(deadline-Date.now()),512*1024),text=String(data?.content||'').trim();
       const checked=jinaOk(text,'deepseek');
       if (text && (checked.ok || 'reason' in checked && checked.reason==='short')) return {ok:true,source:'deepseek',text};
-      if ('reason' in checked) reason=checked.reason==='short'?'not_found':checked.reason;
+      if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
     } catch {if(Date.now()>=deadline-10)reason='timeout';}
   }
   return {ok:false,reason};
@@ -512,13 +515,13 @@ export async function understandLinks(e: any, p: any, s: Services) {
     const url = urls[index];
     const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
     return d.ok === false
-      ? { url, unavailable: true, reason: d.reason, content: untrusted(url, JSON.stringify({ ok: false, reason: d.reason })) }
+      ? { url, unavailable: true, reason: d.reason, reason_text: webFailText(d.reason), content: untrusted(url, JSON.stringify({ ok: false, reason: d.reason })) }
       : { url, source: d.source, content: untrusted(url, d.text) };
   });
   const text = await s.llm(
     "chat",
     "群友分享了资料。用中文提炼核心内容、与项目可能的关系、一个值得讨论的问题，附原链接。不假装看到了网页未包含的视频画面或听到了音轨；需要视频解析时注明字幕/画面还在处理。" +
-      UNTRUSTED_RULE,
+      LINK_FAIL_RULE + UNTRUSTED_RULE,
     { message: m.body, pages, projects: INITIAL_PROJECT_HINTS },
   );
   await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
@@ -783,7 +786,7 @@ export async function agentAnswer(e: any, context: any) {
       type: "function",
       function: {
         name: "read_web",
-        description: "读取群友分享的网页或GitHub页面。",
+        description: "读取群友分享的网页或GitHub页面。" + LINK_FAIL_RULE,
         parameters: {
           type: "object",
           properties: { url: { type: "string" } },
@@ -1191,7 +1194,7 @@ export async function agentAnswer(e: any, context: any) {
                   untrusted: true,
                   text: untrusted(a.url, d.text),
                 }
-              : { unavailable: true, reason: (d as { ok: false; reason: ReadReason }).reason, untrusted: true,
+              : { unavailable: true, reason: (d as { ok: false; reason: ReadReason }).reason, reason_text: webFailText((d as { ok: false; reason: ReadReason }).reason), untrusted: true,
                   text: untrusted(a.url, JSON.stringify(d)) };
             break;
           }

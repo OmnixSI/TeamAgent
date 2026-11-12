@@ -87,7 +87,7 @@ export function createFetchClient(options={}){
          settled=true;clearTimeout(timer);resolveResult({status,headers:res.headers,data});
        });
      });
-     req.on('error',fail);req.on('timeout',()=>{fail();req.destroy();});timer=setTimeout(()=>{fail();req.destroy();},8000);req.end();
+     req.on('error',fail);req.on('timeout',()=>{fail(Object.assign(Error(now()<pausedUntil?'风控':'抓取失败'),{timeout:true}));req.destroy();});timer=setTimeout(()=>{fail(Object.assign(Error(now()<pausedUntil?'风控':'抓取失败'),{timeout:true}));req.destroy();},8000);req.end();
    });
  }
  async function biliApi(path,params={},options={}){
@@ -112,13 +112,13 @@ export function createFetchClient(options={}){
    if(!SHORT.test(code))throw Error('短链无效');let u=new URL('https://b23.tv/'+code);
    for(let hop=0;hop<3;hop++){
      const r=await get(u.href,'short');
-     if(!(r.status>=300&&r.status<400)||!r.headers.location)throw Error('短链无效');
+     if(!(r.status>=300&&r.status<400)||!r.headers.location)throw Object.assign(Error('短链无效'),{reason:'not_found'});
      const target=new URL(r.headers.location,u);
      if(target.protocol!=='https:'||(target.port&&target.port!=='443')||target.username||target.password)throw Error('短链无效');
      if(['www.bilibili.com','m.bilibili.com'].includes(target.hostname)){
-       const bv=target.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0];if(bv)return bv;throw Error('短链无效');
+       const bv=target.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0];if(bv)return bv;throw Object.assign(Error('短链无效'),{reason:'unsupported'});
      }
-     if(target.hostname!=='b23.tv')throw Error('短链无效');u=target;
+     if(target.hostname!=='b23.tv')throw Object.assign(Error('短链无效'),{reason:'unsupported'});u=target;
    }throw Error('短链无效');
  }
  async function refreshBuvid(force=false,anonymous=false){
@@ -138,7 +138,7 @@ export function createFetchClient(options={}){
    let view;
    try{view=await biliApi('/x/web-interface/view',{bvid});}
    catch(error){if(error.status!==412&&error.code!==-412)throw error;await refreshBuvid(true);view=await biliApi('/x/web-interface/view',{bvid});}
-   if(view.code!==0||!view.data)throw Error('视频信息未读到');
+   if(view.code!==0||!view.data)throw Object.assign(Error('视频信息未读到'),{code:view.code});
    const v=view.data,cid=v.pages?.[0]?.cid||v.cid;
    let subtitle=null,subtitle_lang=null,subtitle_status='unavailable';
    if(wbi&&cid){
@@ -169,6 +169,14 @@ export function createFetchClient(options={}){
  const pauseSearch=ms=>{searchPausedUntil=Math.max(searchPausedUntil,now()+ms);};
  return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
 }
+export function classify(error) {
+ if(error?.message==='风控'||[412,403].includes(error?.status)||[-412,-352].includes(error?.code))return {reason:'risk',retryAfter:error?.scope==='search'?3600:600};
+ if(error?.timeout===true||error?.code==='ETIMEDOUT')return {reason:'timeout'};
+ if(['unsupported','not_found'].includes(error?.reason))return {reason:error.reason};
+ if(error?.status===404||[-404,62002,62004,62012].includes(error?.code))return {reason:'not_found'};
+ if(error?.status===401||[-101,-403].includes(error?.code))return {reason:'login_required'};
+ return {reason:'invalid'};
+}
 export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
  let report={id:job.id,lease:p.lease,success:false};
@@ -178,7 +186,7 @@ export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
    if(titleRef&&(typeof p.title!=='string'||![...p.title].length||[...p.title].length>100||/[\p{Cc}\p{Cf}]/u.test(p.title)))throw Error('无效任务');
    await beforeUse();
    report={...report,success:true,result:titleRef?await biliByTitle(client,p.title):await client.biliLight(p.ref)};
- }catch(error){report.reason=error.message==='风控'?'风控':'视频内容未读到';log(client.sanitize('fetch '+report.reason));}
+ }catch(error){const c=classify(error);report={...report,...c};log(client.sanitize('fetch '+c.reason));}
  await cloud('report',client.sanitize(report));
 }
 async function main(){

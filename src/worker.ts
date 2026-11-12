@@ -1,4 +1,6 @@
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
+import {biliFailReply,biliFailMaterial} from './linkfail';
+import {isTitleRef,TITLE_FALLBACK} from './bilititle';
 import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
@@ -7,7 +9,7 @@ import { stage, flushTail } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { videoTarget, biliCached, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -723,7 +725,15 @@ async function processJob(e: Env, id: string) {
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
-      if (transferred || ref && !cached && await startVideoWait(e, { groupId: m.group_id, ref, title: target?.title, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
+      const failure = ref && !cached ? await biliFailure(e, ref) : null;
+      if (failure && mentioned) {
+        await enqueueVoice(e, id, latest.group_id, latest.id, biliFailReply(failure, {title:isTitleRef(ref!)}));
+        await recordDecision(e, {...decisionRow,gate:"video_fail",action:"reply",forced:true,reason:failure,outbox_id:id});
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      if (transferred || ref && !cached && !failure && await startVideoWait(e, { groupId: m.group_id, ref, title: target?.title, latest, batchIds: batch.map((r: any) => r.id), mentioned })) {
         await recordDecision(e, { ...decisionRow, gate: "video", action: "reply", forced: true });
         await advanceCursor(e, m.group_id, cursor, batch);
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
@@ -744,7 +754,7 @@ async function processJob(e: Env, id: string) {
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
-        ...(cached ? { materials: [videoMaterial(cached,ref || '')] } : {}),
+        ...(cached ? { materials: [videoMaterial(cached,ref || '')] } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
