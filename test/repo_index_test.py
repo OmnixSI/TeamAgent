@@ -102,6 +102,61 @@ class RepoIndexTests(unittest.TestCase):
         for value in values: self.assertNotIn(value, body)
         self.assertIn('[REDACTED]', body)
 
+    def test_review_known_values_are_literal_longest_first_and_not_recursive(self):
+        values = ['fake.+cookie', 'fake.+cookie-long', '[REDACTED]', '', None]
+        self.assertEqual(index.redact('fake.+cookie-long fake.+cookie keep', values),
+                         '[REDACTED] [REDACTED] keep')
+
+    def test_review_common_token_and_cookie_forms_are_redacted(self):
+        samples = [
+            'runnerToken = "synthetic-runner-value"',
+            '"runner_token": "synthetic-runner-value"',
+            "'access_token': 'synthetic-access-value'",
+            'refreshToken=synthetic-refresh-value',
+            'api_key: synthetic-api-value',
+            'client_secret=synthetic-client-value',
+            'Authorization: Bearer synthetic.bearer-value',
+            'eyJhbGciOiJub25lIn0.eyJzdWIiOiJmYWtlIn0.c3ludGhldGlj',
+            'Cookie: custom_session=synthetic-cookie; other=synthetic-other',
+            'Set-Cookie: session=synthetic-cookie; HttpOnly',
+            '"cookie": "custom_session=synthetic-cookie; other=synthetic-other"',
+            '"SESSDATA": "synthetic-cookie"',
+            'auth_token = synthetic-cookie',
+            'sessionid=synthetic-cookie',
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(index.redact(sample), '[REDACTED]')
+
+    def test_review_redact_without_known_values_preserves_normal_code(self):
+        text = 'const count = 42; // ordinary code'
+        self.assertEqual(index.redact(text), text)
+        self.assertEqual(index.redact(text, None), text)
+        self.assertEqual(index.redact('SESSDATA=synthetic-cookie'), '[REDACTED]')
+
+    def test_review_sync_redacts_config_token_and_supplied_cookie_before_cutting(self):
+        token, cookie = 'synthetic-runner', 'opaque-cookie-fake.+value'
+        self.git('config', 'user.name', token + ' ' + cookie)
+        self.commit(token + ' ' + cookie + '\n' + 'a'*5000)
+        self.git('commit', '--amend', '-qm', token + ' ' + cookie, '-m', cookie + ' ' + token)
+        self.git('update-ref', 'refs/remotes/origin/main', self.git('rev-parse', 'HEAD'))
+        read = Path.read_text
+        def guarded(path, *args, **kwargs):
+            self.assertNotIn(path.name, ('worker-secrets.json','bili-cookie.json','.env'))
+            return read(path, *args, **kwargs)
+        cut = index.cut_bytes
+        def guarded_cut(text, size):
+            self.assertNotIn(token, text); self.assertNotIn(cookie, text)
+            return cut(text, size)
+        with patch.object(Path, 'read_text', guarded), patch.object(index, 'cut_bytes', side_effect=guarded_cut):
+            index.sync_once(1000, known_values=[cookie])
+        payload = json.dumps(self.batches[-1])
+        self.assertNotIn(token, payload); self.assertNotIn(cookie, payload)
+        record = self.commits()[0]
+        for field in ('author', 'subject', 'body', 'patch'):
+            self.assertIn('[REDACTED]', record[field])
+        self.assertNotIn('synthetic-run', record['patch'])
+
     def test_R6_R16_chinese_patch_and_request_are_bounded_in_utf8_bytes(self):
         for i in range(4): self.commit('中'*11000, 'src/p'+str(i)+'.ts')
         record = index.commit_record(self.root, self.git('rev-parse', 'HEAD'))

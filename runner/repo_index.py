@@ -24,6 +24,13 @@ DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed2
         '.npmrc', '.netrc', '.pypirc', '*secret*', '*credential*', '*cookie*',
         'worker-secrets.json', '.git/*', '.dev.vars', 'wrangler.toml.local')
 PATTERN = re.compile(r'ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+')
+TOKEN_PATTERN = re.compile(
+    r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
+    r'|\bBearer\s+[A-Za-z0-9._~+/-]+=*'
+    r'|\b(?:Cookie|Set-Cookie|Authorization)\s*:\s*[^\r\n]+'
+    r'|[\"\']?\b(?:runner[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|'
+    r'cookie|SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0|session(?:id|_id)?|sid)\b[\"\']?\s*[:=]\s*'
+    r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,\'"}]+)', re.I)
 _fetch_at = {}
 _offset = 0
 _backlog = False
@@ -51,8 +58,12 @@ def denied(path):
     return any(fnmatch.fnmatchcase(path, rule) or fnmatch.fnmatchcase(path.rsplit('/', 1)[-1], rule) for rule in DENY)
 
 
-def redact(text):
-    return PATTERN.sub('[REDACTED]', text)
+def redact(text, known_values=()):
+    # Only values the caller already holds in memory; never discover credentials.
+    values = sorted({v for v in (known_values or ()) if isinstance(v, str) and v}, key=len, reverse=True)
+    if values:
+        text = re.sub('|'.join(re.escape(v) for v in values), '[REDACTED]', text)
+    return PATTERN.sub('[REDACTED]', TOKEN_PATTERN.sub('[REDACTED]', text))
 
 
 def cut_bytes(s, n):
@@ -129,7 +140,7 @@ def _numstat(text):
     return result
 
 
-def commit_record(root, sha):
+def commit_record(root, sha, known_values=()):
     meta = _git(root, 'show', '--no-patch', '--format=%H%x00%at%x00%an%x00%s%x00%b', sha).split('\0', 4)
     # --raw adds actual file status alongside the same numstat; -z preserves names.
     files = _numstat(_git(root, 'show', '--raw', '--numstat', '-z', '--format=', '--diff-merges=first-parent', sha))[:100]
@@ -145,13 +156,13 @@ def commit_record(root, sha):
         if len(names) != 2 or any(denied(name[2:]) for name in names):
             continue
         # Redact before cutting, too: a cut must not expose half a credential.
-        safe = redact(segment)
+        safe = redact(segment, known_values)
         part = cut_bytes(safe, 4000); truncated |= part != safe
         segments.append(part)
     safe = ''.join(segments)
     patch = cut_bytes(safe, 12000); truncated |= patch != safe
-    return {'sha':meta[0], 'at':int(meta[1])*1000, 'author':redact(meta[2]), 'subject':redact(meta[3]),
-            'body':redact(meta[4].strip())[:500], 'files':files, 'patch':redact(patch), 'truncated':int(truncated)}
+    return {'sha':meta[0], 'at':int(meta[1])*1000, 'author':redact(meta[2], known_values), 'subject':redact(meta[3], known_values),
+            'body':redact(meta[4].strip(), known_values)[:500], 'files':files, 'patch':patch, 'truncated':int(truncated)}
 
 
 def branches(root):
@@ -210,7 +221,7 @@ def worktrees(roots, repo):
     return result
 
 
-def build(repo, st, budget):
+def build(repo, st, budget, known_values=()):
     root = repo_root(repo)
     if not root.is_dir():
         print('repo index: clone missing', repo, flush=True)
@@ -225,7 +236,7 @@ def build(repo, st, budget):
     local = worktrees([H/'work', *map(Path, _config().get('index', {}).get('extra_worktree_roots', []))], repo)
     fingerprint = hashlib.sha256(json.dumps([heads, [{k:v for k,v in w.items() if k != 'updatedAt'} for w in local]], sort_keys=True).encode()).hexdigest()
     return {'repo':repo, 'head':{'sha':sha, 'branch':default[len('refs/remotes/origin/'):], 'at':int(_git(root,'show','--no-patch','--format=%at',sha).strip())*1000},
-            'commits':[commit_record(root,s) for s in pending[:budget]], 'branches':branches(root), 'worktrees':local,
+            'commits':[commit_record(root,s,known_values) for s in pending[:budget]], 'branches':branches(root), 'worktrees':local,
             'fingerprint':fingerprint, 'pending_left':max(0,len(pending)-budget), '_heads':heads, '_pending':pending}
 
 
@@ -248,11 +259,12 @@ def _save(state):
         temp.unlink(missing_ok=True)
 
 
-def sync_once(now):
+def sync_once(now, known_values=()):
     global _offset, _backlog
     config = _config()
     if config.get('index', {}).get('enabled', True) is False:
         return
+    known_values = (*known_values, config.get('runnerToken', ''))
     state = _json(H/'repo-index-state.json', {})
     repositories = list(settings()['repositories'])
     if not repositories:
@@ -270,7 +282,7 @@ def sync_once(now):
                     print('repo index: fetch unavailable',repo,flush=True)
                     return
             st = state.get(repo, {})
-            data = build(repo,st,remaining)
+            data = build(repo,st,remaining,known_values)
             if not data:
                 continue
             pending = data['_pending']; _backlog |= bool(pending)
