@@ -396,12 +396,22 @@ export function slot(deadline: number, cap: number, reserve = 0): AbortSignal | 
   return milliseconds < 300 ? null : AbortSignal.timeout(milliseconds);
 }
 const httpReason = (status: number): ReadReason => status === 404 ? 'not_found' : status === 401 || status === 403 ? 'login_required' : status === 429 || status === 412 ? 'risk' : 'invalid';
-export function jinaOk(raw: string): { ok: true; text: string } | { ok: false; reason: ReadReason | 'short' } {
-  if (/Warning:\s*Target URL returned error 404|(?:^|\n)404(?: Not Found)?(?:\s|$)/i.test(raw)) return {ok:false,reason:'not_found'};
-  if (/just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i.test(raw)) return {ok:false,reason:'risk'};
-  if (/sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i.test(raw)) return {ok:false,reason:'login_required'};
-  const body = raw.includes('Markdown Content:') ? raw.slice(raw.indexOf('Markdown Content:') + 17) : raw;
+export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok: true; text: string } | { ok: false; reason: ReadReason | 'short' } {
+  const marker = 'Markdown Content:', boundary = source === 'jina' ? raw.indexOf(marker) : -1;
+  const header = source === 'jina' ? raw.slice(0, boundary < 0 ? 300 : boundary) : '';
+  const warning = header.match(/^\s*Warning:\s*Target URL returned error (\d{3})\b/im);
+  if (warning) return {ok:false,reason:httpReason(Number(warning[1]))};
+  const challenge = /just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i;
+  const login = /sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i;
+  const title = header.match(/^Title:\s*([^\r\n]*)/im)?.[1] || '';
+  if (challenge.test(title)) return {ok:false,reason:'risk'};
+  if (login.test(title)) return {ok:false,reason:'login_required'};
+  const body = boundary < 0 ? raw : raw.slice(boundary + marker.length);
   const text = body.replace(/^(?:\s*\[[^\]\n]*\]\([^\n)]*\)\s*[|·]?)+\s*$/gm, '').trim();
+  if (text.length < 1500) {
+    if (challenge.test(text)) return {ok:false,reason:'risk'};
+    if (login.test(text)) return {ok:false,reason:'login_required'};
+  }
   return text.length < 500 ? {ok:false,reason:'short'} : {ok:true,text};
 }
 // Same token computation as the primary react-tweet syndication implementation.
@@ -469,7 +479,7 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
   if (opt.purpose==='research' && deadline-Date.now()>=300) {
     try {
       const data=await tool(e,'fetch',{url},Math.floor(deadline-Date.now()),512*1024),text=String(data?.content||'').trim();
-      const checked=jinaOk(text);
+      const checked=jinaOk(text,'deepseek');
       if (text && (checked.ok || 'reason' in checked && checked.reason==='short')) return {ok:true,source:'deepseek',text};
       if ('reason' in checked) reason=checked.reason==='short'?'not_found':checked.reason;
     } catch {if(Date.now()>=deadline-10)reason='timeout';}
@@ -493,23 +503,16 @@ export async function understandLinks(e: any, p: any, s: Services) {
     .bind(p.message)
     .first();
   if (!m) return;
-  const pages = [];
-  for (const url of (p.urls || []).filter(publicUrl).slice(0, 3)) {
-    try {
-      const d = await readUrl(e, url, { purpose: "research" });
-      if (d.ok === false) {
-        pages.push({ url, unavailable: true, reason: d.reason, content: untrusted(url, JSON.stringify({ ok: false, reason: d.reason })) });
-        continue;
-      }
-      pages.push({
-        url,
-        source: d.source,
-        content: untrusted(url, d.text),
-      });
-    } catch {
-      pages.push({ url, unavailable: true, reason: "invalid", content: untrusted(url, JSON.stringify({ ok: false, reason: "invalid" })) });
-    }
-  }
+  const urls: string[] = (p.urls || []).filter(publicUrl).slice(0, 3);
+  const deadline = Date.now() + 20000;
+  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline })));
+  const pages = reads.map((read, index) => {
+    const url = urls[index];
+    const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
+    return d.ok === false
+      ? { url, unavailable: true, reason: d.reason, content: untrusted(url, JSON.stringify({ ok: false, reason: d.reason })) }
+      : { url, source: d.source, content: untrusted(url, d.text) };
+  });
   const text = await s.llm(
     "chat",
     "群友分享了资料。用中文提炼核心内容、与项目可能的关系、一个值得讨论的问题，附原链接。不假装看到了网页未包含的视频画面或听到了音轨；需要视频解析时注明字幕/画面还在处理。" +
