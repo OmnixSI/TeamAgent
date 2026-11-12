@@ -15,7 +15,7 @@ export function toolFailure(_name: string, _err: unknown, extra: { kind?: string
   return { ok: false, error_kind: kind, retryable: kind === "upstream", next_action: NEXT[kind] || NEXT.upstream, ...(extra.detail ? { detail: redactPatch(extra.detail).slice(0, 120) } : {}) };
 }
 export function redactPatch(s: string): string {
-  return s.replace(/ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]");
+  return s.replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]");
 }
 export function cutBytes(s: string, n: number): string {
   const bytes = new TextEncoder().encode(s);

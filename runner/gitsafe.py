@@ -35,7 +35,7 @@ class GitFiltersConfigured(GitDenied):
 
 
 PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-          '-c', 'diff.external=', '-c', 'core.pager=cat', '-c', 'color.ui=false',
+          '-c', 'diff.external=', '-c', 'core.pager=cat', '-c', 'color.ui=false', '-c', 'color.diff=false',
           '-c', 'log.showSignature=false', '-c', 'gpg.program=/usr/bin/false',
           '-c', 'gpg.openpgp.program=/usr/bin/false', '-c', 'gpg.x509.program=/usr/bin/false',
           '-c', 'gpg.ssh.program=/usr/bin/false',
@@ -126,6 +126,14 @@ def _timeout():
     return timeout
 
 
+def _kill_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.communicate(timeout=1)
+
+
 def _run_process(args, *, cwd, env, timeout, input=None, max_bytes=None):
     """Reap Git after every run; kill its entire process group on timeout."""
     with subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True,
@@ -153,17 +161,16 @@ def _run_process(args, *, cwd, env, timeout, input=None, max_bytes=None):
                             raise GitOutputTooLarge('Git output exceeded byte limit')
                 process.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.communicate()
+            _kill_process_group(process)
             raise
         except GitOutputTooLarge:
-            # This bounded path is a read-only Git patch command with helpers
-            # disabled. Kill/reap Git directly, including when it just exited.
+            # Reap short-lived Git directly to avoid a vanished-group race.
+            # A helper retaining stdout must not turn cleanup into an unbounded wait.
             process.kill()
-            process.communicate()
+            try:
+                process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                _kill_process_group(process)
             raise
         return subprocess.CompletedProcess(args, process.returncode, output.decode('utf-8', errors='replace'), '')
 

@@ -153,3 +153,14 @@ test('followup filter skip reason survives indexing and displays a fixed Chinese
  await api.ingestRepoIndex(e,{repos:[item]});
  assert.ok(!JSON.stringify(await api.runRepoTool(e,'repo_changes',{repo})).includes('untrusted arbitrary text'));
 });
+
+test('review Worker redacts every GitHub credential prefix before storing or returning it',async()=>{
+ for(const prefix of ['ghp_','gho_','ghu_','ghs_','ghr_'])for(const length of [36,76]){
+  const value=prefix+'a'.repeat(length),e=env();
+  assert.equal(api.redactPatch('before '+value+' after'),'before [REDACTED] after');
+  await api.ingestRepoIndex(e,{repos:[packet([{...commit(),author:value,subject:value,body:value,patch:'+ '+value}])]});
+  const result=await api.runRepoTool(e,'repo_commit',{repo,sha});
+  assert.ok(!JSON.stringify(result).includes(value));
+  for(const key of ['author','subject','body','patch'])assert.ok(result[key].includes('[REDACTED]'));
+ }
+});

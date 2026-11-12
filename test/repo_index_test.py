@@ -417,9 +417,12 @@ class RepoIndexTests(unittest.TestCase):
             for value in ('42', 'currentSession', 'short-cookie'):
                 sample = f'const {key} = {value};'
                 self.assertEqual(index.redact(sample), sample)
-            for value in ('a1B2' * 12, '0123456789abcdef' * 3):
+            for value in ('a' * 32, 'a1B2' * 10, '0123456789abcdef' * 3):
                 self.assertEqual(index.redact(f'{key}={value}'), '[REDACTED]')
                 self.assertEqual(index.redact(f'{key}="{value}"'), '[REDACTED]')
+                for sample in (f'"{key}":"{value}"', f"'{key}': '{value}'", f'{key}: {value}'):
+                    self.assertEqual(index.redact(sample), '[REDACTED]')
+            self.assertEqual(index.redact(f'{key}: ' + 'a' * 31), f'{key}: ' + 'a' * 31)
 
     def test_followup_config_credential_aliases_are_exact(self):
         for key in ('credentials', 'accessKey', 'secretKey', 'passwd'):
@@ -437,10 +440,14 @@ class RepoIndexTests(unittest.TestCase):
     def test_followup_forced_color_does_not_break_patch_parsing(self):
         sha = self.commit('new content\n')
         self.git('config', 'color.ui', 'always')
+        self.git('config', 'color.diff', 'always')
         record = index.commit_record(self.root, sha)
         self.assertIn('+new content', record['patch'])
         self.assertNotIn('\x1b[', record['patch'])
         self.assertEqual(record['truncated'], 0)
+        index.sync_once(1000)
+        self.assertIn('+new content', self.commits()[0]['patch'])
+        self.assertNotIn('\x1b[', self.commits()[0]['patch'])
 
     def test_followup_oversized_patch_keeps_metadata_without_partial_secrets(self):
         sha = self.commit('safe\n' + 'x' * 2048 + '\nsid=' + 'a1B2' * 12)
@@ -472,3 +479,15 @@ class RepoIndexTests(unittest.TestCase):
                     self.assertEqual([r['repo'] for r in self.batches[-1]['repos']], [repos[1]])
                     self.assertNotIn(REPO, self.state())
                     self.assertNotIn('private diagnostic', str(log.call_args_list))
+
+    def test_review_json_and_yaml_session_values_never_reach_sync_payload(self):
+        values = ['a1B2' * 10, 'c3D4' * 10]
+        self.commit(json.dumps(dict(zip(('sid', 'session'), values))), 'settings.json')
+        self.commit('sid: "' + values[0] + '"\nsession: ' + values[1] + '\n', 'settings.yaml')
+        index.sync_once(1000)
+        self.assertEqual(len(self.commits()), 2)
+        payload = json.dumps(self.batches[-1])
+        for value in values:
+            self.assertNotIn(value, payload)
+        for record in self.commits():
+            self.assertIn('[REDACTED]', record['patch'])

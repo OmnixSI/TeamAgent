@@ -31,7 +31,7 @@ TOKEN_PATTERN = re.compile(
     r'|[\"\']?\b(?:runner[_-]?token|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|'
     r'cookie|SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0|session(?:id|_id))\b[\"\']?\s*[:=]\s*'
     r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,\'"}]+)'
-    r'|[\"\']?\b(?:sid|session)\b[\"\']?\s*=\s*'
+    r'|[\"\']?\b(?:sid|session)\b[\"\']?\s*[:=]\s*'
     r'(?:"[A-Za-z0-9_-]{32,}"|\'[A-Za-z0-9_-]{32,}\'|[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-]))', re.I)
 _fetch_at = {}
 _offset = 0

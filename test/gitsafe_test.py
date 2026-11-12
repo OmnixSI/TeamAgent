@@ -248,7 +248,7 @@ class GitSafeTests(unittest.TestCase):
         with patch.dict(os.environ, {'GIT_CONFIG_COUNT':'1','GIT_CONFIG_KEY_0':'core.fsmonitor','GIT_CONFIG_VALUE_0':'evil'}), patch.object(gitsafe, '_run_process', side_effect=result) as started:
             self.assertEqual(gitsafe.run(self.root, 'read', 'status'), 'ok')
         args, opts = started.call_args
-        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','color.ui=false',
+        self.assertEqual(args[0], ['git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','-c','core.pager=cat','-c','color.ui=false','-c','color.diff=false',
                                   '-c','log.showSignature=false','-c','gpg.program=/usr/bin/false','-c','gpg.openpgp.program=/usr/bin/false',
                                   '-c','gpg.x509.program=/usr/bin/false','-c','gpg.ssh.program=/usr/bin/false',
                                   '-c','core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oConnectTimeout=5','-c','credential.helper=','-c','protocol.ext.allow=never','-c','safe.directory='+str(self.root.resolve()),'status','--ignore-submodules=all'])
@@ -769,3 +769,19 @@ class GitSafeTests(unittest.TestCase):
             result = gitsafe._run_process(args, cwd=self.root, env=self.hardened_env(), timeout=2, max_bytes=256)
             self.assertEqual(result.stdout, text)
             self.assertEqual(result.returncode, 0)
+
+    def test_review_byte_cap_cleanup_kills_descendants_holding_stdout(self):
+        marker = self.home / 'overflow-descendant-survived'
+        child = 'import time; from pathlib import Path; time.sleep(2); Path(' + repr(str(marker)) + ').touch()'
+        parent = ('import subprocess, sys, os, time; '
+                  'subprocess.Popen([sys.executable, "-c", ' + repr(child) + ']); '
+                  'os.write(1, b"x" * 65536); time.sleep(10)')
+        began = time.monotonic()
+        with patch.object(gitsafe.os, 'killpg', wraps=os.killpg) as killed:
+            with self.assertRaises(gitsafe.GitOutputTooLarge):
+                gitsafe._run_process([sys.executable, '-c', parent], cwd=self.root,
+                                     env=self.hardened_env(), timeout=3, max_bytes=256)
+            killed.assert_called_once()
+        self.assertLess(time.monotonic() - began, 1.8)
+        time.sleep(1.2)
+        self.assertFalse(marker.exists(), 'overflow left a descendant running')
