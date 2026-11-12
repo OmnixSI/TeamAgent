@@ -38,8 +38,8 @@ class RepoIndexTests(unittest.TestCase):
         self.post = patch.object(index, '_post', side_effect=lambda body, config: self.batches.append(copy.deepcopy(body)) or 200)
         self.post.start(); self.addCleanup(self.post.stop)
         actual_run = index.gitsafe.run
-        def local(root, cls, *args):
-            return '' if cls == 'lifecycle' else actual_run(root, cls, *args)
+        def local(root, cls, *args, **options):
+            return '' if cls == 'lifecycle' else actual_run(root, cls, *args, **options)
         self.safe = patch.object(index.gitsafe, 'run', side_effect=local)
         self.safe.start(); self.addCleanup(self.safe.stop)
 
@@ -129,7 +129,7 @@ class RepoIndexTests(unittest.TestCase):
                 self.assertEqual(index.redact(sample), '[REDACTED]')
 
     def test_review_redact_without_known_values_preserves_normal_code(self):
-        text = 'const count = 42; // ordinary code'
+        text = 'const sid = 42; const session = 42; const count = 42; // ordinary code'
         self.assertEqual(index.redact(text), text)
         self.assertEqual(index.redact(text, None), text)
         self.assertEqual(index.redact('SESSDATA=synthetic-cookie'), '[REDACTED]')
@@ -265,14 +265,15 @@ class RepoIndexTests(unittest.TestCase):
             for repo, root in zip(repos, roots):
                 with patch.object(self, 'root', root):
                     pending[repo] = self.commit('later for ' + repo)
-            for failure in (index.gitsafe.GitFailed('private diagnostic'), TimeoutError('private diagnostic')):
+            for failure in (index.gitsafe.GitFailed('private diagnostic'), TimeoutError('private diagnostic'),
+                            FileNotFoundError('private diagnostic'), PermissionError('private diagnostic')):
                 attempts = []
-                def fetch(root, cls, *args):
+                def fetch(root, cls, *args, **options):
                     if cls == 'lifecycle':
                         attempts.append(root)
                         if root == roots[1]:
                             raise failure
-                    return local(root, cls, *args)
+                    return local(root, cls, *args, **options)
                 index._offset = 0
                 with self.subTest(failure=type(failure).__name__), patch.object(index.gitsafe, 'run', side_effect=fetch), patch('builtins.print') as log:
                     index.sync_once(1120)
@@ -410,3 +411,83 @@ class RepoIndexTests(unittest.TestCase):
         entry = next(f for f in result['worktrees'][0]['files'] if f['path'] == '.env')
         self.assertTrue(entry['hidden']); self.assertIsNone(entry['add'])
         self.assertNotIn('SYNTHETIC-DENIED-CONTENT', json.dumps(result))
+
+    def test_followup_session_cookie_requires_a_long_value(self):
+        for key in ('sid', 'session'):
+            for value in ('42', 'currentSession', 'short-cookie'):
+                sample = f'const {key} = {value};'
+                self.assertEqual(index.redact(sample), sample)
+            for value in ('a' * 32, 'a1B2' * 10, '0123456789abcdef' * 3):
+                self.assertEqual(index.redact(f'{key}={value}'), '[REDACTED]')
+                self.assertEqual(index.redact(f'{key}="{value}"'), '[REDACTED]')
+                for sample in (f'"{key}":"{value}"', f"'{key}': '{value}'", f'{key}: {value}'):
+                    self.assertEqual(index.redact(sample), '[REDACTED]')
+            self.assertEqual(index.redact(f'{key}: ' + 'a' * 31), f'{key}: ' + 'a' * 31)
+
+    def test_followup_config_credential_aliases_are_exact(self):
+        for key in ('credentials', 'accessKey', 'secretKey', 'passwd'):
+            value = 'opaque-' + key + '-synthetic-value'
+            self.assertEqual(list(index._config_secrets({key: value})), [value])
+            self.assertEqual(index.redact(value, index._config_secrets({key: value})), '[REDACTED]')
+        self.assertEqual(list(index._config_secrets({'accessKeyboard': 'ordinary-value-long-enough'})), [])
+
+    def test_followup_all_github_token_prefixes_are_redacted(self):
+        for prefix in ('ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_'):
+            for length in (36, 76):
+                value = prefix + 'a' * length
+                self.assertEqual(index.redact('before ' + value + ' after'), 'before [REDACTED] after')
+
+    def test_followup_forced_color_does_not_break_patch_parsing(self):
+        sha = self.commit('new content\n')
+        self.git('config', 'color.ui', 'always')
+        self.git('config', 'color.diff', 'always')
+        record = index.commit_record(self.root, sha)
+        self.assertIn('+new content', record['patch'])
+        self.assertNotIn('\x1b[', record['patch'])
+        self.assertEqual(record['truncated'], 0)
+        index.sync_once(1000)
+        self.assertIn('+new content', self.commits()[0]['patch'])
+        self.assertNotIn('\x1b[', self.commits()[0]['patch'])
+
+    def test_followup_oversized_patch_keeps_metadata_without_partial_secrets(self):
+        sha = self.commit('safe\n' + 'x' * 2048 + '\nsid=' + 'a1B2' * 12)
+        with patch.object(index, 'MAX_PATCH_BYTES', 256, create=True):
+            record = index.commit_record(self.root, sha)
+        self.assertEqual(record['sha'], sha)
+        self.assertEqual(record['files'][0]['path'], 'code.txt')
+        self.assertEqual(record['patch'], '')
+        self.assertEqual(record['truncated'], 1)
+
+    def test_followup_git_oserror_before_fetch_or_during_build_isolated(self):
+        self.commit('safe')
+        data = index.build(REPO, {}, 30)
+        repos = [REPO, 'OmnixSI/Healthy']
+        for failure in (FileNotFoundError('private diagnostic'), PermissionError('private diagnostic')):
+            for stage in ('remote', 'build'):
+                with self.subTest(failure=type(failure).__name__, stage=stage):
+                    index._offset = 0
+                    def matches(root, repo):
+                        if stage == 'remote' and repo == REPO:
+                            raise failure
+                        return True
+                    def build(repo, *args):
+                        if stage == 'build' and repo == REPO:
+                            raise failure
+                        return dict(data, repo=repo)
+                    with patch.object(index, 'settings', return_value={'repositories':repos}), patch.object(index, 'repo_root', return_value=self.root), patch.object(index, '_matches_remote', side_effect=matches), patch.object(index, 'build', side_effect=build), patch('builtins.print') as log:
+                        index.sync_once(1000)
+                    self.assertEqual([r['repo'] for r in self.batches[-1]['repos']], [repos[1]])
+                    self.assertNotIn(REPO, self.state())
+                    self.assertNotIn('private diagnostic', str(log.call_args_list))
+
+    def test_review_json_and_yaml_session_values_never_reach_sync_payload(self):
+        values = ['a1B2' * 10, 'c3D4' * 10]
+        self.commit(json.dumps(dict(zip(('sid', 'session'), values))), 'settings.json')
+        self.commit('sid: "' + values[0] + '"\nsession: ' + values[1] + '\n', 'settings.yaml')
+        index.sync_once(1000)
+        self.assertEqual(len(self.commits()), 2)
+        payload = json.dumps(self.batches[-1])
+        for value in values:
+            self.assertNotIn(value, payload)
+        for record in self.commits():
+            self.assertIn('[REDACTED]', record['patch'])
