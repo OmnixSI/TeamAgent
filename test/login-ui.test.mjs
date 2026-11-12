@@ -22,6 +22,45 @@ function ui(local=true,options={}){
 }
 const text=n=>[n.textContent,...n.children.map(text)].join(' ');
 const all=n=>[n,...n.children.flatMap(all)];
+test('Bili risk disables login until recovery, including when its visible QR countdown ends',async()=>{
+ const f=await countdownUi();f.context.response.services.bili.auth={state:'risk'};
+ await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
+ assert.match(text(f.panel),/B 站暂时限制，请稍后再试/);
+ let start=all(f.panel).find(n=>n.textContent==='登录 B 站');assert.equal(start.disabled,true);
+ await start.onclick();assert.equal(f.requests.filter(r=>r.opts.method==='POST').length,0);
+ await f.tick(180000);
+ assert.match(text(f.panel),/B 站暂时限制，请稍后再试/);
+ start=all(f.panel).find(n=>n.tagName==='button'&&/登录 B 站|重新获取二维码/.test(n.textContent));assert.equal(start.disabled,true);
+ f.context.response.services.bili={auth:{state:'missing'},flow:{id:'flow',phase:'failed',reason:'risk',expires_at:f.now()+60000}};
+ await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
+ start=all(f.panel).find(n=>n.textContent==='登录 B 站');assert.equal(start.disabled,true);
+ delete f.context.response.services.bili.flow.reason;
+ await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
+ assert.equal(all(f.panel).find(n=>n.textContent==='登录 B 站').disabled,false);
+});
+test('logged-in X offers an enabled relogin action for both auth and completed-flow state',async()=>{
+ for(const entry of [{auth:{state:'ok'},flow:null},{auth:{state:'missing'},flow:{id:'x',phase:'ok',expires_at:Date.now()+300000}}]){
+  const f=ui();vm.runInContext("state={who:{role:'owner'}}",f.context);
+  f.context.response={online:true,services:{bili:{auth:null,flow:null},x:entry}};
+  await vm.runInContext('renderServiceLogins(container)',f.context);
+  const start=all(f.context.container).find(n=>n.textContent==='重新登录 X');assert.ok(start);assert.equal(start.disabled,false);
+  await start.onclick();assert.deepEqual(JSON.parse(f.requests.find(r=>r.opts.method==='POST').opts.body),{service:'x'});
+ }
+});
+test('existing navigation keeps every label keyboard-reachable and the new-task action in the page shell',()=>{
+ const f=ui(),nav=f.ids.get('tabs'),labels=['任务与方案','资料与发现','项目动态','记忆与成长','操作记录','运行状态'];
+ assert.deepEqual(nav.children.map(n=>n.textContent),labels);assert.equal(nav.attrs.role,'tablist');
+ for(const tab of nav.children){f.ids.set(tab.id,tab);assert.equal(tab.attrs.role,'tab');}
+ vm.runInContext('render=()=>{};load=()=>{}',f.context);
+ for(let i=1;i<labels.length;i++){
+  nav.onkeydown({key:'ArrowRight',preventDefault(){}});
+  assert.equal(nav.children[i].attrs['aria-selected'],'true');
+ }
+ const html=readFileSync('web/index.html','utf8');
+ assert.match(html,/<nav id="tabs" class="tabs" aria-label="工作台页面"><\/nav>/);
+ assert.match(html,/<button id="new" class="primary">＋ 新任务<\/button>/);
+ assert.equal(typeof f.ids.get('new').onclick,'function');
+});
 async function retryUi(t){
  const e=env(),qrs=new Map(),controls={},statuses=[],qrReads=[];
  let f,qrSequence=0;
@@ -176,7 +215,7 @@ test('service login UI is owner only and shows offline truth without credential 
  const {context,requests}=ui();context.response={online:false,services:{bili:{auth:null,flow:null},x:{auth:null,flow:null}}};
  vm.runInContext("state={who:{role:'member'}}",context);await vm.runInContext('renderServiceLogins(container)',context);assert.equal(requests.length,0);
  vm.runInContext("state={who:{role:'owner'}}",context);await vm.runInContext('renderServiceLogins(container)',context);
- assert.match(text(context.container),/本机服务没在线，请检查/);assert.match(text(context.container),/登录 B 站/);assert.match(text(context.container),/登录 X/);
+ assert.match(text(context.container),/本机服务没有运行.*双击桌面.*TeamAgent-登录.*重启 Mac.*TeamAgent 服务/);assert.match(text(context.container),/登录 B 站/);assert.match(text(context.container),/登录 X/);
  assert.ok(!all(context.container).some(n=>['input','iframe','img'].includes(n.tagName)));
 });
 test('waiting/scanned QR is rendered locally, final and risk states remove it, X reports local window',async()=>{

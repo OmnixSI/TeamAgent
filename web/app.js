@@ -1126,8 +1126,9 @@ function tickLoginCountdown(panel) {
   const seconds = Math.max(0, Math.ceil((clock.expiresAt - Date.now()) / 1000));
   clock.label.textContent = '二维码剩余有效时间：' + seconds + ' 秒';
   if (seconds === 0) {
-    clock.message.textContent = '已过期'; clock.qr.remove(); clock.cancel.remove();
-    clock.start.textContent = '重新获取二维码'; clock.start.disabled = false;
+    if (!clock.blocked) clock.message.textContent = '已过期';
+    clock.qr.remove(); clock.cancel.remove();
+    clock.start.textContent = '重新获取二维码'; clock.start.disabled = clock.blocked;
     panel.loginCountdown = null; panel.loginSignature = '';
   }
 }
@@ -1169,10 +1170,11 @@ async function refreshServiceLogins(panel) {
     panel.replaceChildren(el('h2', '本机服务登录'));
     panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
     if (!isLocalOwner) panel.append(localConsoleLink('在这台电脑上打开本机开发台扫码（先双击桌面「TeamAgent-登录」）'));
-    if (!snapshot.online) panel.append(el('p', '本机服务没在线，请检查', 'error'));
+    if (!snapshot.online) panel.append(el('p', '本机服务没有运行。请双击桌面的 TeamAgent-登录；仍不行就重启 Mac 上的 TeamAgent 服务。', 'error'));
     const cards = el('div', undefined, 'grid');
     for (const service of ['bili', 'x']) {
       const label = service === 'bili' ? 'B 站' : 'X', entry = snapshot.services[service], flow = entry.flow;
+      const limited = service === 'bili' && (flow?.reason === 'risk' || entry.auth?.state === 'risk');
       const active = flow && ['waiting', 'scanned'].includes(flow.phase) && flow.expires_at > Date.now() && !(service === 'bili' && qrExpired);
       const card = el('article', undefined, 'card');
       card.append(el('h3', label));
@@ -1182,20 +1184,20 @@ async function refreshServiceLogins(panel) {
       if (active && service === 'bili' && localQr) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
       if (active && service === 'x' && flow.started) status = '已在你的电脑上打开登录窗口';
       else if (active && flow.claimed && (service === 'x' || !localQr)) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
-      if (flow?.reason === 'risk') status = 'B 站暂时限制，请稍后再试';
+      if (flow?.reason === 'risk' || limited) status = 'B 站暂时限制，请稍后再试';
       const message = el('p', status); message.setAttribute('role', 'status'); card.append(message);
       if (service === 'x') card.append(el('p', '登录时会在这台 Mac 上弹出一个 Chrome 窗口。请在弹出的 Chrome 中，确认是真实的 x.com 页面后登录。不要在本网页里输入密码；本网页不会也不需要你的密码。', 'note'));
       card.append(el('small', '最近检查：' + date(entry.auth?.checked_at)));
       const qr = active && service === 'bili' && localQr ? loginQr(localQr) : null;
       if (qr) card.append(qr);
       const actions = el('div', undefined, 'actions');
-      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : '登录 ' + label, () => startServiceLogin(panel, service, flow), 'primary');
-      start.disabled = !!active || !snapshot.online || loginStartBusy.has(service) || (service === 'bili' && !isLocalOwner); actions.append(start);
+      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : service === 'x' && status === '已登录' ? '重新登录 X' : '登录 ' + label, () => startServiceLogin(panel, service, flow), 'primary');
+      start.disabled = !!active || limited || !snapshot.online || loginStartBusy.has(service) || (service === 'bili' && !isLocalOwner); actions.append(start);
       const cancel = active ? button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }) : null;
       if (cancel) actions.append(cancel);
       if (qr) {
         const countdown = el('p', undefined, 'note'); countdown.setAttribute('role', 'timer'); card.append(countdown);
-        panel.loginCountdown = {label:countdown,message,qr,start,cancel,expiresAt:loginQrDeadline.expiresAt};
+        panel.loginCountdown = {label:countdown,message,qr,start,cancel,blocked:limited,expiresAt:loginQrDeadline.expiresAt};
         tickLoginCountdown(panel);
       }
       card.append(actions); cards.append(card);
