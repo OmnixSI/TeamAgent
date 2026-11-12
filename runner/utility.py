@@ -165,9 +165,16 @@ def finish(path, report):
     if any(pathlib.Path(str(out) + suffix).exists() for suffix in ["", ".sent", ".sending", ".failed", ".unknown"]):
         clear_receipt(path)
         return
-    stage_outputs(path, report)
+    # Persist cloud acceptance before publishing a manifest. Its terminal file
+    # may be removed after acknowledgement before this receipt gets cleaned.
+    if report.get("reported") and (not report.get("local_files") or
+            any(not pathlib.Path(value).exists() for value in report["local_files"])):
+        clear_receipt(path)
+        return
+    if not report.get("reported"):
+        stage_outputs(path, report)
     try:
-        answer = cloud(
+        answer = {"ok": True} if report.get("reported") else cloud(
             "media/report",
             {k: v for k, v in report.items() if k not in ("local_files", "reported")},
         )
@@ -181,6 +188,8 @@ def finish(path, report):
         return
     if not answer.get("ok"):
         return
+    report["reported"] = True
+    save_json(path, report)
     if report.get("success") is not False and report.get("local_files"):
         q.mkdir(exist_ok=True, mode=0o700)
         if not out.exists() and not any(
