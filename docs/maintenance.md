@@ -94,7 +94,7 @@ INSERT INTO settings(key,value) VALUES('off:quote','1') ON CONFLICT(key) DO UPDA
 -- 恢复：DELETE FROM settings WHERE key IN ('off:wait','off:quote');
 ```
 
-`off:sticker_send`、`off:sticker_collect` 和 `sticker_paused_until` 仅作为后续表情能力的预留开关，本次 P1 不启用表情发送。引用连续出现三次「HTTP 400/422 JSON → 去掉引用后成功」时，自动设置 `off:quote=1`，并记录 `quote.disabled`。其他 HTTP 错误或未知发送结果不因此重发。恢复前应核对 `outbox_attempts` 和真实 QQ 响应；成功带引用发送会归零 `quote_fail`。
+表情的 `off:sticker_send`、`off:sticker_collect` 和 `sticker_paused_until` 开关及回滚步骤见下文“云端表情库（P2）”。引用连续出现三次「HTTP 400/422 JSON → 去掉引用后成功」时，自动设置 `off:quote=1`，并记录 `quote.disabled`。其他 HTTP 错误或未知发送结果不因此重发。恢复前应核对 `outbox_attempts` 和真实 QQ 响应；成功带引用发送会归零 `quote_fail`。
 
 `chat_decisions` 保存每轮的批次、动作、是否 forced、等待、硬规则、引用目标与 outbox id；`outbox_meta` 单独保存引用，保留旧表的位置插入格式。两张表只通过幂等 CREATE 追加。冷图段不写决策或推进游标，续跑的 `chat-v-*` 才判定；等待续跑是 `chat-wait-*`。
 
@@ -131,7 +131,7 @@ node scripts/evaluate-timing.mjs
 
 发送需配置值严格为 `true`；字段缺失、字符串 `"true"`、数字等都按关闭处理。嘴替仅在 banter/care 且合适时提供可选的 2–8 字 `sticker` 关键词，多数回复不提供。按 bigram Jaccard 选择得分至少 0.2、24 小时没用过的图；选中后才扣每天 20 次预算，`send_gif=false` 会排除 GIF。同图并发通过同一事务的条件写入保证只排一张。
 
-文字先排队，表情为单独的 `~s` 段。发送前先核对运行开关和 passive 来源年龄；关闭或来源过期时，跳过表情，只有表情待发时连 QQ token 都不获取。文字照常发送。表情先上传 `/files` 获取 `file_info`，再以 `msg_type=7` 发送；缓存距过期超过一分钟时复用，上传没有有效 ttl 时按一小时缓存。任一步失败或网络结果不明均标为 `skipped`，记录 `outbox_attempts`，不重试富媒体。连续三次失败暂停 24 小时并记录 `sticker.paused`，同一轮中后面的图也停止；成功会归零失败计数。
+文字先排队，表情为单独的 `~s` 段。发送前先核对运行开关和 passive 来源年龄；关闭或来源过期时，跳过表情，只有表情待发时连 QQ token 都不获取。文字照常发送。表情先上传 `/files` 获取 `file_info`，再以 `msg_type=7` 发送；缓存距过期超过一分钟时复用，上传没有有效 ttl 时按一小时缓存。任一步失败或网络结果不明均标为 `skipped`，记录 `outbox_attempts`，不重试富媒体。连续三次失败暂停 24 小时并记录 `sticker.paused`，同一轮中后面的图也停止；写入暂停时在同一批事务内归零失败计数，到期后重新累计三次失败；成功也会归零失败计数。
 
 ```sql
 -- 关闭已排队及后续表情，不需要部署
@@ -139,6 +139,27 @@ INSERT INTO settings(key,value) VALUES('off:sticker_send','1') ON CONFLICT(key) 
 -- 暂停收集新候选
 INSERT INTO settings(key,value) VALUES('off:sticker_collect','1') ON CONFLICT(key) DO UPDATE SET value='1';
 ```
+
+### 停用、回滚与清空表情
+
+紧急停发先通过已有、已授权的 D1 管理入口设置上面的 `off:sticker_send=1`，下一次发送检查即生效，不需要部署。长期关闭保持 `config/team.json` 的 `stickers.send=false`（默认值），配置修改需要检查并发布；收集和标注可独立保留。
+
+回滚表情代码之前，先关闭发送，并执行以下语句丢弃尚未发送的表情段，再按上文流程回滚。旧版本可能不检查新开关，因此不能只设开关就回滚；文字和已发送记录保留。已发起的 QQ 请求需要先核对结果，不能靠删除待发表撤回。还要检查 `sticker_paused_until`：若它仍在未来 24 小时内，发送仍会被抑制，需等待过期或一并清除（清除语句如下）。
+
+```sql
+UPDATE outbox SET status='skipped' WHERE status='pending' AND id LIKE '%~s';
+-- 可选：暂停截止在未来的，先清除；否则重新启用发送仍会被抑制
+DELETE FROM settings WHERE key='sticker_paused_until';
+```
+
+需要清空已收集的图片时，同时设置 `off:sticker_collect=1`，并保持发送关闭、执行上述待发清理。先确认没有正在执行的 `sticker` / `sticker-tag` 任务（`jobs.status='running'`），等已领取任务结束后，再执行以下语句；否则在途收集仍可能把图片写回来。此操作不可恢复，只清空 `stickers` 里的表情图片、标签及对应 `file_info`；不会清 `media_notes`（它不是表情专属，视频/资料缓存仍保留），也不删除群消息和其他任务记录。
+
+```sql
+UPDATE jobs SET status='done' WHERE kind IN ('sticker','sticker-tag') AND status='pending';
+DELETE FROM stickers;
+```
+
+每天发送预算在 `config/team.json` 的 `stickers.caps.send`（默认 20），标注预算在 `stickers.caps.tag`（默认 40）；只在校验允许的范围内调整，运行 `npm run config:check` 后按正常流程发布。标注还受共用视觉预算限制。恢复收集可删除 `settings` 中的 `off:sticker_collect`；恢复发送需确认 QQ 验收通过、`stickers.send=true`，再删除 `off:sticker_send`，并确认 `sticker_paused_until` 已过期或清除，已标为 `skipped` 的段不会重发。
 
 `~s` 不进入 recentBot、对话视图或 P1 的未接话硬规则。`skipped` 不在待发查询或运行状态告警查询中。D1 余量不足时保留 pending，后续 cron 续发；`COST.sticker=6` 覆盖开关、选图、每日预算和三条事务写入，普通文字的 `COST.send_row=10` 不变。富媒体单行另保留两者之和，覆盖缓存写入及熔断路径。关闭的积压用一条条件 UPDATE 标跳过，避免预算不足时逐条写超过 48。
 
