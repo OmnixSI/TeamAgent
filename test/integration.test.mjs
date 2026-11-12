@@ -684,6 +684,20 @@ test("nightly slang promotion requires real group evidence; opt-out survives fut
   );
 });
 
+
+test("duplicate video failure notices are suppressed per normalized b23 ref", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  for (const [id, ref] of [["dup-a", "https://b23.tv/MV29F7r"], ["dup-b", "https://b23.tv/MV29F7r"]]) {
+    await qq(e, msg(id, "总结视频"));
+    await e.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)")
+      .bind("job-" + id, "media", JSON.stringify({message:id,urls:[ref],effort:"high",lane:"heavy"}), Date.now()).run();
+    const {job} = await (await req(e, "/api/runner/media/claim", {}, "runner-secret")).json();
+    await req(e, "/api/runner/media/report", {id:job.id,lease:job.payload.lease,success:false,result:"跑了 8 分钟没跑完"}, "runner-secret");
+  }
+  assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM outbox").first()).n, 1);
+});
+
 test("file failure is terminal once and never leaks local commands or paths to QQ", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
@@ -729,7 +743,7 @@ test("file failure is terminal once and never leaks local commands or paths to Q
   assert.ok(!/Command|Users|480/.test(out[0].body));
 });
 
-test("quoting old video results never starts another video task; markdown URLs stay separate", async () => {
+test("quoting old video results and new video links never start automatic media tasks", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   await qq(e, {
@@ -753,13 +767,7 @@ test("quoting old video results never starts another video task; markdown URLs s
       "看看这两个：[A](https://www.bilibili.com/video/AAA/?t=8)、[B](https://www.bilibili.com/video/BBB/?t=17)",
     ),
   );
-  const row = (
-    await e.DB.prepare("SELECT payload FROM jobs WHERE kind='media'").all()
-  ).results[0];
-  assert.deepEqual(JSON.parse(row.payload).urls, [
-    "https://www.bilibili.com/video/AAA/?t=8",
-    "https://www.bilibili.com/video/BBB/?t=17",
-  ]);
+  assert.equal((await e.DB.prepare("SELECT * FROM jobs WHERE kind='media'").all()).results.length, 0);
 });
 
 test("message bursts coalesce into one high response instead of delayed replies to every line", async () => {

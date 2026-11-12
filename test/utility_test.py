@@ -93,6 +93,11 @@ class UtilityTests(unittest.TestCase):
                     self.assertEqual(agent.call_count, 1)
                 else:
                     u.once()
+            work = h / "utility" / (
+                __import__("hashlib").sha256(job["id"].encode()).hexdigest()[:32]
+            )
+            if not report_failure:
+                assert not work.exists(), "utility work directory was not cleaned"
             return (
                 reports,
                 (
@@ -113,6 +118,8 @@ class UtilityTests(unittest.TestCase):
         reports, files, kills = self.scenario(times_out=True)
         self.assertEqual(kills, 1)
         self.assertFalse(reports[0]["success"])
+        self.assertIn("跑了 8 分钟没跑完", reports[0]["result"])
+        self.assertNotIn("这份资料暂时没处理完", reports[0]["result"])
         self.assertNotIn("private-command", reports[0]["result"])
         self.assertEqual(files, [])
 
