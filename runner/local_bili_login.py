@@ -1,5 +1,6 @@
 """Loopback-only Bilibili QR login. Secrets stay in memory or the 0600 cookie file."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -19,8 +20,60 @@ POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_ke
 NAMES = ("SESSDATA", "bili_jct", "DedeUserID", "buvid3")
 RISK_PATH = "state/bili-risk.json"
 
-class BiliPaused(Exception):
-    pass
+class BiliLoginError(Exception):
+    def __init__(self, reason, http=None, code=None, until=None):
+        self.reason, self.http, self.code, self.until = reason, http, code, until
+        super().__init__(reason)
+
+class BiliPaused(BiliLoginError):
+    def __init__(self, until=None, http=None, code=None, reason='paused'):
+        super().__init__(reason, http=http, code=code, until=until)
+
+def login_tls_context():
+    paths = ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt', ssl.get_default_verify_paths().cafile)
+    for path in paths:
+        if path and Path(path).is_file():
+            try:
+                return ssl.create_default_context(cafile=path)
+            except (OSError, ValueError):
+                continue
+    raise BiliLoginError('certificate')
+
+def login_error(error):
+    """Only fixed labels and numeric metadata may reach the local page."""
+    if isinstance(error, BiliLoginError):
+        reason = error.reason
+    else:
+        cause = error.reason if isinstance(error, urllib.error.URLError) else error
+        reason = 'certificate' if isinstance(cause, ssl.SSLError) else 'http' if isinstance(error, urllib.error.HTTPError) else 'timeout' if isinstance(cause, TimeoutError) else 'network' if isinstance(error, (OSError, urllib.error.URLError)) else 'response' if isinstance(error, (ValueError, TypeError)) else 'failed'
+    messages = {
+        'certificate':'B 站连接证书校验失败，请联系维护者检查本机 CA 证书',
+        'http':'B 站请求失败', 'business':'B 站请求未成功',
+        'risk_state':'本机风控状态文件损坏或不可读，已暂停请求，请联系维护者检查',
+        'paused':'B 站风控暂停，请稍后再试',
+        'timeout':'B 站连接超时，请稍后重试', 'network':'B 站网络连接失败，请检查网络',
+        'response':'B 站返回的二维码或登录数据格式不正确',
+        'storage':'B 站登录信息未能保存，请检查本机目录权限',
+        'failed':'B 站登录未完成，请重试',
+    }
+    result = {'reason':reason if reason in messages else 'failed', 'error':messages.get(reason, messages['failed'])}
+    http = error.code if isinstance(error, urllib.error.HTTPError) else getattr(error, 'http', None)
+    code = getattr(error, 'code', None) if isinstance(error, BiliLoginError) else None
+    if type(http) is int and 100 <= http <= 599:
+        result['http'] = http
+        result['error'] += '（HTTP ' + str(http) + '）'
+    if type(code) is int and -2147483648 <= code <= 2147483647:
+        result['code'] = code
+        result['error'] += '（业务码 ' + str(code) + '）'
+    until = error.until if isinstance(error, BiliLoginError) else None
+    if isinstance(until, (int, float)) and math.isfinite(until) and until > 0:
+        try:
+            stamp = time.strftime('%H:%M', time.localtime(until / 1000))
+            result['paused_until'] = until
+            result['error'] = 'B 站风控暂停至 ' + stamp + '，请稍后再试' + result['error'].split('请稍后再试', 1)[-1] if reason == 'paused' else result['error']
+        except (ValueError, OverflowError, OSError):
+            pass
+    return result
 
 class LocalBiliLogin:
     def __init__(self, runtime, config):
@@ -38,18 +91,21 @@ class LocalBiliLogin:
     def _check_pause(self):
         now = time.time() * 1000
         if self._bad_risk_until > now:
-            raise BiliPaused()
+            raise BiliPaused(reason='risk_state')
         try:
             data = json.loads(self._risk_path().read_text())
-            if float(data.get("paused_until", 0)) > now:
-                raise BiliPaused()
+            until = data.get('paused_until') if isinstance(data, dict) else None
+            if type(until) not in (int, float) or not math.isfinite(until) or until < 0:
+                raise ValueError('invalid risk state')
+            if until > now:
+                raise BiliPaused(until=until)
         except BiliPaused:
             raise
-        except OSError:
+        except FileNotFoundError:
             pass
-        except (ValueError, TypeError):
+        except (OSError, ValueError, TypeError, OverflowError):
             self._bad_risk_until = now + 60000
-            raise BiliPaused()
+            raise BiliPaused(reason='risk_state')
 
     def _pause(self):
         path = self._risk_path()
@@ -73,12 +129,12 @@ class LocalBiliLogin:
                 break
         if not held:
             self._bad_risk_until = time.time() * 1000 + 60000
-            return
+            return self._bad_risk_until
         try:
             old = 0
             try:
                 old = int(json.loads(path.read_text()).get("paused_until", 0))
-            except (OSError, ValueError, TypeError, AttributeError):
+            except (OSError, ValueError, TypeError, AttributeError, OverflowError):
                 old = 0
             value = max(old, int(time.time() * 1000) + 600000)
             temp = path.with_name(path.name + ".tmp-" + secrets.token_hex(6))
@@ -89,9 +145,10 @@ class LocalBiliLogin:
                     json.dump({"paused_until": value}, stream)
                 temp.replace(path)
             except OSError:
-                pass
+                self._bad_risk_until = value
             finally:
                 temp.unlink(missing_ok=True)
+            return value
         finally:
             if held:
                 try:
@@ -103,17 +160,19 @@ class LocalBiliLogin:
         self._check_pause()
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": REFERER, "Accept": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as response:
+            with urllib.request.urlopen(req, timeout=8, context=login_tls_context()) as response:
                 headers = response.headers
                 body = json.loads(response.read())
         except urllib.error.HTTPError as error:
             if error.code in (412, 429):
-                self._pause()
-                raise BiliPaused()
+                raise BiliPaused(until=self._pause(), http=error.code)
             raise
+        if not isinstance(body, dict) or type(body.get('code')) is not int:
+            raise BiliLoginError('response')
         if body.get("code") in (-352, -412):
-            self._pause()
-            raise BiliPaused()
+            raise BiliPaused(until=self._pause(), code=body['code'])
+        if body['code'] != 0:
+            raise BiliLoginError('business', code=body['code'])
         return headers, body
 
     @staticmethod
@@ -174,9 +233,9 @@ class LocalBiliLogin:
                 "Authorization": "Bearer " + config["runnerToken"],
                 "Content-Type": "application/json",
             })
-            with urllib.request.urlopen(req, timeout=5, context=ssl.create_default_context()) as response:
+            with urllib.request.urlopen(req, timeout=5, context=login_tls_context()) as response:
                 response.read()
-        except (OSError, KeyError, ValueError, urllib.error.URLError):
+        except (OSError, KeyError, ValueError, urllib.error.URLError, BiliLoginError):
             pass
 
     def start(self):
@@ -214,7 +273,10 @@ class LocalBiliLogin:
                     current = self._sessions.get("active")
                     if not current or current is not item or current["expires_at"] <= time.time() * 1000:
                         return {"phase": "expired"}
-                    self._save(self._cookies(headers, time.time() * 1000))
+                    try:
+                        self._save(self._cookies(headers, time.time() * 1000))
+                    except (OSError, ValueError, TypeError):
+                        raise BiliLoginError('storage')
                     self._sessions = {}
                     self._finished[login_id] = "ok"
                     while len(self._finished) > 16:
@@ -227,11 +289,11 @@ class LocalBiliLogin:
                     return {"phase": "waiting"}
                 if self._sessions.get("active") is item:
                     self._sessions = {}
-                return {"phase": "expired" if code == 86038 else "failed"}
-            except BiliPaused:
-                return {"phase": "paused"}
-            except (OSError, ValueError, TypeError, urllib.error.URLError):
-                return {"phase": "failed"}
+                return {"phase": "expired"} if code == 86038 else {"phase":"failed", **login_error(BiliLoginError('business', code=code))}
+            except BiliPaused as error:
+                return {"phase": "paused", **login_error(error)}
+            except (OSError, ValueError, TypeError, urllib.error.URLError, BiliLoginError) as error:
+                return {"phase": "failed", **login_error(error)}
 
     def cancel(self, login_id):
         with self._lock:

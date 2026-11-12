@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
+import {openNativeX,xAuthTokenPresent,xMetadata,X_ERRORS,publishX} from './native-x-browser.mjs';
 
 const COOKIE_NAMES=['SESSDATA','bili_jct','DedeUserID','buvid3'];
 const LABELS={bili:'B 站',x:'X'};
@@ -65,10 +66,11 @@ export async function browserOptions(chromium,options={}){
  }
  throw Error(BROWSER_MISSING);
 }
-export function browserLaunchOptions(browser,headless){return {...browser,headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000,chromiumSandbox:true,ignoreDefaultArgs:['--enable-automation'],args:['--disable-blink-features=AutomationControlled']};}
-async function launchBrowser(_service,options){
+export function browserLaunchOptions(browser,headless){return {...browser,headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000,chromiumSandbox:true};}
+async function launchBrowser(service,options){
  const require=createRequire(import.meta.url);
  const {chromium}=require(resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'));
+ if(service==='x')return openNativeX({...options,chromium});
  const browser=await browserOptions(chromium);
  return chromium.launchPersistentContext(options.profile,browserLaunchOptions(browser,options.headless));
 }
@@ -124,25 +126,34 @@ export function createBrowserAuth(options={}){
   try{await report({service,state,checked_at});}catch{options.log?.('登录状态暂未上报，将在下次检查时重试。');}
   return state;
  }
- async function open(service,headless,work){
+ async function open(service,headless,work,control={}){
   await privateDir(resolve(home,'browser'));const profile=resolve(home,'browser',service);await privateDir(profile);
   let context;
   try{
-   context=await launch(service,{profile,headless});
-   await context.route('**/*',route=>allowedBrowserUrl(service,route.request().url())?route.continue():route.abort());
+   context=await launch(service,{profile,headless,signal:control.signal,deadline:control.deadline});
+   if(!context.nativeX)await context.route('**/*',route=>allowedBrowserUrl(service,route.request().url())?route.continue():route.abort());
    // Login does not use WebSockets. Block this separate network channel as well.
-   if(context.routeWebSocket)await context.routeWebSocket('**/*',socket=>socket.close());
+   if(!context.nativeX&&context.routeWebSocket)await context.routeWebSocket('**/*',socket=>socket.close());
    const page=context.pages()[0]||await context.newPage();
    return await work(context,page);
-  }catch(error){throw Error(error.message===BROWSER_MISSING?BROWSER_MISSING:'登录窗口未能完成，请关闭同服务的登录窗口后重试。');}
+  }catch(error){
+   if(service==='x'&&!options.launch){
+    const reason=Object.keys(X_ERRORS).find(k=>X_ERRORS[k]===error.message)||'debug_unavailable';
+    await publishX(home,{phase:'failed',reason,error:X_ERRORS[reason],metadata:xMetadata('',null,null)});
+    throw Error(X_ERRORS[reason]);
+   }
+   throw Error(error.message===BROWSER_MISSING?BROWSER_MISSING:'登录窗口未能完成，请关闭同服务的登录窗口后重试。');
+  }
   finally{if(context)await context.close().catch(()=>{});}
  }
  async function login(service,control={}){
   if(!LOGIN[service])throw Error('请选择 bili 或 x。');
   return locked(service,async()=>{
   if(service==='bili'&&(await client()).isPaused())return 'risk';
-  const state=await open(service,false,async(context,page)=>{
-   const deadline=Math.min(now()+300000,control.deadline??Infinity);
+  if(control.signal?.aborted)return 'cancelled';
+  const deadline=Math.min(now()+300000,control.deadline??Infinity);
+  let state;
+  try{state=await open(service,false,async(context,page)=>{
    const close=()=>context.close().catch(()=>{});
    const timer=setTimeout(close,Math.max(0,deadline-now()));
    control.signal?.addEventListener('abort',close,{once:true});
@@ -150,7 +161,7 @@ export function createBrowserAuth(options={}){
     if(control.signal?.aborted)return 'cancelled';
     if(now()>=deadline)return 'timeout';
     await control.onOpened?.();
-    await page.goto(LOGIN[service],{waitUntil:'domcontentloaded',timeout:15000});
+    if(!context.nativeX)await page.goto(LOGIN[service],{waitUntil:'domcontentloaded',timeout:15000});
     while(now()<deadline){
      if(control.signal?.aborted)return 'cancelled';
      let state=null,exported;
@@ -159,16 +170,28 @@ export function createBrowserAuth(options={}){
       exported=Object.fromEntries(cookies.filter(c=>COOKIE_NAMES.includes(c.name)).map(c=>[c.name,c]));
       await rememberCookies(exported);
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
+     }else if(context.nativeX){
+      const present=await xAuthTokenPresent(context);
+      const xPage=context.pages().find(p=>{try{return ['x.com','twitter.com'].includes(new URL(p.url()).hostname);}catch{return false;}})||page;
+      const title=await xPage.title().catch(()=>'');
+      const http=await xPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null);
+      await context.publishX({phase:present?'ok':'waiting',reason:present?undefined:'not_logged_in',error:present?undefined:X_ERRORS.not_logged_in,expires_at:deadline,metadata:xMetadata(title,http,present)});
+      state=present?'ok':null;
      }else state=await xState(page);
      if(control.signal?.aborted)return 'cancelled';
      if(state==='risk'){if(service==='bili')(await client()).pauseForRisk();return 'risk';}
      if(state==='ok'&&now()<deadline){if(service==='bili')await writeBiliCookies(home,Object.values(exported));return 'ok';}
      await sleep(Math.min(2000,Math.max(0,deadline-now())));
     }
+    if(context.nativeX)await context.publishX({phase:'failed',reason:'not_logged_in',error:X_ERRORS.not_logged_in,metadata:xMetadata('',null,false)});
     return 'timeout';
    }catch(error){if(control.signal?.aborted)return 'cancelled';if(now()>=deadline)return 'timeout';throw error;}
    finally{clearTimeout(timer);control.signal?.removeEventListener('abort',close);}
-  });
+  },{...control,deadline});}catch(error){
+   if(control.signal?.aborted)return 'cancelled';
+   if(now()>=deadline)return 'timeout';
+   throw error;
+  }
   if(state==='ok'){await record(service,'ok');await notify(LABELS[service]+'已登录');}
   else if(state==='risk')await record(service,'risk');
   return state;
@@ -176,6 +199,9 @@ export function createBrowserAuth(options={}){
  }
  async function check(service){
   if(!LOGIN[service])throw Error('unknown service');
+  // The native X instance is interactive. Preserve the last observation instead
+  // of opening windows or inventing a fresh check while the user is absent.
+  if(service==='x'&&!options.launch)return (await readJSON(statePath('x'))).state||'missing';
   return locked(service,async()=>{
   let state;
   if(service==='bili'){

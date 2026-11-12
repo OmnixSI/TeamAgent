@@ -2,10 +2,10 @@
 """Loopback-only owner view. Team invitations use the separate authenticated cloud site."""
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-import os, json, re, urllib.request, urllib.error, ssl, shutil, subprocess
+import os, json, re, urllib.request, urllib.error, ssl, shutil, subprocess, time, math
 from urllib.parse import urlsplit, parse_qs
 from local_login_qr import read_local_qr, clear_local_qr
-from local_bili_login import BiliPaused, LocalBiliLogin
+from local_bili_login import BiliPaused, LocalBiliLogin, login_error
 from local_login_page import PAGE
 from owner_unlock import redeem_code, mint_code, OwnerSessions
 
@@ -88,15 +88,71 @@ class Handler(BaseHTTPRequestHandler):
         return self.local_json(200, {'opened': True})
 
     def open_x(self):
+        info = self.x_status()
+        if info.get('phase') in ('starting','waiting','debug_unavailable') and info.get('expires_at', 0) > time.time()*1000:
+            return self.local_json(200, {'opened': True})
         node = shutil.which('node') or '/opt/homebrew/bin/node'
         fetcher = self.runtime / 'fetcher.mjs'
         if not Path(node).exists() or not fetcher.exists():
             return self.local_json(503, {'error':'X 登录组件未安装'})
         try:
+            (self.runtime / 'state/x-login.json').unlink(missing_ok=True)
             subprocess.Popen([node, str(fetcher), 'login', 'x'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError:
             return self.local_json(503, {'error':'X 登录组件未安装'})
         return self.local_json(200, {'opened': True})
+
+    def x_status(self):
+        errors = {
+            'browser_missing':'未找到 Edge 或 Chrome，请先安装浏览器',
+            'debug_unavailable':'浏览器调试端口不可用，请在打开的窗口登录后点击“我已登录”重试；若仍失败，请检查浏览器调试策略',
+            'not_logged_in':'未检测到 X 登录态，请在浏览器中完成登录后重试',
+            'window_closed':'登录窗口已关闭，请重新打开',
+        }
+        try:
+            path = self.runtime / 'state/x-login.json'
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as stream:
+                info = os.fstat(stream.fileno())
+                if info.st_size > 4096 or info.st_mode & 0o077:
+                    raise ValueError('invalid status')
+                data = json.load(stream)
+            phase = data.get('phase')
+            if phase not in ('starting','waiting','debug_unavailable','ok','failed'):
+                raise ValueError('invalid phase')
+            result = {'phase':phase}
+            reason = data.get('reason')
+            if reason in errors:
+                result.update(reason=reason, error=errors[reason])
+            expiry = data.get('expires_at')
+            if type(expiry) in (int,float) and math.isfinite(expiry):
+                result['expires_at'] = expiry
+                if phase in ('starting','waiting','debug_unavailable') and expiry <= time.time()*1000:
+                    result.update(phase='failed',reason='not_logged_in',error=errors['not_logged_in'])
+            metadata = data.get('metadata', {})
+            title = metadata.get('title')
+            title = title if title in ('X','Twitter','登录 X','登录 / X','Log in to X','Something went wrong','X / X') else '其他页面（标题已隐藏）'
+            http = metadata.get('http')
+            present = metadata.get('auth_token_present')
+            result['metadata'] = {'title':title,'http':http if type(http) is int and 100 <= http <= 599 else None,'auth_token_present':present if type(present) is bool else None}
+            return result
+        except FileNotFoundError:
+            return {'phase':'missing'}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return {'phase':'failed','reason':'debug_unavailable','error':errors['debug_unavailable']}
+
+    def confirm_x(self):
+        if self.x_status().get('phase') not in ('waiting','debug_unavailable'):
+            return self.local_json(409, {'error':'未检测到登录窗口，请先打开 X 登录'})
+        path = self.runtime / 'state/x-login-confirm'
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write('retry')
+        except OSError:
+            return self.local_json(503, {'error':'本机登录目录不可写，请联系维护者检查'})
+        return self.local_json(200, {'checking':True})
 
     def unlock(self):
         message = {'error':'解锁码无效或已过期'}
@@ -126,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.local_page()
         if self.route_path == '/api/local/session' and self.command == 'POST':
             return self.unlock()
-        if self.route_path in ('/api/local/bili/start','/api/local/bili/status','/api/local/x/open','/api/local/open-login'):
+        if self.route_path in ('/api/local/bili/start','/api/local/bili/status','/api/local/x/open','/api/local/x/status','/api/local/x/confirm','/api/local/open-login'):
             if not self.local_action():
                 return
             if self.route_path == '/api/local/bili/start':
@@ -134,10 +190,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_error(405)
                 try:
                     return self.local_json(200, self.bili().start())
-                except BiliPaused:
-                    return self.local_json(503, {'error':'B 站暂时限制，请稍后再试'})
-                except Exception:
-                    return self.local_json(502, {'error':'B 站二维码获取失败，请稍后重试'})
+                except BiliPaused as error:
+                    return self.local_json(503, login_error(error))
+                except Exception as error:
+                    return self.local_json(502, login_error(error))
             if self.route_path == '/api/local/bili/status':
                 if self.command != 'GET':
                     return self.send_error(405)
@@ -145,6 +201,10 @@ class Handler(BaseHTTPRequestHandler):
                 if set(query) != {'id'} or len(query['id']) != 1:
                     return self.local_json(400, {'error':'无效登录'})
                 return self.local_json(200, self.bili().status(query['id'][0]))
+            if self.route_path == '/api/local/x/status':
+                return self.local_json(200, self.x_status()) if self.command == 'GET' else self.send_error(405)
+            if self.route_path == '/api/local/x/confirm':
+                return self.confirm_x() if self.command == 'POST' else self.send_error(405)
             if self.command != 'POST':
                 return self.send_error(405)
             return self.open_login() if self.route_path == '/api/local/open-login' else self.open_x()

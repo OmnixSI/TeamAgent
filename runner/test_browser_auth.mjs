@@ -125,11 +125,9 @@ test('L18 X request deadline closes the window and does not report successful lo
 });
 
 
-test('L5b launch options enable Chromium sandbox and remove automation defaults',()=>{
+test('L5b legacy Bili launch keeps the sandbox without stealth or warning-suppression flags',()=>{
  const options=browserLaunchOptions({channel:'msedge'},false);
  assert.equal(options.chromiumSandbox,true);
- assert.ok(options.ignoreDefaultArgs.includes('--enable-automation'));
- assert.ok(options.args.includes('--disable-blink-features=AutomationControlled'));
- assert.ok(!options.args.includes('--no-sandbox'));
+ assert.doesNotMatch(JSON.stringify(options),/enable-automation|disable-blink-features|no-sandbox|disable-infobars/);
  assert.equal(options.headless,false);
 });
