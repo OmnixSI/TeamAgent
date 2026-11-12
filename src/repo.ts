@@ -34,12 +34,13 @@ export function redactPatch(s: string, preserveLines = false): string {
     cursor = s.length;
   }
   return (safe.join("") + s.slice(cursor))
-    .replace(/\bBearer[\t ]+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/(\bAuthorization["']?[\t ]*:[\t ]*["']?Bearer[\t ]+)[A-Za-z0-9._~+/-]+=*/gi, "$1[REDACTED]")
     .replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]")
-    // Only complete standard base64 runs >=128 characters (96 decoded bytes).
+    // Only complete standard base64 runs >=128 characters (96 decoded bytes)
+    // with upper/lowercase letters and digits, avoiding plain identifiers.
     // Keep short examples and surrounding code intact; scan each run just once.
     .replace(/[A-Za-z0-9+/_-]+={0,2}/g, value => value.length >= 128 && value.length % 4 === 0 &&
-      /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? "[REDACTED]" : value);
+      /^[A-Za-z0-9+/]+={0,2}$/.test(value) && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) ? "[REDACTED]" : value);
 }
 export function cutBytes(s: string, n: number): string {
   const bytes = new TextEncoder().encode(s);
