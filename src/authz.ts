@@ -57,6 +57,14 @@ function ownClauses(text: string): string[] {
   return own.split(/[，,。！？!?；;\n]/).map(part => part.trim().replace(/^@\S+\s+/, ""));
 }
 
+// A face alone between 不是 and 是 is the corrected old value: keep a one-char,
+// non-space, non-punctuation gap there. Everywhere else faces vanish, so
+// contiguous phrases and negative guards see the member's prose unchanged.
+const FACE_GAP = /(不是)(?:\s*\[表情\])+\s*(?=是)/g;
+function neutralFaces(text: string): string {
+  return text.replace(FACE_GAP, "$1￼").replaceAll("[表情]", "").trim();
+}
+
 /** The only clean-turn work predicate, shared by file and project tools. */
 export function cleanWorkRequest(text: string): boolean {
   if (COMPLETED_WORK.test(text)) return false;
@@ -75,7 +83,7 @@ export function cleanWorkRequest(text: string): boolean {
 
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
-  text = text.replaceAll("[表情]", " ").trim();
+  text = neutralFaces(text);
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
   return ownClauses(text).some(clause => {

@@ -19,10 +19,10 @@ function face(text,format='encoded') {
 const source=body=>({id:'current',body,sender:'U1',ts:new Date().toISOString(),meta:{direct:true,media:[]}});
 
 test('correction with a face as its old value preserves explicit authorization',()=>{
-  for(const body of ['不是[表情]是周四','不是'+face('微笑')+'是周四']) {
-    const row=source(body),quote=view.displayText(body,[]);
-    assert.equal(az.explicitWriteRequest('remember_correction',row),true);
-    assert.deepEqual(az.authorize('remember_correction',quote,row,{batch:[row],latest:row},[]),{ok:true,tainted:false});
+  for(const body of ['不是[表情]是周四','不是'+face('微笑')+'是周四','不是[表情][表情]是周四','不是 '+face('微笑')+' 是周四'])for(const dirty of [false,true]) {
+    const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
+    assert.equal(az.explicitWriteRequest('remember_correction',row,new Map(),dirty),true);
+    assert.deepEqual(az.authorize('remember_correction',quote,row,context,[]),{ok:true,tainted:dirty});
   }
 });
 
@@ -63,10 +63,10 @@ test('face display quotations match only the neutral marker, never the decoded c
   }
 });
 
-for(const [tool,command] of Object.entries(commands))for(const position of ['start','middle','end']) {
-  test(`displayed face at ${position} preserves explicit ${tool} requests`,()=>{
+for(const [tool,command] of Object.entries(commands))for(const split of tool==='remember_correction'?[2,4]:[2,3])for(const position of ['start','middle','end']) {
+  test(`displayed face at ${position} split=${split} preserves explicit ${tool} requests`,()=>{
     for(const format of ['encoded','escaped','json'])for(const dirty of [false,true]) {
-      const marker=face('微笑',format),split=tool==='remember_correction'?4:2;
+      const marker=face('微笑',format);
       const body=position==='start'?marker+command:position==='end'?command+marker:command.slice(0,split)+marker+command.slice(split);
       const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
       assert.equal(view.quoteIn(row,quote),true,format);
@@ -76,6 +76,26 @@ for(const [tool,command] of Object.entries(commands))for(const position of ['sta
     }
   });
 }
+
+for(const [tool,body] of [
+  ['create_file_task','帮我写文件搞'+face('微笑')+'定'],
+  ['prepare_project_task','帮我建个任务已'+face('微笑')+'经'],
+  ['remember_correction','不是周三是'+face('微笑')+'的'],
+])for(const dirty of [false,true]) {
+  test(`faces cannot split negative guards for ${tool} dirty=${dirty}`,()=>{
+    const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
+    assert.equal(az.explicitWriteRequest(tool,row,new Map(),dirty),false);
+    assert.equal(az.authorize(tool,quote,row,context,[]).ok,false);
+  });
+}
+
+test('face labels cannot be spliced into prose',()=>{
+  for(const body of ['帮'+face('我写')+'文件','帮我'+face('建个')+'任务','不是'+face('A是B'),face('不是')+'A是B'])for(const tool of Object.keys(commands))for(const dirty of [false,true]) {
+    const row=source(body),quote=view.displayText(body,[]),context={batch:[row],latest:row,authz:{tainted:dirty}};
+    assert.equal(az.explicitWriteRequest(tool,row,new Map(),dirty),false);
+    assert.equal(az.authorize(tool,quote,row,context,[]).ok,false);
+  }
+});
 
 for(const format of ['encoded','escaped','json']) {
   test(`greater-than signs inside ${format} face names never become member evidence`,()=>{
