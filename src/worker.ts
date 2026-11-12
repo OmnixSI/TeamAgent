@@ -2,6 +2,7 @@ import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
+import { stage, flushTail } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -510,6 +511,7 @@ async function processJob(e: Env, id: string) {
   if (!claim) return;
   try {
     const p = JSON.parse(claim.payload);
+    (e as any).timingTurn = p.latestId || p.message || (claim.kind === "video_reply" ? p.wait?.slice(3) : undefined);
     if (claim.kind === "discussion") {
       for (const m of p.messages || [])
         await e.DB.prepare("UPDATE messages SET processed=0 WHERE id=?")
@@ -654,6 +656,7 @@ async function processJob(e: Env, id: string) {
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
+      const claimedAt = Date.now();
       const m = await e.DB.prepare(
         "SELECT rowid AS ordinal,* FROM messages WHERE id=?",
       )
@@ -673,6 +676,8 @@ async function processJob(e: Env, id: string) {
       const preloaded = await loadBatch(e, m.group_id, cursor);
       if (!preloaded.length) return;
       const latestPre = preloaded[preloaded.length - 1];
+      (e as any).timingTurn = latestPre.id;
+      stage(e, latestPre.id, "chat_claimed", undefined, claimedAt);
       const refRows = new Map<string, any>();
       const refId = latestPre.meta?.replyTo?.targetId;
       if (refId) {
@@ -1046,6 +1051,7 @@ async function sendOutbox(e: Env) {
           ? e.DB.prepare("INSERT INTO settings VALUES('quote_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value")
           : e.DB.prepare("UPDATE settings SET value='0' WHERE key='quote_fail' AND value!='0'")] : []),
       ]);
+      if (status === "sent") stage(e, o.msg_id, "sent");
       if (reference && status === "sent") {
         const failures = recovered ? Number(sent.at(-1)?.results?.[0]?.value || 0) : 0;
         switches!.quote_fail = String(failures);
@@ -1198,8 +1204,11 @@ async function scheduled(e: Env) {
     .bind(iso(), Date.now())
     .run();
   await retryStickerTags(e);
+  if (new Date().getUTCMinutes() === 0)
+    await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Finish mandatory maintenance before the sender spends its remaining budget.
   await sendOutbox(e);
+  await flushTail(e);
 }
 function requestBodyLimit(r: Request) {
   return r.method === 'POST' && new URL(r.url).pathname === '/api/team/stickers'
@@ -2332,12 +2341,15 @@ export default {
   async queue(batch: any, e: Env) {
     const base = e;
     e = metered(base);
-    for (const m of batch.messages) {
+    for (let i = 0; i < batch.messages.length; i++) {
+      const m = batch.messages[i];
       e = metered(base);
       await processJob(e, m.body.id);
+      if (i < batch.messages.length - 1) await flushTail(e);
       m.ack();
     }
     await sendOutbox(e);
+    await flushTail(e);
   },
   async scheduled(_c: any, e: Env, ctx: any) {
     e = metered(e);

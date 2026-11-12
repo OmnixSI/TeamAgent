@@ -1,4 +1,5 @@
 import { COST, left, ResourceLimitError } from "./d1";
+import { stage } from "./timing";
 import { parseDecision } from "./rhythm";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
@@ -242,9 +243,19 @@ export async function proactiveReply(e: any, p: any, s: Services) {
     answer,
   );
 }
-async function readLimited(response: Response, max: number) {
+function abortable<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  if (signal.aborted) { void pending.catch(() => {}); return Promise.reject(signal.reason); }
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener("abort", abort); reject(signal.reason); };
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(value => { signal.removeEventListener("abort", abort); resolve(value); },
+      error => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+async function readLimited(response: Response, max: number, signal?: AbortSignal) {
   if (!response.body) {
-    const text = await response.text();
+    const text = await abortable(response.text(), signal);
     return text.length > max ? null : text;
   }
   const reader = response.body.getReader();
@@ -252,18 +263,19 @@ async function readLimited(response: Response, max: number) {
   let total = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await abortable(reader.read(), signal);
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
       if (total > max) {
-        await reader.cancel().catch(() => {});
+        void reader.cancel().catch(() => {});
         return null;
       }
       chunks.push(value);
     }
   } catch {
-    await reader.cancel().catch(() => {});
+    void reader.cancel().catch(() => {});
+    if (signal?.aborted) throw signal.reason;
     return null;
   }
   const merged = new Uint8Array(total);
@@ -281,6 +293,7 @@ export async function tool(
   timeout = 45000,
   maxBytes = 1_000_000,
 ) {
+  const signal = AbortSignal.timeout(timeout);
   const r = await fetch("https://api.deepseek.com/v1/tools/" + name, {
     method: "POST",
     headers: {
@@ -288,10 +301,10 @@ export async function tool(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeout),
+    signal,
   });
   if (!r.ok) throw Error(name + " HTTP " + r.status);
-  const raw = await readLimited(r, maxBytes);
+  const raw = await readLimited(r, maxBytes, signal);
   if (raw === null) throw Error(name + " response too large");
   return JSON.parse(raw);
 }
@@ -333,24 +346,13 @@ export function publicUrl(value: string) {
     return false;
   }
 }
-export function isTweet(value: string) {
+export function isTweet(value: string): { id: string } | null {
   try {
     const u = new URL(value);
-    if (!["https:", "http:"].includes(u.protocol)) return false;
-    if (
-      ![
-        "x.com",
-        "www.x.com",
-        "twitter.com",
-        "www.twitter.com",
-        "mobile.twitter.com",
-      ].includes(u.hostname.toLowerCase().replace(/\.$/, ""))
-    )
-      return false;
-    return /^\/[^/]+\/status\/\d+\/?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
+    if (!['https:', 'http:'].includes(u.protocol) || !['x.com', 'www.x.com', 'mobile.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(u.hostname.toLowerCase().replace(/\.$/, ''))) return null;
+    const match = u.pathname.match(/^\/(?:[^/]+|i\/web)\/status\/(\d+)(?:\/(?:photo|video)\/\d+)?\/?$/);
+    return match ? { id: match[1] } : null;
+  } catch { return null; }
 }
 function decodeEntities(value: string) {
   const named: Record<string, string> = {
@@ -385,72 +387,104 @@ function tweetText(html: string) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-export async function readUrl(
-  e: any,
-  url: string,
-): Promise<{
-  source: "jina" | "deepseek" | "oembed";
-  text: string;
-} | null> {
-  if (!publicUrl(url)) return null;
-  if (isTweet(url)) {
+export type ReadReason = 'risk' | 'offline' | 'timeout' | 'not_found' | 'login_required' | 'ambiguous' | 'runner_outdated' | 'invalid';
+export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
+export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research' };
+/** All sources, including response bodies, spend the same absolute budget. */
+export function slot(deadline: number, cap: number, reserve = 0): AbortSignal | null {
+  const milliseconds = Math.floor(Math.min(cap, deadline - Date.now() - reserve));
+  return milliseconds < 300 ? null : AbortSignal.timeout(milliseconds);
+}
+const httpReason = (status: number): ReadReason => status === 404 ? 'not_found' : status === 401 || status === 403 ? 'login_required' : status === 429 || status === 412 ? 'risk' : 'invalid';
+export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok: true; text: string } | { ok: false; reason: ReadReason | 'short' } {
+  const marker = 'Markdown Content:', boundary = source === 'jina' ? raw.indexOf(marker) : -1;
+  const header = source === 'jina' ? raw.slice(0, boundary < 0 ? 300 : boundary) : '';
+  const warning = header.match(/^\s*Warning:\s*Target URL returned error (\d{3})\b/im);
+  if (warning) return {ok:false,reason:httpReason(Number(warning[1]))};
+  const challenge = /just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i;
+  const login = /sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i;
+  const title = header.match(/^Title:\s*([^\r\n]*)/im)?.[1] || '';
+  if (challenge.test(title)) return {ok:false,reason:'risk'};
+  if (login.test(title)) return {ok:false,reason:'login_required'};
+  const body = boundary < 0 ? raw : raw.slice(boundary + marker.length);
+  const text = body.replace(/^(?:\s*\[[^\]\n]*\]\([^\n)]*\)\s*[|·]?)+\s*$/gm, '').trim();
+  if (text.length < 1500) {
+    if (challenge.test(text)) return {ok:false,reason:'risk'};
+    if (login.test(text)) return {ok:false,reason:'login_required'};
+  }
+  return text.length < 500 ? {ok:false,reason:'short'} : {ok:true,text};
+}
+// Same token computation as the primary react-tweet syndication implementation.
+export const syndicationToken = (id: string) => ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '');
+export async function readTweet(url: string, deadline: number): Promise<ReadResult> {
+  const tweet = isTweet(url);
+  if (!tweet || !publicUrl(url)) return {ok:false,reason:'invalid'};
+  let reason: ReadReason = 'not_found';
+  const sources = [
+    {source:'fx' as const,url:'https://api.fxtwitter.com/2/status/'+tweet.id,cap:1200,reserve:1300},
+    {source:'syndication' as const,url:'https://cdn.syndication.twimg.com/tweet-result?id='+tweet.id+'&lang=en&token='+syndicationToken(tweet.id),cap:900,reserve:400},
+    {source:'oembed' as const,url:'https://publish.x.com/oembed?omit_script=1&dnt=1&url='+encodeURIComponent(url),cap:Infinity,reserve:0},
+  ];
+  for (const source of sources) {
+    const signal = slot(deadline,source.cap,source.reserve);
+    if (!signal) {reason='timeout';continue;}
     try {
-      const r = await fetch(
-        "https://publish.x.com/oembed?omit_script=1&dnt=1&url=" +
-          encodeURIComponent(url),
-        {
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-      if (!r.ok) {
-        if (r.body) await r.body.cancel().catch(() => {});
-        return null;
-      }
-      const raw = await readLimited(r, 64 * 1024);
-      if (!raw) return null;
+      const r = await abortable(fetch(source.url,{headers:{Accept:'application/json'},signal}),signal);
+      if (!r.ok) {void r.body?.cancel().catch(()=>{});reason=httpReason(r.status);continue;}
+      const raw = await readLimited(r,source.source==='oembed'?64*1024:512*1024,signal);
+      if (!raw) {reason='invalid';continue;}
       const data = JSON.parse(raw);
-      const body = tweetText(data.html);
-      if (!body) return null;
-      const author = tweetText(data.author_name);
-      return {
-        source: "oembed",
-        text: author ? author + "\n" + body : body,
-      };
-    } catch {
-      return null;
-    }
+      let text: string, author: string, createdAt: string | undefined;
+      if (source.source==='oembed') {text=tweetText(data.html);author=tweetText(data.author_name);}
+      else {
+        const value = source.source==='fx' ? data.status ?? data.tweet : data;
+        if (value?.type==='tombstone') {reason=['private','blocked'].includes(value.reason)?'login_required':'not_found';continue;}
+        if (!value || String(value.id ?? value.id_str) !== tweet.id || typeof value.text !== 'string') {reason='invalid';continue;}
+        text=value.text;author=String(value.author?.name ?? value.user?.name ?? '');
+        const at=typeof value.created_timestamp==='number'?value.created_timestamp*1000:Date.parse(value.created_at);
+        if (Number.isFinite(at)) createdAt=new Date(at).toISOString();
+      }
+      if (!text.trim()) {reason='not_found';continue;}
+      return {ok:true,source:source.source,id:tweet.id,text:author?author+'\n'+text:text,...(createdAt?{createdAt}:{})};
+    } catch {reason=signal.aborted?'timeout':'invalid';}
   }
-  const deadline = Date.now() + 15000;
-  const remaining = () => Math.max(1000, deadline - Date.now());
+  return {ok:false,reason};
+}
+export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'research'}): Promise<ReadResult> {
+  if (!publicUrl(url)) return {ok:false,reason:'invalid'};
+  const deadline=opt.deadline ?? Date.now()+({research:15000,inline:3000,prefetch:4000}[opt.purpose]);
+  if (isTweet(url)) return readTweet(url,deadline);
+  let reason: ReadReason='not_found';
+  const parsed=new URL(url),repo=parsed.hostname==='github.com'?parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/?$/):null;
+  if (repo) {
+    const signal=slot(deadline,1200,1000);
+    if (signal) try {
+      const response=await abortable(fetch('https://raw.githubusercontent.com/'+repo[1]+'/'+repo[2].replace(/\.git$/,'')+'/HEAD/README.md',{signal}),signal);
+      if (response.ok) {const text=await readLimited(response,512*1024,signal);if(text?.trim())return {ok:true,source:'github',text:text.trim()};}
+      else {void response.body?.cancel().catch(()=>{});reason=httpReason(response.status);}
+    } catch {reason=signal.aborted?'timeout':'invalid';}
+    else reason='timeout';
+  }
   if (TEAM.web?.jina !== false) {
-    try {
-      const r = await fetch("https://r.jina.ai/" + url, {
-        headers: {
-          Accept: "text/plain",
-          "X-Return-Format": "text",
-        },
-        signal: AbortSignal.timeout(Math.min(8000, remaining())),
-      });
-      if (r.ok) {
-        const text = await readLimited(r, 512 * 1024);
-        if (text && text.trim().length >= 200)
-          return { source: "jina", text: text.trim() };
-      } else if (r.body) await r.body.cancel().catch(() => {});
-    } catch {}
+    const signal=slot(deadline,opt.purpose==='research'?8000:Infinity,opt.purpose==='research'?4000:0);
+    if (signal) try {
+      const r=await abortable(fetch('https://r.jina.ai/'+url,{headers:{Accept:'text/plain','X-Return-Format':'text'},signal}),signal);
+      const raw=await readLimited(r,512*1024,signal),checked=raw===null?{ok:false as const,reason:'invalid' as const}:jinaOk(raw);
+      if (r.ok && checked.ok) return {ok:true,source:'jina',text:checked.text};
+      if (!checked.ok && 'reason' in checked && checked.reason!=='short') reason=checked.reason;
+      else reason=r.ok?'not_found':httpReason(r.status);
+    } catch {reason=signal.aborted?'timeout':'invalid';}
+    else reason='timeout';
   }
-  try {
-    const d = await tool(
-      e,
-      "fetch",
-      { url },
-      Math.min(8000, remaining()),
-      512 * 1024,
-    );
-    const text = String(d?.content || "").trim();
-    if (text) return { source: "deepseek", text };
-  } catch {}
-  return null;
+  if (opt.purpose==='research' && deadline-Date.now()>=300) {
+    try {
+      const data=await tool(e,'fetch',{url},Math.floor(deadline-Date.now()),512*1024),text=String(data?.content||'').trim();
+      const checked=jinaOk(text,'deepseek');
+      if (text && (checked.ok || 'reason' in checked && checked.reason==='short')) return {ok:true,source:'deepseek',text};
+      if ('reason' in checked) reason=checked.reason==='short'?'not_found':checked.reason;
+    } catch {if(Date.now()>=deadline-10)reason='timeout';}
+  }
+  return {ok:false,reason};
 }
 export function untrustedResults(results: any) {
   return (Array.isArray(results) ? results : []).map((r: any) => {
@@ -469,23 +503,16 @@ export async function understandLinks(e: any, p: any, s: Services) {
     .bind(p.message)
     .first();
   if (!m) return;
-  const pages = [];
-  for (const url of (p.urls || []).filter(publicUrl).slice(0, 3)) {
-    try {
-      const d = await readUrl(e, url);
-      if (!d) {
-        pages.push({ url, unavailable: true });
-        continue;
-      }
-      pages.push({
-        url,
-        source: d.source,
-        content: untrusted(url, d.text),
-      });
-    } catch {
-      pages.push({ url, unavailable: true });
-    }
-  }
+  const urls: string[] = (p.urls || []).filter(publicUrl).slice(0, 3);
+  const deadline = Date.now() + 20000;
+  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline })));
+  const pages = reads.map((read, index) => {
+    const url = urls[index];
+    const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
+    return d.ok === false
+      ? { url, unavailable: true, reason: d.reason, content: untrusted(url, JSON.stringify({ ok: false, reason: d.reason })) }
+      : { url, source: d.source, content: untrusted(url, d.text) };
+  });
   const text = await s.llm(
     "chat",
     "群友分享了资料。用中文提炼核心内容、与项目可能的关系、一个值得讨论的问题，附原链接。不假装看到了网页未包含的视频画面或听到了音轨；需要视频解析时注明字幕/画面还在处理。" +
@@ -609,6 +636,7 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 }
 
 export async function agentAnswer(e: any, context: any) {
+  e.timingTurn = context.latest?.id || e.timingTurn;
   const facts = (
     await e.DB.prepare(
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
@@ -885,6 +913,7 @@ export async function agentAnswer(e: any, context: any) {
         "资料检索已转到后台，聊天继续",
         id,
       );
+      stage(e, context.latest.id, "research_queued");
       if (!context.mentioned)
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       return speakBrief(
@@ -1153,14 +1182,15 @@ export async function agentAnswer(e: any, context: any) {
             );
             break;
           case "read_web": {
-            const d = await readUrl(e, a.url);
-            result = d
+            const d = await readUrl(e, a.url, { purpose: "research" });
+            result = d.ok
               ? {
                   source: d.source,
                   untrusted: true,
                   text: untrusted(a.url, d.text),
                 }
-              : { unavailable: true };
+              : { unavailable: true, reason: (d as { ok: false; reason: ReadReason }).reason, untrusted: true,
+                  text: untrusted(a.url, JSON.stringify(d)) };
             break;
           }
           case "get_project":
@@ -1198,7 +1228,9 @@ export async function agentAnswer(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: JSON.stringify(result).slice(0, 40000),
+        content: call.function.name === "read_web"
+          ? untrusted("read_web", JSON.stringify(result), undefined, 40000)
+          : JSON.stringify(result).slice(0, 40000),
       });
     }
   }

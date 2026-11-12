@@ -28,7 +28,7 @@ async function mocked(steps,run) {
     const body=JSON.parse(options.body);seen.push(body);
     const voice=body.messages[0].content.includes('最后的嘴替模块');
     if(voice)return Response.json({choices:[{message:{content:'{"mode":"work","text":"收到，按实际授权处理。"}'}}]});
-    for(const m of body.messages)if(m.role==='tool')tools.push(JSON.parse(m.content));
+    for(const m of body.messages)if(m.role==='tool')tools.push(JSON.parse(m.content.startsWith('【外部资料')?m.content.split('\n').slice(1,-1).join('\n'):m.content));
     const step=steps[index++];
     const message=step?{role:'assistant',tool_calls:Array.isArray(step)?step:[step]}:{content:'{"should_reply":true,"kind":"direct","brief":"按真实结果回复"}'};
     return Response.json({choices:[{message}]});

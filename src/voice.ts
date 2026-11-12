@@ -1,4 +1,5 @@
 import { TEAM } from "./config";
+import { stage } from "./timing";
 import { COST, left } from "./d1";
 import { loadSwitches } from "./rhythm";
 import { budget } from "./budget";
@@ -81,6 +82,7 @@ export async function enqueueVoice(
         Date.now() + i,
       )
       .run();
+  if (parts.length) stage(e, message, "outbox");
   if (parts.length && opts?.reference)
     await e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({ reference: opts.reference })).run();
   if (parts.length && v.mode !== "work" && v.sticker && TEAM.stickers.send === true && left(e) >= COST.sticker + COST.tail) {
