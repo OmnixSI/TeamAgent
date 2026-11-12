@@ -3,6 +3,7 @@ import { left } from "./d1";
 import { stage, flushTail } from "./timing";
 import { TEAM } from "./config";
 import { extractBili } from "./inbound";
+import { SHORT_CODE } from './bili-links';
 import { metaOf } from "./view";
 import { loadChatContext } from "./context";
 import { agentAnswer } from "./semantic";
@@ -24,9 +25,9 @@ export type BiliResult = {
   comments: { uname: string; message: string }[]; tier: "light"; fetched_at: string;
 };
 const BV = /^BV[0-9A-Za-z]{10}$/;
-const validRef = (s: string) => BV.test(s) || /^[0-9A-Za-z]{4,12}$/.test(s);
+const validRef = (s: string) => BV.test(s) || SHORT_CODE.test(s);
 function refIn(bili: any[]): string | null {
-  return bili?.find(b => BV.test(b.bvid || ""))?.bvid || bili?.find(b => /^[0-9A-Za-z]{4,12}$/.test(b.short || ""))?.short || null;
+  return bili?.find(b => BV.test(b.bvid || ""))?.bvid || bili?.find(b => SHORT_CODE.test(b.short || ""))?.short || null;
 }
 type VideoTarget = {ref:string;title?:string};
 function targetOf(meta: any): VideoTarget | null {
@@ -126,7 +127,7 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
 }
 export function biliNoteText(r: BiliResult): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
-  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
+  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`BV号：${r.bvid}`,`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
     `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
     hasSubtitle
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
@@ -134,10 +135,65 @@ export function biliNoteText(r: BiliResult): string {
         ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
         : r.subtitle_status === "unavailable"
           ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
-          : "无 CC 字幕；未查看画面或听取音轨。"].join("\n").slice(0, 6000);
+          : "无 CC 字幕；本条没有字幕；画面和音轨目前读不了。"].join("\n").slice(0, 6000);
 }
-export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
-  return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
+const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS) {
+  const bodyMax = Math.max(0, max - untrusted('bilibili', '', r.fetched_at).length);
+  return 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
+    : untrusted('bilibili',biliNoteText(r),r.fetched_at,bodyMax);
+}
+/** Cached Bili notes already fetched for this turn; never invent missing content. */
+export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
+  const batch = (context.batch || []).filter(Boolean), latest = context.latest, recent = context.recent || [];
+  const refs: string[] = [];
+  const add = (value: any) => {
+    if (typeof value !== 'string' || refs.length >= RESEARCH_REFS) return;
+    if ((BV.test(value) || SHORT_CODE.test(value)) && !refs.includes(value)) refs.push(value);
+  };
+  // Only this turn's target and messages; old links in unrelated history are not material.
+  const target = latest ? videoTarget(batch, latest, recent, TEAM) : null;
+  if (target) add(target.ref);
+  for (const row of [latest, ...batch].filter(Boolean)) {
+    const meta = row.meta || {};
+    for (const b of meta.bili || []) { add(b?.bvid); add(b?.short); }
+    for (const url of [...(meta.biliUrls || []), ...(meta.quotedBiliUrls || []), ...(meta.quotedUrls || [])]) {
+      for (const b of extractBili([url], '')) { add(b.bvid); add(b.short); }
+    }
+    const quoted = targetOf(meta.quoted || {}); if (quoted) add(quoted.ref);
+  }
+  if (!refs.length) return [];
+  const materials: string[] = [];
+  let total = 0, reads = 0;
+  const budget = Math.min(RESEARCH_READS, Number.isFinite(left(e)) ? Math.max(0, left(e) - 2) : RESEARCH_READS);
+  for (const ref of refs.slice(0, RESEARCH_REFS)) {
+    if (reads + 1 > budget) break;
+    const cached = await biliCached(e, ref); reads++;
+    let material: string;
+    if (cached) material = videoMaterial(cached, ref, Math.min(MATERIAL_CHARS, MATERIALS_CHARS - total));
+    else {
+      if (reads + 1 > budget) break;
+      const outcome = await fetchOutcome(e, ref); reads++;
+      if (!outcome || outcome === 'timeout') continue;
+      material = biliFailMaterial(outcome, {title:isTitleRef(ref), titleFallback:TITLE_FALLBACK});
+    }
+    if (materials.includes(material) || total + material.length > MATERIALS_CHARS) continue;
+    materials.push(material); total += material.length;
+  }
+  return materials;
+}
+/** True when a resume message list already carries this material; a handoff must not append it twice. */
+export function materialInjected(messages: any[], material: string): boolean {
+  const visit = (value: any): boolean => {
+    if (typeof value === 'string') {
+      if (value.includes(material)) return true;
+      if (/^\s*[[{]/.test(value)) { try { return visit(JSON.parse(value)); } catch {} }
+      return false;
+    }
+    if (Array.isArray(value)) return value.some(visit);
+    return !!value && typeof value === 'object' && Object.values(value).some(visit);
+  };
+  return (messages || []).some(m => visit(m?.content));
 }
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   e.timingTurn = waitId.slice(3);

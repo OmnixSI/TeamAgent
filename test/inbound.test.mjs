@@ -49,6 +49,15 @@ test('I-B2 recursive JSON/escaped/bare BV and b23 links reach the correct own or
   assert.deepEqual(previewArray.bili,[]);
   assert.deepEqual(ib.parseInbound('GROUP_MESSAGE_CREATE',{content:'https://evil.test/'+bv}).bili,[]);
 });
+
+test('I-B2b official short aliases and hyphen/underscore codes enter the video path',()=>{
+  for(const url of ['https://bili2233.cn/Ab-Cd_12','https://b23.tv/Ab-Cd_12']){
+    const parsed=ib.parseInbound('GROUP_MESSAGE_CREATE',{content:'总结 '+url});
+    assert.equal(parsed.bili[0]?.short,'Ab-Cd_12',url);
+    assert.ok(parsed.biliUrls.includes(url),url);
+  }
+});
+
 test('I-B3 card-only note survives storage and model view, linked cards skip title lookup',async()=>{
   const e=await setup();await qq(e,{...msg('miniapp',''),...inferredCard.event});
   const m=await meta(e,'miniapp');assert.equal(m.biliCard.title,inferredCard.event.ark_data.fields.title);

@@ -1,3 +1,5 @@
+export const SHORT_HOSTS = new Set(['b23.tv','bili2233.cn']);
+export const SHORT_CODE = /^[0-9A-Za-z_-]{4,32}$/;
 /** Walk unknown QQ card wrappers without promoting quoted media to the sender. */
 export function scanBiliPayload(raw: unknown) {
   const biliUrls = new Set<string>(), quotedBiliUrls = new Set<string>();
@@ -12,11 +14,11 @@ export function scanBiliPayload(raw: unknown) {
       for (let i = 0; i < 4 && text.includes('\\/'); i++) text = text.replace(/\\\//g, '/');
       const urls = quoted ? quotedBiliUrls : biliUrls;
       const accept = (url: string) => {
-        try { const u = new URL(url); if (!u.username && !u.password && ['http:','https:'].includes(u.protocol) && (u.hostname === 'b23.tv' || u.hostname === 'bilibili.com' || u.hostname.endsWith('.bilibili.com'))) urls.add(u.href); } catch {}
+        try { const u = new URL(url); if (!u.username && !u.password && ['http:','https:'].includes(u.protocol) && (SHORT_HOSTS.has(u.hostname) || u.hostname === 'bilibili.com' || u.hostname.endsWith('.bilibili.com'))) urls.add(u.href); } catch {}
       };
       const rest = text.replace(/(?:https?:\/\/|\/\/)[^\s"'<>\\\[\]()（）、，。；]+/gi, match => {
         accept((match.startsWith('//') ? 'https:' : '') + match.replace(/[.,;!?]+$/, '')); return ' ';
-      }).replace(/(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9-]+\.)*(?:b23\.tv|bilibili\.com)\/[^\s"'<>\\\[\]()（）、，。；]+/gi, match => {
+      }).replace(/(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9-]+\.)*(?:b23\.tv|bili2233\.cn|bilibili\.com)\/[^\s"'<>\\\[\]()（）、，。；]+/gi, match => {
         accept('https://' + match.replace(/[.,;!?]+$/, '')); return ' ';
       });
       for (const match of rest.matchAll(/(?<![A-Za-z0-9])BV[0-9A-Za-z]{10}(?![A-Za-z0-9])/g))

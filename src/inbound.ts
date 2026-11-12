@@ -1,6 +1,6 @@
 import { redact } from "./runtime";
 import {extractUrls} from './policy';
-import {scanBiliPayload} from './bili-links';
+import {scanBiliPayload,SHORT_HOSTS} from './bili-links';
 import {BILI_CARD_NOTE,cleanCardTitle,isBiliCard,titleRef} from './bilititle';
 
 export type Mention = { id: string; name: string; isBot: boolean };
@@ -45,7 +45,7 @@ export function extractBili(urls: string[], _text: string): Bili[] {
   return urls.flatMap<Bili>(url => {
     let u: URL;
     try { u = new URL(url); } catch { return []; }
-    if (u.hostname === "b23.tv") {
+    if (SHORT_HOSTS.has(u.hostname)) {
       const short = u.pathname.split("/").filter(Boolean)[0];
       return short ? [{ url, short }] : [];
     }
