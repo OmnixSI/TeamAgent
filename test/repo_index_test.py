@@ -17,6 +17,12 @@ REPO = 'OmnixSI/TeamAgent'
 
 
 class RepoIndexTests(unittest.TestCase):
+    def test_cloud_T11_shared_deny_cases_match_runner(self):
+        cases = json.loads((Path(__file__).parent / 'fixtures/deny_cases.json').read_text())
+        for path, expected in cases:
+            with self.subTest(path=path):
+                self.assertEqual(index.denied(path), expected)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
