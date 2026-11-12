@@ -46,3 +46,31 @@
 - fastlinks 合并后的三态派发、入口 allowedNames、origin 防递归、嘴替无工具与引用回复、真实 QQ 取消/超时/离线验收。
 
 范围解释：沙箱明确规则允许临时 HOME 写入；S-4 的禁止写 HOME 按真实 HOME 验证，未将这条解释为禁止 DSH 在临时 HOME 保存状态。
+
+## 2026-11-13 复核返工：步骤 0 阻断，停止提交
+
+针对 `TeamAgent-c3-runner-review-20261113.md` 的 2 项 P1、3 项 P2，新增 5 项测试先红（15 个子断言失败、2 个错误）后绿；本机 `subagent_test.py` 为 45/45，无跳过。原有 40 项全部通过，包含复核容器中受嵌套 sandbox/ps EPERM 影响的那 6 项。
+
+已写入但**尚未提交**的修复：
+
+- 拒绝整个真实 HOME 下的 `.openmausbot`，仅放行 `tools/npm`；补 `.dsh/.credentials.yaml`、`qq-session.json`、实际浏览器/秘密目录与精确凭据文件名。
+- 删除递归匹配 `cookie|bili|x-` 的正则，合成 `prefix-sum.ts`、`box-shadow.css`、`bilingual.md` 均可读，敏感名称仍不可读。
+- read 输入先 `expanduser()` 再校验实际路径在 worktree 内，HOME 文件不再充当读到代码的证据。
+- 共享 reader patch 使用每次独立的 0600 临时文件，fsync 后 `os.replace` 原子发布；并发调用不再截断共享文件。
+- subagent 与 reload 脚本都忽略 glob 之后已被删除的 marker。
+
+**真实启动探针失败，按返工简报 P1-1 停止，未放宽规则。** 本次使用真实 HOME 生成 deny/allow 路径，仅把子进程 HOME/DSH_HOME/TMPDIR 放到临时目录；未读取生产凭据、未调用模型或真实服务。真实安装的 DSH 分别执行 `--dump-config` 和 headless `--help`，均 exit 1：
+
+```text
+Error: EPERM: operation not permitted, lstat '/Users/yanghongming/.openmausbot'
+at Object.realpathSync (node:fs:2760:29)
+at toRealPath (node:internal/modules/helpers:65:13)
+```
+
+祖先目录的 metadata 检查仍受整个目录的 `file-read*` deny 约束，放行后代 `tools/npm` 不足以让 Node 的入口路径解析通过。此处没有自行放行祖先 metadata、删 deny 或扩大安装目录例外。
+
+上轮成功的配置加载探针使用合成 HOME 生成沙箱；真实安装路径当时不在该合成 HOME 的 deny 内，不能替代本次“真实安装 + 真实 HOME 规则”的交叉检查。上文历史结果保留为原探针记录。
+
+证据：`.agent/c3-review-red.log`、`.agent/c3-review-green.log`、`.agent/c3-review-step0.json`（均不提交）。步骤 0 原始输出目录由 JSON 的 `root` 字段记录。`READER_VERIFIED=False` 保持不变。触发停止条件时 HEAD 是 `4579d7ae5e8a5400e6219cd6341d3570fcd02b79`，当时未启动全量验收或提交。
+
+BINI 后续要求先交边界简述，并完成独立修复的验证和新增提交；这不表示 P1-1 的真实启动问题已关闭。边界简述：`/Users/yanghongming/Projects/TeamAgent-c3-sandbox-boundary-20261113.md`。不放宽当前 deny，不推送或部署，等待架构师修订规则后再收尾。

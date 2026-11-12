@@ -1,5 +1,6 @@
 """C3 local contracts. All repositories, credentials and processes are synthetic."""
 import json
+import concurrent.futures
 import os
 from pathlib import Path
 import signal
@@ -7,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -67,6 +69,16 @@ class LocalTests(unittest.TestCase):
             with self.subTest(events=events):
                 self.assertEqual(s.read_evidence(events, self.sub), [])
 
+    def test_review_tilde_reads_must_not_be_worktree_evidence(self):
+        with patch.dict(os.environ,{'HOME':str(self.home)}):
+            (self.home/'x.txt').write_text('outside')
+            for path in ['~/x.txt','~/.inkboard-team/config.json']:
+                with self.subTest(path=path):
+                    self.assertEqual(s.read_evidence(read_events(path),self.sub),[])
+                    result=s.classify_events({},self.sub,'a'*40,read_events(path)+[
+                        {'type':'final','reason':{'kind':'completed'},'text':'不可转发的结论'}],0)
+                    self.assertEqual((result['error_kind'],result['answer']),('not_found',''))
+
     def test_S19_empty_search_completed_is_failed_with_tried(self):
         events = [{"type":"tool_call","tool":"glob","callId":"g","input":{}},
                   {"type":"tool_result","callId":"g","status":"completed","result":"No files found"},
@@ -87,6 +99,25 @@ class LocalTests(unittest.TestCase):
         expected = Path(__file__).parent / 'fixtures/dsh-reader.yml'
         self.assertEqual(p.read_text(), expected.read_text())
         self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600)
+
+    def test_review_concurrent_profiles_publish_complete_private_files(self):
+        shared=s.reader_profile()
+        original=s.write_private
+        barrier=threading.Barrier(2)
+        targets=[]
+        def write(path,text):
+            targets.append(path)
+            self.assertEqual(shared.read_text(),s.READER_PROFILE)
+            barrier.wait(timeout=3)
+            return original(path,text)
+        with patch.object(s,'write_private',side_effect=write),concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results=[pool.submit(s.reader_profile) for _ in range(2)]
+            self.assertEqual([f.result(timeout=5) for f in results],[shared,shared])
+        self.assertEqual(len(set(targets)),2)
+        self.assertNotIn(shared,targets)
+        self.assertEqual(shared.read_text(),s.READER_PROFILE)
+        self.assertEqual(shared.stat().st_mode & 0o777,0o600)
+        self.assertTrue(all(not p.exists() for p in targets))
 
     def test_S25_marker_atomic_two_phases_and_permissions(self):
         marker = self.h / "sub/x.running"
@@ -191,6 +222,49 @@ class LocalTests(unittest.TestCase):
             with patch.object(time,'time',return_value=now):
                 self.assertEqual(bool(s.live_markers()),expected)
                 self.assertEqual(bool(reload.live_markers()),expected)
+
+    def test_review_marker_disappearing_between_glob_and_stat_is_ignored(self):
+        patch.object(reload,'H',self.h).start()
+        live=self.h/'sub/live.running';live.write_text('{}')
+        gone=self.h/'sub/gone.running'
+        original=Path.stat
+        def stat(path,*args,**kwargs):
+            if path==gone:gone.unlink(missing_ok=True)
+            return original(path,*args,**kwargs)
+        for module in [s,reload]:
+            gone.write_text('{}')
+            with self.subTest(module=module.__name__),patch.object(Path,'stat',stat):
+                self.assertEqual(module.live_markers(),[live])
+
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
+    def test_review_maus_top_level_files_and_other_credential_stores_are_denied(self):
+        paths=[self.home/'.openmausbot'/name for name in
+               ['bots.json','bot-api.json','browser-engine-key','config.json','future-private.json','workspaces/probe','tools/private-key']]
+        paths += [self.home/'.dsh/.credentials.yaml',self.h/'qq-session.json']
+        for path in paths:path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic-deny')
+        allowed=self.home/'.openmausbot/tools/npm/probe';allowed.parent.mkdir(parents=True);allowed.write_text('allowed')
+        sb=s.sandbox_profile(self.sub,self.home/'isolated-home')
+        try:
+            for path in paths:
+                with self.subTest(path=path):
+                    r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(path)],capture_output=True)
+                    self.assertNotEqual(r.returncode,0,r.stderr);self.assertNotIn(b'synthetic-deny',r.stdout)
+            r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(allowed)],capture_output=True)
+            self.assertEqual((r.returncode,r.stdout),(0,b'allowed'),r.stderr)
+        finally:sb.unlink()
+
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
+    def test_review_legitimate_code_names_readable_sensitive_paths_still_denied(self):
+        good=[self.sub/name for name in ['src/prefix-sum.ts','box-shadow.css','bilingual.md']]
+        bad=[self.h/name for name in ['bili-cookie.json','bili.cookies.json','x-auth/token','x-browser/auth','browser/x/Default/Cookies','secrets/bili-cookie.json']]
+        for path in good+bad:path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic-content')
+        sb=s.sandbox_profile(self.sub,self.home/'isolated-home')
+        try:
+            for path in good+bad:
+                with self.subTest(path=path):
+                    r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(path)],capture_output=True)
+                    self.assertEqual(r.returncode==0,path in good,r.stderr)
+        finally:sb.unlink()
 
     def fake_dsh(self, events=None, sleep=0):
         exe=self.home/'fake-dsh'

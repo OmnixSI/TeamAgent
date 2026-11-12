@@ -4,7 +4,12 @@ import pathlib,json,urllib.request,ssl,os,subprocess,time,sys,shutil
 H=pathlib.Path.home()/".inkboard-team"
 SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick","com.inkboard.team-fetch"]
 def live_markers():
-    return [p for p in (H/"sub").glob("*.running") if time.time()-p.stat().st_mtime < 900]
+    live=[]
+    for path in (H/"sub").glob("*.running"):
+        try:
+            if time.time()-path.stat().st_mtime < 900:live.append(path)
+        except FileNotFoundError:continue
+    return live
 def restart_services():
     for name in SERVICES:
         subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/"+name],check=name!="com.inkboard.team-fetch",capture_output=True)

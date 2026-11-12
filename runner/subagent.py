@@ -413,7 +413,7 @@ def read_evidence(events, sub):
         raw = call['input'].get('file_path')
         if not isinstance(raw, str) or not raw:
             continue
-        path = (sub / raw).resolve()
+        path = (sub / Path(raw).expanduser()).resolve()
         if not path.is_relative_to(root):
             continue
         rel = path.relative_to(root).as_posix()
@@ -447,7 +447,15 @@ def classify_events(run, sub, sha, events, returncode):
 
 def reader_profile():
     path = H / 'dsh-reader.yml'
-    write_private(path, READER_PROFILE)
+    H.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.dsh-reader-', suffix='.tmp', dir=H)
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        write_private(tmp, READER_PROFILE)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return path
 
 
@@ -468,20 +476,28 @@ def write_marker(path, obj):
 
 
 def live_markers():
-    return [p for p in (H / 'sub').glob('*.running') if time.time() - p.stat().st_mtime < 900]
+    live = []
+    for path in (H / 'sub').glob('*.running'):
+        try:
+            if time.time() - path.stat().st_mtime < 900:
+                live.append(path)
+        except FileNotFoundError:
+            continue
+    return live
 
 
 def sandbox_profile(sub, home):
     real_home = Path.home().resolve()
-    denied = [H / p for p in ['worker-secrets.json', 'config.json', 'dsh-team.yml']]
-    denied += [real_home / p for p in ['.ssh', '.config/gh', '.aws', '.netrc', '.codex', '.claude', 'Library/Keychains']]
+    denied = [H / p for p in ['worker-secrets.json', 'config.json', 'dsh-team.yml', 'qq-session.json',
+        'secrets', 'browser', 'x-browser', 'x-auth', 'bili-cookie.json', 'bili-cookies.json',
+        'bili.cookies.json', 'x-cookie.json', 'x-cookies.json', 'x-auth.json']]
+    denied += [real_home / p for p in ['.ssh', '.config/gh', '.aws', '.netrc', '.codex', '.claude',
+                                     '.dsh/.credentials.yaml', 'Library/Keychains']]
     maus = real_home / '.openmausbot'
-    if maus.exists():
-        denied += [Path(e.path) for e in os.scandir(maus) if e.name != 'tools' and e.is_dir(follow_symlinks=False)]
+    denied.append(maus)
     lines = ['(version 1)', '(allow default)']
     lines += ['(deny file-read* (subpath ' + json.dumps(str(p)) + '))' for p in denied]
-    regex = re.escape(str(H.resolve())) + r'/.*(?i:cookie|bili|x-).*'
-    lines += ['(deny file-read* (regex ' + json.dumps(regex) + '))',
+    lines += ['(allow file-read* (subpath ' + json.dumps(str(maus / 'tools/npm')) + '))',
               '(deny file-write* (subpath "/"))']
     for path in [sub, Path(os.environ.get('TMPDIR') or tempfile.gettempdir()).resolve(), home]:
         lines.append('(allow file-write* (subpath ' + json.dumps(str(path.resolve())) + '))')
