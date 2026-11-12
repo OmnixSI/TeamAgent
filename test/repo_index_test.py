@@ -135,7 +135,8 @@ class RepoIndexTests(unittest.TestCase):
         self.assertEqual(index.redact('SESSDATA=synthetic-cookie'), '[REDACTED]')
 
     def test_review_sync_redacts_config_token_and_supplied_cookie_before_cutting(self):
-        token, cookie = 'synthetic-runner', 'opaque-cookie-fake.+value'
+        token, cookie = 'synthetic-runner-long-value', 'opaque-cookie-fake.+value'
+        (self.h / 'config.json').write_text(json.dumps({'url':'https://cloud.invalid','runnerToken':token}))
         self.git('config', 'user.name', token + ' ' + cookie)
         self.commit(token + ' ' + cookie + '\n' + 'a'*5000)
         self.git('commit', '--amend', '-qm', token + ' ' + cookie, '-m', cookie + ' ' + token)
@@ -158,8 +159,8 @@ class RepoIndexTests(unittest.TestCase):
         self.assertNotIn('synthetic-run', record['patch'])
 
     def test_sync_redacts_all_config_secret_values_in_patch_and_commit_message(self):
-        values = ['opaque-admin.+value', 'opaque-source-key', 'opaque-api-value',
-                  'opaque-client-value', 'opaque-password', 'opaque-cookie-value', 'opaque-list-token']
+        values = ['opaque-admin.+value', 'opaque-source-key', 'opaque-api-key-value',
+                  'opaque-client-value', 'opaque-password-value', 'opaque-cookie-value', 'opaque-list-token']
         config = {'url':'https://cloud.invalid', 'runnerToken':'synthetic-runner',
                   'adminToken':values[0], 'sourceKey':values[1],
                   'service':{'api_key':values[2], 'clientSecret':values[3], 'password':values[4], 'cookie':values[5]},
@@ -177,6 +178,18 @@ class RepoIndexTests(unittest.TestCase):
                 self.assertNotIn(value, record[field])
         for value in values:
             self.assertNotIn(value, json.dumps(self.batches[-1]))
+
+    def test_config_secrets_require_exact_names_and_long_values(self):
+        tokens = ['synthetic-admin-token-long', 'synthetic-runner-token-long', 'synthetic-source-key-long']
+        config = {'adminToken':tokens[0], 'runnerToken':tokens[1], 'sourceKey':tokens[2],
+                  'key':'a', 'hotkeys':{'save':'cmd+s', 'long':'ordinary-hotkey-description'},
+                  'monkey':'ordinary-monkey-description', 'tokenizer':'ordinary-tokenizer-description',
+                  'service':{'api_key':'short', 'password':'password', 'clientSecret':'commonword'}}
+        self.assertEqual(set(index._config_secrets(config)), set(tokens))
+        text = 'const on = true; a cmd+s password commonword short ordinary-hotkey-description ordinary-monkey-description ordinary-tokenizer-description'
+        self.assertEqual(index.redact(text, index._config_secrets(config)), text)
+        for value in tokens:
+            self.assertEqual(index.redact(value, index._config_secrets(config)), '[REDACTED]')
 
     def test_R6_R16_chinese_patch_and_request_are_bounded_in_utf8_bytes(self):
         for i in range(4): self.commit('中'*11000, 'src/p'+str(i)+'.ts')

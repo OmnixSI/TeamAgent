@@ -33,6 +33,9 @@ TOKEN_PATTERN = re.compile(
 _fetch_at = {}
 _offset = 0
 _backlog = False
+CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'accesstoken', 'refreshtoken',
+                              'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
+                              'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0'))
 
 
 def _json(path, default):
@@ -66,15 +69,15 @@ def redact(text, known_values=()):
 
 
 def _config_secrets(value, sensitive=False):
-    # Inspect only the config already loaded for this round, never secret files.
+    # Exact credential names (including sync-runtime-secrets.py's config keys),
+    # with short placeholders excluded; inspect only the already loaded config.
     if isinstance(value, dict):
         for key, item in value.items():
-            yield from _config_secrets(item, sensitive or bool(re.search(
-                r'token|secret|password|passwd|key|cookie|authorization|credential', key, re.I)))
+            yield from _config_secrets(item, sensitive or re.sub(r'[_-]', '', key).lower() in CONFIG_SECRET_KEYS)
     elif isinstance(value, list):
         for item in value:
             yield from _config_secrets(item, sensitive)
-    elif sensitive and isinstance(value, str) and value:
+    elif sensitive and isinstance(value, str) and len(value) >= 16:
         yield value
 
 

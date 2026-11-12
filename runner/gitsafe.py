@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -123,6 +124,65 @@ def _credential_helpers(env):
     return flags
 
 
+def _invoke(root, env, args, extra=(), input=None):
+    result = subprocess.run(PREFIX + list(extra) + ['-c', 'safe.directory=' + str(Path(root).resolve())] + list(args),
+                            cwd=root, env=env, input=input, text=True, encoding='utf-8', errors='replace',
+                            capture_output=True, timeout=_timeout())
+    if result.returncode:
+        raise GitFailed('Git command failed')
+    return result.stdout
+
+
+def _origin_url(root):
+    url = run(root, 'read', 'config', '--get', 'remote.origin.url').strip()
+    if not re.fullmatch(r'(?:https://github\.com/|git@github\.com:)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', url):
+        raise GitFailed('Git remote denied')
+    return url
+
+
+def _refs(root, env):
+    rows = _invoke(root, env, ['for-each-ref', '--format=%(objectname) %(refname) %(symref)'])
+    refs = {}
+    for row in rows.splitlines():
+        parts = row.split()
+        if len(parts) == 2:  # Leave symbolic refs such as origin/HEAD untouched.
+            sha, ref = parts
+            refs[ref] = sha
+    return refs
+
+
+def _fetch(root, env, helpers):
+    url = _origin_url(root)
+    objects = run(root, 'read', 'rev-parse', '--path-format=absolute', '--git-path', 'objects').strip()
+    object_format = run(root, 'read', 'rev-parse', '--show-object-format').strip()
+    before = _refs(root, env)
+    # Fetch never loads the source repository's config: http/credential/url keys
+    # (including includes, URL-specific proxy/CA overrides and rewrites) stay out.
+    # Share only objects; publish fetched origin refs/tags atomically on success.
+    with tempfile.TemporaryDirectory(prefix='teamagent-fetch-') as temporary:
+        _invoke(temporary, env, ['init', '--bare', '--template=', '--object-format=' + object_format])
+        network_env = dict(env, GIT_OBJECT_DIRECTORY=objects)
+        if before:
+            _invoke(temporary, network_env, ['update-ref', '--stdin'],
+                    input=''.join('update ' + ref + ' ' + sha + '\n' for ref, sha in before.items()))
+        policy = ['-c', 'remote.origin.url=' + url, '-c', 'remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*',
+                  '-c', 'http.proxy=', '-c', 'http.sslVerify=true', '-c', 'http.extraHeader=',
+                  '-c', 'http.followRedirects=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false']
+        output = _invoke(temporary, network_env, ['fetch', '--prune', 'origin'], extra=policy + helpers)
+        after = _refs(temporary, network_env)
+        updates = []
+        for ref in sorted(before.keys() | after.keys()):
+            if not ref.startswith(('refs/remotes/origin/', 'refs/tags/')) or before.get(ref) == after.get(ref):
+                continue
+            if ref in after:
+                updates.append('update ' + ref + ' ' + after[ref] + ' ' + before.get(ref, '0'*len(after[ref])))
+            else:
+                updates.append('delete ' + ref + ' ' + before[ref])
+        if updates:
+            _invoke(root, env, ['update-ref', '--stdin'], input='start\n' + '\n'.join(updates) + '\nprepare\ncommit\n')
+        return output
+
+
 def run(root, cls, *args):
     """Return stdout for a permitted Git command; errors never include output."""
     _validate(root, cls, args)
@@ -134,10 +194,8 @@ def run(root, cls, *args):
         # Block repo-local askPass execution as well as interactive terminal prompts.
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
                    GIT_ASKPASS='/usr/bin/false', GIT_OPTIONAL_LOCKS='0')
-        result = subprocess.run(PREFIX + helpers + ['-c', 'safe.directory=' + str(Path(root).resolve())] + [command] + flags + rest, cwd=root, env=env,
-                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=_timeout())
+        if command == 'fetch':
+            return _fetch(root, env, helpers)
+        return _invoke(root, env, [command] + flags + rest)
     except subprocess.TimeoutExpired:
         raise TimeoutError('Git command timed out') from None
-    if result.returncode:
-        raise GitFailed('Git command failed')
-    return result.stdout
