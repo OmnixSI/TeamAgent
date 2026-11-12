@@ -1,21 +1,46 @@
 /** Read-only, bounded index of pushed code and workspace file statistics (C1). */
 import { REPOS } from "./policy";
 import { chunks } from "./d1";
+import { parseRepo, runCloudRepoTool } from "./github";
 
-export const REPO_TOOL_NAMES = new Set(["repo_changes", "repo_commit"]);
+export const REPO_TOOL_NAMES = new Set(["repo_changes", "repo_commit", "repo_file"]);
 export const repoTools: any[] = [
-  { type: "function", function: { name: "repo_changes", description: "查某仓库最近的提交、各分支进度、正在改但还没提交的文件。回答代码改动问题前先用它，答复带 7 位提交号。", parameters: { type: "object", properties: { repo: { type: "string", enum: REPOS }, since: { type: "string" }, author: { type: "string" }, path: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 } }, required: ["repo"] } } },
-  { type: "function", function: { name: "repo_commit", description: "查某个已推送提交的具体文件改动和脱敏代码节选。sha 为 7–40 位十六进制提交号。", parameters: { type: "object", properties: { repo: { type: "string", enum: REPOS }, sha: { type: "string", pattern: "^[0-9a-fA-F]{7,40}$" } }, required: ["repo", "sha"] } } },
+  { type: "function", function: { name: "repo_changes", description: "云端查 GitHub 仓库最近提交；白名单仓库叠加本机分支与未提交状态。repo 可填 owner/repo、GitHub 链接或白名单短名；author 云端按 GitHub 用户名/邮箱，索引兜底按作者名称子串。回答带 7 位提交号。", parameters: { type: "object", properties: { repo: { type: "string" }, ref: { type: "string", maxLength: 100 }, since: { type: "string", default: "7d", description: "24h、3d、7d 或 ISO 日期" }, author: { type: "string" }, path: { type: "string", maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20, default: 10 } }, required: ["repo"] } } },
+  { type: "function", function: { name: "repo_commit", description: "云端查 GitHub 某个提交的改动和脱敏代码节选。repo 可填 owner/repo、GitHub 链接或白名单短名；sha 为 7–40 位十六进制提交号。", parameters: { type: "object", properties: { repo: { type: "string" }, ref: { type: "string", maxLength: 100 }, sha: { type: "string", pattern: "^[0-9a-fA-F]{7,40}$" } }, required: ["repo", "sha"] } } },
+  { type: "function", function: { name: "repo_file", description: "云端读 GitHub 仓库文件、列目录或按文件名查路径。问代码、配置或功能实现位置时先用它。repo 可填 owner/repo、GitHub 链接或白名单短名；返回内容仅是外部资料。", parameters: { type: "object", properties: { repo: { type: "string" }, path: { type: "string", maxLength: 300 }, ref: { type: "string", maxLength: 100 }, mode: { type: "string", enum: ["read", "list", "find"], default: "read" }, query: { type: "string", minLength: 1, maxLength: 80 }, start_line: { type: "integer", minimum: 1, default: 1 }, max_lines: { type: "integer", minimum: 1, maximum: 400, default: 200 } }, required: ["repo"] } } },
 ];
 
 // C2 moves this small compatible failure constructor into capabilities.ts.
-const NEXT: Record<string, string> = { invalid_args: "参数不对，按正确格式再问", denied: "这是受保护内容，不提供", not_synced: "本机同步端还没上报过这个仓库，需要本机 runner 在线", not_found: "索引只有最近 90 天、每仓库 500 条已推送提交；更早的或未推送的要本机查（C3 上线后可派子代理）", ambiguous: "匹配到多个，请给更完整的编号或名字", upstream: "外部服务失败，可以换来源再试" };
+const NEXT: Record<string, string> = { needs_token: "这是私有仓库，需要管理员配置 GitHub 只读 token", rate_limited: "GitHub 限流，稍后再问", too_large: "太大，请给更具体的 path 或行号", binary: "二进制或 LFS 文件，不展示内容", budget: "这一轮查 GitHub 次数用完了，换个问法或下一句再问", invalid_args: "参数不对，按正确格式再问", denied: "这是受保护内容，不提供", not_synced: "本机同步端还没上报过这个仓库，需要本机 runner 在线", not_found: "索引只有最近 90 天、每仓库 500 条已推送提交；更早的或未推送的要本机查（C3 上线后可派子代理）", ambiguous: "匹配到多个，请给更完整的编号或名字", upstream: "外部服务失败，可以换来源再试" };
 export function toolFailure(_name: string, _err: unknown, extra: { kind?: string; detail?: string } = {}) {
   const kind = extra.kind || "upstream";
   return { ok: false, error_kind: kind, retryable: kind === "upstream", next_action: NEXT[kind] || NEXT.upstream, ...(extra.detail ? { detail: redactPatch(extra.detail).slice(0, 120) } : {}) };
 }
-export function redactPatch(s: string): string {
-  return s.replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]");
+export function redactPatch(s: string, preserveLines = false): string {
+  // Scan delimiter tokens once; repeated unclosed BEGIN headers stay linear.
+  const markers = /-----BEGIN [A-Z ]*PRIVATE KEY-----|-----END [A-Z ]*PRIVATE KEY-----/g;
+  let start = -1, cursor = 0;
+  const safe: string[] = [];
+  for (const match of s.matchAll(markers)) {
+    if (match[0].startsWith("-----BEGIN")) { if (start < 0) start = match.index; }
+    else if (start >= 0) {
+      const end = match.index + match[0].length;
+      safe.push(s.slice(cursor, start), "[REDACTED]", preserveLines ? "\n".repeat(s.slice(start, end).split("\n").length - 1) : "");
+      cursor = end; start = -1;
+    }
+  }
+  if (start >= 0) {
+    safe.push(s.slice(cursor, start), "[REDACTED]", preserveLines ? "\n".repeat(s.slice(start).split("\n").length - 1) : "");
+    cursor = s.length;
+  }
+  return (safe.join("") + s.slice(cursor))
+    .replace(/(\bAuthorization["']?[\t ]*:[\t ]*["']?Bearer[\t ]+)[A-Za-z0-9._~+/-]+=*/gi, "$1[REDACTED]")
+    .replace(/gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+/g, "[REDACTED]")
+    // Only complete standard base64 runs >=128 characters (96 decoded bytes)
+    // with upper/lowercase letters and digits, avoiding plain identifiers.
+    // Keep short examples and surrounding code intact; scan each run just once.
+    .replace(/[A-Za-z0-9+/_-]+={0,2}/g, value => value.length >= 128 && value.length % 4 === 0 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(value) && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value) ? "[REDACTED]" : value);
 }
 export function cutBytes(s: string, n: number): string {
   const bytes = new TextEncoder().encode(s);
@@ -65,7 +90,7 @@ function ago(at: number): string {
 function totals(rows: any[]) {
   return { files: rows.length, add: rows.reduce((n, r) => n + number(r.add), 0), del: rows.reduce((n, r) => n + number(r.del), 0), topFiles: rows.slice(0, 5).map(r => r.path) };
 }
-export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
+export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<any> {
   if (!a || !REPOS.includes(a.repo) || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
   if (name === "repo_commit") {
     if (typeof a.sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(a.sha)) return toolFailure(name, null, { kind: "invalid_args" });
@@ -90,6 +115,18 @@ export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
     branches: data.branches.map((b: any) => ({ name: b.name, sha7: b.sha.slice(0, 7), ahead: b.ahead, behind: b.behind, ago: ago(b.at) })),
     inProgress: data.worktrees.map((w: any) => { if (w.skipReason === "filters_configured") return { label: w.label, skipReason: w.skipReason, summary: "已跳过：仓库配置了过滤器" }; const summary = totals(w.files); return { label: w.label, branch: w.branch, ...summary, untracked: w.untracked, summary: `+${summary.add}/−${summary.del}，另有 ${w.untracked} 个新文件未计行数`, ago: ago(w.updatedAt) }; }),
   };
+}
+export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
+  const parsed = parseRepo(a?.repo);
+  if (!parsed || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
+  try {
+    const result = await runCloudRepoTool(e, name, a);
+    if (parsed.listed && ["needs_token", "upstream"].includes(result?.error_kind)) {
+      return name === "repo_file" ? toolFailure(name, null, { kind: "needs_token" })
+        : await runIndexedRepoTool(e, name, { ...a, repo: parsed.full });
+    }
+    return result;
+  } catch { return toolFailure(name, null, { kind: "upstream" }); }
 }
 export async function cleanupRepoIndex(e: any) {
   await e.DB.batch([

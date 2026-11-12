@@ -10,6 +10,12 @@ const api=await import('../'+outfile),repo='OmnixSI/TeamAgent',sha='1234567'+'a'
 const commit=(id=sha)=>({sha:id,at:Date.now(),author:'Alice',subject:'真实改动',body:'修改说明',files:[{path:'runner/fetcher.mjs',status:'M',add:3,del:1}],patch:'diff --git a/code b/code\n+code\n',truncated:0});
 const packet=(commits=[commit()],name=repo)=>({repo:name,head:{sha,branch:'main',at:Date.now()},branches:[{name:'agent/work',sha,ahead:2,behind:0,at:Date.now()}],worktrees:[{label:'task',branch:'team/task',base:sha,files:[{path:'code.ts',status:'M',add:3,del:1},{path:'new.ts',status:'??',add:null,del:null}],untracked:1,updatedAt:Date.now()}],fingerprint:'synthetic-fp',commits});
 const counts={};
+test('cloud schemas broaden only readonly repository tools and expose defaults and refs',()=>{
+ for(const name of ['repo_changes','repo_commit','repo_file']){
+  const schema=api.repoTools.find(t=>t.function.name===name).function.parameters.properties;
+  assert.equal(schema.repo.type,'string');assert.equal(schema.repo.enum,undefined);assert.ok(schema.ref);
+ }
+});
 async function measured(base,label,work,max=48){const e=api.metered(base),before=base.DB.executed;const result=await work(e);assert.equal(e.meter.used,base.DB.executed-before,label);assert.ok(e.meter.used<=max,label+' '+e.meter.used);counts[label]=e.meter.used;writeFileSync('.agent/c1-counts.json',JSON.stringify(counts,null,2));return {result,used:e.meter.used};}
 const call=(name,args)=>({id:'tool-'+name,type:'function',function:{name,arguments:JSON.stringify(args)}});
 async function context(e,body='最近仓库改了什么'){
@@ -35,7 +41,8 @@ test('W-2 missing and incorrect runner tokens return 401 and never write',async(
  assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM repo_commits').first()).n,0);
 });
 test('W-3 invalid repositories and SHAs are skipped, total commits and patch bytes are capped',async()=>{
- const e=env();await api.ingestRepoIndex(e,{repos:[packet([commit()],'other/private'),packet([commit('bad'),...Array.from({length:31},(_,i)=>({...commit(i.toString(16).padStart(40,'0')),patch:'x'.repeat(20000)}))])]});
+ // Use code lines: a long uninterrupted alphabetic run is now redacted as base64.
+ const e=env();await api.ingestRepoIndex(e,{repos:[packet([commit()],'other/private'),packet([commit('bad'),...Array.from({length:31},(_,i)=>({...commit(i.toString(16).padStart(40,'0')),patch:'+ const value = 1;\n'.repeat(1200)}))])]});
  const rows=(await e.DB.prepare('SELECT repo,sha,patch FROM repo_commits').all()).results;
  assert.equal(rows.length,30);assert.ok(rows.every(r=>r.repo===repo&&r.patch.length===12000));
 });

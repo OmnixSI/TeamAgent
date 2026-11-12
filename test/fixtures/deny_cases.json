@@ -1,0 +1,10 @@
+[
+  [".ENV", true], ["a/b/.env.local", true], ["config/secrets/app.txt", true],
+  [".git/config", true], ["foo/.git/config", true], ["a/b/.git/HEAD", true],
+  ["foo/.GIT/config", true], ["foo/.git", true], ["foo/.git/", true],
+  ["foo/git/config", false], ["foo/.github/HEAD", false],
+  ["X/ID_RSA.pub", true], ["src/key.ts", false],
+  ["README.md", false], ["dir/CREDENTIALS/data.txt", true], ["a/.npmrc", true],
+  ["ssl/cert.pem", true], ["src/private.ts", false], ["cookies.txt", true],
+  ["config/.env.production", true], ["lib/normal.key.ts", false]
+]
