@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import tracemalloc
 from unittest.mock import patch
 
 from runner import gitsafe, repo_index
@@ -39,6 +40,131 @@ class GitSafeTests(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(['git', *args], cwd=self.root, text=True, capture_output=True, check=True).stdout
+
+    def test_C1b_G1_ls_tree_has_one_exact_read_shape(self):
+        sha = self.git('rev-parse', 'HEAD').strip()
+        good = ('ls-tree', '-r', '-t', '-z', '--long', '--full-tree', sha)
+        self.assertIn('data.txt', gitsafe.run(self.root, 'read', *good))
+        for args in (good + ('--',), good[:-1], good[:-1] + ('HEAD',),
+                     ('ls-tree', '--format=%(objectname)', sha), good[:-1] + ('a'*39,)):
+            with self.subTest(args=args), patch.object(gitsafe, '_run_process') as started:
+                with self.assertRaises(gitsafe.GitDenied):
+                    gitsafe.run(self.root, 'read', *args)
+                started.assert_not_called()
+
+    def test_C1b_G2_real_stderr_is_classified_and_never_returned(self):
+        for message, reason in [('Authentication failed for private', 'auth'),
+                                ('could not read Username', 'auth'), ('HTTP 403', 'auth'),
+                                ('Repository not found', 'not_found'),
+                                ('Could not resolve host', 'network'), ('Connection refused', 'network'),
+                                ('timed out', 'network'), ('unknown private diagnostic', 'failed')]:
+            with self.subTest(reason=reason):
+                result = gitsafe._run_process([sys.executable, '-c',
+                    'import os; os.write(2, ' + repr(message.encode()) + '); raise SystemExit(128)'],
+                    cwd=self.root, env=self.hardened_env(), timeout=3, classify=True)
+                self.assertEqual(result.reason, reason)
+                self.assertEqual(result.stderr, '')
+                self.assertNotIn(message, repr(result))
+        with self.assertRaises(ValueError):
+            gitsafe._run_process(['git'], cwd=self.root, env={}, timeout=1, classify=True, max_bytes=10)
+        with self.assertRaises(ValueError):
+            gitsafe._run_process(['git'], cwd=self.root, env={}, timeout=1, classify=True, input='private')
+
+    def test_C1b_G2_eight_mib_stderr_is_drained_with_bounded_memory(self):
+        code = ('import os; block=b"x"*65536; '
+                '[os.write(2,block) for _ in range(128)]; '
+                'os.write(2,b"Authentication failed"); raise SystemExit(128)')
+        tracemalloc.start()
+        try:
+            baseline = tracemalloc.get_traced_memory()[0]
+            result = gitsafe._run_process([sys.executable, '-c', code], cwd=self.root,
+                env=self.hardened_env(), timeout=5, classify=True)
+            peak = tracemalloc.get_traced_memory()[1] - baseline
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 1024*1024)
+        self.assertEqual(result.reason, 'auth')
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (128, '', ''))
+
+    def test_C1b_G2_classified_timeout_reaps_process_group(self):
+        with patch.object(gitsafe.os, 'killpg', wraps=os.killpg) as killed:
+            with self.assertRaises(gitsafe.GitFailed) as failure:
+                gitsafe._run_process([sys.executable, '-c', 'import time; time.sleep(20)'],
+                    cwd=self.root, env=self.hardened_env(), timeout=0.1, classify=True)
+        self.assertEqual(failure.exception.reason, 'timeout')
+        self.assertNotIn('time.sleep', str(failure.exception))
+        killed.assert_called_once()
+
+    def test_C1b_G3_call_cap_is_nested_and_cannot_escape_round_deadline(self):
+        self.assertLessEqual(gitsafe._timeout(), 30)
+        with gitsafe.call_cap(300):
+            self.assertGreater(gitsafe._timeout(), 30)
+            with gitsafe.call_cap(90):
+                self.assertLessEqual(gitsafe._timeout(), 90)
+            self.assertGreater(gitsafe._timeout(), 90)
+            with gitsafe.time_budget(5):
+                self.assertLessEqual(gitsafe._timeout(), 5)
+        self.assertLessEqual(gitsafe._timeout(), 30)
+        self.assertEqual(gitsafe._env('read')['GIT_ALLOW_PROTOCOL'], 'none')
+
+    def test_C1b_C1_C4_C5_clone_is_atomic_private_and_never_checks_out(self):
+        parent = self.home / 'repos'
+        def populate(root, env):
+            shutil.copytree(self.root / '.git/objects', Path(root) / '.git/objects', dirs_exist_ok=True)
+        with patch.object(gitsafe, '_fetch', side_effect=populate):
+            target = gitsafe.clone('Org/Example', parent)
+        self.assertEqual(target, parent / 'Example')
+        self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+        self.assertEqual([p.name for p in target.iterdir()], ['.git'])
+        self.assertEqual(list(parent.glob('.clone-*')), [])
+        for name in ('Org/Example', 'Org/link'):
+            if name.endswith('/link'):
+                (parent / 'link').symlink_to(self.root)
+            with self.assertRaises(gitsafe.GitDenied):
+                gitsafe.clone(name, parent)
+        for name in ('../x', 'OmnixSI/.git', 'a/b/c', 'OmnixSI/..', 'a/b c'):
+            with self.subTest(name=name), patch.object(gitsafe.tempfile, 'mkdtemp') as made:
+                with self.assertRaises(gitsafe.GitDenied):
+                    gitsafe.clone(name, parent)
+                made.assert_not_called()
+
+    def test_C1b_C2_C3_failed_clone_cleans_up_and_preserves_reason(self):
+        for failure in (gitsafe.GitFailed('fixed', 'auth'), TimeoutError(),
+                        subprocess.TimeoutExpired('synthetic', 0.1)):
+            with self.subTest(failure=type(failure).__name__), patch.object(gitsafe, '_fetch', side_effect=failure):
+                with self.assertRaises(gitsafe.GitFailed) as caught:
+                    gitsafe.clone('Org/Example', self.home / 'repos')
+                self.assertEqual(caught.exception.reason, 'auth' if isinstance(failure, gitsafe.GitFailed) else 'timeout')
+                self.assertEqual(list((self.home / 'repos').iterdir()), [])
+
+    def test_C1b_C7_clone_size_counts_pack_and_loose_objects(self):
+        (self.root / 'random.bin').write_bytes(os.urandom(65536))
+        self.git('add', 'random.bin'); self.git('commit', '-qm', 'synthetic random bytes')
+        for storage in ('loose', 'pack'):
+            if storage == 'pack':
+                self.git('repack', '-ad'); self.git('prune-packed')
+            def populate(root, env):
+                shutil.copytree(self.root / '.git/objects', Path(root) / '.git/objects', dirs_exist_ok=True)
+            with self.subTest(storage=storage), patch.object(gitsafe, '_fetch', side_effect=populate):
+                with self.assertRaises(gitsafe.GitFailed) as caught:
+                    gitsafe.clone('Org/Example', self.home / 'repos', max_kib=1)
+                self.assertEqual(caught.exception.reason, 'too_large')
+                self.assertEqual(list((self.home / 'repos').iterdir()), [])
+
+    def test_C1b_C8_clone_does_not_expose_credentials_in_arguments_or_output(self):
+        secret = 'SyntheticPasswordNeverInArguments'
+        original = gitsafe._run_process
+        arguments = []
+        def record(args, **kwargs):
+            arguments.append(args)
+            return original(args, **kwargs)
+        def populate(root, env):
+            env = dict(env, TEAMAGENT_GIT_PASSWORD=secret)
+            gitsafe._invoke(root, env, ['count-objects', '-v'])
+        with patch.object(gitsafe, '_run_process', side_effect=record), patch.object(gitsafe, '_fetch', side_effect=populate), patch('builtins.print') as printed:
+            gitsafe.clone('Org/Example', self.home / 'repos')
+        self.assertNotIn(secret, str(arguments))
+        self.assertNotIn(secret, str(printed.call_args_list))
 
     def marker_script(self, name):
         marker = self.home / (name + '-executed')
