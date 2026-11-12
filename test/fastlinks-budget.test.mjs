@@ -118,3 +118,36 @@ test('P0a a multi-message delivery flushes each source buffer without losing ear
  assert.deepEqual(events,['claim','tail','ack','claim','ack','tail']);const points=await stages(base);
  for(const id of ['notice-one','notice-two'])for(const name of ['model_start','model_end','outbox'])assert.ok(points.some(r=>r.turn_id===id&&r.stage===name),id+' '+name);
 });
+
+test('P0b batch statements count individually, including a no-op update',async()=>{
+ const base=env();await measured(base,'P0b-batch-probe',async e=>{
+  const before=e.meter.used;await e.DB.batch([
+   e.DB.prepare("INSERT INTO settings VALUES('budget:a','1')"),
+   e.DB.prepare("INSERT INTO settings VALUES('budget:b','2')"),
+   e.DB.prepare("UPDATE settings SET value='unused' WHERE key='missing'"),
+  ]);assert.equal(e.meter.used-before,3);
+ });
+});
+test('P0b failure report, fixed video reply and cached repeat stay within budget without model calls',async()=>{
+ const base=env();await req(base,'/api/admin/bind',{groupId:'GROUP000001'});
+ await qq(base,msg('fail-budget','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');
+ await queue(base,'chat-fail-budget');const {job}=await(await req(base,'/api/runner/fetch/claim',{},'runner-secret')).json();
+ await measured(base,'P0b-failure-report',async e=>{assert.equal((await req(e,'/api/runner/fetch/report',{id:job.id,lease:job.payload.lease,success:false,reason:'risk',retryAfter:600},'runner-secret')).status,200);});
+ await modelFixture(async state=>{
+  await measured(base,'P0b-failed-video-reply',e=>queue(e,'video-vw-fail-budget'));assert.equal(state.models,0);
+  await qq(base,msg('cached-failure','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');
+  await measured(base,'P0b-fail-cache-reply',e=>queue(e,'chat-cached-failure'));assert.equal(state.models,0);
+ });
+ assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM video_waits').first()).n,1);
+ assert.equal((await base.DB.prepare("SELECT status FROM jobs WHERE id='fetch-bili-BV1xx411c7mD'").first()).status,'failed');
+ const out=(await base.DB.prepare('SELECT body FROM outbox').all()).results;assert.equal(out.length,2);for(const row of out)assert.match(row.body,/B 站这次拦住了读取/);
+});
+test('P0b offline short-circuit stays within budget with no wait, fetch or model',async()=>{
+ const base=env();await req(base,'/api/admin/bind',{groupId:'GROUP000001'});
+ await base.DB.prepare("INSERT INTO settings VALUES('fetcher:last-seen',?)").bind(String(Date.now()-130000)).run();
+ await qq(base,msg('offline-budget','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');
+ await modelFixture(async state=>{await measured(base,'P0b-offline-reply',e=>queue(e,'chat-offline-budget'));assert.equal(state.models,0);});
+ assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM video_waits').first()).n,0);
+ assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='fetch'").first()).n,0);
+ assert.match((await base.DB.prepare('SELECT body FROM outbox').first()).body,/读取端暂时离线/);
+});

@@ -1,3 +1,4 @@
+import {FAILURE_PREFIX,OFFLINE_MS,READ_REASONS,fetchFailure,failureTtl,jobReason,biliFailReply,biliFailMaterial,type ReadReason} from './linkfail';
 import { left } from "./d1";
 import { stage, flushTail } from "./timing";
 import { TEAM } from "./config";
@@ -54,6 +55,21 @@ export async function biliCached(e: any, ref: string): Promise<BiliResult | Titl
   const row = await e.DB.prepare("SELECT body,created_at FROM media_notes WHERE id=?").bind("bili:" + ref).first();
   if (!row || !(Date.parse(row.created_at) >= Date.now() - (isTitleRef(ref) ? 86400000 : 7 * 86400000))) return null;
   try { const value = JSON.parse(row.body); return isTitleRef(ref) && titleMissOf(value) || cleanResult(value); } catch { return null; }
+}
+/** Read stable failures and reader presence together within the chat budget. */
+export async function biliFailure(e: any, ref: string): Promise<ReadReason | null> {
+  const row = await e.DB.prepare("SELECT (SELECT body FROM media_notes WHERE id=?) f,(SELECT value FROM settings WHERE key='fetcher:last-seen') seen")
+    .bind(FAILURE_PREFIX + ref).first();
+  const now = Date.now();
+  try { const f = JSON.parse(row.f); if (f && f.until > now && READ_REASONS.includes(f.reason)) return f.reason; } catch {}
+  return row.seen !== null && now - Number(row.seen) > OFFLINE_MS ? 'offline' : null;
+}
+/** Failed jobs take precedence over presence; an online reader may simply be slow. */
+export async function fetchOutcome(e: any, ref: string): Promise<ReadReason> {
+  const row = await e.DB.prepare("SELECT (SELECT status FROM jobs WHERE id=?) status,(SELECT error FROM jobs WHERE id=?) error,(SELECT value FROM settings WHERE key='fetcher:last-seen') seen")
+    .bind('fetch-bili-' + ref, 'fetch-bili-' + ref).first();
+  if (row.status === 'failed') return jobReason(row.error);
+  return row.seen !== null && Date.now() - Number(row.seen) > OFFLINE_MS ? 'offline' : 'timeout';
 }
 function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitCreated?: number, title?: string) {
   return e.DB.prepare(`INSERT INTO jobs(id,kind,payload,created_at)
@@ -131,9 +147,17 @@ export async function runVideoWait(e: any, waitId: string): Promise<void> {
     .bind(now + 120000, waitId, now, now).first();
   if (!w) return;
   try {
-    const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
     const cached = await biliCached(e, w.ref);
-    const materials = cached ? [videoMaterial(cached,w.ref)] : [isTitleRef(w.ref) ? TITLE_FALLBACK : "视频内容暂时没读到（本机抓取端可能离线），只依据卡片信息作答。"];
+    const outcome = cached ? null : await fetchOutcome(e, w.ref);
+    if (outcome && outcome !== 'timeout' && w.mentioned) {
+      const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
+      if (!owns) return;
+      await enqueueVoice(e, "video-" + w.id, w.group_id, w.latest_id, biliFailReply(outcome,{title:isTitleRef(w.ref)}));
+      await e.DB.prepare("UPDATE video_waits SET status='done' WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).run();
+      return;
+    }
+    const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
+    const materials = cached ? [videoMaterial(cached,w.ref)] : [biliFailMaterial(outcome!,{title:isTitleRef(w.ref),titleFallback:TITLE_FALLBACK})];
     const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
     // A timed-out old attempt must not finish a newer lease.
     const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
@@ -156,7 +180,7 @@ async function failVideoWait(e: any, w: Row): Promise<void> {
 }
 export async function sweepVideoWaits(e: any): Promise<void> {
   const now = Date.now();
-  await e.DB.prepare("UPDATE jobs SET status='failed',error='本机抓取端未回报' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
+  await e.DB.prepare("UPDATE jobs SET status='failed',error='timeout' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
   const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
   for (const w of exhausted) {
     if (left(e) < 4) break;
@@ -191,6 +215,7 @@ function cleanResult(r: any): BiliResult {
     comments: (Array.isArray(r.comments) ? r.comments : []).slice(0, 8).map((c: any) => ({ uname: text(c?.uname, 100), message: text(c?.message, 120) })), tier: "light", fetched_at: Number.isFinite(Date.parse(r.fetched_at)) ? new Date(r.fetched_at).toISOString() : new Date().toISOString() };
 }
 export async function reportFetch(e: any, b: any): Promise<Response> {
+  const fail = b.success === true ? null : fetchFailure(b);
   let result: BiliResult | TitleMiss | null = null;
   if (b.success === true) {
     try {
@@ -216,8 +241,11 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
       .bind("bili:" + ref, JSON.stringify(result), new Date(now).toISOString(), ...leaseArgs));
   writes.push(e.DB.prepare("UPDATE video_waits SET ready=1 WHERE status='waiting' AND id IN (SELECT value FROM jobs,json_each(jobs.payload,'$.waiters') WHERE " + guard.replace("id=?", "jobs.id=?") + ")")
     .bind(...leaseArgs));
+  if (fail && failureTtl(fail) > 0)
+    writes.push(e.DB.prepare("INSERT OR REPLACE INTO media_notes SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE " + guard + ")")
+      .bind(FAILURE_PREFIX + p.ref, JSON.stringify({reason:fail.reason,until:now + failureTtl(fail)}), new Date(now).toISOString(), ...leaseArgs));
   writes.push(e.DB.prepare("UPDATE jobs SET status=?,error=? WHERE " + guard)
-    .bind(status, result ? null : "本机抓取未完成", ...leaseArgs));
+    .bind(status, result ? null : fail!.reason, ...leaseArgs));
   await e.DB.batch(writes);
   const committed = await e.DB.prepare("SELECT payload FROM jobs WHERE id=? AND kind='fetch' AND json_extract(payload,'$.lease')=? AND status=?")
     .bind(b.id, b.lease, status).first();
@@ -228,8 +256,8 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   return Response.json({ ok: true });
 }
 async function dispatchFetch(e: any, path: string, b: any): Promise<Response> {
+  await fetcherSeen(e);
   if (path.endsWith('/claim')) {
-    await fetcherSeen(e);
     const login=await claimLogin(e);
     const job=login?null:await claimFetch(e);
     for (const waiter of (job?.payload?.waiters || []).slice(0,3)) stage(e, waiter.slice(3), "fetch_claimed");

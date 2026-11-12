@@ -15,11 +15,12 @@ export function pickByTitle(results,title){
  return hits.length===1?hits[0]:{miss:!list.length?'none':hits.length>1?'multiple':'near'};
 }
 export async function biliByTitle(client,title){
- if(client.isPaused()||client.isSearchPaused())throw Error('风控');
+ if(client.isPaused())throw Error('风控');
+ if(client.isSearchPaused())throw Object.assign(Error('风控'),{scope:'search'});
  const keys=await client.prepare(true);if(!keys)throw Error('抓取失败');
  const response=await client.biliApi('/x/web-interface/wbi/search/type',wbiSign({search_type:'video',keyword:title,page:1,order:'totalrank'},...keys),{anonymous:true});
  // A successful HTTP/code response may carry a verification challenge, not search results.
- if(response.data?.v_voucher){client.pauseSearch(6*3600000);throw Error('风控');}
+ if(response.data?.v_voucher){client.pauseSearch(6*3600000);throw Object.assign(Error('风控'),{scope:'search'});}
  if(response.code!==0||!Array.isArray(response.data?.result)&&response.data?.numResults!==0)throw Error('抓取失败');
  const picked=pickByTitle(response.data?.result||[],title);
  return picked.bvid?client.biliLight(picked.bvid):picked;

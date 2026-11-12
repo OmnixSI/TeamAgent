@@ -84,7 +84,7 @@ test('N-T7 voucher leaves BV reads running, blocks all title requests for six ho
  assert.equal((await f.client.biliLight(BV)).bvid,BV);assert.ok(f.calls.some(o=>o.path.startsWith('/x/web-interface/view?')));
  const count=f.calls.length,searches=()=>f.calls.filter(o=>o.path.includes('/search/type')).length;
  assert.equal(searches(),1);
- for(const title of ['标题','另一个标题']){await runJob(task(title),f.client,cloud);assert.equal(reports.at(-1).success,false);assert.equal(reports.at(-1).reason,'风控');}
+ for(const title of ['标题','另一个标题']){await runJob(task(title),f.client,cloud);assert.equal(reports.at(-1).success,false);assert.equal(reports.at(-1).reason,'risk');assert.equal(reports.at(-1).retryAfter,3600);}
  assert.equal(f.calls.length,count);
  f.setTime(challengedAt+6*3600000-1);await runJob(task('标题'),f.client,cloud);assert.equal(f.calls.length,count);
  f.setTime(challengedAt+6*3600000);assert.equal(f.client.isSearchPaused(),false);
@@ -299,4 +299,49 @@ test('N17 shared pause written during rate sleep is checked before the next requ
  await assert.rejects(f.client.biliApi('/x2'),/风控/);
  assert.equal(f.calls.length,1);
  assert.equal(slept,1);
+});
+
+test('R2 timeout request event carries a timeout attribute without waiting',async()=>{
+ const request=()=>{const req=new EventEmitter();req.end=()=>queueMicrotask(()=>req.emit('timeout'));req.destroy=()=>{};return req;};
+ const client=createFetchClient({request});
+ await assert.rejects(client.biliLight(BV),e=>e.timeout===true&&e.message==='抓取失败');
+ const reports=[];await runJob({id:'timeout',payload:{type:'bili',tier:'light',ref:BV}},client,async(_p,b)=>reports.push(b));
+ assert.equal(reports[0].reason,'timeout');
+});
+test('R3 view failure preserves its code and reports not_found',async()=>{
+ const f=fixture(o=>o.path.includes('/view')?{body:{code:-404}}:{body:{code:0,data:{}}});
+ await assert.rejects(f.client.biliLight(BV),e=>e.code===-404&&e.message==='视频信息未读到');
+ const reports=[];await runJob({id:'deleted',payload:{type:'bili',tier:'light',ref:BV}},f.client,async(_p,b)=>reports.push(b));assert.equal(reports[0].reason,'not_found');
+});
+test('R4 short link targets distinguish unsupported and missing',async()=>{
+ for(const [response,reason] of [[{status:302,headers:{location:'https://live.bilibili.com/1'}},'unsupported'],[{status:302,headers:{location:'https://www.bilibili.com/read/cv1'}},'unsupported'],[{status:200},'not_found']]){
+  const f=fixture(()=>response);await assert.rejects(f.client.resolveShort('AbCd12'),e=>e.reason===reason&&e.message==='短链无效');
+  const reports=[];await runJob({id:'short',payload:{type:'bili',tier:'light',ref:'AbCd12'}},f.client,async(_p,b)=>reports.push(b));assert.equal(reports[0].reason,reason);
+ }
+});
+test('R1 classify follows the ordered failure mapping',async()=>{
+ const {classify}=await import('./fetcher.mjs');
+ for(const [error,reason,retryAfter] of [[{message:'风控'},'risk',600],[{status:412},'risk',600],[{status:403},'risk',600],[{code:-352},'risk',600],[{code:-412},'risk',600],[{message:'风控',scope:'search'},'risk',3600],[{timeout:true},'timeout'],[{code:'ETIMEDOUT'},'timeout'],[{reason:'unsupported'},'unsupported'],[{reason:'not_found'},'not_found'],[{status:404},'not_found'],...[-404,62002,62004,62012].map(code=>[{code},'not_found']),[{code:-101},'login_required'],[{code:-403},'login_required'],[{status:401},'login_required'],[Error('无效任务'),'invalid'],[undefined,'invalid']])assert.deepEqual(classify(error),{reason,...(retryAfter?{retryAfter}:{})});
+});
+test('R5 two risk responses report a bounded retryAfter',async()=>{
+ const f=fixture(o=>o.path.includes('/view')?{status:412}:{body:{code:0,data:{}}}),reports=[];
+ await runJob({id:'risk',payload:{type:'bili',tier:'light',ref:BV}},f.client,async(_p,b)=>reports.push(b));
+ assert.deepEqual(reports[0],{id:'risk',lease:undefined,success:false,reason:'risk',retryAfter:600});
+});
+test('R6 search challenge reports risk for one hour while preserving six-hour search pause',async()=>{
+ const {biliByTitle}=await titleModule();let paused=false;
+ const client={isPaused:()=>false,isSearchPaused:()=>paused,pauseSearch:ms=>{assert.equal(ms,6*3600000);paused=true;},prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>({code:0,data:{v_voucher:'challenge'}}),sanitize:x=>x};
+ const reports=[];for(let i=0;i<2;i++)await runJob({id:'search',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title:'标题'}},client,async(_p,b)=>reports.push(b));
+ assert.equal(paused,true);for(const report of reports)assert.deepEqual(report,{id:'search',lease:undefined,success:false,reason:'risk',retryAfter:3600});
+});
+test('R7 arbitrary exception text and session values never enter reports or logs',async()=>{
+ const f=fixture(()=>({body:{}}),{cookies:{SESSDATA:'sess-secret-1'}}),reports=[],logs=[];
+ f.client.biliLight=async()=>{throw Error('SESSDATA=sess-secret-1 https://private.example');};
+ await runJob({id:'private',payload:{type:'bili',tier:'light',ref:BV,lease:'lease'}},f.client,async(_p,b)=>reports.push(b),s=>logs.push(s));
+ assert.equal(reports[0].reason,'invalid');assert.ok(Object.keys(reports[0]).every(k=>['id','lease','success','reason','retryAfter'].includes(k)));
+ assert.doesNotMatch(JSON.stringify({reports,logs}),/sess-secret-1|private\.example|SESSDATA/);assert.deepEqual(logs,['fetch invalid']);
+});
+test('R8 successful reports retain exactly the original shape and values',async()=>{
+ const result={bvid:BV,title:'标题'},reports=[];await runJob({id:'ok',payload:{type:'bili',tier:'light',ref:BV,lease:'lease'}},{sanitize:x=>x,biliLight:async()=>result},async(_p,b)=>reports.push(b));
+ assert.deepEqual(reports,[{id:'ok',lease:'lease',success:true,result}]);assert.deepEqual(Object.keys(reports[0]).sort(),['id','lease','result','success']);
 });
