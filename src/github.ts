@@ -36,8 +36,10 @@ export function validPath(value: unknown): string | null {
   if (value === undefined || value === "" || value === "." || value === "./") return "";
   if (typeof value !== "string" || value.length > 300 || value.startsWith("/") ||
       value !== value.trim() || /[\\\0]/.test(value) || value.includes("//") ||
-      /%[0-9a-f]{2}/i.test(value) || value.split("/").includes("..")) return null;
-  // Callers supply decoded paths. Normalize dot segments before DENY checks.
+      /%(?:25)*(?:2f|5c|00)/i.test(value) ||
+      value.split("/").some(part => part.replace(/%(?:25)*2e/gi, ".") === "..")) return null;
+  // Preserve literal percent filenames; reject encoded traversal even when
+  // repeatedly escaped. Normalize actual dot segments before DENY checks.
   return value.split("/").filter(part => part !== "." && part !== "").join("/");
 }
 const validRef = (r: any) => r === undefined || typeof r === "string" &&

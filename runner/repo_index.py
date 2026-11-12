@@ -61,7 +61,7 @@ def repo_root(repo):
 
 def denied(path):
     path = path.lower()
-    return any(fnmatch.fnmatchcase(path, rule) or fnmatch.fnmatchcase(path.rsplit('/', 1)[-1], rule) for rule in DENY)
+    return '.git' in path.split('/') or any(fnmatch.fnmatchcase(path, rule) or fnmatch.fnmatchcase(path.rsplit('/', 1)[-1], rule) for rule in DENY)
 
 
 def redact(text, known_values=()):
