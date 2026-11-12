@@ -118,7 +118,14 @@ export function createFetchClient(options={}){
      if(['bilibili.com','www.bilibili.com','m.bilibili.com'].includes(target.hostname)){
        const bv=target.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0];if(bv)return bv;
        const av=target.pathname.match(/\bav(\d+)\b/i)?.[1];
-       if(av){try{const view=await biliApi('/x/web-interface/view',{aid:Number(av)});const bvid=view.data?.bvid;if(typeof bvid==='string'&&BV.test(bvid))return bvid;}catch{}}
+       if(av){
+         // Keep transport/risk failures for classify(); a deleted or private aid is not "not a video".
+         const view=await biliApi('/x/web-interface/view',{aid:Number(av)});
+         if(view?.code!==0||!view.data)throw Object.assign(Error('视频信息未读到'),{code:view?.code});
+         const bvid=view.data.bvid;
+         if(typeof bvid==='string'&&BV.test(bvid))return bvid;
+         throw Error('视频信息未读到');
+       }
        throw Object.assign(Error('短链无效'),{reason:'unsupported'});
      }
      if(target.hostname!=='b23.tv')throw Object.assign(Error('短链无效'),{reason:'unsupported'});u=target;

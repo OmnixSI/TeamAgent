@@ -9,7 +9,7 @@ import { stage, flushTail } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials } from "./fetchjobs";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -577,9 +577,15 @@ async function processJob(e: Env, id: string) {
       }
       const biliMaterials = await biliResearchMaterials(e, p);
       if (biliMaterials.length) {
-        p.materials = [...(p.materials || []), ...biliMaterials];
-        if (Array.isArray(p.resume?.messages))
-          p.resume.messages = [...p.resume.messages, { role: "system", content: "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + biliMaterials.join("\n\n") }];
+        // A resumed handoff already saw these notes; append only what its messages lack.
+        const fresh = biliMaterials.filter(
+          (m: string) => !Array.isArray(p.resume?.messages) || !materialInjected(p.resume.messages, m),
+        );
+        if (fresh.length) {
+          p.materials = [...(p.materials || []), ...fresh];
+          if (Array.isArray(p.resume?.messages))
+            p.resume.messages = [...p.resume.messages, { role: "system", content: "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + fresh.join("\n\n") }];
+        }
       }
       const answer = await agentAnswer(e, p);
       if (decodeVoice(answer).text !== "[[SILENT]]")

@@ -141,28 +141,58 @@ export function videoMaterial(r: BiliResult | TitleMiss, ref = '') {
   return 'miss' in r ? titleMissMaterial(r) : isTitleRef(ref) ? titleMaterial(r) : untrusted('bilibili',biliNoteText(r),r.fetched_at);
 }
 /** Cached Bili notes already fetched for this turn; never invent missing content. */
+const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
 export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
-  const rows = [...(context.batch || []), ...(context.recent || []), context.latest].filter(Boolean);
-  const refs = new Set<string>();
+  const batch = (context.batch || []).filter(Boolean), latest = context.latest, recent = context.recent || [];
+  const refs: string[] = [];
   const add = (value: any) => {
-    if (typeof value !== 'string') return;
-    if (BV.test(value) || SHORT_CODE.test(value)) refs.add(value);
+    if (typeof value !== 'string' || refs.length >= RESEARCH_REFS) return;
+    if ((BV.test(value) || SHORT_CODE.test(value)) && !refs.includes(value)) refs.push(value);
   };
-  for (const row of rows) {
+  // Only this turn's target and messages; old links in unrelated history are not material.
+  const target = latest ? videoTarget(batch, latest, recent, TEAM) : null;
+  if (target) add(target.ref);
+  for (const row of [latest, ...batch].filter(Boolean)) {
     const meta = row.meta || {};
     for (const b of meta.bili || []) { add(b?.bvid); add(b?.short); }
     for (const url of [...(meta.biliUrls || []), ...(meta.quotedBiliUrls || []), ...(meta.quotedUrls || [])]) {
       for (const b of extractBili([url], '')) { add(b.bvid); add(b.short); }
     }
+    const quoted = targetOf(meta.quoted || {}); if (quoted) add(quoted.ref);
   }
+  if (!refs.length) return [];
   const materials: string[] = [];
-  for (const ref of refs) {
-    const cached = await biliCached(e, ref);
-    if (cached) { materials.push(videoMaterial(cached, ref)); continue; }
-    const outcome = await fetchOutcome(e, ref);
-    if (outcome && outcome !== 'timeout') materials.push(biliFailMaterial(outcome, {title:isTitleRef(ref), titleFallback:TITLE_FALLBACK}));
+  let total = 0, reads = 0;
+  const budget = Math.min(RESEARCH_READS, Number.isFinite(left(e)) ? Math.max(0, left(e) - 2) : RESEARCH_READS);
+  for (const ref of refs.slice(0, RESEARCH_REFS)) {
+    if (reads + 1 > budget) break;
+    const cached = await biliCached(e, ref); reads++;
+    let material: string;
+    if (cached) material = videoMaterial(cached, ref);
+    else {
+      if (reads + 1 > budget) break;
+      const outcome = await fetchOutcome(e, ref); reads++;
+      if (!outcome || outcome === 'timeout') continue;
+      material = biliFailMaterial(outcome, {title:isTitleRef(ref), titleFallback:TITLE_FALLBACK});
+    }
+    material = material.slice(0, MATERIAL_CHARS);
+    if (materials.includes(material) || total + material.length > MATERIALS_CHARS) continue;
+    materials.push(material); total += material.length;
   }
-  return [...new Set(materials)];
+  return materials;
+}
+/** True when a resume message list already carries this material; a handoff must not append it twice. */
+export function materialInjected(messages: any[], material: string): boolean {
+  const visit = (value: any): boolean => {
+    if (typeof value === 'string') {
+      if (value.includes(material)) return true;
+      if (/^\s*[[{]/.test(value)) { try { return visit(JSON.parse(value)); } catch {} }
+      return false;
+    }
+    if (Array.isArray(value)) return value.some(visit);
+    return !!value && typeof value === 'object' && Object.values(value).some(visit);
+  };
+  return (messages || []).some(m => visit(m?.content));
 }
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   e.timingTurn = waitId.slice(3);

@@ -142,6 +142,20 @@ test('N6b short codes with -/_ and av final pages resolve or stay explicitly uns
  await assert.rejects(f.client.resolveShort('AbCd12'),e=>e.reason==='unsupported');
 });
 
+test('N6c av conversion failures keep risk, permission, missing and timeout reasons',async()=>{
+ for(const [response,reason] of [[{body:{code:-412}},'risk'],[{body:{code:-101}},'login_required'],[{body:{code:-404}},'not_found']]){
+  const f=fixture(o=>o.host==='b23.tv'?{status:302,headers:{location:'https://www.bilibili.com/video/av123'}}:o.path.includes('/view')?response:{body:{code:0,data:{}}});
+  await assert.rejects(f.client.resolveShort('AbCd12'),e=>e.code===response.body.code);
+  const reports=[];await runJob({id:'av',payload:{type:'bili',tier:'light',ref:'AbCd12'}},f.client,async(_p,b)=>reports.push(b));
+  assert.equal(reports.at(-1).reason,reason);
+ }
+ const request=(o,cb)=>{const req=new EventEmitter();req.end=()=>{if(o.host==='b23.tv'){const res=new EventEmitter();res.statusCode=302;res.headers={location:'https://www.bilibili.com/video/av123'};cb(res);queueMicrotask(()=>res.emit('end'));}else queueMicrotask(()=>req.emit('timeout'));};req.destroy=()=>{};return req;};
+ const client=createFetchClient({request,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),now:()=>10000});
+ await assert.rejects(client.resolveShort('AbCd12'),e=>e.timeout===true);
+ const reports=[];await runJob({id:'av-timeout',payload:{type:'bili',tier:'light',ref:'AbCd12'}},client,async(_p,b)=>reports.push(b));
+ assert.equal(reports.at(-1).reason,'timeout');
+});
+
 test('N7 DNS rejects all unsafe answers, pins one lookup per connection, handles mapped IPv6',async()=>{for(const ip of ['::ffff:127.0.0.1','::ffff:7f00:1','::ffff:10.0.0.1','fe80::1','100.64.0.1','0.0.0.0','::','::1','fc00::1','ff00::1','64:ff9b::0808:0808','2001:db8::1','192.0.2.1','198.18.0.1','224.0.0.1'])assert.equal(isPublic(ip),false,ip);assert.equal(isPublic('2606:4700:4700::1111'),true);const lookup=createSafeLookup((_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]));await assert.rejects(new Promise((resolve,reject)=>lookup('api.bilibili.com',{},(e,a)=>e?reject(e):resolve(a))));let n=0;const f=fixture(undefined,{lookup:(_h,_o,cb)=>cb(null,[{address:++n===1?'8.8.8.8':'127.0.0.1',family:4}])});await f.client.biliApi('/x');await assert.rejects(f.client.biliApi('/x'));assert.equal(n,2);});
 test('N8 streaming body limit destroys request',async()=>{const f=fixture(()=>({chunks:[Buffer.alloc(1_500_000),Buffer.alloc(600_000)]}));await assert.rejects(f.client.biliSubtitle('https://a.hdslb.com/a'));assert.ok(f.destroys>0);});
 test('N9 reports and logs exclude exact cookie values and untrusted payload fields',async()=>{const cookies={SESSDATA:'session-secret-value',buvid3:'buvid-secret-value'}, reports=[],logs=[];const client={biliLight:async()=>({title:'session-secret-value',desc:'buvid-secret-value'}),sanitize:x=>sanitize(x,Object.values(cookies))};await runJob({id:'j',payload:{type:'bili',ref:BV,tier:'light',lease:'l',url:'https://evil.com',cookie:'session-secret-value'}},client,async(path,b)=>reports.push([path,b]),x=>logs.push(x));assert.ok(!JSON.stringify([reports,logs]).includes('session-secret-value'));assert.ok(!JSON.stringify([reports,logs]).includes('buvid-secret-value'));await runJob({id:'j',payload:{type:'x',ref:BV,tier:'light',lease:'l'}},client,async(path,b)=>reports.push([path,b]),x=>logs.push(x));assert.equal(reports.at(-1)[1].success,false);});
