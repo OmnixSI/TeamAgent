@@ -81,6 +81,9 @@ class FetchInstallTests(unittest.TestCase):
         self.assertIn('osascript', content)
         self.assertIn(str(self.runtime / 'fetcher.mjs'), content)
         self.assertIn('login', content)
+        self.assertIn('owner_unlock.py', content)
+        self.assertIn('打开开发台（B 站扫码）', content)
+        self.assertTrue((self.runtime / 'owner_unlock.py').exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o700)
         for directory in ['browser/bili', 'browser/x', 'secrets']:
             self.assertEqual((self.runtime / directory).stat().st_mode & 0o777, 0o700)

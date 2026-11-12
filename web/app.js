@@ -1,9 +1,13 @@
 let token = sessionStorage.getItem("team-token") || "",
+  localSession = sessionStorage.getItem('local-session') || '',
   state,
   view = "tasks",
   loginTimer,
   lastFull = 0,
   loading = false;
+const LOCAL_LOCKED = '本机开发台未解锁';
+const LOCAL_UNLOCK_HINT = '本机开发台未解锁：双击桌面「TeamAgent-登录」→ 选「打开开发台（B 站扫码）」';
+function localOwner() { return location.origin === 'http://127.0.0.1:3391'; }
 const $ = (s) => document.getElementById(s),
   names = {
     proposal: "方案待确认",
@@ -67,6 +71,20 @@ function link(text, url) {
   } catch {}
   return a;
 }
+function localConsoleLink(text) {
+  const a = el('a', text);
+  a.href = 'http://127.0.0.1:3391/'; a.target = '_blank'; a.rel = 'noreferrer';
+  return a;
+}
+function showLocalLocked() {
+  localSession = ''; sessionStorage.removeItem('local-session');
+  $('app').hidden = true; $('login').hidden = false; $('nameform').hidden = true;
+  $('logincode').textContent = LOCAL_UNLOCK_HINT; $('error').textContent = '';
+}
+function localLockedError() {
+  showLocalLocked();
+  const error = Error(LOCAL_LOCKED); error.localLocked = true; return error;
+}
 function badge(text, kind) {
   return el("span", text, "badge " + (kind || ""));
 }
@@ -74,6 +92,7 @@ function empty(text) {
   return el("p", text, "empty");
 }
 function error(e) {
+  if (e.localLocked && localOwner()) return;
   $("error").textContent = e.message || String(e);
   if ($("modal").open) toast(e.message || String(e));
 }
@@ -86,13 +105,14 @@ async function api(path, body, method) {
   const r = await fetch(path, {
     method: method || (body ? "POST" : "GET"),
     headers: {
-      Authorization: "Bearer " + token,
       "Content-Type": "application/json",
+      ...(localOwner() ? {'X-TeamAgent-Session':localSession,'X-TeamAgent-Local':'1'} : {Authorization:"Bearer " + token}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
   const j = await r.json();
   if (!r.ok) {
+    if (localOwner() && r.status === 401 && j.error === LOCAL_LOCKED) throw localLockedError();
     if (r.status === 401 && state) {
       $("app").hidden = true;
       $("login").hidden = false;
@@ -1075,9 +1095,10 @@ function loginQr(text) {
 let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot;
 async function localServiceQr(id) {
   const response = await fetch('/api/local/service-login/qr?id=' + encodeURIComponent(id), {
-    headers: {'X-TeamAgent-Local':'1'}, cache:'no-store', referrerPolicy:'no-referrer', signal:AbortSignal.timeout(3000),
+    headers: {'X-TeamAgent-Local':'1',...(localOwner()?{'X-TeamAgent-Session':localSession}:{})}, cache:'no-store', referrerPolicy:'no-referrer', signal:AbortSignal.timeout(3000),
   });
   if (response.status === 404) return null;
+  if (localOwner() && response.status === 401 && (await response.json()).error === LOCAL_LOCKED) throw localLockedError();
   if (!response.ok) throw Error('无法取得本机二维码，请检查本机管理员开发台。');
   const qr = await response.json();
   return qr.id === id && qr.expires_at > Date.now() && typeof qr.qr_url === 'string' ? qr.qr_url : null;
@@ -1094,9 +1115,9 @@ async function refreshServiceLogins(panel) {
   try {
     const snapshot = await api('/api/team/service-login');
     if (!panel.isConnected || state?.who.role !== 'owner') return;
-    const localOwner = location.origin === 'http://127.0.0.1:3391';
+    const isLocalOwner = localOwner();
     const biliFlow = snapshot.services.bili.flow;
-    const localQr = localOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now()
+    const localQr = isLocalOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now()
       ? await localServiceQr(biliFlow.id) : null;
     loginSnapshot = snapshot; lastLoginRefresh = Date.now();
     // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
@@ -1105,7 +1126,7 @@ async function refreshServiceLogins(panel) {
     panel.loginSignature = visual;
     panel.replaceChildren(el('h2', '本机服务登录'));
     panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
-    if (!localOwner) panel.append(link('请打开本机管理员开发台进行扫码', 'http://127.0.0.1:3391'));
+    if (!isLocalOwner) panel.append(localConsoleLink('在这台电脑上打开本机开发台扫码（先双击桌面「TeamAgent-登录」）'));
     if (!snapshot.online) panel.append(el('p', '本机服务没在线，请检查', 'error'));
     const cards = el('div', undefined, 'grid');
     for (const service of ['bili', 'x']) {
@@ -1124,7 +1145,7 @@ async function refreshServiceLogins(panel) {
       if (active && service === 'bili' && localQr) card.append(loginQr(localQr));
       const actions = el('div', undefined, 'actions');
       const start = button('登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
-      start.disabled = !!active || !snapshot.online || (service === 'bili' && !localOwner); actions.append(start);
+      start.disabled = !!active || !snapshot.online || (service === 'bili' && !isLocalOwner); actions.append(start);
       if (active) actions.append(button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }));
       card.append(actions); cards.append(card);
     }
@@ -1433,7 +1454,30 @@ $("admin").onclick = () => {
   box.append(connection);
   show(el("h2", "管理接入"), box);
 };
-if (token || location.hostname === "127.0.0.1") load();
+async function startLocalOwner() {
+  const fragment = location.hash || '';
+  if (fragment.startsWith('#unlock=')) {
+    const code = fragment.slice(8);
+    // Erase the one-time code before any exchange or other network request.
+    history.replaceState(null, '', '/');
+    try {
+      const response = await fetch('/api/local/session', {
+        method:'POST', headers:{'Content-Type':'application/json','X-TeamAgent-Local':'1'},
+        body:JSON.stringify({code}), cache:'no-store', referrerPolicy:'no-referrer',
+      });
+      if (!response.ok) { showLocalLocked(); return; }
+      const data = await response.json();
+      if (typeof data.session !== 'string' || !data.session) { showLocalLocked(); return; }
+      localSession = data.session; sessionStorage.setItem('local-session', localSession);
+      $('nameform').hidden = true;
+      // The desktop entry opens directly on the Bilibili/X login controls.
+      selectView('system');
+    } catch { showLocalLocked(); }
+  } else if (localSession) await load();
+  else showLocalLocked();
+}
+if (localOwner()) startLocalOwner();
+else if (token) load();
 setInterval(async () => {
   if (document.hidden || $("app").hidden || $("modal").open || loading) return;
   try {

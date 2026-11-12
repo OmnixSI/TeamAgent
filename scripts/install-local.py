@@ -84,9 +84,9 @@ def install_login_launcher():
     path = Path.home() / "Desktop/TeamAgent-登录.command"
     content = """#!/bin/zsh
 # TeamAgent managed login launcher
-choice=$(/usr/bin/osascript -e 'choose from list {"B 站", "X"} with title "TeamAgent 登录" with prompt "选择要登录的服务"') || exit 0
+choice=$(/usr/bin/osascript -e 'choose from list {"打开开发台（B 站扫码）", "X"} with title "TeamAgent 登录" with prompt "选择要登录的服务"') || exit 0
 case "$choice" in
-  "B 站") service=bili ;;
+  "打开开发台（B 站扫码）") exec """ + shlex.quote(sys.executable) + " " + shlex.quote(str(runtime / "owner_unlock.py")) + """ ;;
   "X") service=x ;;
   *) exit 0 ;;
 esac
