@@ -134,7 +134,10 @@ export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<
   ]);
   if(!ok&&Number(result[2]?.results?.[0]?.value)>=3){
     const until=String(Date.now()+86400000);
-    await e.DB.prepare("INSERT INTO settings VALUES('sticker_paused_until',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(until).run();
+    await e.DB.batch([
+      e.DB.prepare("INSERT INTO settings VALUES('sticker_paused_until',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(until),
+      e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail'"),
+    ]);
     sw.sticker_paused_until=until;
     await activity(e,'sticker.paused','stickers','Bot','表情连续发送失败，已暂停一天');
   }

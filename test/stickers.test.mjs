@@ -199,9 +199,37 @@ test('S11 upload failure skips once while text succeeds; no duplicate delivery',
 test('S11b three failures pause for a day, and a successful sticker resets the counter',async()=>{
  const e=await sendingFixture();for(let i=0;i<3;i++)await mediaRow(e,'bad-'+i);
  await deliverSticker(e,{upload:()=>Response.json({code:123},{status:400})});
- const settings=Object.fromEntries((await all(e,'settings')).map(r=>[r.key,r.value]));assert.equal(settings.sticker_fail,'3');assert.ok(Number(settings.sticker_paused_until)>=Date.now()+86400000-1000);
+ const settings=Object.fromEntries((await all(e,'settings')).map(r=>[r.key,r.value]));assert.equal(settings.sticker_fail,'0');assert.ok(Number(settings.sticker_paused_until)>=Date.now()+86400000-1000);
  assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.paused').length,1);
  const good=await sendingFixture();await put(good,'sticker_fail','2');await mediaRow(good);await deliverSticker(good);assert.equal((await all(good,'settings')).find(r=>r.key==='sticker_fail').value,'0');
+});
+test('sticker failures start a new three-attempt cycle after the daily pause expires',async()=>{
+ const real=Date.now;let now=real();Date.now=()=>now;
+ try{
+  const e=await sendingFixture(),failure={upload:()=>Response.json({code:123},{status:400})};
+  for(let i=0;i<3;i++)await mediaRow(e,'first-cycle-'+i);
+  const firstCalls=await deliverSticker(e,failure);
+  assert.equal(firstCalls.filter(c=>c.url.endsWith('/files')).length,3);
+  const settings=()=>all(e,'settings').then(rows=>Object.fromEntries(rows.map(r=>[r.key,r.value])));
+  const paused=await settings(),until=Number(paused.sticker_paused_until);
+  assert.equal(until,now+86400000);
+  await mediaRow(e,'during-pause');assert.equal((await deliverSticker(e,failure)).length,0);
+  now=until+1;
+  await e.DB.prepare('UPDATE messages SET ts=?').bind(new Date(now).toISOString()).run();
+  for(let i=1;i<=3;i++){
+   await mediaRow(e,'next-cycle-'+i);
+   const calls=await deliverSticker(e,failure),current=await settings();
+   assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,1);
+   if(i<3){
+    assert.equal(current.sticker_fail,String(i),'expired pauses must not retain the previous failure streak');
+    assert.equal(current.sticker_paused_until,String(until));
+    assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.paused').length,1);
+   }else{
+    assert.equal(current.sticker_fail,'0');assert.equal(Number(current.sticker_paused_until),now+86400000);
+    assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.paused').length,2);
+   }
+  }
+ }finally{Date.now=real;}
 });
 test('message rejection and network uncertainty never retry rich media',async()=>{
  for(const failure of ['rejected','network']){
@@ -246,7 +274,7 @@ test('sticker selection and the largest sender failure path count actual D1 stat
  assert.equal(e.meter.used,base.DB.executed-before);assert.equal(e.meter.used,7);assert.ok((await all(base,'outbox')).some(o=>o.id.endsWith('~s')));
  // Worst row: upload cache write, rejected message, failure counter and fuse activity.
  const fail=await sendingFixture();await put(fail,'sticker_fail','2');await mediaRow(fail);before=fail.DB.executed;e=metered(fail);
- await deliverSticker(e,{send:()=>Response.json({code:9},{status:400})});assert.equal(e.meter.used,fail.DB.executed-before);assert.ok(e.meter.used<=48);assert.equal(e.meter.used,13);
+ await deliverSticker(e,{send:()=>Response.json({code:9},{status:400})});assert.equal(e.meter.used,fail.DB.executed-before);assert.ok(e.meter.used<=48);assert.equal(e.meter.used,14);
  const {writeFileSync}=await import('node:fs');writeFileSync('.agent/p2-send-counts.json',JSON.stringify({selectionIncludingText:7,largestFailureInvocation:e.meter.used},null,2));
 });
 test('closed sticker backlog can be skipped within four remaining statements and zero QQ calls',async()=>{
