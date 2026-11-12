@@ -17,6 +17,10 @@ REFERER = "https://www.bilibili.com/"
 GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key="
 NAMES = ("SESSDATA", "bili_jct", "DedeUserID", "buvid3")
+RISK_PATH = "state/bili-risk.json"
+
+class BiliPaused(Exception):
+    pass
 
 class LocalBiliLogin:
     def __init__(self, runtime, config):
@@ -25,10 +29,48 @@ class LocalBiliLogin:
         self._sessions = {}
         self._lock = threading.Lock()
 
+    def _risk_path(self):
+        return self.runtime / RISK_PATH
+
+    def _check_pause(self):
+        try:
+            data = json.loads(self._risk_path().read_text())
+            if float(data.get("paused_until", 0)) > time.time() * 1000:
+                raise BiliPaused()
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _pause(self):
+        path = self._risk_path()
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temp = path.with_name(path.name + ".tmp-" + secrets.token_hex(6))
+        try:
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                json.dump({"paused_until": int(time.time() * 1000) + 600000}, stream)
+            temp.replace(path)
+        except OSError:
+            pass
+        finally:
+            temp.unlink(missing_ok=True)
+
     def _http(self, url):
+        self._check_pause()
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": REFERER, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as response:
-            return response.headers, json.loads(response.read())
+        try:
+            with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as response:
+                headers = response.headers
+                body = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            if error.code in (412, 429):
+                self._pause()
+                raise BiliPaused()
+            raise
+        if body.get("code") in (-352, -412):
+            self._pause()
+            raise BiliPaused()
+        return headers, body
 
     @staticmethod
     def _cookies(headers, now):
@@ -94,6 +136,11 @@ class LocalBiliLogin:
             pass
 
     def start(self):
+        with self._lock:
+            active = self._sessions.get("active")
+            if active and active["expires_at"] > time.time() * 1000:
+                return {"id": active["id"], "qr_url": active["qr_url"], "expires_at": active["expires_at"]}
+            self._sessions = {}
         headers, body = self._http(GENERATE)
         data = body.get("data") if body.get("code") == 0 else None
         qr_url, key = (data or {}).get("url"), (data or {}).get("qrcode_key")
@@ -102,17 +149,16 @@ class LocalBiliLogin:
         login_id = secrets.token_hex(8)
         expires = int(time.time() * 1000) + 180000
         with self._lock:
-            self._sessions = {k: v for k, v in self._sessions.items() if v["expires_at"] > time.time() * 1000}
-            self._sessions[login_id] = {"key": key, "expires_at": expires}
+            self._sessions = {"active": {"id": login_id, "key": key, "qr_url": qr_url, "expires_at": expires}}
         return {"id": login_id, "qr_url": qr_url, "expires_at": expires}
 
     def status(self, login_id):
         with self._lock:
-            item = self._sessions.get(login_id) if isinstance(login_id, str) else None
-            if not item:
+            item = self._sessions.get("active") if isinstance(login_id, str) else None
+            if not item or item["id"] != login_id:
                 return {"phase": "expired"}
             if item["expires_at"] <= time.time() * 1000:
-                self._sessions.pop(login_id, None)
+                self._sessions = {}
                 return {"phase": "expired"}
             key = item["key"]
         try:
@@ -121,9 +167,12 @@ class LocalBiliLogin:
                 return {"phase": "failed"}
             code = (body.get("data") or {}).get("code")
             if code == 0:
-                self._save(self._cookies(headers, time.time() * 1000))
                 with self._lock:
-                    self._sessions.pop(login_id, None)
+                    current = self._sessions.get("active")
+                    if not current or current is not item or current["expires_at"] <= time.time() * 1000:
+                        return {"phase": "expired"}
+                    self._sessions = {}
+                self._save(self._cookies(headers, time.time() * 1000))
                 self._report("ok")
                 return {"phase": "ok"}
             if code == 86090:
@@ -131,11 +180,16 @@ class LocalBiliLogin:
             if code == 86101:
                 return {"phase": "waiting"}
             with self._lock:
-                self._sessions.pop(login_id, None)
+                if self._sessions.get("active") is item:
+                    self._sessions = {}
             return {"phase": "expired" if code == 86038 else "failed"}
+        except BiliPaused:
+            return {"phase": "paused"}
         except (OSError, ValueError, TypeError, urllib.error.URLError):
             return {"phase": "failed"}
 
     def cancel(self, login_id):
         with self._lock:
-            self._sessions.pop(login_id, None)
+            item = self._sessions.get("active")
+            if item and item["id"] == login_id:
+                self._sessions = {}

@@ -81,6 +81,39 @@ class LocalLoginPageTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {'phase':'waiting'})
         self.assertNotIn(b'cookie', body.lower())
 
+
+    def test_local_bili_reuses_shared_pause_and_single_active_flow(self):
+        spec = importlib.util.spec_from_file_location('local_bili_unit2', ROOT / 'runner/local_bili_login.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(ROOT / 'runner'))
+        spec.loader.exec_module(module)
+        login = module.LocalBiliLogin(self.runtime, {'url':'https://cloud.test','runnerToken':'runner'})
+        risk = self.runtime / 'state/bili-risk.json'
+        risk.parent.mkdir(parents=True)
+        risk.write_text(json.dumps({'paused_until': int(time.time()*1000)+60000}))
+        with patch.object(module.urllib.request, 'urlopen') as opened:
+            with self.assertRaises(module.BiliPaused):
+                login.start()
+            opened.assert_not_called()
+        login._pause()
+        with patch.object(module.urllib.request, 'urlopen') as opened:
+            for _ in range(5):
+                with self.assertRaises(module.BiliPaused):
+                    login.start()
+            opened.assert_not_called()
+        risk.write_text(json.dumps({'paused_until': 0}))
+        headers = Message()
+        url = 'https://account.bilibili.com/h5/account-h5/auth/scan-web?navhide=1&callback=close&qrcode_key=' + 'b'*32 + '&from='
+        calls = []
+        def http(path):
+            calls.append(path)
+            return headers, {'code':0,'data':{'url':url,'qrcode_key':'b'*32}}
+        login._http = http
+        first = login.start()
+        second = login.start()
+        self.assertEqual(first['id'], second['id'])
+        self.assertEqual(len(calls), 1)
+
     def test_local_bili_generate_and_ok_poll_write_0600_cookie_file(self):
         spec = importlib.util.spec_from_file_location('local_bili_unit', ROOT / 'runner/local_bili_login.py')
         module = importlib.util.module_from_spec(spec)

@@ -5,7 +5,7 @@ from pathlib import Path
 import os, json, re, urllib.request, urllib.error, ssl, shutil, subprocess
 from urllib.parse import urlsplit, parse_qs
 from local_login_qr import read_local_qr, clear_local_qr
-from local_bili_login import LocalBiliLogin
+from local_bili_login import BiliPaused, LocalBiliLogin
 from local_login_page import PAGE
 from owner_unlock import redeem_code, mint_code, OwnerSessions
 
@@ -134,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_error(405)
                 try:
                     return self.local_json(200, self.bili().start())
+                except BiliPaused:
+                    return self.local_json(503, {'error':'B 站暂时限制，请稍后再试'})
                 except Exception:
                     return self.local_json(502, {'error':'B 站二维码获取失败，请稍后重试'})
             if self.route_path == '/api/local/bili/status':

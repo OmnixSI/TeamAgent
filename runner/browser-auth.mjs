@@ -65,11 +65,12 @@ export async function browserOptions(chromium,options={}){
  }
  throw Error(BROWSER_MISSING);
 }
+export function browserLaunchOptions(browser,headless){return {...browser,headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000,chromiumSandbox:true,ignoreDefaultArgs:['--enable-automation'],args:['--disable-blink-features=AutomationControlled']};}
 async function launchBrowser(_service,options){
  const require=createRequire(import.meta.url);
  const {chromium}=require(resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'));
  const browser=await browserOptions(chromium);
- return chromium.launchPersistentContext(options.profile,{...browser,headless:options.headless,acceptDownloads:false,serviceWorkers:'block',timeout:20000,ignoreDefaultArgs:['--enable-automation'],args:['--disable-blink-features=AutomationControlled']});
+ return chromium.launchPersistentContext(options.profile,browserLaunchOptions(browser,options.headless));
 }
 export async function macNotification(text){
  if(process.platform!=='darwin')return;

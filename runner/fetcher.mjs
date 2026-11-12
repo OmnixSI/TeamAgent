@@ -7,8 +7,9 @@ import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {resolve} from 'node:path';
+import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const MIXIN=[46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52];
@@ -56,13 +57,13 @@ function allowed(raw,kind){
  if(!ok)throw Error('blocked host');return u;
 }
 export function createFetchClient(options={}){
- const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random,log=options.log||(()=>{});
+ const request=options.request||https.request,lookup=createSafeLookup(options.lookup||dns.lookup),now=options.now||Date.now,sleep=options.sleep||(ms=>new Promise(r=>setTimeout(r,ms))),random=options.random||Math.random,log=options.log||(()=>{}),riskPath=options.riskPath;
  const cookies={...(options.cookies||{})};let nextAt=0,serial=Promise.resolve(),riskCount=0,pausedUntil=0,searchPausedUntil=0,buvidAt=cookies.buvid3?now():-Infinity,wbi=null,wbiAt=-Infinity;
  const knownSecrets=new Set(Object.values(cookies).filter(x=>typeof x==='string'&&x));
  const secrets=()=>[...knownSecrets];
  const safe=x=>sanitize(x,secrets());
- const rate=()=>{const slot=serial.then(async()=>{if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
- function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2)pausedUntil=now()+600000;}
+ const rate=()=>{const slot=serial.then(async()=>{if(riskPath){try{const p=Number(JSON.parse(readFileSync(riskPath,'utf8'))?.paused_until);if(Number.isFinite(p))pausedUntil=Math.max(pausedUntil,p);}catch{}}if(pausedUntil&&now()>=pausedUntil){pausedUntil=0;riskCount=0;}if(now()<pausedUntil)throw Error('风控');const delay=Math.max(0,nextAt-now());if(delay)await sleep(delay);if(now()<pausedUntil)throw Error('风控');nextAt=now()+1000+200+Math.floor(random()*601);});serial=slot.catch(()=>{});return slot;};
+ function risk(hit,reset=true){const before=riskCount;riskCount=hit?riskCount+1:(reset?0:riskCount);if(hit&&before<2&&riskCount>=2){pausedUntil=now()+600000;if(riskPath){try{mkdirSync(dirname(riskPath),{recursive:true,mode:0o700});const tmp=riskPath+'.tmp-'+process.pid;writeFileSync(tmp,JSON.stringify({paused_until:pausedUntil}),{mode:0o600});renameSync(tmp,riskPath);}catch{}}}}
  async function get(raw,kind,anonymous=false){
    const u=allowed(raw,kind);await rate();
    // Fresh headers per request: never reuse the API Cookie for a subtitle/short URL.
