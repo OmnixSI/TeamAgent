@@ -1,6 +1,7 @@
-/** QR transport runs locally. Only validated display URLs and fixed status fields reach the Worker. */
+/** The QR URL is a login credential: only fixed progress fields reach the Worker. */
 import {writeBiliCookies,loadBiliCookies} from './browser-auth.mjs';
 import {validLoginQr} from './login-url.mjs';
+import {publishLocalQr,clearLocalQr} from './local-login-qr.mjs';
 const NAMES=['SESSDATA','bili_jct','DedeUserID','buvid3'];
 const risk=error=>error?.status===412||[-352,-412].includes(error?.code)||error?.message==='风控';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -28,10 +29,10 @@ export async function runLoginFlow(login,options){
 async function executeLoginFlow(login,options){
  const {client,auth,cloud,home}=options,now=options.now||Date.now,wait=options.sleep||sleep;
  if(!login||!['bili','x'].includes(login.service)||typeof login.id!=='string'||!Number.isFinite(login.expires_at))return 'failed';
- const deadline=Math.min(login.expires_at,now()+300000);let qr,heartbeat,heartbeatBusy=false,heartbeatError;
+ const deadline=Math.min(login.expires_at,now()+300000);let heartbeat,heartbeatBusy=false,heartbeatError;
  const controller=new AbortController();
  async function publish(phase,extra={}){
-  try{await cloud('login-state',{id:login.id,service:login.service,phase,...extra});}
+  try{await cloud('login-state',{id:login.id,service:login.service,phase,...(extra.reason==='risk'?{reason:'risk'}:{})});}
   catch(error){if(error.status===409)throw new Cancelled();throw error;}
  }
  try{
@@ -53,7 +54,7 @@ async function executeLoginFlow(login,options){
   const generated=await client.biliPassport('generate');
   const data=generated.body?.data;
   if(generated.body.code!==0||!validLoginQr(data?.url)||!/^[a-f0-9]{32}$/.test(data?.qrcode_key))throw Error('invalid QR response');
-  qr=data.url;await publish('waiting',{qr_url:qr});
+  await publishLocalQr(home,{...login,expires_at:deadline},data.url);await publish('waiting');
   while(now()<deadline){
    const result=await client.biliPassport('poll',data.qrcode_key);
    if(now()>=deadline)break;
@@ -62,7 +63,7 @@ async function executeLoginFlow(login,options){
    if(code===86038){await publish('expired');return 'expired';}
    if(code===0){
     // Verify the request is still active before accepting the login locally.
-    await publish('scanned',{qr_url:qr});
+    await publish('scanned');
     const parsed=parseCookies(result.headers,now());
     if(!NAMES.slice(0,3).every(name=>parsed.some(c=>c.name===name&&c.value)))throw Error('incomplete cookies');
     const old=await loadBiliCookies(home),device=parsed.find(c=>c.name==='buvid3');
@@ -79,7 +80,7 @@ async function executeLoginFlow(login,options){
     await auth.record('bili','ok');await publish('ok');return 'ok';
    }
    if(![86101,86090].includes(code))throw Error('invalid QR state');
-   await publish(code===86090?'scanned':'waiting',{qr_url:qr});
+   await publish(code===86090?'scanned':'waiting');
    await wait(Math.min(2000,Math.max(0,deadline-now())));
   }
   await publish('expired');return 'expired';
@@ -88,5 +89,5 @@ async function executeLoginFlow(login,options){
   if(risk(error)){client.pauseForRisk();await auth.record('bili','risk');}
   try{await publish('failed',risk(error)?{reason:'risk'}:{});}catch{}
   return 'failed';
- }finally{clearInterval(heartbeat);controller.abort();}
+ }finally{clearInterval(heartbeat);controller.abort();if(login.service==='bili')await clearLocalQr(home,login.id);}
 }

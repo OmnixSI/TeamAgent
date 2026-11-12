@@ -26,15 +26,24 @@ async function fixture(t,codes=[86101,86090,0],extra={}){
  return {home,client,calls,states,auth,logs,options,login:{id:'flow',service:'bili',expires_at:310000},get time(){return time;}};
 }
 test('QR waiting/scanned/ok saves exactly four private fields, fills buvid anonymously and exports no credentials',async t=>{
- const f=await fixture(t);assert.equal(await runLoginFlow(f.login,f.options),'ok');
+ const f=await fixture(t),wait=f.options.sleep,local=[];
+ f.options.sleep=async ms=>{
+  const file=join(f.home,'state/login-qr/bili-flow.json');
+  local.push(JSON.parse(await readFile(file,'utf8')));
+  assert.equal((await stat(file)).mode&0o777,0o600);
+  assert.equal((await stat(join(f.home,'state/login-qr'))).mode&0o777,0o700);
+  await wait(ms);
+ };
+ assert.equal(await runLoginFlow(f.login,f.options),'ok');assert.equal(local[0].qr_url,url);
+ await assert.rejects(readFile(join(f.home,'state/login-qr/bili-flow.json')));
  const file=join(f.home,'secrets/bili-cookie.json'),saved=JSON.parse(await readFile(file,'utf8'));
  assert.deepEqual(Object.keys(saved).sort(),Object.keys(values).sort());for(const [name,value] of Object.entries(values))assert.equal(saved[name].value,value);
  assert.equal((await stat(file)).mode&0o777,0o600);assert.equal((await stat(join(f.home,'secrets'))).mode&0o777,0o700);
- assert.deepEqual(f.states.map(x=>x.phase),['waiting','waiting','scanned','scanned','ok']);assert.ok(f.states.filter(x=>x.qr_url).every(x=>x.qr_url===url));
+ assert.deepEqual(f.states.map(x=>x.phase),['waiting','waiting','scanned','scanned','ok']);assert.ok(f.states.every(x=>!('qr_url' in x)));
  assert.deepEqual(f.auth,[{service:'bili',state:'ok'}]);assert.equal(f.states.at(-1).qr_url,undefined);
  const spi=f.calls.find(x=>x.host==='api.bilibili.com');assert.ok(spi.path.startsWith('/x/frontend/finger/spi'));assert.equal(spi.headers.Cookie,undefined);
  assert.ok(f.calls.filter(x=>x.path.includes('/qrcode/')).every(x=>x.host==='passport.bilibili.com'&&!x.headers.Cookie));
- for(const secret of [...Object.values(values),'FAKE-REFRESH-PRIVATE'])assert.ok(!JSON.stringify([f.states,f.logs,f.auth]).includes(secret));
+ for(const secret of [...Object.values(values),'FAKE-REFRESH-PRIVATE',key,url,encodeURIComponent(url),Buffer.from(url).toString('base64')])assert.ok(!JSON.stringify([f.states,f.logs,f.auth]).includes(secret));
  assert.ok(!f.client.sanitize(Object.values(values).join(' ')).includes('PRIVATE'));
 });
 test('QR expiry and five-minute timeout finish without credential files or QR',async t=>{
@@ -42,11 +51,13 @@ test('QR expiry and five-minute timeout finish without credential files or QR',a
   const f=await fixture(t,codes);f.login.expires_at=deadline;
   assert.equal(await runLoginFlow(f.login,f.options),'expired');assert.equal(f.states.at(-1).qr_url,undefined);
   await assert.rejects(readFile(join(f.home,'secrets/bili-cookie.json')));
+   await assert.rejects(readFile(join(f.home,'state/login-qr/bili-flow.json')));
  }
 });
 test('QR cancellation stops polling and prevents credential persistence',async t=>{
  const f=await fixture(t,[0],{cancel:2});assert.equal(await runLoginFlow(f.login,f.options),'cancelled');
  assert.equal(f.calls.filter(x=>x.path.includes('/poll')).length,1);await assert.rejects(readFile(join(f.home,'secrets/bili-cookie.json')));
+ await assert.rejects(readFile(join(f.home,'state/login-qr/bili-flow.json')));
 });
 test('passport risk stops immediately and shares the fetch pause; unsafe generation URL never leaves local process',async t=>{
  const f=await fixture(t,[412]);assert.equal(await runLoginFlow(f.login,f.options),'failed');assert.equal(f.client.isPaused(),true);

@@ -26,25 +26,26 @@ test('one concurrent request per service, exactly one claim and no fetch job gra
  const next=await claim(e);assert.equal(next.login,null);assert.equal(next.job.id,'video');
  assert.equal((await e.DB.prepare("SELECT COUNT(*) AS n FROM jobs").first()).n,1);
 });
-test('waiting to scanned to ok, only display fields escape and terminal state erases qr',async()=>{
+test('waiting to scanned to ok exposes progress only; QR capabilities never enter D1',async()=>{
  const e=env();await start(e);const {login}=await claim(e);
  for(const phase of ['waiting','scanned']){
-  assert.equal((await report(e,login,phase,{qr_url:url,cookie:secrets[0],SESSDATA:secrets[1]})).status,200);
-  const s=await state(e);assert.equal(s.services.bili.flow.phase,phase);assert.equal(s.services.bili.flow.qr_url,url);
+  assert.equal((await report(e,login,phase)).status,200);
+  const s=await state(e);assert.equal(s.services.bili.flow.phase,phase);assert.equal(s.services.bili.flow.qr_url,undefined);
   assert.equal(s.online,true);assert.ok(!JSON.stringify(s).includes('cookie'));for(const x of secrets)assert.ok(!JSON.stringify(s).includes(x));
  }
- await runner(e,'auth-status',{service:'bili',state:'ok'});await report(e,login,'ok',{qr_url:url});
+ await runner(e,'auth-status',{service:'bili',state:'ok'});await report(e,login,'ok');
  const s=await state(e);assert.equal(s.services.bili.flow.phase,'ok');assert.equal(s.services.bili.auth.state,'ok');assert.equal(s.services.bili.flow.qr_url,undefined);
  assert.ok(!(await e.DB.prepare("SELECT value FROM settings WHERE key='login-flow:bili'").first()).value.includes('qr_url'));
- assert.equal((await report(e,login,'waiting',{qr_url:url})).status,409);
+ assert.equal((await report(e,login,'waiting')).status,409);
 });
-test('rejects unsafe QR URLs, credential query parameters and URLs on X flows',async()=>{
+test('rejects QR URLs and credential fields on every cloud login report',async()=>{
  const e=env();await start(e);const {login}=await claim(e);
  for(const qr_url of ['https://evil.com/scan','https://passport.bilibili.com.evil.test/scan','http://passport.bilibili.com/scan','https://u:p@passport.bilibili.com/scan','https://passport.bilibili.com:8443/scan','https://passport.bilibili.com/unrelated','https://passport.bilibili.com/h5-app/passport/login/scan?SESSDATA='+secrets[0],url+'&cookie='+secrets[0],url+'x'.repeat(500)])assert.equal((await report(e,login,'waiting',{qr_url})).status,400,qr_url);
+ for(const extra of [{qr_url:url},{qrcode_key:'a'.repeat(32)},{cookie:secrets[0]},{url}])assert.equal((await report(e,login,'waiting',extra)).status,400);
  await start(e,'x');const x=(await claim(e)).login;assert.equal(x.service,'x');assert.equal((await report(e,x,'waiting',{qr_url:url})).status,400);
 });
 test('cancellation invalidates old reports and requests, removes QR and permits a fresh flow',async()=>{
- const e=env();await start(e);const {login}=await claim(e);await report(e,login,'waiting',{qr_url:url});
+ const e=env();await start(e);const {login}=await claim(e);await report(e,login,'waiting');
  assert.equal((await owner(e,{service:'bili',id:login.id},'DELETE')).status,200);
  assert.equal((await state(e)).services.bili.flow.phase,'cancelled');assert.equal((await report(e,login,'ok')).status,409);
  const fresh=await start(e);assert.notEqual(fresh.flow.id,login.id);
@@ -52,10 +53,10 @@ test('cancellation invalidates old reports and requests, removes QR and permits 
 });
 test('expired/failed statuses and five minute timeout clear QR; stale flow and offline heartbeat disappear',async()=>{
  const e=env();for(const phase of ['expired','failed']){
-  await start(e);const {login}=await claim(e);await report(e,login,'waiting',{qr_url:url});await report(e,login,phase,{qr_url:url,reason:'risk',cookie:secrets[0]});
+  await start(e);const {login}=await claim(e);await report(e,login,'waiting');await report(e,login,phase,{reason:'risk'});
   const flow=(await state(e)).services.bili.flow;assert.equal(flow.phase,phase);assert.equal(flow.qr_url,undefined);
  }
- await start(e);const {login}=await claim(e);await report(e,login,'waiting',{qr_url:url});
+ await start(e);const {login}=await claim(e);await report(e,login,'waiting');
  const originalNow=Date.now;const later=originalNow()+300001;
  try{Date.now=()=>later;const s=await state(e);assert.equal(s.services.bili.flow,null);assert.equal(s.online,false);assert.equal((await report(e,login,'ok')).status,409);assert.equal((await owner(e,{service:'bili'})).status,200);}finally{Date.now=originalNow;}
 });
@@ -78,6 +79,41 @@ test('owner to fake local fetcher to saved credentials and auth status works end
  const view=await state(e);assert.equal(view.services.bili.auth.state,'ok');assert.equal(view.services.bili.flow.phase,'ok');
  for(const secret of secrets)assert.ok(!JSON.stringify(view).includes(secret));assert.ok(!JSON.stringify(view).includes('cookie'));
  assert.equal(JSON.parse(await readFile(join(home,'secrets/bili-cookie.json'),'utf8')).SESSDATA.value,secrets[0]);
+});
+test('P1 QR capability and cookies never occur in any Worker request, D1 binding, Worker response or log',async t=>{
+ const {mkdtemp,rm,readFile}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
+ const {runLoginFlow}=await import('../runner/qr-login.mjs'),{createBrowserAuth}=await import('../runner/browser-auth.mjs');
+ const home=await mkdtemp(join(tmpdir(),'team-qr-private-e2e-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const e=env(),payloads=[],bindings=[],responses=[],logs=[],local=[];
+ const prepare=e.DB.prepare.bind(e.DB);
+ e.DB.prepare=sql=>{const wrap=statement=>new Proxy(statement,{get(target,key){if(key==='bind')return (...args)=>{bindings.push(args);return wrap(target.bind(...args));};return target[key];}});return wrap(prepare(sql));};
+ const call=async(path,body,key='owner-secret')=>{
+  payloads.push({path,body});const response=await req(e,path,body,key);const data=await response.json();responses.push(data);
+  if(!response.ok){const error=Error('conflict');error.status=response.status;throw error;}return data;
+ };
+ await call('/api/team/service-login',{service:'bili'});
+ const {login}=await call('/api/runner/fetch/claim',{},'runner-secret');let i=0;
+ const client={isPaused:()=>false,setSessionCookies(){},anonymousBuvid:async()=>secrets[3],biliPassport:async action=>action==='generate'?{body:{code:0,data:{url,qrcode_key:'a'.repeat(32)}}}:{body:{code:0,data:{code:[86101,86090,0][i++]}},headers:{'set-cookie':secrets.slice(0,3).map((s,j)=>['SESSDATA','bili_jct','DedeUserID'][j]+'='+s+'; Max-Age=3600')}}};
+ const cloud=(path,b)=>call('/api/runner/fetch/'+path,b,'runner-secret');
+ const auth=createBrowserAuth({home,client,notify:async()=>{},log:x=>logs.push(x),report:b=>cloud('auth-status',b)});
+ assert.equal(await runLoginFlow(login,{home,client,auth,cloud,sleep:async()=>{
+  try{const qr=JSON.parse(await readFile(join(home,'state/login-qr/bili-'+login.id+'.json'),'utf8'));local.push(qr);}catch(error){if(error.code!=='ENOENT')throw error;}
+  await call('/api/team/service-login');
+ }}),'ok');
+ await call('/api/team/service-login');
+ const rows=(await e.DB.prepare('SELECT key,value FROM settings').all()).results;
+ const all=JSON.stringify({payloads,bindings,responses,logs,rows});
+ for(const secret of ['qrcode_key','qr_url',url,'a'.repeat(32),...secrets,encodeURIComponent(url),Buffer.from(url).toString('base64')])assert.ok(!all.includes(secret),'sensitive value crossed the cloud boundary');
+ assert.ok(local.length);assert.equal(local[0].qr_url,url);
+ await assert.rejects(readFile(join(home,'state/login-qr/bili-'+login.id+'.json')));
+});
+test('P1 previously stored QR credentials are erased before returning owner state',async()=>{
+ const e=env();await start(e);const {login}=await claim(e);
+ await e.DB.prepare("UPDATE settings SET value=json_set(value,'$.qr_url',?) WHERE key='login-flow:bili'").bind(url).run();
+ const snapshot=await state(e);
+ assert.equal(snapshot.services.bili.flow.id,login.id);assert.equal(snapshot.services.bili.flow.phase,'waiting');
+ assert.ok(!JSON.stringify(snapshot).includes(url));assert.equal(snapshot.services.bili.flow.qr_url,undefined);
+ const row=await e.DB.prepare("SELECT value FROM settings WHERE key='login-flow:bili'").first();assert.ok(!row.value.includes(url));assert.ok(!row.value.includes('qr_url'));
 });
 test('QR login uses the local service lock so desktop/background login cannot overwrite it',async t=>{
  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');

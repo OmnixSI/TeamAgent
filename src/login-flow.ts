@@ -1,4 +1,3 @@
-import {validLoginQr} from '../runner/login-url.mjs';
 const SERVICES=['bili','x'];
 const ACTIVE=['waiting','scanned'];
 const PHASES=[...ACTIVE,'ok','expired','failed','cancelled'];
@@ -8,9 +7,11 @@ const json=(body:any,status=200)=>Response.json(body,{status,headers:{'Cache-Con
 function display(s:any,now:number){
  if(!s||s.expires_at<=now)return null;
  return {id:s.id,service:s.service,phase:s.phase,claimed:!!s.claimed_at,started:s.started===true,updated_at:s.updated_at,expires_at:s.expires_at,
-  ...(ACTIVE.includes(s.phase)&&validLoginQr(s.qr_url)?{qr_url:s.qr_url}:{}),...(s.reason==='risk'?{reason:'risk'}:{})};
+  ...(s.reason==='risk'?{reason:'risk'}:{})};
 }
 export async function loginState(e:any):Promise<Response>{
+ // Remove display credentials retained by the old implementation, without reading them back.
+ await e.DB.prepare("UPDATE settings SET value=json_remove(value,'$.qr_url') WHERE key IN ('login-flow:bili','login-flow:x') AND json_type(value,'$.qr_url') IS NOT NULL").run();
  const rows=(await e.DB.prepare("SELECT key,value FROM settings WHERE key IN ('login-flow:bili','login-flow:x','auth:bili','auth:x','fetcher:last-seen')").all()).results;
  const values=new Map<string,string>(rows.map((r:any)=>[r.key,r.value]));const now=Date.now();
  const services=Object.fromEntries(SERVICES.map(service=>{
@@ -49,15 +50,13 @@ export async function claimLogin(e:any):Promise<any>{
 }
 export async function reportLogin(e:any,b:any):Promise<Response>{
  if(!SERVICES.includes(b?.service)||typeof b.id!=='string'||!PHASES.includes(b.phase))return json({error:'invalid login state'},400);
- const active=ACTIVE.includes(b.phase);
- if(b.qr_url!==undefined&&active&&(b.service!=='bili'||!validLoginQr(b.qr_url)))return json({error:'invalid QR URL'},400);
- if(b.service==='bili'&&active&&!validLoginQr(b.qr_url))return json({error:'missing QR URL'},400);
+ if(Object.keys(b).some(k=>!['id','service','phase','reason'].includes(k)))return json({error:'only login progress is accepted'},400);
  const now=Date.now();
  // Fixed fields only. Neither unknown keys nor arbitrary error messages enter D1 or a response.
  const row=await e.DB.prepare(`UPDATE settings SET value=json_patch(json_remove(value,'$.qr_url','$.reason'),?)
   WHERE key=? AND json_extract(value,'$.id')=? AND json_extract(value,'$.claimed_at') IS NOT NULL
   AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned') RETURNING value`)
-  .bind(JSON.stringify({phase:b.phase,started:true,updated_at:new Date(now).toISOString(),...(active&&b.service==='bili'?{qr_url:b.qr_url}:{}),...(b.phase==='failed'&&b.reason==='risk'?{reason:'risk'}:{})}),
+  .bind(JSON.stringify({phase:b.phase,started:true,updated_at:new Date(now).toISOString(),...(b.phase==='failed'&&b.reason==='risk'?{reason:'risk'}:{})}),
    'login-flow:'+b.service,b.id,now).first();
  if(!row)return json({error:'登录已取消或过期'},409);
  await fetcherSeen(e);return json({ok:true});

@@ -1,4 +1,4 @@
-/** Display-only login URL. Never accept the success/cross-domain URL (it contains credentials). */
+/** Local-only QR capability. Neither this URL nor success/cross-domain URLs may reach the cloud. */
 export function validLoginQr(raw){
  if(typeof raw!=='string'||raw.length>240||!/^https:\/\//.test(raw))return false;
  try{

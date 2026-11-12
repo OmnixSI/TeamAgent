@@ -1073,6 +1073,15 @@ function loginQr(text) {
   svg.append(background, path); return svg;
 }
 let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot;
+async function localServiceQr(id) {
+  const response = await fetch('/api/local/service-login/qr?id=' + encodeURIComponent(id), {
+    headers: {'X-TeamAgent-Local':'1'}, cache:'no-store', referrerPolicy:'no-referrer', signal:AbortSignal.timeout(3000),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw Error('无法取得本机二维码，请检查本机管理员开发台。');
+  const qr = await response.json();
+  return qr.id === id && qr.expires_at > Date.now() && typeof qr.qr_url === 'string' ? qr.qr_url : null;
+}
 async function renderServiceLogins(box) {
   if (state?.who.role !== 'owner') return;
   const panel = el('section', undefined, 'panel'); panel.id = 'service-logins';
@@ -1085,13 +1094,18 @@ async function refreshServiceLogins(panel) {
   try {
     const snapshot = await api('/api/team/service-login');
     if (!panel.isConnected || state?.who.role !== 'owner') return;
+    const localOwner = location.origin === 'http://127.0.0.1:3391';
+    const biliFlow = snapshot.services.bili.flow;
+    const localQr = localOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now()
+      ? await localServiceQr(biliFlow.id) : null;
     loginSnapshot = snapshot; lastLoginRefresh = Date.now();
     // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
-    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services}, (key, value) => key === 'updated_at' ? undefined : value);
+    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr}, (key, value) => key === 'updated_at' ? undefined : value);
     if (panel.loginSignature === visual) return;
     panel.loginSignature = visual;
     panel.replaceChildren(el('h2', '本机服务登录'));
     panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
+    if (!localOwner) panel.append(link('请打开本机管理员开发台进行扫码', 'http://127.0.0.1:3391'));
     if (!snapshot.online) panel.append(el('p', '本机服务没在线，请检查', 'error'));
     const cards = el('div', undefined, 'grid');
     for (const service of ['bili', 'x']) {
@@ -1101,16 +1115,16 @@ async function refreshServiceLogins(panel) {
       card.append(el('h3', label));
       let status = ({ok:'已登录',missing:'未登录',expired:'已过期',risk:'登录需要验证'})[entry.auth?.state] || '未登录';
       if (flow) status = ({waiting:'等待本机服务领取',scanned:'已扫码待确认',ok:'已登录',expired:'已过期',failed:'登录失败',cancelled:'已取消'})[flow.phase];
-      if (active && service === 'bili' && flow.qr_url) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
+      if (active && service === 'bili' && localQr) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
       if (active && service === 'x' && flow.started) status = '已在你的电脑上打开登录窗口';
-      else if (active && flow.claimed && !flow.qr_url) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
+      else if (active && flow.claimed && (service === 'x' || !localQr)) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
       if (flow?.reason === 'risk') status = 'B 站暂时限制，请稍后再试';
       const message = el('p', status); message.setAttribute('role', 'status'); card.append(message);
       card.append(el('small', '最近检查：' + date(entry.auth?.checked_at)));
-      if (active && service === 'bili' && flow.qr_url) card.append(loginQr(flow.qr_url));
+      if (active && service === 'bili' && localQr) card.append(loginQr(localQr));
       const actions = el('div', undefined, 'actions');
       const start = button('登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
-      start.disabled = !!active || !snapshot.online; actions.append(start);
+      start.disabled = !!active || !snapshot.online || (service === 'bili' && !localOwner); actions.append(start);
       if (active) actions.append(button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }));
       card.append(actions); cards.append(card);
     }

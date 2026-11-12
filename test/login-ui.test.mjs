@@ -4,16 +4,16 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import vm from 'node:vm';
 const script=readFileSync('web/app.js','utf8');
-function ui(){
+function ui(local=true){
  const ids=new Map(),requests=[];
  class Node{
   constructor(tag='div'){this.tagName=tag;this.children=[];this.attrs={};this.hidden=false;this.isConnected=true;this.textContent='';}
   append(...nodes){this.children.push(...nodes);}replaceChildren(...nodes){this.children=[...nodes];}
   setAttribute(k,v){this.attrs[k]=v;}focus(){}get value(){return this._value||'';}set value(v){this._value=v;}
  }
- const context=vm.createContext({document:{hidden:false,getElementById:id=>ids.get(id)||ids.set(id,new Node()).get(id),createElement:tag=>new Node(tag),createElementNS:(_ns,tag)=>new Node(tag)},sessionStorage:{getItem:()=>''},location:{hostname:'example.test'},setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},TextEncoder,URL,Date,console,
-  fetch:async(path,opts)=>{requests.push({path,opts});return Response.json(context.response);},container:new Node()});
- vm.runInContext(script,context);return {context,requests};
+ const context=vm.createContext({document:{hidden:false,getElementById:id=>ids.get(id)||ids.set(id,new Node()).get(id),createElement:tag=>new Node(tag),createElementNS:(_ns,tag)=>new Node(tag)},sessionStorage:{getItem:()=>''},location:{hostname:'example.test'},setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},TextEncoder,URL,Date,AbortSignal,console,
+  fetch:async(path,opts)=>{requests.push({path,opts});return Response.json(path.startsWith('/api/local/')?(context.localResponse||{}):context.response);},container:new Node()});
+ vm.runInContext(script,context);context.location.origin=local?'http://127.0.0.1:3391':'https://team.example';return {context,requests};
 }
 const text=n=>[n.textContent,...n.children.map(text)].join(' ');
 const all=n=>[n,...n.children.flatMap(all)];
@@ -35,13 +35,25 @@ test('waiting/scanned QR is rendered locally, final and risk states remove it, X
  const {context,requests}=ui(),fixture=JSON.parse(readFileSync('test/fixtures/login-qr.json'));
  vm.runInContext("state={who:{role:'owner'}}",context);
  for(const phase of ['waiting','scanned','ok','failed']){
-  context.container.replaceChildren();context.response={online:true,services:{bili:{auth:{state:'ok'},flow:{id:'flow',service:'bili',phase,qr_url:phase==='waiting'||phase==='scanned'?fixture.text:undefined,reason:phase==='failed'?'risk':undefined,expires_at:Date.now()+300000}},x:{auth:null,flow:{id:'x',service:'x',phase:'waiting',started:true,expires_at:Date.now()+300000}}}};
+  context.container.replaceChildren();context.response={online:true,services:{bili:{auth:{state:'ok'},flow:{id:'flow',service:'bili',phase,reason:phase==='failed'?'risk':undefined,expires_at:Date.now()+300000}},x:{auth:null,flow:{id:'x',service:'x',phase:'waiting',started:true,expires_at:Date.now()+300000}}}};
+  context.localResponse={id:'flow',qr_url:fixture.text,expires_at:Date.now()+300000};
   await vm.runInContext('renderServiceLogins(container)',context);
   assert.equal(all(context.container).filter(n=>n.tagName==='svg').length,['waiting','scanned'].includes(phase)?1:0);
   assert.match(text(context.container),/已在你的电脑上打开登录窗口/);
   if(phase==='failed')assert.match(text(context.container),/B 站暂时限制，请稍后再试/);
  }
- assert.ok(requests.every(x=>x.path==='/api/team/service-login'));
+ assert.ok(requests.every(x=>x.path==='/api/team/service-login'||x.path==='/api/local/service-login/qr?id=flow'));
+ assert.ok(requests.some(x=>x.path.startsWith('/api/local/')&&x.opts.headers['X-TeamAgent-Local']==='1'));
+ assert.ok(!JSON.stringify(requests).includes(fixture.text));
+});
+test('remote owner never obtains QR from Worker data and links to loopback instead',async()=>{
+ const {context,requests}=ui(false),fixture=JSON.parse(readFileSync('test/fixtures/login-qr.json'));
+ vm.runInContext("state={who:{role:'owner'}}",context);
+ context.response={online:true,services:{bili:{auth:null,flow:{id:'flow',service:'bili',phase:'waiting',qr_url:fixture.text,expires_at:Date.now()+300000}},x:{auth:null,flow:null}}};
+ await vm.runInContext('renderServiceLogins(container)',context);
+ assert.equal(all(context.container).filter(n=>n.tagName==='svg').length,0);
+ assert.ok(!requests.some(r=>r.path.startsWith('/api/local/')));
+ assert.match(text(context.container),/本机管理员开发台/);
 });
 test('login and cancel buttons use the owner API, disabling duplicate starts for an active service',async()=>{
  const {context,requests}=ui();vm.runInContext("state={who:{role:'owner'}}",context);

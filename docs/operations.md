@@ -89,11 +89,12 @@ fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天�
 
 打开现有管理员开发台 `http://127.0.0.1:3391`，进入「运行状态」→「本机服务登录」。普通成员名字登录看不到此卡片，也不能调用对应接口。
 
-- 「登录 B 站」把扫码链接直接画成浏览器内的二维码，用 B 站 App 扫描并确认。二维码不经过第三方图片服务。本机 fetcher 调用 passport 的 generate/poll，读取响应的 Set-Cookie，仅把四个允许字段及过期时间写入 `~/.inkboard-team/secrets/bili-cookie.json`（0600）。成功响应的跨域 URL、refresh_token、cookie 值不回传。缺少 buvid3 时匿名调用现有 fingerprint API；风控时保留已保存的会话和空 buvid3，后续抓取再补。
+- 「登录 B 站」把本机扫码链接画成浏览器内的二维码，用 B 站 App 扫描并确认。二维码 URL 含可领取 Cookie 的轮询凭证，不能经过 Cloudflare/D1 或第三方图片服务。本机 fetcher 只把二维码临时写入 `~/.inkboard-team/state/login-qr/bili-<请求ID>.json`（文件 0600、目录 0700）；owner 通过 `/api/local/service-login/qr?id=<请求ID>` 直接交给同源网页。该接口要求原有回环 Host/Origin 校验及 `X-TeamAgent-Local: 1`，不代理到云端，不提供跨域访问；响应禁止缓存和 Referrer。终态、取消时清理本机二维码，过期文件拒绝读取。云端 owner 页面只给出本机入口，不显示二维码。
+- 本机 fetcher 自己持有 key 并调用 passport 的 generate/poll，读取响应的 Set-Cookie，仅把四个允许字段及过期时间写入 `~/.inkboard-team/secrets/bili-cookie.json`（0600）。二维码 URL、轮询 key、成功响应的跨域 URL、refresh_token、cookie 值均不回传。缺少 buvid3 时匿名调用现有 fingerprint API；风控时保留已保存的会话和空 buvid3，后续抓取再补。
 - 「登录 X」由本机 fetcher 打开 Chrome，账号密码和验证码只在真实 X 窗口内填写；网页仅显示进展。可点「取消登录」关闭窗口。桌面「TeamAgent-登录.command」继续保留。
 - 登录请求五分钟失效，B 站二维码可能更早失效（passport 当前文档为三分钟）。同一服务只能有一个未结束请求；取消或失败后可重新发起。终态和超时不展示二维码。本机风控暂停十分钟，页面提示「B 站暂时限制，请稍后再试」。
 - 本机两分钟无领取或登录进展回报时，卡片提示「本机服务没在线，请检查」，停止接受新的登录操作；最近登录检查时间来自现有 auth 状态。先检查 team-fetch 是否在线，避免反复点击。
 
-云端 `settings` 仅新增固定键 `login-flow:bili`、`login-flow:x`、`fetcher:last-seen`，不加表。owner 的 `/api/team/service-login` 支持 GET 状态、POST 请求、DELETE 取消；runner 使用现有 fetch/claim 和新增 fetch/login-state 回报，暂停领取闸照常生效。前端活动登录每两秒更新、空闲时每三十秒检查；只在运行状态页可见且 owner 登录时运行。所有登录凭证仍只在本机，网页不接收密码、验证码或 cookie。
+云端 `settings` 仅使用固定键 `login-flow:bili`、`login-flow:x`、`fetcher:last-seen`，只保存请求 ID、服务、进度和时间，不加表。owner 的 `/api/team/service-login` 支持 GET 状态、POST 请求、DELETE 取消；runner 使用现有 fetch/claim 和 fetch/login-state 回报，暂停领取闸照常生效。状态回报只接受固定进度字段；拒绝二维码及其他额外字段，状态读取时清除旧版本残留的二维码字段。前端活动登录每两秒更新、空闲时每三十秒检查；只在运行状态页可见且 owner 登录时运行。密码、验证码和会话 Cookie 不进入网页；二维码仅在本机 owner 网页短暂显示。
 
 接口字段核对依据：[B 站 web 扫码接口资料](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/login/login_action/QR.md)（2026-11-12，社区整理；真实扫码仍需发布后在 Mac 验收）。
