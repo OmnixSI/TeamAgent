@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import vm from 'node:vm';
+import {env,req} from './support.mjs';
 const script=readFileSync('web/app.js','utf8');
 function ui(local=true,options={}){
  const ids=new Map(),requests=[],events=[],storage=new Map(),intervals=new Map();
@@ -16,11 +17,95 @@ function ui(local=true,options={}){
   setAttribute(k,v){this.attrs[k]=v;}focus(){}get value(){return this._value||'';}set value(v){this._value=v;}
  }
  const context=vm.createContext({document:{hidden:false,getElementById:id=>ids.get(id)||ids.set(id,new Node()).get(id),createElement:tag=>new Node(tag),createElementNS:(_ns,tag)=>new Node(tag)},sessionStorage:{getItem:key=>storage.get(key)||'',setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},location:{hostname:options.startup?'127.0.0.1':'example.test',origin:options.startup?'http://127.0.0.1:3391':'https://team.example',hash:options.hash||''},history:{replaceState:(_state,_title,url)=>{events.push(['replace',url]);context.location.hash='';}},setInterval:(fn,ms)=>{const id=++timerId;intervals.set(id,{fn,ms});return id;},clearInterval:id=>intervals.delete(id),setTimeout:()=>1,clearTimeout:()=>{},TextEncoder,URL,Date:Clock,AbortSignal,console,
-  fetch:async(path,opts)=>{requests.push({path,opts});events.push(['fetch',path]);return Response.json(path==='/api/local/session'?{session:'s'.repeat(43),expires_at:Date.now()+43200000}:path.startsWith('/api/local/')?(context.localResponse||{}):(context.response||{}),{status:context.responseStatus||200});},container:new Node()});
+  fetch:async(path,opts)=>{requests.push({path,opts});events.push(['fetch',path]);if(options.fetch)return options.fetch(path,opts);return Response.json(path==='/api/local/session'?{session:'s'.repeat(43),expires_at:Date.now()+43200000}:path.startsWith('/api/local/')?(context.localResponse||{}):(context.response||{}),{status:context.responseStatus||200});},container:new Node()});
  vm.runInContext(script,context);context.location.origin=local?'http://127.0.0.1:3391':'https://team.example';return {context,requests,events,storage,ids,intervals,now:()=>now,tick:async(ms=1000)=>{now+=ms;for(const timer of [...intervals.values()])if(timer.ms===1000)await timer.fn();}};
 }
 const text=n=>[n.textContent,...n.children.map(text)].join(' ');
 const all=n=>[n,...n.children.flatMap(all)];
+async function retryUi(t){
+ const e=env(),qrs=new Map(),controls={},statuses=[],qrReads=[];
+ let f,qrSequence=0;
+ const call=async(path,body,key='owner-secret',method)=>{
+  const before=e.DB.executed,response=await req(e,path,body,key,method);
+  assert.ok(e.DB.executed-before<=48);return response;
+ };
+ const owner=(body,method)=>call('/api/team/service-login',body,'owner-secret',method);
+ const publish=async()=>{
+  const {login}=await(await call('/api/runner/fetch/claim',{},'runner-secret')).json();assert.ok(login);
+  assert.equal((await call('/api/runner/fetch/login-state',{id:login.id,service:'bili',phase:'waiting'},'runner-secret')).status,200);
+  qrs.set(login.id,{id:login.id,qr_url:'https://passport.bilibili.com/h5-app/passport/login/scan?qrcode_key='+String(++qrSequence).repeat(32),expires_at:login.expires_at});
+ };
+ f=ui(true,{session:'s'.repeat(43),fetch:async(path,options)=>{
+  if(path.startsWith('/api/local/service-login/qr')){
+   const id=new URL(path,'http://127.0.0.1:3391').searchParams.get('id');qrReads.push(id);
+   return qrs.has(id)?Response.json(qrs.get(id)):Response.json({error:'二维码暂未就绪'},{status:404});
+  }
+  const method=options.method||'GET',body=options.body?JSON.parse(options.body):undefined;
+  if(method==='DELETE'&&controls.cancel){const response=await controls.cancel(body);if(response)return response;}
+  // Simulate the fetcher's heartbeat while using the real Worker and isolated SQLite.
+  if(method==='GET')await e.DB.prepare("INSERT INTO settings VALUES('fetcher:last-seen',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(f.now())).run();
+  const response=await call(path,body,'owner-secret',method);statuses.push({method,status:response.status});
+  if(method==='DELETE'&&response.ok)qrs.delete(body.id);
+  if(method==='POST'&&response.ok)await publish();
+  return response;
+ }});
+ t.mock.method(Date,'now',()=>f.now());
+ const {flow}=await(await owner({service:'bili'})).json();await publish();
+ vm.runInContext("state={who:{role:'owner'}};view='system'",f.context);
+ await vm.runInContext('renderServiceLogins(container)',f.context);
+ f.panel=f.context.container.children[0];f.ids.set('service-logins',f.panel);
+ const oldQr=all(f.panel).find(n=>n.tagName==='path').attrs.d;
+ await f.tick(180000);
+ assert.match(text(f.panel),/已过期/);
+ return {...f,e,owner,publish,controls,statuses,qrReads,oldFlow:flow,oldQr,retry:()=>all(f.panel).find(n=>n.textContent==='重新获取二维码'),newPosts:()=>f.requests.filter(r=>r.opts.method==='POST')};
+}
+test('expired QR retry cancels the still-active five-minute Worker flow before getting a fresh QR',async t=>{
+ const f=await retryUi(t);
+ assert.equal((await f.owner({service:'bili'})).status,409,'reproduce the old direct-POST conflict at 180 seconds');
+ await f.retry().onclick();
+ assert.deepEqual(f.statuses.filter(r=>r.method!=='GET').map(r=>[r.method,r.status]),[['DELETE',200],['POST',200]]);
+ const current=(await(await f.owner()).json()).services.bili.flow;
+ assert.notEqual(current.id,f.oldFlow.id);assert.equal(f.newPosts().length,1);assert.equal(f.qrReads.at(-1),current.id);
+ assert.notEqual(all(f.panel).find(n=>n.tagName==='path')?.attrs.d,f.oldQr);assert.equal(all(f.panel).filter(n=>n.tagName==='svg').length,1);
+ assert.ok(f.requests.every(r=>r.opts.headers['X-TeamAgent-Session']==='s'.repeat(43)));
+});
+test('failed cancellation reports a clear error, leaves retry usable and creates no login',async t=>{
+ const f=await retryUi(t);f.controls.cancel=async()=>Response.json({error:'synthetic failure'},{status:503});
+ await f.retry().onclick();
+ assert.match(f.ids.get('error').textContent,/取消.*失败.*未.*登录/);assert.equal(f.newPosts().length,0);
+ assert.equal((await(await f.owner()).json()).services.bili.flow.id,f.oldFlow.id);assert.equal(f.retry().disabled,false);
+});
+test('retry handles an already-finished cancellation conflict but never replaces another active flow',async t=>{
+ const f=await retryUi(t);
+ f.controls.cancel=async()=>{
+  await f.owner({service:'bili',id:f.oldFlow.id},'DELETE');
+  return Response.json({error:'登录请求已变化，请刷新'},{status:409});
+ };
+ await f.retry().onclick();assert.equal(f.newPosts().length,1);assert.equal(all(f.panel).filter(n=>n.tagName==='svg').length,1);
+ // A separate client creates a replacement while our old retry button is stale.
+ await f.tick(180000);const stale=(await(await f.owner()).json()).services.bili.flow;
+ let replacement;
+ f.controls.cancel=async()=>{
+  await f.owner({service:'bili',id:stale.id},'DELETE');replacement=(await(await f.owner({service:'bili'})).json()).flow;await f.publish();
+  return Response.json({error:'登录请求已变化，请刷新'},{status:409});
+ };
+ await f.retry().onclick();assert.equal(f.newPosts().length,1);
+ assert.equal((await(await f.owner()).json()).services.bili.flow.id,replacement.id);
+ assert.match(f.ids.get('error').textContent,/登录.*变化.*未.*登录/);
+});
+test('concurrent retry clicks across a heartbeat redraw cancel and create only once',async t=>{
+ const f=await retryUi(t);let entered,release;
+ const started=new Promise(resolve=>entered=resolve),pending=new Promise(resolve=>release=resolve);
+ f.controls.cancel=async()=>{entered();await pending;};
+ const first=f.retry().onclick();
+ try{
+  await started;await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
+  const second=f.retry().onclick();release();await Promise.all([first,second]);
+ }finally{release();}
+ assert.equal(f.requests.filter(r=>r.opts.method==='DELETE').length,1);assert.equal(f.newPosts().length,1);
+ const current=(await(await f.owner()).json()).services.bili.flow;
+ assert.notEqual(current.id,f.oldFlow.id);assert.equal(f.qrReads.at(-1),current.id);
+});
 async function countdownUi(ttl=300000){
  const f=ui(),fixture=JSON.parse(readFileSync('test/fixtures/login-qr.json'));
  vm.runInContext("state={who:{role:'owner'}};view='system'",f.context);

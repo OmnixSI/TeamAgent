@@ -117,7 +117,7 @@ async function api(path, body, method) {
       $("app").hidden = true;
       $("login").hidden = false;
     }
-    throw Error(j.error || "请求失败");
+    const error = Error(j.error || "请求失败"); error.status = r.status; throw error;
   }
   return j;
 }
@@ -1093,6 +1093,32 @@ function loginQr(text) {
   svg.append(background, path); return svg;
 }
 let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot, loginQrDeadline;
+const loginStartBusy = new Set();
+async function startServiceLogin(panel, service, flow) {
+  if (loginStartBusy.has(service)) return;
+  loginStartBusy.add(service);
+  try {
+    if (flow && ['waiting','scanned'].includes(flow.phase)) {
+      try { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); }
+      catch (e) {
+        if (e.localLocked) throw e;
+        if (e.status !== 409) throw Error('取消旧登录失败，请稍后重试；尚未创建新的登录。');
+        let latest;
+        try { latest = await api('/api/team/service-login'); }
+        catch (e) {
+          if (e.localLocked) throw e;
+          throw Error('无法确认旧登录是否已结束，请刷新后重试；尚未创建新的登录。');
+        }
+        const current = latest.services[service].flow;
+        if (current && ['waiting','scanned'].includes(current.phase))
+          throw Error('登录流程已变化，请刷新后重试；尚未创建新的登录。');
+      }
+    }
+    await api('/api/team/service-login', {service});
+  } finally {
+    loginStartBusy.delete(service); panel.loginSignature = ''; await refreshServiceLogins(panel);
+  }
+}
 function tickLoginCountdown(panel) {
   const clock = panel.loginCountdown;
   if (!clock) return;
@@ -1136,7 +1162,7 @@ async function refreshServiceLogins(panel) {
     if (localQr && !loginQrDeadline) loginQrDeadline = {id:biliFlow.id,expiresAt:Math.min(biliFlow.expires_at, Date.now() + 180000)};
     loginSnapshot = snapshot; lastLoginRefresh = Date.now();
     // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
-    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr,qrExpired}, (key, value) => key === 'updated_at' ? undefined : value);
+    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr,qrExpired,starting:[...loginStartBusy]}, (key, value) => key === 'updated_at' ? undefined : value);
     if (panel.loginSignature === visual) return;
     panel.loginSignature = visual;
     panel.loginCountdown = null;
@@ -1163,8 +1189,8 @@ async function refreshServiceLogins(panel) {
       const qr = active && service === 'bili' && localQr ? loginQr(localQr) : null;
       if (qr) card.append(qr);
       const actions = el('div', undefined, 'actions');
-      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : '登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
-      start.disabled = !!active || !snapshot.online || (service === 'bili' && !isLocalOwner); actions.append(start);
+      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : '登录 ' + label, () => startServiceLogin(panel, service, flow), 'primary');
+      start.disabled = !!active || !snapshot.online || loginStartBusy.has(service) || (service === 'bili' && !isLocalOwner); actions.append(start);
       const cancel = active ? button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }) : null;
       if (cancel) actions.append(cancel);
       if (qr) {
