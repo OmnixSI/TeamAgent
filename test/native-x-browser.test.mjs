@@ -59,16 +59,28 @@ test('CDP unavailable offers confirmation, then attaches and closes only its own
   assert.doesNotMatch(JSON.stringify(states),/synthetic-private-endpoint|ws:\/\//);
  }finally{await rm(home,{recursive:true,force:true});}
 });
-for(const [label,domain,path,expected] of [
+for(const [label,domain,path,expected,form=false,marker=true] of [
  ['x token and home','.x.com','/home','ok'],
  ['x token on login','.x.com','/login','waiting'],
  ['x token in login flow','.x.com','/i/flow/login','waiting'],
  ['twitter token on home','.twitter.com','/home','waiting'],
  ['no token on home',null,'/home','waiting'],
+ ['onboarding login','.x.com','/i/jf/onboarding/web?mode=login','waiting'],
+ ['flow without trailing slash','.x.com','/i/flow','waiting'],
+ ['encoded login','.x.com','/%6Cogin','waiting'],
+ ['login trailing slash','.x.com','/login/','waiting'],
+ ['logout trailing slash','.x.com','/logout/','waiting'],
+ ['logout','.x.com','/logout','waiting'],
+ ['other internal flow','.x.com','/i/unknown-guide','waiting'],
+ ['home login overlay with old account marker','.x.com','/home','waiting',true],
+ ['home without authenticated marker','.x.com','/home','waiting',false,false],
+ ['malformed encoded path','.x.com','/%ZZ','waiting'],
 ])test('native X login requires current x.com session: '+label,async()=>{
  const {createBrowserAuth}=await import('../runner/browser-auth.mjs');
  const home=await mkdtemp(join(tmpdir(),'native-x-auth-')),states=[],reports=[],logs=[];let now=Date.now(),closed=0;
- const page={url:()=> 'https://x.com'+path,title:async()=> 'X',evaluate:async()=>200,goto(){throw Error('native window must navigate itself');}};
+ const page={url:()=> 'https://x.com'+path,title:async()=> 'X',evaluate:async fn=>fn.toString().includes('hasFocus')?true:200,
+  locator:selector=>({first(){return this;},isVisible:async()=>selector.includes('SideNav_AccountSwitcher_Button')?marker:selector.includes('autocomplete')?form:false}),
+  goto(){throw Error('native window must navigate itself');}};
  const cookie={name:'auth_token',domain,get value(){throw Error('synthetic-secret-must-not-be-read');}};
  const context={nativeX:true,pages:()=>[page],cookies:async()=>domain?[cookie]:[],publishX:async data=>states.push(data),close:async()=>{closed++;}};
  try{
@@ -82,6 +94,23 @@ for(const [label,domain,path,expected] of [
    assert.equal(Object.hasOwn(states[0],'error'),false);
   }
   assert.doesNotMatch(JSON.stringify({states,reports,logs}),/synthetic-secret|cookie.*value/i);
+ }finally{await rm(home,{recursive:true,force:true});}
+});
+for(const mode of ['active login','no identifiable active page','login tab focused then browser unfocused'])test('native X login ignores background old home: '+mode,async()=>{
+ const {createBrowserAuth}=await import('../runner/browser-auth.mjs');
+ const home=await mkdtemp(join(tmpdir(),'native-x-tabs-')),states=[],reports=[];let now=Date.now(),focusChecks=0;
+ const oldPage={url:()=> 'https://x.com/home',title:async()=> 'X',evaluate:async fn=>fn.toString().includes('hasFocus')?false:200,
+  locator(){throw Error('background old home must not be inspected for login markers');}};
+ const activePage={url:()=> 'https://x.com/login',title:async()=> '登录 X',evaluate:async fn=>fn.toString().includes('hasFocus')?(mode==='active login'||(mode.includes('then')&&focusChecks++===0)):200,
+  locator:()=>({first(){return this;},isVisible:async()=>false})};
+ const cookie={name:'auth_token',domain:'.x.com',get value(){throw Error('synthetic-cookie-value-must-not-be-read');}};
+ const context={nativeX:true,pages:()=>[oldPage,activePage],cookies:async()=>[cookie],publishX:async data=>states.push(data),close:async()=>{}};
+ try{
+  const auth=createBrowserAuth({home,now:()=>now,sleep:async ms=>{now+=ms;},launch:async()=>context,report:async data=>reports.push(data),notify:async()=>{}});
+  assert.equal(await auth.login('x',{deadline:now+3000}),'timeout');
+  assert.ok(states.filter(s=>s.phase==='waiting').length>=2);
+  assert.equal(states.some(s=>s.phase==='ok'),false);assert.deepEqual(reports,[]);
+  assert.doesNotMatch(JSON.stringify({states,reports}),/synthetic-cookie-value/);
  }finally{await rm(home,{recursive:true,force:true});}
 });
 test('native startup cancellation and request deadlines close the owned process promptly',async()=>{

@@ -90,10 +90,23 @@ async function defaultBiliProbe(client,cookies){
 }
 async function xState(page){
  if(await page.locator('[data-testid="captcha"], iframe[src*="captcha"], iframe[src*="arkoselabs"]').first().isVisible())return 'risk';
- if(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').isVisible())return 'ok';
+ if(await page.locator('input[autocomplete="username"]:visible, input[name="password"]:visible, [data-testid="LoginForm_Login_Button"]:visible').first().isVisible())return 'expired';
  if(/^\/(?:login|i\/flow\/login)(?:\/|$)/.test(new URL(page.url()).pathname))return 'expired';
- if(await page.locator('input[autocomplete="username"], input[name="password"], [data-testid="LoginForm_Login_Button"]').first().isVisible())return 'expired';
+ if(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').isVisible())return 'ok';
  return null; // An empty/error page does not establish that the session expired.
+}
+function xSessionUrl(page){
+ try{
+  const url=new URL(page.url()),path=decodeURIComponent(url.pathname).replace(/\/+$/,'');
+  // Internal /i routes include changing onboarding flows; wait conservatively.
+  return url.hostname==='x.com'&&!['/login','/logout','/i'].includes(path)&&!path.startsWith('/i/');
+ }catch{return false;}
+}
+async function currentXPage(context,previous){
+ const pages=context.pages();
+ for(const page of pages)if(await page.evaluate(()=>document.visibilityState==='visible'&&document.hasFocus()).catch(()=>false))return page;
+ // Never choose a background tab just because its URL looks authenticated.
+ return pages.includes(previous)?previous:pages.length===1?pages[0]:null;
 }
 export function createBrowserAuth(options={}){
  const home=options.home||resolve(homedir(),'.inkboard-team'),now=options.now||Date.now,sleep=options.sleep||wait;
@@ -162,6 +175,7 @@ export function createBrowserAuth(options={}){
     if(now()>=deadline)return 'timeout';
     await control.onOpened?.();
     if(!context.nativeX)await page.goto(LOGIN[service],{waitUntil:'domcontentloaded',timeout:15000});
+    let xPage=null;
     while(now()<deadline){
      if(control.signal?.aborted)return 'cancelled';
      let state=null,exported;
@@ -172,10 +186,10 @@ export function createBrowserAuth(options={}){
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
      }else if(context.nativeX){
       const present=await xAuthTokenPresent(context);
-      const xPage=context.pages().find(p=>{try{const url=new URL(p.url());return url.hostname==='x.com'&&!['/login','/logout'].includes(url.pathname)&&!url.pathname.startsWith('/i/flow/');}catch{return false;}});
-      const loggedIn=present&&!!xPage,diagnosticPage=xPage||page;
-      const title=await diagnosticPage.title().catch(()=>'');
-      const http=await diagnosticPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null);
+      xPage=await currentXPage(context,xPage);
+      const loggedIn=present&&!!xPage&&xSessionUrl(xPage)&&(await xState(xPage).catch(()=>null))==='ok';
+      const title=xPage?await xPage.title().catch(()=>''):'';
+      const http=xPage?await xPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null):null;
       await context.publishX({phase:loggedIn?'ok':'waiting',reason:loggedIn?undefined:'not_logged_in',expires_at:deadline,metadata:xMetadata(title,http,present)});
       state=loggedIn?'ok':null;
      }else state=await xState(page);
