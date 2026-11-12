@@ -1,4 +1,5 @@
 import { looksLikeSticker } from "./vision";
+import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
 import { quoteRef, quoteOutcome } from "./quote";
@@ -1691,6 +1692,13 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if(path==='/api/team/service-login'){
+    if(who.role!=='owner')return json({error:'owner only'},403);
+    if(method==='GET')return loginState(e);
+    if(method==='POST')return requestLogin(e,await r.json());
+    if(method==='DELETE')return cancelLogin(e,await r.json());
+    return json({error:'method not allowed'},405);
+  }
   if (path === "/api/team/stickers" && method === "POST") {
     if (who.role !== "owner") return json({error:"owner only"},403);
     return importSticker(e, await r.json());

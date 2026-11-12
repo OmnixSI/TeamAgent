@@ -15,6 +15,13 @@
   --green: #16735a;
   --red: #a84245;
 }
+.login-qr {
+  display: block;
+  width: 260px;
+  max-width: 100%;
+  height: auto;
+  margin: 14px 0;
+}
 * {
   box-sizing: border-box;
 }

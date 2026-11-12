@@ -1,9 +1,13 @@
 let token = sessionStorage.getItem("team-token") || "",
+  localSession = sessionStorage.getItem('local-session') || '',
   state,
   view = "tasks",
   loginTimer,
   lastFull = 0,
   loading = false;
+const LOCAL_LOCKED = '本机开发台未解锁';
+const LOCAL_UNLOCK_HINT = '本机开发台未解锁：双击桌面「TeamAgent-登录」→ 选「打开开发台（B 站扫码）」';
+function localOwner() { return location.origin === 'http://127.0.0.1:3391'; }
 const $ = (s) => document.getElementById(s),
   names = {
     proposal: "方案待确认",
@@ -67,6 +71,20 @@ function link(text, url) {
   } catch {}
   return a;
 }
+function localConsoleLink(text) {
+  const a = el('a', text);
+  a.href = 'http://127.0.0.1:3391/'; a.target = '_blank'; a.rel = 'noreferrer';
+  return a;
+}
+function showLocalLocked() {
+  localSession = ''; sessionStorage.removeItem('local-session');
+  $('app').hidden = true; $('login').hidden = false; $('nameform').hidden = true;
+  $('logincode').textContent = LOCAL_UNLOCK_HINT; $('error').textContent = '';
+}
+function localLockedError() {
+  showLocalLocked();
+  const error = Error(LOCAL_LOCKED); error.localLocked = true; return error;
+}
 function badge(text, kind) {
   return el("span", text, "badge " + (kind || ""));
 }
@@ -74,6 +92,7 @@ function empty(text) {
   return el("p", text, "empty");
 }
 function error(e) {
+  if (e.localLocked && localOwner()) return;
   $("error").textContent = e.message || String(e);
   if ($("modal").open) toast(e.message || String(e));
 }
@@ -86,18 +105,19 @@ async function api(path, body, method) {
   const r = await fetch(path, {
     method: method || (body ? "POST" : "GET"),
     headers: {
-      Authorization: "Bearer " + token,
       "Content-Type": "application/json",
+      ...(localOwner() ? {'X-TeamAgent-Session':localSession,'X-TeamAgent-Local':'1'} : {Authorization:"Bearer " + token}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
   const j = await r.json();
   if (!r.ok) {
+    if (localOwner() && r.status === 401 && j.error === LOCAL_LOCKED) throw localLockedError();
     if (r.status === 401 && state) {
       $("app").hidden = true;
       $("login").hidden = false;
     }
-    throw Error(j.error || "请求失败");
+    const error = Error(j.error || "请求失败"); error.status = r.status; throw error;
   }
   return j;
 }
@@ -989,9 +1009,218 @@ function table(headers, rows) {
   box.append(t);
   return box;
 }
+// Version 10-L, byte mode, mask 0: sufficient for the validated (<=240 byte) scan URL.
+// Matrices are checked against the independent Nayuki QR reference implementation.
+function loginQrMatrix(text) {
+  const bytes = new TextEncoder().encode(text), bits = [];
+  if (bytes.length > 240) throw Error('二维码内容过长，请重新登录');
+  const push = (value, count) => { for (let i = count - 1; i >= 0; i--) bits.push((value >>> i) & 1); };
+  push(4, 4); push(bytes.length, 16);
+  for (const byte of bytes) push(byte, 8);
+  push(0, 4); while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8) data.push(bits.slice(i, i + 8).reduce((v, bit) => v * 2 + bit, 0));
+  for (let pad = 0; data.length < 274; pad++) data.push(pad % 2 ? 0x11 : 0xec);
+  const multiply = (a, b) => {
+    let value = 0;
+    for (; b; b >>>= 1) { if (b & 1) value ^= a; a <<= 1; if (a & 256) a ^= 0x11d; }
+    return value;
+  };
+  let divisor = [1], root = 1;
+  for (let i = 0; i < 18; i++) {
+    const next = Array(divisor.length + 1).fill(0);
+    divisor.forEach((n, j) => { next[j] ^= n; next[j + 1] ^= multiply(n, root); });
+    divisor = next; root = multiply(root, 2);
+  }
+  let offset = 0;
+  const blocks = [68, 68, 69, 69].map(length => {
+    const block = data.slice(offset, offset += length), parity = Array(18).fill(0);
+    for (const byte of block) {
+      const factor = byte ^ parity.shift(); parity.push(0);
+      for (let j = 0; j < 18; j++) parity[j] ^= multiply(divisor[j + 1], factor);
+    }
+    return { block, parity };
+  });
+  const codewords = [];
+  for (let i = 0; i < 69; i++) for (const b of blocks) if (i < b.block.length) codewords.push(b.block[i]);
+  for (let i = 0; i < 18; i++) for (const b of blocks) codewords.push(b.parity[i]);
+  const size = 57, matrix = Array.from({ length: size }, () => Array(size).fill(false)), reserved = matrix.map(row => row.slice());
+  const mark = (x, y, dark) => { if (x >= 0 && y >= 0 && x < size && y < size) { matrix[y][x] = !!dark; reserved[y][x] = true; } };
+  for (let i = 0; i < size; i++) { mark(6, i, i % 2 === 0); mark(i, 6, i % 2 === 0); }
+  for (const [cx, cy] of [[3, 3], [53, 3], [3, 53]]) {
+    for (let y = -4; y <= 4; y++) for (let x = -4; x <= 4; x++) { const d = Math.max(Math.abs(x), Math.abs(y)); mark(cx + x, cy + y, d !== 2 && d !== 4); }
+  }
+  for (const cx of [6, 28, 50]) for (const cy of [6, 28, 50]) {
+    if ((cx === 6 && cy === 6) || (cx === 6 && cy === 50) || (cx === 50 && cy === 6)) continue;
+    for (let y = -2; y <= 2; y++) for (let x = -2; x <= 2; x++) mark(cx + x, cy + y, Math.max(Math.abs(x), Math.abs(y)) !== 1);
+  }
+  let rem = 8;
+  for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+  const format = ((8 << 10) | rem) ^ 0x5412, bit = (value, n) => (value >>> n) & 1;
+  for (let i = 0; i < 6; i++) mark(8, i, bit(format, i));
+  mark(8, 7, bit(format, 6)); mark(8, 8, bit(format, 7)); mark(7, 8, bit(format, 8));
+  for (let i = 9; i < 15; i++) mark(14 - i, 8, bit(format, i));
+  for (let i = 0; i < 8; i++) mark(size - 1 - i, 8, bit(format, i));
+  for (let i = 8; i < 15; i++) mark(8, size - 15 + i, bit(format, i));
+  mark(8, size - 8, true);
+  rem = 10;
+  for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+  const version = (10 << 12) | rem;
+  for (let i = 0; i < 18; i++) { const a = size - 11 + i % 3, b = Math.floor(i / 3); mark(a, b, bit(version, i)); mark(b, a, bit(version, i)); }
+  let index = 0;
+  for (let right = size - 1; right > 0; right -= 2) {
+    if (right === 6) right--;
+    for (let step = 0; step < size; step++) {
+      const y = ((right + 1) & 2) === 0 ? size - 1 - step : step;
+      for (let j = 0; j < 2; j++) {
+        const x = right - j;
+        if (!reserved[y][x]) { const dark = bit(codewords[index >>> 3] || 0, 7 - (index & 7)); index++; matrix[y][x] = !!(dark ^ ((x + y) % 2 === 0)); }
+      }
+    }
+  }
+  return matrix;
+}
+function loginQr(text) {
+  const matrix = loginQrMatrix(text), ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 65 65'); svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'B 站登录二维码，请用 B 站手机 App 扫描并确认');
+  svg.setAttribute('class', 'login-qr'); svg.setAttribute('shape-rendering', 'crispEdges');
+  const background = document.createElementNS(ns, 'rect');
+  background.setAttribute('width', '65'); background.setAttribute('height', '65'); background.setAttribute('fill', '#fff');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('fill', '#000');
+  path.setAttribute('d', matrix.flatMap((row, y) => row.flatMap((dark, x) => dark ? ['M' + (x + 4) + ',' + (y + 4) + 'h1v1h-1z'] : [])).join(''));
+  svg.append(background, path); return svg;
+}
+let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot, loginQrDeadline;
+const loginStartBusy = new Set();
+async function startServiceLogin(panel, service, flow) {
+  if (loginStartBusy.has(service)) return;
+  loginStartBusy.add(service);
+  try {
+    if (flow && ['waiting','scanned'].includes(flow.phase)) {
+      try { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); }
+      catch (e) {
+        if (e.localLocked) throw e;
+        if (e.status !== 409) throw Error('取消旧登录失败，请稍后重试；尚未创建新的登录。');
+        let latest;
+        try { latest = await api('/api/team/service-login'); }
+        catch (e) {
+          if (e.localLocked) throw e;
+          throw Error('无法确认旧登录是否已结束，请刷新后重试；尚未创建新的登录。');
+        }
+        const current = latest.services[service].flow;
+        if (current && ['waiting','scanned'].includes(current.phase))
+          throw Error('登录流程已变化，请刷新后重试；尚未创建新的登录。');
+      }
+    }
+    await api('/api/team/service-login', {service});
+  } finally {
+    loginStartBusy.delete(service); panel.loginSignature = ''; await refreshServiceLogins(panel);
+  }
+}
+function tickLoginCountdown(panel) {
+  const clock = panel.loginCountdown;
+  if (!clock) return;
+  if (!panel.isConnected) { panel.loginCountdown = null; return; }
+  const seconds = Math.max(0, Math.ceil((clock.expiresAt - Date.now()) / 1000));
+  clock.label.textContent = '二维码剩余有效时间：' + seconds + ' 秒';
+  if (seconds === 0) {
+    clock.message.textContent = '已过期'; clock.qr.remove(); clock.cancel.remove();
+    clock.start.textContent = '重新获取二维码'; clock.start.disabled = false;
+    panel.loginCountdown = null; panel.loginSignature = '';
+  }
+}
+async function localServiceQr(id) {
+  const response = await fetch('/api/local/service-login/qr?id=' + encodeURIComponent(id), {
+    headers: {'X-TeamAgent-Local':'1',...(localOwner()?{'X-TeamAgent-Session':localSession}:{})}, cache:'no-store', referrerPolicy:'no-referrer', signal:AbortSignal.timeout(3000),
+  });
+  if (response.status === 404) return null;
+  if (localOwner() && response.status === 401 && (await response.json()).error === LOCAL_LOCKED) throw localLockedError();
+  if (!response.ok) throw Error('无法取得本机二维码，请检查本机管理员开发台。');
+  const qr = await response.json();
+  return qr.id === id && qr.expires_at > Date.now() && typeof qr.qr_url === 'string' ? qr.qr_url : null;
+}
+async function renderServiceLogins(box) {
+  if (state?.who.role !== 'owner') return;
+  const panel = el('section', undefined, 'panel'); panel.id = 'service-logins';
+  panel.setAttribute('aria-label', '本机服务登录'); box.append(panel);
+  await refreshServiceLogins(panel);
+}
+async function refreshServiceLogins(panel) {
+  if (loginRefreshBusy) return;
+  loginRefreshBusy = true;
+  try {
+    const snapshot = await api('/api/team/service-login');
+    if (!panel.isConnected || state?.who.role !== 'owner') return;
+    const isLocalOwner = localOwner();
+    const biliFlow = snapshot.services.bili.flow;
+    if (loginQrDeadline?.id !== biliFlow?.id || !['waiting','scanned'].includes(biliFlow?.phase)) loginQrDeadline = null;
+    const qrExpired = !!loginQrDeadline && loginQrDeadline.expiresAt <= Date.now();
+    const localQr = isLocalOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now() && !qrExpired
+      ? await localServiceQr(biliFlow.id) : null;
+    if (localQr && !loginQrDeadline) loginQrDeadline = {id:biliFlow.id,expiresAt:Math.min(biliFlow.expires_at, Date.now() + 180000)};
+    loginSnapshot = snapshot; lastLoginRefresh = Date.now();
+    // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
+    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr,qrExpired,starting:[...loginStartBusy]}, (key, value) => key === 'updated_at' ? undefined : value);
+    if (panel.loginSignature === visual) return;
+    panel.loginSignature = visual;
+    panel.loginCountdown = null;
+    panel.replaceChildren(el('h2', '本机服务登录'));
+    panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
+    if (!isLocalOwner) panel.append(localConsoleLink('在这台电脑上打开本机开发台扫码（先双击桌面「TeamAgent-登录」）'));
+    if (!snapshot.online) panel.append(el('p', '本机服务没有运行。请双击桌面的 TeamAgent-登录；仍不行就重启 Mac 上的 TeamAgent 服务。', 'error'));
+    const cards = el('div', undefined, 'grid');
+    for (const service of ['bili', 'x']) {
+      const label = service === 'bili' ? 'B 站' : 'X', entry = snapshot.services[service], flow = entry.flow;
+      const riskNotice = service === 'bili' && (flow?.reason === 'risk' || entry.auth?.state === 'risk');
+      const active = flow && ['waiting', 'scanned'].includes(flow.phase) && flow.expires_at > Date.now() && !(service === 'bili' && qrExpired);
+      const card = el('article', undefined, 'card');
+      card.append(el('h3', label));
+      let status = ({ok:'已登录',missing:'未登录',expired:'已过期',risk:'登录需要验证'})[entry.auth?.state] || '未登录';
+      if (flow) status = ({waiting:'等待本机服务领取',scanned:'已扫码待确认',ok:'已登录',expired:'已过期',failed:'登录失败',cancelled:'已取消'})[flow.phase];
+      if (service === 'bili' && flow && ['waiting','scanned'].includes(flow.phase) && !active) status = '已过期';
+      if (active && service === 'bili' && localQr) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
+      if (active && service === 'x' && flow.started) status = '已在你的电脑上打开登录窗口';
+      else if (active && flow.claimed && (service === 'x' || !localQr)) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
+      if (flow?.reason === 'risk' || (riskNotice && !active)) status = 'B 站暂时限制，请稍后再试';
+      const message = el('p', status); message.setAttribute('role', 'status'); card.append(message);
+      if (service === 'x') card.append(el('p', '登录时会在这台 Mac 上弹出一个 Chrome 窗口。请在弹出的 Chrome 中，确认是真实的 x.com 页面后登录。不要在本网页里输入密码；本网页不会也不需要你的密码。', 'note'));
+      card.append(el('small', '最近检查：' + date(entry.auth?.checked_at)));
+      const qr = active && service === 'bili' && localQr ? loginQr(localQr) : null;
+      if (qr) card.append(qr);
+      const actions = el('div', undefined, 'actions');
+      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : service === 'x' && status === '已登录' ? '重新登录 X' : '登录 ' + label, () => startServiceLogin(panel, service, flow), 'primary');
+      start.disabled = !!active || !snapshot.online || loginStartBusy.has(service) || (service === 'bili' && !isLocalOwner); actions.append(start);
+      const cancel = active ? button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }) : null;
+      if (cancel) actions.append(cancel);
+      if (qr) {
+        const countdown = el('p', undefined, 'note'); countdown.setAttribute('role', 'timer'); card.append(countdown);
+        panel.loginCountdown = {label:countdown,message,qr,start,cancel,expiresAt:loginQrDeadline.expiresAt};
+        tickLoginCountdown(panel);
+      }
+      card.append(actions); cards.append(card);
+    }
+    panel.append(cards);
+  } catch (e) {
+    panel.loginCountdown = null;
+    panel.loginSignature = '';
+    panel.replaceChildren(el('h2', '本机服务登录'), el('p', e.message, 'error'));
+  } finally { loginRefreshBusy = false; }
+}
+setInterval(async () => {
+  if (document.hidden || $('app').hidden || view !== 'system' || state?.who.role !== 'owner' || loading) return;
+  const panel = $('service-logins'); if (!panel) return;
+  tickLoginCountdown(panel);
+  if (loginRefreshBusy) return;
+  const active = Object.values(loginSnapshot?.services || {}).some(s => s.flow && ['waiting','scanned'].includes(s.flow.phase));
+  if (Date.now() - lastLoginRefresh >= (active ? 2000 : 30000)) await refreshServiceLogins(panel);
+}, 1000);
+
 async function renderSystem() {
   const box = $("system");
   box.replaceChildren();
+  await renderServiceLogins(box);
   const model = el("section", undefined, "panel");
   model.append(
     el("h2", "最近 24 小时 · 模型调用"),
@@ -1280,7 +1509,30 @@ $("admin").onclick = () => {
   box.append(connection);
   show(el("h2", "管理接入"), box);
 };
-if (token || location.hostname === "127.0.0.1") load();
+async function startLocalOwner() {
+  const fragment = location.hash || '';
+  if (fragment.startsWith('#unlock=')) {
+    const code = fragment.slice(8);
+    // Erase the one-time code before any exchange or other network request.
+    history.replaceState(null, '', '/');
+    try {
+      const response = await fetch('/api/local/session', {
+        method:'POST', headers:{'Content-Type':'application/json','X-TeamAgent-Local':'1'},
+        body:JSON.stringify({code}), cache:'no-store', referrerPolicy:'no-referrer',
+      });
+      if (!response.ok) { showLocalLocked(); return; }
+      const data = await response.json();
+      if (typeof data.session !== 'string' || !data.session) { showLocalLocked(); return; }
+      localSession = data.session; sessionStorage.setItem('local-session', localSession);
+      $('nameform').hidden = true;
+      // The desktop entry opens directly on the Bilibili/X login controls.
+      selectView('system');
+    } catch { showLocalLocked(); }
+  } else if (localSession) await load();
+  else showLocalLocked();
+}
+if (localOwner()) startLocalOwner();
+else if (token) load();
 setInterval(async () => {
   if (document.hidden || $("app").hidden || $("modal").open || loading) return;
   try {

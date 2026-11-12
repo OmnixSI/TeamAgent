@@ -8,6 +8,9 @@ import { enqueueVoice, decodeVoice } from "./voice";
 import { queueFor } from "./lanes";
 import { untrusted } from "./untrusted";
 import { redact } from "./runtime";
+import {recordAuthStatus} from './auth-status';
+import {claimLogin,reportLogin,fetcherSeen} from './login-flow';
+export {authReminder} from './auth-status';
 
 type Row = Record<string, any>;
 export type BiliResult = {
@@ -196,15 +199,14 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   return Response.json({ ok: true });
 }
 export async function fetchRoute(e: any, path: string, b: any): Promise<Response> {
-  if (path.endsWith('/claim')) return Response.json({ job: await claimFetch(e) });
+  if (path.endsWith('/claim')) {
+    await fetcherSeen(e);
+    const login=await claimLogin(e);
+    return Response.json({login,job:login?null:await claimFetch(e)});
+  }
+  if(path.endsWith('/login-state'))return reportLogin(e,b);
   if (path.endsWith('/heartbeat')) { const ok = await heartbeatFetch(e, b.id, b.lease); return Response.json({ ok }, { status: ok ? 200 : 409 }); }
   if (path.endsWith('/report')) return reportFetch(e, b);
-  if (path.endsWith('/auth-status')) {
-    if (!["bili", "x"].includes(b.service) || !["ok", "expired", "risk", "missing"].includes(b.state)) return Response.json({ error: "invalid auth state" }, { status: 400 });
-    const key = "auth:" + b.service, old = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind(key).first();
-    let previous: any = {}; try { previous = JSON.parse(old?.value || "{}"); } catch {}
-    await e.DB.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key, JSON.stringify({ state: b.state, checked_at: new Date().toISOString(), had_ok: b.state === "ok" || previous.had_ok === true })).run();
-    return Response.json({ ok: true });
-  }
+  if (path.endsWith('/auth-status')) return recordAuthStatus(e,b);
   return Response.json({ error: "not found" }, { status: 404 });
 }

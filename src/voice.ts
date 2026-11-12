@@ -6,6 +6,7 @@ import { stickerSendOn, pickSticker, enqueueSticker } from "./stickers";
 import settings from "../config/voice.json";
 import { model } from "./runtime";
 import { toPrompt } from "./view";
+import {replyAuthReminders} from './auth-status';
 /** Independent group voice. Tool results are facts, never a change to this persona. */
 export const VOICE = settings.text;
 export type VoiceMode = "banter" | "work" | "care";
@@ -63,6 +64,12 @@ export async function enqueueVoice(
   opts?: { reference?: string; sticker?: string },
 ) {
   const v = decodeVoice(raw), parts = fragments(raw, id);
+  const wantsSticker=parts.length && v.mode !== 'work' && v.sticker && TEAM.stickers.send === true && left(e) >= COST.sticker + COST.tail;
+  const stickerSwitches=wantsSticker?await loadSwitches(e):undefined;
+  if(parts.length && message && left(e)>=COST.tail+parts.length+3){
+    const reminders=await replyAuthReminders(e,id);
+    if(reminders.length){const suffix='\n'+reminders.join('\n');parts[parts.length-1]=parts[parts.length-1].slice(0,4000-suffix.length)+suffix;}
+  }
   for (let i = 0; i < parts.length; i++)
     await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
       .bind(
@@ -77,7 +84,7 @@ export async function enqueueVoice(
   if (parts.length && opts?.reference)
     await e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({ reference: opts.reference })).run();
   if (parts.length && v.mode !== "work" && v.sticker && TEAM.stickers.send === true && left(e) >= COST.sticker + COST.tail) {
-    const sw = await loadSwitches(e);
+    const sw = stickerSwitches ?? await loadSwitches(e);
     if (!stickerSendOn(sw, Date.now())) return;
     const sha = await pickSticker(e, v.sticker);
     if (sha && await budget(e, "sticker_send", TEAM.stickers.caps.send))

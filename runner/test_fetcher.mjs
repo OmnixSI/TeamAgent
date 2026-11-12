@@ -1,6 +1,13 @@
 import {test} from 'node:test';
+import './test_browser_auth.mjs';
+import './test_qr_login.mjs';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import https from 'node:https';
+import {createBrowserAuth,writeBiliCookies} from './browser-auth.mjs';
 import {createFetchClient,createSafeLookup,isPublic,wbiSign,sanitize,runJob} from './fetcher.mjs';
 const BV='BV1xx411c7mD';
 function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
@@ -9,12 +16,41 @@ function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
  const client=createFetchClient({request,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),now:()=>t,sleep:async ms=>{t+=ms;},random:()=>0,log:x=>logs.push(x),...extra});
  return {client,calls,logs,times,get destroys(){return destroys;},get time(){return t;},setTime(v){t=v;}};
 }
+test('L13 a paused fetch client suppresses auth probes and preserves the last local status',async t=>{
+ t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
+ const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ await writeBiliCookies(home,[{name:'SESSDATA',value:'private-session',expires:2000000000}]);
+ const f=fixture(()=>({status:412})),reports=[];
+ const auth=createBrowserAuth({home,client:f.client,report:async b=>reports.push(b),notify:async()=>{}});
+ await auth.record('bili','ok');
+ await assert.rejects(f.client.biliApi('/x'));await assert.rejects(f.client.biliApi('/x'));
+ assert.equal(await auth.check('bili'),'ok');assert.equal(f.calls.length,2);assert.equal(reports.length,1);
+});
+test('L14 login nav shares the fetch limiter and stops on its first risk response',async t=>{
+ t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
+ const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ let mode='ok',closed=0;
+ const f=fixture(()=>mode==='ok'?{body:{code:0}}:{body:{code:-352}});
+ await f.client.biliApi('/x');mode='risk';
+ const page={goto:async()=>{}},context={pages:()=>[page],route:async()=>{},cookies:async()=>[{name:'SESSDATA',value:'private-session',expires:2000000000}],close:async()=>closed++};
+ const auth=createBrowserAuth({home,client:f.client,now:()=>f.time,sleep:async ms=>f.setTime(f.time+ms),launch:async()=>context,notify:async()=>{}});
+ assert.equal(await auth.login('bili'),'risk');assert.equal(f.calls.length,2);assert.equal(closed,1);
+ assert.ok(f.times[1]-f.times[0]>=1000);assert.equal(f.client.isPaused(),true);
+ assert.equal(await auth.check('bili'),'risk');assert.equal(f.calls.length,2);
+ await assert.rejects(readFile(join(home,'secrets/bili-cookie.json')));
+});
 test('N1 WBI public fixed-key example matches published digest',()=>{ // https://github.com/SocialSisterYi/bilibili-API-collect/blob/e99f64c9b5c2bbd156e95ca254620378a22697f7/docs/misc/sign/wbi.md (algorithm example, zab parameter)
 const q=wbiSign({foo:'114',bar:'514',zab:1919810},'7cd084941338484aae1ad9425b84077c','4932caff0ff746eab6f01bf08b70ac45',1702204169);assert.equal(new URLSearchParams(q).get('w_rid'),'8f6f2b5b3d485fe1886cec6a0be8c5d4');assert.equal(new URLSearchParams(wbiSign({foo:"!'()*a b",w_rid:'old',wts:1},'a'.repeat(32),'b'.repeat(32),123)).get('foo'),'a b');});
 test('N2 light fetch joins metadata, preferred subtitles, hot comments; missing sections degrade',async()=>{for(const empty of [false,true]){const f=fixture(o=>{const p=o.path.split('?')[0];if(p.endsWith('/spi'))return {body:{code:0,data:{b_3:'anon'}}};if(p.endsWith('/nav'))return {body:{code:-101,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}};if(p.endsWith('/view'))return {body:{code:0,data:{bvid:BV,title:'T',desc:'D',owner:{name:'UP'},tname:'科技',duration:60,pubdate:1,stat:{view:2},aid:123,pages:[{cid:456}]}}};if(p.endsWith('/v2'))return {body:{code:0,data:{subtitle:{subtitles:empty?[]:[{lan:'en',subtitle_url:'//a.hdslb.com/en'},{lan:'zh-CN',subtitle_url:'//a.hdslb.com/zh'}]}}}};if(p==='/zh')return {body:{body:[{content:'中文'},{content:'字幕'}]}};return {body:empty?{code:-404}:{code:0,data:{replies:[{like:1,member:{uname:'A'},content:{message:'低'}},{like:8,member:{uname:'B'},content:{message:'高'}}]}}};});const r=await f.client.biliLight(BV);assert.equal(r.owner,'UP');assert.equal(r.tier,'light');assert.equal(r.bvid,BV);assert.equal(r.subtitle,empty?null:'中文 字幕');assert.equal(r.subtitle_status,empty?'none':'ok');assert.deepEqual(r.comments,empty?[]:[{uname:'B',message:'高'},{uname:'A',message:'低'}]);}});
 test('N3 rate limit serializes five concurrent requests and pauses after two risk responses',async()=>{const f=fixture();await Promise.all(Array.from({length:5},()=>f.client.biliApi('/x')));assert.equal(f.calls.length,5);assert.ok(f.time>=14800);assert.ok(f.times.slice(1).every((t,i)=>t-f.times[i]>=1000),JSON.stringify(f.times));assert.ok(f.calls.every(o=>o.agent===false));const risk=fixture(()=>({status:412}));await assert.rejects(risk.client.biliApi('/x'));await assert.rejects(risk.client.biliApi('/x'));await assert.rejects(risk.client.biliApi('/x'),/风控/);assert.equal(risk.calls.length,2);const code=fixture(()=>({body:{code:-352}}));await assert.rejects(code.client.biliApi('/x'));await assert.rejects(code.client.biliApi('/x'));await assert.rejects(code.client.biliApi('/x'),/风控/);assert.equal(code.calls.length,2);});
 test('N4 strict per-request URL boundaries',async()=>{const f=fixture();for(const url of ['https://api.bilibili.com.evil.com/a','https://evilbilibili.com/a','https://xhdslb.com/a','https://hdslb.com.evil.com/a','http://api.bilibili.com/a','https://api.bilibili.com:8443/a','https://u:p@api.bilibili.com/a'])await assert.rejects(f.client.biliSubtitle(url));assert.equal(f.calls.length,0);});
 test('N5 cookies go only to API, never subtitles or short redirects',async()=>{const f=fixture(o=>o.host==='b23.tv'?{status:302,headers:{location:'https://www.bilibili.com/video/'+BV}}:{body:{code:0}},{cookies:{SESSDATA:'sample-private-session',buvid3:'sample-buvid'}});await f.client.biliApi('/x');await f.client.biliSubtitle('https://a.hdslb.com/a');assert.equal(await f.client.resolveShort('abcd'),BV);assert.equal(f.calls[0].headers['User-Agent'],'curl/8.7.1');assert.match(f.calls[0].headers.Cookie,/SESSDATA=sample-private-session/);assert.equal(f.calls[1].headers.Cookie,undefined);assert.equal(f.calls[2].headers.Cookie,undefined);await assert.rejects(f.client.biliSubtitle('https://api.bilibili.com/sub'));assert.equal(f.calls.length,3);});
+test('login cookie refresh preserves anonymous buvid and redacts the real client logger',async()=>{
+ const f=fixture(undefined,{cookies:{buvid3:'anonymous-buvid'}});
+ f.client.setSessionCookies({SESSDATA:'session-private-value'});await f.client.biliApi('/session-private-value');
+ assert.ok(!JSON.stringify(f.logs).includes('session-private-value'));assert.match(f.calls[0].headers.Cookie,/SESSDATA=session-private-value/);
+ f.client.setSessionCookies({});await f.client.biliApi('/x');assert.equal(f.calls[1].headers.Cookie,'buvid3=anonymous-buvid');assert.equal(f.client.sanitize('session-private-value'),'***');
+});
 test('N6 redirects are manual and short chains bounded',async()=>{let f=fixture(()=>({status:302,headers:{location:'https://evil.com/'}}));await assert.rejects(f.client.biliApi('/x'));assert.equal(f.calls.length,1);await assert.rejects(f.client.resolveShort('abcd'));f=fixture(()=>({status:302,headers:{location:'https://www.bilibili.com/video/'+BV}}));assert.equal(await f.client.resolveShort('abcd'),BV);assert.equal(f.calls.length,1);f=fixture((_o,n)=>({status:302,headers:{location:'https://b23.tv/hop'+n}}));await assert.rejects(f.client.resolveShort('abcd'));assert.equal(f.calls.length,3);});
 test('N7 DNS rejects all unsafe answers, pins one lookup per connection, handles mapped IPv6',async()=>{for(const ip of ['::ffff:127.0.0.1','::ffff:7f00:1','::ffff:10.0.0.1','fe80::1','100.64.0.1','0.0.0.0','::','::1','fc00::1','ff00::1','64:ff9b::0808:0808','2001:db8::1','192.0.2.1','198.18.0.1','224.0.0.1'])assert.equal(isPublic(ip),false,ip);assert.equal(isPublic('2606:4700:4700::1111'),true);const lookup=createSafeLookup((_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4},{address:'127.0.0.1',family:4}]));await assert.rejects(new Promise((resolve,reject)=>lookup('api.bilibili.com',{},(e,a)=>e?reject(e):resolve(a))));let n=0;const f=fixture(undefined,{lookup:(_h,_o,cb)=>cb(null,[{address:++n===1?'8.8.8.8':'127.0.0.1',family:4}])});await f.client.biliApi('/x');await assert.rejects(f.client.biliApi('/x'));assert.equal(n,2);});
 test('N8 streaming body limit destroys request',async()=>{const f=fixture(()=>({chunks:[Buffer.alloc(1_500_000),Buffer.alloc(600_000)]}));await assert.rejects(f.client.biliSubtitle('https://a.hdslb.com/a'));assert.ok(f.destroys>0);});

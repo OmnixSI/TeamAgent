@@ -1,4 +1,6 @@
-/** Low-frequency read-only Bilibili fetcher. No browser or login required. */
+/** Low-frequency Bilibili fetcher; optional local browser login. */
+import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
+import {runLoginFlow} from './qr-login.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -40,7 +42,7 @@ export function sanitize(value,secrets){
  if(typeof value==='string'){
    let text=value;
    for(const secret of secrets)if(typeof secret==='string'&&secret)text=text.split(secret).join('***');
-   return text;
+   return safeLogText(text);
  }
  if(Array.isArray(value))return value.map(x=>sanitize(x,secrets));
  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,sanitize(v,secrets)]));
@@ -49,7 +51,7 @@ export function sanitize(value,secrets){
 function allowed(raw,kind){
  const u=new URL(raw);
  if(u.protocol!=='https:'||(u.port&&u.port!=='443')||u.username||u.password)throw Error('blocked URL');
- const ok=kind==='api'?u.hostname==='api.bilibili.com':kind==='subtitle'?u.hostname.endsWith('.hdslb.com'):kind==='short'&&u.hostname==='b23.tv';
+ const ok=kind==='api'?u.hostname==='api.bilibili.com':kind==='fingerprint'?u.hostname==='api.bilibili.com'&&u.pathname==='/x/frontend/finger/spi':kind==='passport'?u.hostname==='passport.bilibili.com':kind==='subtitle'?u.hostname.endsWith('.hdslb.com'):kind==='short'&&u.hostname==='b23.tv';
  if(!ok)throw Error('blocked host');return u;
 }
 export function createFetchClient(options={}){
@@ -76,8 +78,8 @@ export function createFetchClient(options={}){
          if(settled)return;
          const status=res.statusCode;
          let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
-         log('fetch '+kind+' '+u.pathname+' status='+status);
-         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
+         log(safe('fetch '+kind+' '+u.pathname+' status='+status));
+         const hit=status===412||[-352,-412].includes(data?.code);const keepRisk=kind==='short'||kind==='fingerprint'||(kind==='api'&&u.pathname==='/x/frontend/finger/spi');risk(hit,!keepRisk);
          if(hit||(!(status>=200&&status<300)&&!(kind==='short'&&status>=300&&status<400))){const error=Error(now()<pausedUntil?'风控':'抓取失败');error.status=status;error.code=data?.code;fail(error);return;}
          settled=true;clearTimeout(timer);resolveResult({status,headers:res.headers,data});
        });
@@ -92,6 +94,17 @@ export function createFetchClient(options={}){
    if(!r.data)throw Error('无效接口响应');return r.data;
  }
  async function biliSubtitle(url){const r=await get(url,'subtitle');if(!r.data)throw Error('无效字幕响应');return r.data;}
+ async function biliPassport(action,key){
+   if(!['generate','poll'].includes(action)||(action==='poll'&&!/^[a-f0-9]{32}$/.test(key)))throw Error('invalid passport action');
+   const r=await get('https://passport.bilibili.com/x/passport-login/web/qrcode/'+action+(action==='poll'?'?qrcode_key='+key:''),'passport');
+   if(!r.data)throw Error('无效登录响应');return {body:r.data,headers:r.headers};
+ }
+ async function anonymousBuvid(){
+   const r=await get('https://api.bilibili.com/x/frontend/finger/spi','fingerprint');
+   const value=r.data?.code===0&&r.data?.data?.b_3;
+   if(typeof value!=='string'||!value)throw Error('无效设备响应');
+   knownSecrets.add(value);return value;
+ }
  async function resolveShort(code){
    if(!SHORT.test(code))throw Error('短链无效');let u=new URL('https://b23.tv/'+code);
    for(let hop=0;hop<3;hop++){
@@ -137,13 +150,21 @@ export function createFetchClient(options={}){
    try{const reply=await biliApi('/x/v2/reply',{type:1,oid:v.aid,sort:1,ps:20});if(reply.code===0){const list=[...(reply.data?.hots||[]),...(reply.data?.replies||[])];const unique=[...new Map(list.map(x=>[x.rpid??(x.member?.uname+'\0'+x.content?.message),x])).values()];comments=unique.sort((a,b)=>(b.like||0)-(a.like||0)).slice(0,8).map(c=>({uname:String(c.member?.uname||'').slice(0,100),message:String(c.content?.message||'').slice(0,120)}));}}catch(error){if(now()<pausedUntil)throw error;}
    return safe({bvid,title:String(v.title||'').slice(0,300),desc:String(v.desc||'').slice(0,1500),owner:String(v.owner?.name||'').slice(0,100),tname:String(v.tname||'').slice(0,100),duration:v.duration||0,pubdate:v.pubdate||0,stat:Object.fromEntries(['view','like','coin','favorite','reply'].map(k=>[k,v.stat?.[k]||0])),subtitle,subtitle_lang,subtitle_status,comments,tier:'light',fetched_at:new Date(now()).toISOString()});
  }
- return {biliApi,biliSubtitle,resolveShort,biliLight,sanitize:safe};
+ function setSessionCookies(next){
+   for(const key of ['SESSDATA','bili_jct','DedeUserID'])delete cookies[key];
+   for(const key of ['SESSDATA','bili_jct','DedeUserID','buvid3'])if(typeof next[key]==='string'&&next[key]){cookies[key]=next[key];knownSecrets.add(next[key]);}
+   if(next.buvid3)buvidAt=now();
+ }
+ const isPaused=()=>now()<pausedUntil;
+ const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);};
+ return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,setSessionCookies,isPaused,pauseForRisk,sanitize:safe};
 }
-export async function runJob(job,client,cloud,log=()=>{}){
+export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  const p=job.payload||{};
  let report={id:job.id,lease:p.lease,success:false};
  try{
    if(p.type!=='bili'||p.tier!=='light'||typeof p.ref!=='string'||(!BV.test(p.ref)&&!SHORT.test(p.ref)))throw Error('无效任务');
+   await beforeUse();
    report={...report,success:true,result:await client.biliLight(p.ref)};
  }catch(error){report.reason=error.message==='风控'?'风控':'视频内容未读到';log(client.sanitize('fetch '+report.reason));}
  await cloud('report',client.sanitize(report));
@@ -152,22 +173,30 @@ async function main(){
  const home=resolve(homedir(),'.inkboard-team');
  const config=JSON.parse(await readFile(resolve(home,'config.json'),'utf8'));
  const base=new URL(config.url);if(base.protocol!=='https:'||base.username||base.password)throw Error('invalid cloud URL');
- let cookies={};try{cookies=JSON.parse(await readFile(resolve(home,'secrets/bili-cookie.json'),'utf8'));}catch{}
- const log=x=>console.log(x);
- const client=createFetchClient({cookies,log});
+ const log=x=>console.log(safeLogText(x));
+ const client=createFetchClient({log});
  log('fetcher start '+createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).digest('hex').slice(0,12));
  const cloud=async(path,body)=>{
    const r=await fetch(new URL('/api/runner/fetch/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
-   if(!r.ok)throw Error('cloud request failed');return r.json();
+   if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
  };
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
+ if(process.argv[2]==='login'){
+   const state=await auth.login(process.argv[3]);
+   log(state==='ok'?'登录已保存在本机。':state==='risk'?'登录受到限制，请稍后再试。':'五分钟内未完成登录，窗口已关闭。');
+   if(state!=='ok')process.exitCode=1;
+   return;
+ }
  for(;;){
    try{
-     const {job}=await cloud('claim',{});
+     await auth.daily();
+     const {job,login}=await cloud('claim',{});
+     if(login){await runLoginFlow(login,{home,client,auth,cloud});continue;}
      if(!job){await sleep(10000);continue;}
      const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).catch(()=>{}),30000);
-     try{await runJob(job,client,cloud,log);}finally{clearInterval(heartbeat);}
+     try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client));}finally{clearInterval(heartbeat);}
    }catch{log('fetch cycle incomplete');await sleep(10000);}
  }
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(()=>{console.error('fetcher startup failed');process.exitCode=1;});
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message==='需要装一次浏览器（Chromium），请联系维护者安装后再登录。'?error.message:'fetcher startup failed；登录未完成，请检查本机运行环境。');process.exitCode=1;});
