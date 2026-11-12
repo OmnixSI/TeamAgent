@@ -17,7 +17,7 @@ B 站失败回报只含枚举原因，风控另带秒数；异常原文和 Cooki
 ## D1 预算实测
 
 `test/fastlinks-budget.test.mjs` 的 `measured()` 同时核对计数器与底层执行次数，所有路径均 ≤48。一个 batch 中的每条语句各占一次，包含零行更新。
-本地 Miniflare/workerd D1 实测一个 batch 三条语句：计数 3，changes `[1,1,0]`，剩余预算 45；没有向生产数据库发请求。这验证应用计数规则，不声称测得生产服务的限额执行。
+本地一个 batch 三条语句的计数由 `test/fastlinks-budget.test.mjs` 的 `measured()` 得出：计数 3，changes `[1,1,0]`，剩余预算 45；没有向生产数据库发请求。这验证应用计数规则，不声称测得生产服务的限额执行。
 
 | 路径 | P0a 基线 | P0b |
 |---|---:|---:|
