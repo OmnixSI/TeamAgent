@@ -35,7 +35,7 @@ test('X detection reads only cookie name/domain and no value, diagnostics hide a
  const cookie={name:'auth_token',domain:'.x.com',get value(){throw Error(secret);}};
  const ctx={cookies:async scope=>{urls=scope;return[cookie];}};
  assert.equal(await n.xAuthTokenPresent(ctx),true);
- assert.deepEqual(urls,['https://x.com','https://twitter.com']);
+ assert.deepEqual(urls,['https://x.com']);
  assert.equal(await n.xAuthTokenPresent({cookies:async()=>[{...Object.getOwnPropertyDescriptors(cookie).name,value:'irrelevant',name:'auth_token',domain:'evil.com'}]}),false);
  assert.equal(await n.xAuthTokenPresent({cookies:async()=>[]}),false);
  assert.equal(n.xMetadata(secret+' user@example.com',200,true).title,'其他页面（标题已隐藏）');
@@ -51,6 +51,7 @@ test('CDP unavailable offers confirmation, then attaches and closes only its own
    sleep:async ms=>{now+=ms;if(!confirmed&&states.some(s=>s.phase==='debug_unavailable')){await writeFile(join(home,'state/x-login-confirm'),'retry');confirmed=true;}},
    discover:async()=>{if(!confirmed)throw Error('synthetic-private-endpoint');return 'ws://127.0.0.1:12345/devtools/browser/test';},
    chromium:{connectOverCDP:async()=>browser}});
+  assert.equal(Object.hasOwn(states.find(s=>s.phase==='waiting'),'error'),false);
   assert.equal(confirmed,true);assert.ok(states.some(s=>s.phase==='debug_unavailable'&&s.error.includes('我已登录')));
   assert.equal((await stat(profile)).mode&0o777,0o700);
   assert.equal(commands[0].opts.stdio,'ignore');assert.doesNotMatch(commands[0].args.join(' '),/no-sandbox|enable-automation|disable-blink/);
@@ -58,21 +59,30 @@ test('CDP unavailable offers confirmation, then attaches and closes only its own
   assert.doesNotMatch(JSON.stringify(states),/synthetic-private-endpoint|ws:\/\//);
  }finally{await rm(home,{recursive:true,force:true});}
 });
-test('native X login records only observed presence and closes the debugging context without exporting cookie values',async()=>{
+for(const [label,domain,path,expected] of [
+ ['x token and home','.x.com','/home','ok'],
+ ['x token on login','.x.com','/login','waiting'],
+ ['x token in login flow','.x.com','/i/flow/login','waiting'],
+ ['twitter token on home','.twitter.com','/home','waiting'],
+ ['no token on home',null,'/home','waiting'],
+])test('native X login requires current x.com session: '+label,async()=>{
  const {createBrowserAuth}=await import('../runner/browser-auth.mjs');
- for(const present of [false,true]){
-  const home=await mkdtemp(join(tmpdir(),'native-x-auth-')),states=[],reports=[];let now=Date.now(),closed=0;
-  const page={url:()=> 'https://x.com/login',title:async()=> 'Something went wrong',evaluate:async()=>403,goto(){throw Error('native window must navigate itself');}};
-  const cookie={name:'auth_token',domain:'.x.com',get value(){throw Error('synthetic-secret-must-not-be-read');}};
-  const context={nativeX:true,pages:()=>[page],cookies:async()=>present?[cookie]:[],publishX:async data=>states.push(data),close:async()=>{closed++;}};
-  try{
-   const auth=createBrowserAuth({home,now:()=>now,sleep:async ms=>{now+=ms;},launch:async()=>context,report:async data=>reports.push(data),notify:async()=>{}});
-   assert.equal(await auth.login('x',{deadline:now+10}),present?'ok':'timeout');
-   assert.equal(closed,1);assert.equal(reports.length,present?1:0);
-   assert.equal(states[0].metadata.auth_token_present,present);
-   assert.doesNotMatch(JSON.stringify({states,reports}),/synthetic-secret|cookie.*value/i);
-  }finally{await rm(home,{recursive:true,force:true});}
- }
+ const home=await mkdtemp(join(tmpdir(),'native-x-auth-')),states=[],reports=[],logs=[];let now=Date.now(),closed=0;
+ const page={url:()=> 'https://x.com'+path,title:async()=> 'X',evaluate:async()=>200,goto(){throw Error('native window must navigate itself');}};
+ const cookie={name:'auth_token',domain,get value(){throw Error('synthetic-secret-must-not-be-read');}};
+ const context={nativeX:true,pages:()=>[page],cookies:async()=>domain?[cookie]:[],publishX:async data=>states.push(data),close:async()=>{closed++;}};
+ try{
+  const auth=createBrowserAuth({home,now:()=>now,sleep:async ms=>{now+=ms;},launch:async()=>context,report:async data=>reports.push(data),log:text=>logs.push(text),notify:async()=>{}});
+  assert.equal(await auth.login('x',{deadline:now+10}),expected==='ok'?'ok':'timeout');
+  assert.equal(states[0].phase,expected);
+  assert.equal(closed,1);assert.equal(reports.length,expected==='ok'?1:0);
+  assert.equal(states[0].metadata.auth_token_present,domain==='.x.com');
+  if(expected==='waiting'){
+   assert.equal(states[0].reason,'not_logged_in');
+   assert.equal(Object.hasOwn(states[0],'error'),false);
+  }
+  assert.doesNotMatch(JSON.stringify({states,reports,logs}),/synthetic-secret|cookie.*value/i);
+ }finally{await rm(home,{recursive:true,force:true});}
 });
 test('native startup cancellation and request deadlines close the owned process promptly',async()=>{
  const n=await native();

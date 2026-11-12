@@ -85,6 +85,18 @@ class LocalLoginPageTests(unittest.TestCase):
         self.assertEqual((self.runtime / 'state/x-login-confirm').stat().st_mode & 0o777, 0o600)
         self.assertNotIn('ok', body.decode())
 
+    def test_x_waiting_status_preserves_reason_without_error(self):
+        state = self.runtime / 'state/x-login.json'
+        state.parent.mkdir()
+        state.write_text(json.dumps({'phase':'waiting','reason':'not_logged_in','error':'旧版等待错误','expires_at':int(time.time()*1000)+60000}))
+        state.chmod(0o600)
+        status, body, _ = self.request('/api/local/x/status')
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result['phase'], 'waiting')
+        self.assertEqual(result['reason'], 'not_logged_in')
+        self.assertNotIn('error', result)
+
     def test_bili_certificate_and_pause_errors_keep_fixed_reasons_in_local_response(self):
         import ssl
         import urllib.error

@@ -123,7 +123,9 @@ class Handler(BaseHTTPRequestHandler):
             result = {'phase':phase}
             reason = data.get('reason')
             if reason in errors:
-                result.update(reason=reason, error=errors[reason])
+                result['reason'] = reason
+                if phase in ('failed','debug_unavailable'):
+                    result['error'] = errors[reason]
             expiry = data.get('expires_at')
             if type(expiry) in (int,float) and math.isfinite(expiry):
                 result['expires_at'] = expiry

@@ -172,11 +172,12 @@ export function createBrowserAuth(options={}){
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
      }else if(context.nativeX){
       const present=await xAuthTokenPresent(context);
-      const xPage=context.pages().find(p=>{try{return ['x.com','twitter.com'].includes(new URL(p.url()).hostname);}catch{return false;}})||page;
-      const title=await xPage.title().catch(()=>'');
-      const http=await xPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null);
-      await context.publishX({phase:present?'ok':'waiting',reason:present?undefined:'not_logged_in',error:present?undefined:X_ERRORS.not_logged_in,expires_at:deadline,metadata:xMetadata(title,http,present)});
-      state=present?'ok':null;
+      const xPage=context.pages().find(p=>{try{const url=new URL(p.url());return url.hostname==='x.com'&&!['/login','/logout'].includes(url.pathname)&&!url.pathname.startsWith('/i/flow/');}catch{return false;}});
+      const loggedIn=present&&!!xPage,diagnosticPage=xPage||page;
+      const title=await diagnosticPage.title().catch(()=>'');
+      const http=await diagnosticPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null);
+      await context.publishX({phase:loggedIn?'ok':'waiting',reason:loggedIn?undefined:'not_logged_in',expires_at:deadline,metadata:xMetadata(title,http,present)});
+      state=loggedIn?'ok':null;
      }else state=await xState(page);
      if(control.signal?.aborted)return 'cancelled';
      if(state==='risk'){if(service==='bili')(await client()).pauseForRisk();return 'risk';}

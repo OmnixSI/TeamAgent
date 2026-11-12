@@ -26,6 +26,17 @@ class BiliLoginErrorsTests(unittest.TestCase):
         self.key = 'a' * 32
         self.qr = 'https://passport.bilibili.com/h5-app/passport/login/scan?qrcode_key=' + self.key
 
+    def test_save_replaces_non_object_cookie_json(self):
+        path = self.runtime / 'secrets/bili-cookie.json'
+        path.parent.mkdir()
+        fresh = {name: {'value':'synthetic-' + name, 'expires':0} for name in ('SESSDATA','bili_jct','DedeUserID')}
+        for old in ('[]', 'null'):
+            with self.subTest(old=old):
+                path.write_text(old)
+                self.login._save(fresh)
+                self.assertEqual(json.loads(path.read_text()), fresh)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_generate_poll_and_report_choose_explicit_verified_ca(self):
         responses = []
         for body in [{'code':0,'data':{'url':self.qr,'qrcode_key':self.key}}, {'code':0,'data':{'code':86101}}, {}]:

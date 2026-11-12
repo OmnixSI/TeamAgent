@@ -21,8 +21,8 @@ export function nativeXExecutable(exists=existsSync){
  throw Error(X_ERRORS.browser_missing);
 }
 export async function xAuthTokenPresent(context){
- const cookies=await context.cookies(['https://x.com','https://twitter.com']);
- return cookies.some(c=>c.name==='auth_token'&&['x.com','.x.com','twitter.com','.twitter.com'].includes(c.domain));
+ const cookies=await context.cookies(['https://x.com']);
+ return cookies.some(c=>c.name==='auth_token'&&['x.com','.x.com'].includes(c.domain));
 }
 export function xMetadata(title,http,hasAuth){
  const safeTitle=typeof title==='string'&&/^(?:X|Twitter|登录 X|登录 \/ X|Log in to X|Something went wrong|X \/ X)$/.test(title)?title:'其他页面（标题已隐藏）';
@@ -73,7 +73,7 @@ export async function openNativeX(options){
      browser=await chromium.connectOverCDP(endpoint,{timeout:3000});
      const context=browser.contexts()[0];if(!context)throw Error(X_ERRORS.debug_unavailable);
      context.nativeX=true;context.publishX=publish;context.close=close;
-     await publish({phase:'waiting',expires_at,error:X_ERRORS.not_logged_in,reason:'not_logged_in',metadata:xMetadata('',null,false)});
+     await publish({phase:'waiting',expires_at,reason:'not_logged_in',metadata:xMetadata('',null,false)});
      return context;
     }catch{
      if(now()+1000>=expires_at||now()-started_at>=4000){

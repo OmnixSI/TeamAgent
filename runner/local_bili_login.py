@@ -209,6 +209,7 @@ class LocalBiliLogin:
             old = json.loads(path.read_text())
         except (OSError, ValueError, TypeError):
             old = {}
+        if not isinstance(old, dict): old = {}
         selected = {name: fresh[name] for name in NAMES if name in fresh}
         if "buvid3" not in selected and isinstance(old.get("buvid3"), dict):
             selected["buvid3"] = old["buvid3"]
