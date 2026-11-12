@@ -1,5 +1,7 @@
 # C3 本机只读调查 runner（尚未接入 Worker）
 
+> 当前状态（v1.5）：按 M0–M4 矩阵选用 W1；真实 HOME 下 DSH 配置转储/帮助启动及 OS 沙箱边界检查通过，S-3/S-27–S-31 本机回归通过、无跳过。真实模型工具事件未完成，因此 `READER_VERIFIED=False`，运行模式仍是方案 B。详情见文末 v1.5；下列 v1.3/v1.4/返工结果是历史记录。
+
 基线固定 `0f67b289b2af019572e091254e1b42a9cbaac75a`。本批只实现本机侧，不启动真实服务，不注册 bridge 线程，不改 Worker、schema、CI 或依赖。
 
 ## 接口与取材
@@ -74,3 +76,74 @@ at toRealPath (node:internal/modules/helpers:65:13)
 证据：`.agent/c3-review-red.log`、`.agent/c3-review-green.log`、`.agent/c3-review-step0.json`（均不提交）。步骤 0 原始输出目录由 JSON 的 `root` 字段记录。`READER_VERIFIED=False` 保持不变。触发停止条件时 HEAD 是 `4579d7ae5e8a5400e6219cd6341d3570fcd02b79`，当时未启动全量验收或提交。
 
 BINI 后续要求先交边界简述，并完成独立修复的验证和新增提交；这不表示 P1-1 的真实启动问题已关闭。边界简述：`/Users/yanghongming/Projects/TeamAgent-c3-sandbox-boundary-20261113.md`。不放宽当前 deny，不推送或部署，等待架构师修订规则后再收尾。
+
+## v1.4：原文规则与真实读根行为冲突（未提交）
+
+本轮以 `cb949f0c503261acf6797015e2644ad6593725de` 为父版本，按 v1.4 增加 `install_root/sandbox_roots/SENSITIVE/SandboxUnsafe/repo_git_clean`，生成唯一 HOME `file-read-data` deny、5 个目录读根及 1 个 literal 配置读根；不再使用敏感文件名列表或正则生成 .sb。子进程 TMPDIR 移到临时 HOME 的 `tmp/`（0700）。读根覆盖 HOME 或已知凭据、remote URL 内含用户名/密码、或存在 extraheader 时，在 Popen 前拒绝为 `runner_unsupported`。
+
+测试先红（51 项、15 个错误），再实现。S-27 精确正文/顺序（含无 Node 读根）、S-28 不安全读根、S-29 安装前缀、S-30 remote 凭据拦截，单独运行 **4/4 通过**。所有本机测试运行 **51 项、0 skip，8 个失败断言、1 个错误**：HOME 内合法读根无法读，导致 S-3/正常 read/symlink 对照和假 DSH 成功案例失败；假 DSH 环境测试因没有成功答案而出现 JSONDecodeError。未放宽这些断言，没有把失败改成跳过。
+
+### 最小复现（与项目封装无关）
+
+在系统 TMPDIR 建合成 HOME `T`，其中 `T/allowed/ok.txt` 是普通合成文本；直接执行下列方案同款规则：
+
+```scheme
+(version 1)
+(allow default)
+(deny file-read-data (subpath "<T>"))
+(allow file-read* (subpath "<T>/allowed"))
+```
+
+实际结果：`cat T/allowed/ok.txt` **exit 1 / Operation not permitted**，`stat T` exit 0，`ls T` exit 1。S-27 证明实现正文与方案相同；不能凭“后写规则生效”的假设认定目录内容已被放行。未另试更宽规则，也未增加任何读根。
+
+### 步骤 0：真实 HOME、真实安装
+
+子进程只用临时 HOME/DSH_HOME/TMPDIR 与合成仓库，生产凭据不在环境中，模型调用 0 次：
+
+- 对 SENSITIVE 的 **12 项**逐一在沙箱内 `cat`：均 exit 1；stdout/stderr 全部丢弃，只记录路径与退出码，无凭据内容进入终端或日志。
+- 按方案创建 4 个独占、0600、随机金丝雀：OS `cat` 全部 exit 1，finally 已删除全部本轮新文件；未覆盖已有文件。
+- 对真实 `.openmausbot`、`.openmausbot/tools`、H 做 stat：3 项均 exit 0；对真实 `.openmausbot`、H、HOME 做 ls：3 项均 exit 1。
+- 临时 worktree 的符号链接指向 HOME 内金丝雀：OS `cat` exit 1。DSH 层金丝雀/symlink 的 read 事件未运行，因为入口已被拒；不能用 OS 结果冒充 tool_result。
+- `repo_git_clean` 对合成仓库和当前项目 worktree 均为 True。
+- 同一 .sb 下真实 DSH 的 `--dump-config` 和 `--help` **均 exit 1**，`open/readFileSync` 的 EPERM 路径是 `/Users/yanghongming/.openmausbot/tools/npm/lib/node_modules/@deepseek-ai/dsh/lib/bin.js`；该文件已在读根 1 中。祖先 lstat 不再是此次报错位置。
+
+证据：`.agent/c3-v14-red.log`、`.agent/c3-v14-current.log`、`.agent/c3-v14-minimal.json`、`.agent/c3-v14-step0.json`，均不提交。后两个 JSON 的 `root` 定位仅含合成数据/启动诊断的临时文件。真实凭据探针从未保存输出。
+
+依据“方案与代码对不上停下交回”及 v1.4 失败处理，保留 `READER_VERIFIED=False` 和方案 B；未移除 HOME deny、未新增读根、未改放行操作类型、未运行干净 worktree 六项验收、未新增提交、未 push/部署。需要架构师确认 SBPL 中具体操作 `file-read-data` 与操作族 `file-read*` 的优先级，以及如何使既定读根的允许内容读取实际生效；是否要使用同操作类型逐根放行，由方案决定，本轮未自行实现或试验。
+
+## v1.5：选择 W1，真实 DSH 启动恢复，工具事件仍待验
+
+本批父提交为 `cb949f0c503261acf6797015e2644ad6593725de`，包含上轮未提交的 v1.4 读根计算、自检、remote 凭据检查与临时 HOME/TMPDIR 实现，并按 v1.5 替换读规则。生产代码只实现 W1，没有 W2/W3 开关或候补分支：单条 `deny file-read-data`，`require-all` 内限定真实 HOME，并用 `require-not` 逐项排除 5 个目录读根与 1 个 literal 配置读根。未新增/扩大读根，未使用 `allow file-read*`。
+
+### 先跑的独立 SBPL 语义矩阵
+
+系统 TMPDIR 下的合成 T 全部经 realpath；使用随机合成文本、literal 配置对照、子目录、上跳路径和指向拒读文件的符号链接，无生产数据。脚本 `.agent/c3-v15-matrix.py`，逐命令退出码与完整规则 `.agent/c3-v15-matrix.json`，均不提交。
+
+| 写法 | m1 合法内容 | m2 私密/上跳 | m3 symlink | m4 stat | m5a HOME 列表 | m5b 读根列表 | m6 xattr | m7 编译 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M0 v1.4 原文（诊断） | 失败 | 符合拒绝 | 符合拒绝 | 通过 | 符合拒绝 | 失败 | exit 1，只记录 | 通过 |
+| M1/W1 | 通过 | 符合拒绝 | 符合拒绝 | 通过 | 符合拒绝 | 通过 | exit 1，只记录 | 通过 |
+| M2/W2 | 通过 | 符合拒绝 | 符合拒绝 | 通过 | 符合拒绝 | 通过 | exit 1，只记录 | 通过 |
+| M3/W3 | 通过 | 符合拒绝 | 符合拒绝 | 通过 | 符合拒绝 | 通过 | exit 1，符合拒绝 | 通过 |
+| M4 allow 操作族移到前面（诊断） | 失败 | 符合拒绝 | 符合拒绝 | 通过 | 符合拒绝 | 失败 | exit 1，只记录 | 通过 |
+
+W1 是按 W1→W2→W3 顺序第一个通过矩阵、S-3/S-27–S-31、OS 凭据边界及真实 DSH 启动检查的写法，因此仅接入 W1；不声称它已经通过尚未运行的真实模型工具事件。
+
+### 测试与字符串边界
+
+更新 S-3 加深层文件、合法读根列目录、敏感文件 stat 与上跳拒绝；更新 S-27 逐行比对 W1、缺 Node 的少一行情况，全文不得出现 `allow file-read*`。S-28 对读根、HOME、sub、系统 TMPDIR、临时 HOME 的原始/解析后路径拒绝双引号、反斜杠、换行和 NUL；正常 symlink 解析为真实目录。S-29 安装前缀和 S-30 remote/extraheader 拦截保留。新增 S-31 把 W1 的 m1–m7 作为真沙箱回归，从 `/var/folders/...` 别名调用 `sandbox_roots`，确认输出为 `/private/var/folders/...` 并实际读写边界成立。
+
+v1.5 测试先红（53 项、13 个失败断言、2 个错误），实现 W1 和路径检查后 **53/53 通过、0 skip**。S-3/S-30/S-31 在运行前先探测嵌套 sandbox；本次宿主机无探测失败，未借 skip 掩盖问题。M0/M4 不进入回归测试。
+
+### 第 0 步实测（真实 HOME 策略、真实安装，无生产 key）
+
+- DSH 安装读根为 `/Users/yanghongming/.openmausbot/tools/npm`；Node 读根为 realpath `/opt/homebrew/Cellar/node/26.0.0`，其余读根仅合成仓库 `.git`、本次 worktree、临时 HOME 和专用 reader patch。
+- 同一 W1 .sb 下，真实 DSH `--dump-config`、headless `--help` 均 **exit 0，stderr 无 EPERM，报错路径为空**。没有临时增加读根或改动网络规则。
+- SENSITIVE 的 **12 项**真实路径 `cat` 均 exit 1，stdout/stderr 均丢弃，只记退出码；4 个独占 0600 金丝雀的 OS `cat` 均 exit 1，finally 已清理。
+- 真实 `.openmausbot`、`.openmausbot/tools`、H 的 stat 均 exit 0；真实 HOME、`.openmausbot`、H 的 ls 均 exit 1；worktree 指向 HOME 金丝雀的 symlink OS `cat` exit 1。
+- `repo_git_clean` 对当前项目为 True。
+- **未完成项**：模型返回工具表、未知工具探针、真实 read tool_result、DSH 层金丝雀与 symlink read 事件、S-26(g)(h) 原生结果。尝试仅在 localhost:443 启动合成 Messages 端点以避免生产凭据，但绑定端口得到 `PermissionError`，请求数为 0；未改网络端口/策略，未尝试生产 key，不把合成 OS 检查算作模型事件。
+
+证据：`.agent/c3-v15-startup.json`、`.agent/c3-v15-step0.json`、`.agent/c3-v15-native-read.json`；JSON 中的 `root` 定位临时输出，真实凭据探针无任何内容日志。根据“第 0 步全过才能启用”的约定，`READER_VERIFIED=False` 保持不变；当前方案 B 仍负责确定性搜读，Worker/bridge 接入与真实模型验收继续留待后续，不推送或部署。
+
+宿主机最终验证（本机 Python 3.14.5，满足项目 ≥3.12）：`npm run check`、`npm test`、`npm run test:runner`、`npm test --prefix clients`、`npm run check:ui`、`npm run config:check` 全部 exit 0；主测试 464、Python 112（原基线 53 + 共享 gitsafe 6 + C3 53）、Node fetcher 51、clients 2，共 629 项，0 skip；`git diff --check` 干净。相对 cb949f0 本批新增 8 项 C3 测试。日志 `.agent/c3-v15-{check,test,runner,clients,ui,config}.log` 不提交。

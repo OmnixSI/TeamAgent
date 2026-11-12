@@ -3,6 +3,7 @@ import json
 import concurrent.futures
 import os
 from pathlib import Path
+import secrets
 import signal
 import stat
 import subprocess
@@ -40,6 +41,20 @@ class LocalTests(unittest.TestCase):
         patch.object(s, "H", self.h).start()
         patch.object(Path, "home", return_value=self.home).start()
         patch.dict(os.environ, {"TMPDIR": str(self.home), "DEEPSEEK_API_KEY": "synthetic-api-key"}).start()
+
+    def synthetic_roots(self, home=None):
+        home=self.home/'isolated-home' if home is None else home
+        roots={'real_home':self.home,
+               'read':[self.home/'.openmausbot/tools/npm',self.home/'.nvm/versions/node/test',self.sub,
+                       self.h/'repos/Test/.git',home],
+               'reader':self.h/'dsh-reader.yml'}
+        for path in roots['read']:path.mkdir(parents=True,exist_ok=True)
+        s.reader_profile()
+        return roots
+
+    def require_native_sandbox(self):
+        r=subprocess.run(['sandbox-exec','-p','(version 1)(allow default)','/usr/bin/true'],capture_output=True)
+        if r.returncode:self.skipTest('nested sandbox')
 
     def test_S26_native_envelopes_and_blocks_count_only_numbered_body(self):
         cases = [(envelope("", "(End of file - total 0 lines)"), 0),
@@ -243,7 +258,7 @@ class LocalTests(unittest.TestCase):
         paths += [self.home/'.dsh/.credentials.yaml',self.h/'qq-session.json']
         for path in paths:path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic-deny')
         allowed=self.home/'.openmausbot/tools/npm/probe';allowed.parent.mkdir(parents=True);allowed.write_text('allowed')
-        sb=s.sandbox_profile(self.sub,self.home/'isolated-home')
+        sb=s.sandbox_profile(self.sub,self.home/'isolated-home',self.synthetic_roots())
         try:
             for path in paths:
                 with self.subTest(path=path):
@@ -258,7 +273,7 @@ class LocalTests(unittest.TestCase):
         good=[self.sub/name for name in ['src/prefix-sum.ts','box-shadow.css','bilingual.md']]
         bad=[self.h/name for name in ['bili-cookie.json','bili.cookies.json','x-auth/token','x-browser/auth','browser/x/Default/Cookies','secrets/bili-cookie.json']]
         for path in good+bad:path.parent.mkdir(parents=True,exist_ok=True);path.write_text('synthetic-content')
-        sb=s.sandbox_profile(self.sub,self.home/'isolated-home')
+        sb=s.sandbox_profile(self.sub,self.home/'isolated-home',self.synthetic_roots())
         try:
             for path in good+bad:
                 with self.subTest(path=path):
@@ -267,7 +282,8 @@ class LocalTests(unittest.TestCase):
         finally:sb.unlink()
 
     def fake_dsh(self, events=None, sleep=0):
-        exe=self.home/'fake-dsh'
+        exe=self.home/'fake-install/fake-dsh'
+        exe.parent.mkdir(exist_ok=True)
         events = read_events()+[{'type':'final','reason':{'kind':'completed'},'text':'README.md:1 已核实'}] if events is None else events
         exe.write_text('#!'+sys.executable+'\nimport json,sys,time,os\nsys.stdin.read()\n'
             + f'time.sleep({sleep})\n'
@@ -275,6 +291,9 @@ class LocalTests(unittest.TestCase):
         exe.chmod(0o700)
         patch.dict(os.environ,{'TEAM_AGENT_DSH':str(exe),'GITHUB_TOKEN':'must-not-leak','GH_TOKEN':'must-not-leak','runnerToken':'must-not-leak'}).start()
         self.run={'id':'x','lease':'l','deadline':(time.time()+400)*1000,'resolved_sha':'a'*40,'question':''}
+        root=self.h/'repos/Test';(root/'.git').mkdir(parents=True,exist_ok=True)
+        patch.dict(s._roots,{str(self.sub):root}).start()
+        patch.object(s,'repo_git_clean',return_value=True).start()
 
     @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
     def test_S3_S4_real_sandbox_blocks_synthetic_secrets_and_external_writes(self):
@@ -287,7 +306,7 @@ class LocalTests(unittest.TestCase):
         temp_home=self.home/'isolated-home';temp_home.mkdir(mode=0o700)
         # TMPDIR must not include the synthetic home, otherwise the plan explicitly permits writes there.
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'TMPDIR':tmp}):
-            sb=s.sandbox_profile(self.sub,temp_home)
+            sb=s.sandbox_profile(self.sub,temp_home,self.synthetic_roots(temp_home))
             try:
                 for p in files:
                     r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(p)],capture_output=True)
@@ -300,12 +319,160 @@ class LocalTests(unittest.TestCase):
                     self.assertEqual(r.returncode==0,ok,r.stderr)
             finally:sb.unlink()
 
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
+    def test_S3_v15_home_content_denied_six_roots_readable_metadata_allowed(self):
+        self.require_native_sandbox()
+        private=[self.home/'.openmausbot'/name for name in ['bots.json','bot-api.json','browser-engine-key','config.json','other/x']]
+        private += [self.home/'.dsh/.credentials.yaml',self.home/'.ssh/id_rsa',self.home/'Documents/a.txt']
+        private += [self.h/name for name in ['qq-session.json','worker-secrets.json','config.json','dsh-team.yml']]
+        for path in private:path.parent.mkdir(parents=True,exist_ok=True);path.write_text('must-not-read')
+        roots=self.synthetic_roots()
+        allowed=[]
+        for directory in roots['read']:
+            p=directory/'probe';p.write_text('allowed');allowed.append(p)
+        for directory in [roots['read'][0],roots['read'][2]]:
+            p=directory/'deep/probe';p.parent.mkdir();p.write_text('deep-allowed');allowed.append(p)
+        allowed.append(roots['reader'])
+        expected={p:p.read_bytes() for p in allowed}
+        sb=s.sandbox_profile(self.sub,roots['read'][-1],roots)
+        try:
+            for p in private:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(p)],capture_output=True)
+                self.assertNotEqual(r.returncode,0,p);self.assertEqual(r.stdout,b'')
+            for p in allowed:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(p)],capture_output=True)
+                self.assertEqual((r.returncode,r.stdout),(0,expected[p]),r.stderr)
+            for p in [self.home/'.openmausbot',self.home/'.openmausbot/tools',self.h,self.home/'.openmausbot/bots.json']:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/usr/bin/stat','-f','%p',str(p)],capture_output=True)
+                self.assertEqual(r.returncode,0,r.stderr)
+            for p in [self.home/'.openmausbot',self.h,self.home]:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/ls',str(p)],capture_output=True)
+                self.assertNotEqual(r.returncode,0,p)
+            for p in [roots['read'][0],roots['read'][2]]:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/ls',str(p)],capture_output=True)
+                self.assertEqual(r.returncode,0,r.stderr)
+            r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(roots['read'][2]/'../../config.json')],capture_output=True)
+            self.assertNotEqual(r.returncode,0);self.assertEqual(r.stdout,b'')
+        finally:sb.unlink()
+
+    def test_S27_exact_read_root_rules_and_no_regex(self):
+        roots=self.synthetic_roots();home=roots['read'][-1]
+        for directories in [roots['read'],[p for p in roots['read'] if p!=roots['read'][1]]]:
+            actual=dict(roots,read=directories)
+            sb=s.sandbox_profile(self.sub,home,actual)
+            try:
+                lines=['(version 1)','(allow default)','(deny file-read-data','  (require-all',f'    (subpath {json.dumps(str(self.home))})']
+                lines += [f'    (require-not (subpath {json.dumps(str(p.resolve()))}))' for p in directories]
+                lines += [f'    (require-not (literal {json.dumps(str(roots["reader"].resolve()))}))))',
+                          '(deny file-write* (subpath "/"))',
+                          f'(allow file-write* (subpath {json.dumps(str(self.sub))}) (subpath {json.dumps(str(self.home))}) (subpath {json.dumps(str(home))}))',
+                          '(deny network-outbound)','(allow network-outbound (remote tcp "*:443"))',
+                          '(allow network-outbound (literal "/private/var/run/mDNSResponder"))']
+                self.assertEqual(sb.read_text(),'\n'.join(lines)+'\n')
+                self.assertNotIn('regex',sb.read_text())
+                self.assertNotIn('allow file-read*',sb.read_text())
+            finally:sb.unlink()
+
+    def test_S28_unsafe_read_roots_rejected_before_process_start(self):
+        self.fake_dsh()
+        roots=self.synthetic_roots()
+        for index,path in [(0,self.home),(0,self.home.parent),(0,self.home/'.openmausbot'),(0,self.h),(1,self.h),
+                           (0,self.home/'.config')]:
+            with self.subTest(index=index,path=path):
+                bad=dict(roots,read=list(roots['read']));bad['read'][index]=path
+                with self.assertRaises(s.SandboxUnsafe):s.sandbox_profile(self.sub,roots['read'][-1],bad)
+                with patch.object(s,'sandbox_roots',return_value=bad),patch.object(s.subprocess,'Popen') as launch:
+                    result=s.execute(self.run,self.sub)
+                self.assertEqual(result['error_kind'],'runner_unsupported');launch.assert_not_called()
+        literal=dict(roots,reader=self.h/'config.json')
+        with self.assertRaises(s.SandboxUnsafe):s.sandbox_profile(self.sub,roots['read'][-1],literal)
+
+    def test_S28_special_path_characters_rejected_and_symlink_roots_resolved(self):
+        roots=self.synthetic_roots();self.fake_dsh()
+        for char in ['"','\\','\n','\0']:
+            bad=dict(roots,read=list(roots['read']));bad['read'][2]=self.home/('invalid'+char+'path')
+            with self.subTest(char=repr(char)):
+                with self.assertRaises(s.SandboxUnsafe):s.sandbox_profile(self.sub,roots['read'][-1],bad)
+                with patch.object(s,'sandbox_roots',return_value=bad),patch.object(s.subprocess,'Popen') as launch:
+                    result=s.execute(self.run,self.sub)
+                self.assertEqual(result['error_kind'],'runner_unsupported');launch.assert_not_called()
+                with patch.dict(os.environ,{'TMPDIR':str(self.home/('invalid'+char+'tmp'))}) if char!='\0' else self.subTest('nul checked through roots'):
+                    if char!='\0':
+                        with self.assertRaises(s.SandboxUnsafe):s.sandbox_profile(self.sub,roots['read'][-1],roots)
+        link=self.home/'sub-link';link.symlink_to(self.sub,target_is_directory=True)
+        good=dict(roots,read=list(roots['read']));good['read'][2]=link
+        sb=s.sandbox_profile(link,roots['read'][-1],good)
+        try:
+            self.assertIn(str(self.sub),sb.read_text());self.assertNotIn(str(link),sb.read_text())
+        finally:sb.unlink()
+
+    def test_S29_install_prefix_resolves_symlink_and_fallback(self):
+        prefix=self.home/'install';script=prefix/'lib/node_modules/@deepseek-ai/dsh/lib/bin.js'
+        script.parent.mkdir(parents=True);script.write_text('synthetic')
+        link=prefix/'bin/dsh';link.parent.mkdir();link.symlink_to(script)
+        self.assertEqual(s.install_root(link),prefix)
+        self.assertEqual(s.install_root(self.home/'other/fake-dsh'),self.home/'other')
+
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
+    def test_S30_symlink_outside_read_roots_is_denied(self):
+        self.require_native_sandbox()
+        roots=self.synthetic_roots();outside=self.home/'.openmausbot/bots.json';outside.parent.mkdir(exist_ok=True)
+        outside.write_text('must-not-read');(self.sub/'link.txt').symlink_to(outside)
+        (self.sub/'ok.txt').write_text('allowed')
+        sb=s.sandbox_profile(self.sub,roots['read'][-1],roots)
+        try:
+            for name,ok in [('link.txt',False),('ok.txt',True)]:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(self.sub/name)],capture_output=True)
+                self.assertEqual(r.returncode==0,ok,r.stderr)
+                self.assertNotIn(b'must-not-read',r.stdout)
+        finally:sb.unlink()
+
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS sandbox required')
+    def test_S31_selected_W1_semantic_matrix_and_var_realpath(self):
+        self.require_native_sandbox()
+        t=self.home;allowed=t/'allowed';(allowed/'deep').mkdir(parents=True)
+        files={allowed/'ok.txt':'OK-'+secrets.token_hex(8),allowed/'deep/n.txt':'N-'+secrets.token_hex(8),
+               t/'conf.yml':'CONF-'+secrets.token_hex(8),t/'secret.txt':'SECRET-'+secrets.token_hex(8),t/'conf.yml.bak':'BACKUP'}
+        for path,text in files.items():path.write_text(text)
+        (allowed/'link.txt').symlink_to(t/'secret.txt')
+        subprocess.run(['/usr/bin/xattr','-w','x.k','v',str(t/'secret.txt')],check=True)
+        # Exercise sandbox_roots with /var aliases, rather than just testing already canonical paths.
+        alias=Path(str(t).replace('/private/var/','/var/',1))
+        fake_dsh=allowed/'dsh';fake_dsh.write_text('synthetic');fake_dsh.chmod(0o700)
+        repo=t/'repo';(repo/'.git').mkdir(parents=True)
+        temporary=alias/'temp-home';temporary.mkdir()
+        with patch.object(s,'dsh_program',return_value=str(alias/'allowed/dsh')), \
+             patch.object(s,'reader_profile',return_value=alias/'conf.yml'), \
+             patch.object(Path,'home',return_value=alias),patch.dict(s._roots,{str(alias/'allowed'):repo}):
+            roots=s.sandbox_roots(alias/'allowed',temporary,{'PATH':os.environ['PATH']})
+            sb=s.sandbox_profile(alias/'allowed',temporary,roots)
+        try:
+            self.assertEqual(roots['real_home'],t)
+            self.assertNotIn('"'+str(alias)+'/',sb.read_text())
+            for path in [allowed/'ok.txt',allowed/'deep/n.txt',t/'conf.yml']:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(path)],capture_output=True,text=True)
+                self.assertEqual((r.returncode,r.stdout),(0,files[path]),r.stderr)
+            for path in [t/'secret.txt',t/'conf.yml.bak',allowed/'../secret.txt',allowed/'link.txt']:
+                r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/cat',str(path)],capture_output=True)
+                self.assertNotEqual(r.returncode,0);self.assertEqual(r.stdout,b'')
+            for path in [t,t/'secret.txt',allowed]:
+                self.assertEqual(subprocess.run(['sandbox-exec','-f',str(sb),'/usr/bin/stat','-f','%z',str(path)],capture_output=True).returncode,0)
+            self.assertNotEqual(subprocess.run(['sandbox-exec','-f',str(sb),'/bin/ls',str(t)],capture_output=True).returncode,0)
+            r=subprocess.run(['sandbox-exec','-f',str(sb),'/bin/ls',str(allowed)],capture_output=True,text=True)
+            self.assertEqual(r.returncode,0);self.assertIn('ok.txt',r.stdout)
+            # m6 is diagnostic only for W1: preserve its result without constraining it.
+            subprocess.run(['sandbox-exec','-f',str(sb),'/usr/bin/xattr','-p','x.k',str(t/'secret.txt')],capture_output=True)
+            self.assertEqual(subprocess.run(['sandbox-exec','-f',str(sb),'/bin/echo','ok'],capture_output=True).returncode,0)
+        finally:sb.unlink()
+
     def test_S6_environment_whitelist_and_S12_actual_command(self):
         self.fake_dsh()
         env=s.reader_env(self.home/'temp-home')
         self.assertFalse({'GITHUB_TOKEN','GH_TOKEN','runnerToken'} & env.keys())
         self.assertEqual(env['HOME'],str(self.home/'temp-home'))
         self.assertEqual(env['DEEPSEEK_API_KEY'],'synthetic-api-key')
+        self.assertEqual(env['TMPDIR'],str(self.home/'temp-home/tmp'))
+        self.assertEqual(Path(env['TMPDIR']).stat().st_mode & 0o777,0o700)
         args=s.reader_command(self.sub,self.home/'sb')
         self.assertIn(str(self.h/'dsh-reader.yml'),args)
         self.assertEqual(args[args.index('--permission-mode')+1],'read-only')
@@ -462,6 +629,22 @@ class GitTests(unittest.TestCase):
         for term in ['missing-xyz','secret_keyword']:
             r=s.search_read(dict(self.run,question=term,keywords=[term]),self.sha)
             self.assertEqual((r['status'],r['error_kind'],r['answer']),('failed','not_found',''))
+
+    def test_S30_repo_git_credentials_rejected_before_launch(self):
+        with patch.dict(s._roots,{str(self.sub):self.root}):
+            for url in ['https://github.com/a/b','https://x:ghp_'+'a'*36+'@github.com/a/b']:
+                self.git('config','remote.origin.url',url)
+                self.assertEqual(s.repo_git_clean(self.root),'@' not in url)
+                if '@' in url:
+                    with patch.object(s,'repo_git_clean',return_value=False),patch.object(s.subprocess,'Popen') as launch:
+                        result=s.execute(dict(self.run,resolved_sha=self.sha),self.sub)
+                    self.assertEqual(result['error_kind'],'runner_unsupported');launch.assert_not_called()
+            self.git('config','remote.origin.url','https://github.com/a/b')
+            self.git('config','http.https://github.com/.extraheader','synthetic-authorization')
+            self.assertFalse(s.repo_git_clean(self.root))
+            with patch.object(s,'repo_git_clean',return_value=False),patch.object(s.subprocess,'Popen') as launch:
+                result=s.execute(dict(self.run,resolved_sha=self.sha),self.sub)
+            self.assertEqual(result['error_kind'],'runner_unsupported');launch.assert_not_called()
 
     def test_B_only_searches_pinned_sha_and_limits_three_nonsecret_files(self):
         (self.root/'src/a.ts').write_text('not_in_commit\n')

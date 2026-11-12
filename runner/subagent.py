@@ -486,21 +486,89 @@ def live_markers():
     return live
 
 
-def sandbox_profile(sub, home):
-    real_home = Path.home().resolve()
-    denied = [H / p for p in ['worker-secrets.json', 'config.json', 'dsh-team.yml', 'qq-session.json',
-        'secrets', 'browser', 'x-browser', 'x-auth', 'bili-cookie.json', 'bili-cookies.json',
-        'bili.cookies.json', 'x-cookie.json', 'x-cookies.json', 'x-auth.json']]
-    denied += [real_home / p for p in ['.ssh', '.config/gh', '.aws', '.netrc', '.codex', '.claude',
-                                     '.dsh/.credentials.yaml', 'Library/Keychains']]
-    maus = real_home / '.openmausbot'
-    denied.append(maus)
-    lines = ['(version 1)', '(allow default)']
-    lines += ['(deny file-read* (subpath ' + json.dumps(str(p)) + '))' for p in denied]
-    lines += ['(allow file-read* (subpath ' + json.dumps(str(maus / 'tools/npm')) + '))',
+SENSITIVE = ['~/.openmausbot/bots.json', '~/.openmausbot/bot-api.json',
+             '~/.openmausbot/browser-engine-key', '~/.openmausbot/config.json',
+             '~/.dsh/.credentials.yaml', 'H/qq-session.json', 'H/worker-secrets.json',
+             'H/config.json', 'H/dsh-team.yml', '~/.ssh', '~/.config/gh', '~/Library/Keychains']
+
+
+class SandboxUnsafe(Exception):
+    pass
+
+
+def sandbox_path(path):
+    if any(ch in str(path) for ch in ['"', '\\', '\n', '\0']):
+        raise SandboxUnsafe('沙箱读根不安全')
+    try:
+        resolved = Path(path).resolve()
+    except (ValueError, OSError):
+        raise SandboxUnsafe('沙箱读根不安全') from None
+    if any(ch in str(resolved) for ch in ['"', '\\', '\n', '\0']):
+        raise SandboxUnsafe('沙箱读根不安全')
+    return resolved
+
+
+def install_root(script):
+    script = script.resolve()
+    for ancestor in script.parents:
+        if ancestor.name == 'node_modules' and ancestor.parent.name == 'lib':
+            return ancestor.parent.parent
+    return script.parent
+
+
+def sandbox_roots(sub, home, env):
+    exe = shutil.which(dsh_program(), path=env['PATH'])
+    root = _roots.get(str(sub))
+    if not exe or root is None:
+        raise SandboxUnsafe('沙箱读根不安全')
+    directories = [sandbox_path(install_root(Path(exe)))]
+    node = shutil.which('node', path=env['PATH'])
+    if node:
+        directories.append(sandbox_path(Path(node).resolve().parent.parent))
+    directories.extend([sandbox_path(sub), sandbox_path(root / '.git'), sandbox_path(home)])
+    return {'real_home': sandbox_path(Path.home()), 'read': directories, 'reader': sandbox_path(reader_profile())}
+
+
+def sensitive_paths(real_home):
+    return [(real_home / name[2:] if name.startswith('~/') else H / name[2:]).resolve()
+            for name in SENSITIVE]
+
+
+def repo_git_clean(root):
+    try:
+        text = gitsafe.run(root, 'read', 'config', '--get-regexp', r'^(remote\..*\.url|http\..*\.extraheader)$')
+    except gitsafe.GitFailed:
+        return True  # git config exits 1 when no matching key exists.
+    for line in text.splitlines():
+        key, _, value = line.partition(' ')
+        if key.lower().startswith('http.'):
+            return False
+        authority = value.partition('://')[2]
+        if '@' in authority and ':' in authority.split('@', 1)[0]:
+            return False
+    return True
+
+
+def sandbox_profile(sub, home, roots=None):
+    """v1.5 采用 W1，矩阵结果见 docs/c3-runner.md。"""
+    roots = sandbox_roots(sub, home, reader_env(home)) if roots is None else roots
+    real_home = sandbox_path(roots['real_home'])
+    directories = [sandbox_path(p) for p in roots['read']]
+    reader = sandbox_path(roots['reader'])
+    sensitive = sensitive_paths(real_home)
+    forbidden = {real_home, *real_home.parents, real_home / '.openmausbot', H.resolve()}
+    for directory in directories:
+        if directory in forbidden or any(p == directory or directory in p.parents for p in sensitive):
+            raise SandboxUnsafe('沙箱读根不安全')
+    if reader in forbidden or reader in sensitive:
+        raise SandboxUnsafe('沙箱读根不安全')
+    lines = ['(version 1)', '(allow default)', '(deny file-read-data',
+             '  (require-all', '    (subpath ' + json.dumps(str(real_home)) + ')']
+    lines += ['    (require-not (subpath ' + json.dumps(str(p)) + '))' for p in directories]
+    lines += ['    (require-not (literal ' + json.dumps(str(reader)) + '))))',
               '(deny file-write* (subpath "/"))']
-    for path in [sub, Path(os.environ.get('TMPDIR') or tempfile.gettempdir()).resolve(), home]:
-        lines.append('(allow file-write* (subpath ' + json.dumps(str(path.resolve())) + '))')
+    writable = [sandbox_path(sub), sandbox_path(os.environ.get('TMPDIR') or tempfile.gettempdir()), sandbox_path(home)]
+    lines.append('(allow file-write* ' + ' '.join('(subpath ' + json.dumps(str(p)) + ')' for p in writable) + ')')
     lines += ['(deny network-outbound)', '(allow network-outbound (remote tcp "*:443"))',
               '(allow network-outbound (literal "/private/var/run/mDNSResponder"))']
     fd, name = tempfile.mkstemp(prefix='sub-sandbox-', suffix='.sb', dir=os.environ.get('TMPDIR'))
@@ -568,6 +636,10 @@ def reader_env(home):
                'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'}
     env = {k: v for k, v in os.environ.items() if k in allowed}
     env['HOME'] = str(home)
+    temp = home / 'tmp'
+    temp.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp.chmod(0o700)
+    env['TMPDIR'] = str(temp)
     env['DEEPSEEK_API_KEY'] = api_key()
     _secrets.add(env['DEEPSEEK_API_KEY'])
     return env
@@ -634,8 +706,12 @@ def execute(run, sub):
                     pass
 
     try:
-        sandbox = sandbox_profile(sub, home)
-        proc = subprocess.Popen(reader_command(sub, sandbox), cwd=sub, env=reader_env(home),
+        env = reader_env(home)
+        root = _roots.get(str(sub))
+        if root is None or not repo_git_clean(root):
+            return failure('runner_unsupported', sha=sha, detail='仓库 git 配置含凭据')
+        sandbox = sandbox_profile(sub, home, sandbox_roots(sub, home, env))
+        proc = subprocess.Popen(reader_command(sub, sandbox), cwd=sub, env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, start_new_session=True)
         write_marker(H / 'sub' / (run['id'] + '.running'),
@@ -658,6 +734,8 @@ def execute(run, sub):
         if cancelled.is_set():
             return None  # A fenced runner must not report, even with a partial answer.
         return classify_events(run, sub, sha, events, proc.returncode)
+    except SandboxUnsafe:
+        return failure('runner_unsupported', sha=sha, detail='沙箱读根不安全')
     except (OSError, ValueError):
         return failure('upstream', sha=sha)
     finally:
