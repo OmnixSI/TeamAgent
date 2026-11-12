@@ -1092,7 +1092,19 @@ function loginQr(text) {
   path.setAttribute('d', matrix.flatMap((row, y) => row.flatMap((dark, x) => dark ? ['M' + (x + 4) + ',' + (y + 4) + 'h1v1h-1z'] : [])).join(''));
   svg.append(background, path); return svg;
 }
-let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot;
+let loginRefreshBusy = false, lastLoginRefresh = 0, loginSnapshot, loginQrDeadline;
+function tickLoginCountdown(panel) {
+  const clock = panel.loginCountdown;
+  if (!clock) return;
+  if (!panel.isConnected) { panel.loginCountdown = null; return; }
+  const seconds = Math.max(0, Math.ceil((clock.expiresAt - Date.now()) / 1000));
+  clock.label.textContent = '二维码剩余有效时间：' + seconds + ' 秒';
+  if (seconds === 0) {
+    clock.message.textContent = '已过期'; clock.qr.remove(); clock.cancel.remove();
+    clock.start.textContent = '重新获取二维码'; clock.start.disabled = false;
+    panel.loginCountdown = null; panel.loginSignature = '';
+  }
+}
 async function localServiceQr(id) {
   const response = await fetch('/api/local/service-login/qr?id=' + encodeURIComponent(id), {
     headers: {'X-TeamAgent-Local':'1',...(localOwner()?{'X-TeamAgent-Session':localSession}:{})}, cache:'no-store', referrerPolicy:'no-referrer', signal:AbortSignal.timeout(3000),
@@ -1117,13 +1129,17 @@ async function refreshServiceLogins(panel) {
     if (!panel.isConnected || state?.who.role !== 'owner') return;
     const isLocalOwner = localOwner();
     const biliFlow = snapshot.services.bili.flow;
-    const localQr = isLocalOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now()
+    if (loginQrDeadline?.id !== biliFlow?.id || !['waiting','scanned'].includes(biliFlow?.phase)) loginQrDeadline = null;
+    const qrExpired = !!loginQrDeadline && loginQrDeadline.expiresAt <= Date.now();
+    const localQr = isLocalOwner && snapshot.online && biliFlow && ['waiting','scanned'].includes(biliFlow.phase) && biliFlow.expires_at > Date.now() && !qrExpired
       ? await localServiceQr(biliFlow.id) : null;
+    if (localQr && !loginQrDeadline) loginQrDeadline = {id:biliFlow.id,expiresAt:Math.min(biliFlow.expires_at, Date.now() + 180000)};
     loginSnapshot = snapshot; lastLoginRefresh = Date.now();
     // Keep focused buttons and the same QR in place while only the heartbeat timestamp changes.
-    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr}, (key, value) => key === 'updated_at' ? undefined : value);
+    const visual = JSON.stringify({online:snapshot.online,services:snapshot.services,localQr,qrExpired}, (key, value) => key === 'updated_at' ? undefined : value);
     if (panel.loginSignature === visual) return;
     panel.loginSignature = visual;
+    panel.loginCountdown = null;
     panel.replaceChildren(el('h2', '本机服务登录'));
     panel.append(el('p', '用 B 站 App 扫码确认；X 在这台电脑弹出的窗口中登录。', 'note'));
     if (!isLocalOwner) panel.append(localConsoleLink('在这台电脑上打开本机开发台扫码（先双击桌面「TeamAgent-登录」）'));
@@ -1131,36 +1147,48 @@ async function refreshServiceLogins(panel) {
     const cards = el('div', undefined, 'grid');
     for (const service of ['bili', 'x']) {
       const label = service === 'bili' ? 'B 站' : 'X', entry = snapshot.services[service], flow = entry.flow;
-      const active = flow && ['waiting', 'scanned'].includes(flow.phase) && flow.expires_at > Date.now();
+      const active = flow && ['waiting', 'scanned'].includes(flow.phase) && flow.expires_at > Date.now() && !(service === 'bili' && qrExpired);
       const card = el('article', undefined, 'card');
       card.append(el('h3', label));
       let status = ({ok:'已登录',missing:'未登录',expired:'已过期',risk:'登录需要验证'})[entry.auth?.state] || '未登录';
       if (flow) status = ({waiting:'等待本机服务领取',scanned:'已扫码待确认',ok:'已登录',expired:'已过期',failed:'登录失败',cancelled:'已取消'})[flow.phase];
+      if (service === 'bili' && flow && ['waiting','scanned'].includes(flow.phase) && !active) status = '已过期';
       if (active && service === 'bili' && localQr) status = flow.phase === 'scanned' ? '已扫码待确认' : '等待扫码';
       if (active && service === 'x' && flow.started) status = '已在你的电脑上打开登录窗口';
       else if (active && flow.claimed && (service === 'x' || !localQr)) status = service === 'x' ? '正在电脑上打开登录窗口' : '正在获取二维码';
       if (flow?.reason === 'risk') status = 'B 站暂时限制，请稍后再试';
       const message = el('p', status); message.setAttribute('role', 'status'); card.append(message);
+      if (service === 'x') card.append(el('p', '登录时会在这台 Mac 上弹出一个 Chrome 窗口。请在弹出的 Chrome 中，确认是真实的 x.com 页面后登录。不要在本网页里输入密码；本网页不会也不需要你的密码。', 'note'));
       card.append(el('small', '最近检查：' + date(entry.auth?.checked_at)));
-      if (active && service === 'bili' && localQr) card.append(loginQr(localQr));
+      const qr = active && service === 'bili' && localQr ? loginQr(localQr) : null;
+      if (qr) card.append(qr);
       const actions = el('div', undefined, 'actions');
-      const start = button('登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
+      const start = button(service === 'bili' && status === '已过期' ? '重新获取二维码' : '登录 ' + label, async () => { await api('/api/team/service-login', {service}); panel.loginSignature = ''; await refreshServiceLogins(panel); }, 'primary');
       start.disabled = !!active || !snapshot.online || (service === 'bili' && !isLocalOwner); actions.append(start);
-      if (active) actions.append(button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }));
+      const cancel = active ? button('取消登录', async () => { await api('/api/team/service-login', {service,id:flow.id}, 'DELETE'); panel.loginSignature = ''; await refreshServiceLogins(panel); }) : null;
+      if (cancel) actions.append(cancel);
+      if (qr) {
+        const countdown = el('p', undefined, 'note'); countdown.setAttribute('role', 'timer'); card.append(countdown);
+        panel.loginCountdown = {label:countdown,message,qr,start,cancel,expiresAt:loginQrDeadline.expiresAt};
+        tickLoginCountdown(panel);
+      }
       card.append(actions); cards.append(card);
     }
     panel.append(cards);
   } catch (e) {
+    panel.loginCountdown = null;
     panel.loginSignature = '';
     panel.replaceChildren(el('h2', '本机服务登录'), el('p', e.message, 'error'));
   } finally { loginRefreshBusy = false; }
 }
 setInterval(async () => {
-  if (document.hidden || $('app').hidden || view !== 'system' || state?.who.role !== 'owner' || loading || loginRefreshBusy) return;
+  if (document.hidden || $('app').hidden || view !== 'system' || state?.who.role !== 'owner' || loading) return;
   const panel = $('service-logins'); if (!panel) return;
+  tickLoginCountdown(panel);
+  if (loginRefreshBusy) return;
   const active = Object.values(loginSnapshot?.services || {}).some(s => s.flow && ['waiting','scanned'].includes(s.flow.phase));
   if (Date.now() - lastLoginRefresh >= (active ? 2000 : 30000)) await refreshServiceLogins(panel);
-}, 2000);
+}, 1000);
 
 async function renderSystem() {
   const box = $("system");
