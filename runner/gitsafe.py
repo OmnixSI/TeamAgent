@@ -1,0 +1,99 @@
+"""Git command classes for indexing and private detached readers (K2).
+
+The existing development executor keeps its own Git writer. Callers of this
+module cannot commit/push, install hooks, or invoke repository diff helpers.
+"""
+from contextlib import contextmanager
+import os
+from pathlib import Path
+import subprocess
+import threading
+import time
+
+
+class GitDenied(ValueError):
+    pass
+
+
+class GitFailed(RuntimeError):
+    pass
+
+
+PREFIX = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+          '-c', 'diff.external=', '-c', 'core.pager=cat', '-c', 'safe.directory=*']
+READ = {'log', 'show', 'rev-list', 'rev-parse', 'merge-base', 'for-each-ref',
+        'status', 'diff', 'cat-file', 'ls-files', 'grep', 'config', 'worktree'}
+_clock = threading.local()
+
+
+@contextmanager
+def time_budget(seconds=120):
+    """Share one elapsed-time budget across all Git calls in an index round."""
+    previous = getattr(_clock, 'deadline', None)
+    deadline = time.monotonic() + seconds
+    _clock.deadline = min(previous, deadline) if previous is not None else deadline
+    try:
+        yield
+    finally:
+        _clock.deadline = previous
+
+
+def _private_target(root, target):
+    base = Path.home().resolve() / '.inkboard-team/sub'
+    path = Path(target)
+    path = (path if path.is_absolute() else Path(root) / path).resolve()
+    return path != base and base in path.parents
+
+
+def _validate(root, cls, args):
+    if not args or any(not isinstance(a, str) or '\0' in a for a in args):
+        raise GitDenied('Git command denied')
+    command = args[0]
+    if cls == 'read':
+        if command not in READ:
+            raise GitDenied('Git read command denied')
+        # These options execute a helper or write an output file despite being
+        # attached to an otherwise read-only command.
+        if any(a in ('--ext-diff', '--textconv', '--filters', '--open-files-in-pager')
+               or a.startswith(('--output', '--open-files-in-pager='))
+               or (command == 'grep' and a.startswith('-O')) for a in args[1:]):
+            raise GitDenied('Git read option denied')
+        if command == 'config' and not (len(args) == 3 and args[1] in ('--get', '--get-regexp') and not args[2].startswith('-')):
+            raise GitDenied('Git config is read-only')
+        if command == 'merge-base' and not (len(args) == 4 and args[1] == '--is-ancestor' and all(not a.startswith('-') for a in args[2:])):
+            raise GitDenied('Git merge-base mode denied')
+        if command == 'worktree' and not (len(args) >= 2 and args[1] == 'list' and all(a in ('--porcelain', '-z') for a in args[2:])):
+            raise GitDenied('Git worktree is read-only')
+        return
+    if cls == 'lifecycle':
+        if args == ('fetch', '--prune', 'origin') or args == ('worktree', 'prune'):
+            return
+        if (len(args) == 5 and args[:3] == ('worktree', 'add', '--detach')
+                and not args[3].startswith('-') and not args[4].startswith('-') and _private_target(root, args[3])):
+            return
+        if (len(args) == 4 and args[:3] == ('worktree', 'remove', '--force')
+                and not args[3].startswith('-') and _private_target(root, args[3])):
+            return
+        raise GitDenied('Git lifecycle command denied')
+    raise GitDenied('Unknown Git command class')
+
+
+def run(root, cls, *args):
+    """Return stdout for a permitted Git command; errors never include output."""
+    _validate(root, cls, args)
+    command, *rest = args
+    flags = ['--no-textconv'] if command == 'grep' else ['--no-ext-diff', '--no-textconv'] if command in ('show', 'diff', 'log') else []
+    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+    deadline = getattr(_clock, 'deadline', None)
+    timeout = 30 if deadline is None else min(30, deadline - time.monotonic())
+    if timeout <= 0:
+        raise TimeoutError('Git round timed out')
+    try:
+        result = subprocess.run(PREFIX + [command] + flags + rest, cwd=root, env=env,
+                                text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError('Git command timed out') from None
+    if result.returncode:
+        raise GitFailed('Git command failed')
+    return result.stdout
