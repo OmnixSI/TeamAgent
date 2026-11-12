@@ -18,25 +18,88 @@ function ui(local=true,options={}){
  }
  const context=vm.createContext({document:{hidden:false,getElementById:id=>ids.get(id)||ids.set(id,new Node()).get(id),createElement:tag=>new Node(tag),createElementNS:(_ns,tag)=>new Node(tag)},sessionStorage:{getItem:key=>storage.get(key)||'',setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},location:{hostname:options.startup?'127.0.0.1':'example.test',origin:options.startup?'http://127.0.0.1:3391':'https://team.example',hash:options.hash||''},history:{replaceState:(_state,_title,url)=>{events.push(['replace',url]);context.location.hash='';}},setInterval:(fn,ms)=>{const id=++timerId;intervals.set(id,{fn,ms});return id;},clearInterval:id=>intervals.delete(id),setTimeout:()=>1,clearTimeout:()=>{},TextEncoder,URL,Date:Clock,AbortSignal,console,
   fetch:async(path,opts)=>{requests.push({path,opts});events.push(['fetch',path]);if(options.fetch)return options.fetch(path,opts);return Response.json(path==='/api/local/session'?{session:'s'.repeat(43),expires_at:Date.now()+43200000}:path.startsWith('/api/local/')?(context.localResponse||{}):(context.response||{}),{status:context.responseStatus||200});},container:new Node()});
- vm.runInContext(script,context);context.location.origin=local?'http://127.0.0.1:3391':'https://team.example';return {context,requests,events,storage,ids,intervals,now:()=>now,tick:async(ms=1000)=>{now+=ms;for(const timer of [...intervals.values()])if(timer.ms===1000)await timer.fn();}};
+ vm.runInContext(script,context);context.location.origin=local?'http://127.0.0.1:3391':'https://team.example';return {context,requests,events,storage,ids,intervals,now:()=>now,advance:ms=>now+=ms,tick:async(ms=1000)=>{now+=ms;for(const timer of [...intervals.values()])if(timer.ms===1000)await timer.fn();}};
 }
 const text=n=>[n.textContent,...n.children.map(text)].join(' ');
 const all=n=>[n,...n.children.flatMap(all)];
-test('Bili risk disables login until recovery, including when its visible QR countdown ends',async()=>{
+test('historical Bili risk permits retry while actual active-flow and countdown guards still work',async()=>{
  const f=await countdownUi();f.context.response.services.bili.auth={state:'risk'};
  await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
- assert.match(text(f.panel),/B 站暂时限制，请稍后再试/);
  let start=all(f.panel).find(n=>n.textContent==='登录 B 站');assert.equal(start.disabled,true);
  await start.onclick();assert.equal(f.requests.filter(r=>r.opts.method==='POST').length,0);
  await f.tick(180000);
  assert.match(text(f.panel),/B 站暂时限制，请稍后再试/);
- start=all(f.panel).find(n=>n.tagName==='button'&&/登录 B 站|重新获取二维码/.test(n.textContent));assert.equal(start.disabled,true);
+ start=all(f.panel).find(n=>n.tagName==='button'&&/登录 B 站|重新获取二维码/.test(n.textContent));assert.equal(start.disabled,false);
  f.context.response.services.bili={auth:{state:'missing'},flow:{id:'flow',phase:'failed',reason:'risk',expires_at:f.now()+60000}};
  await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
- start=all(f.panel).find(n=>n.textContent==='登录 B 站');assert.equal(start.disabled,true);
+ start=all(f.panel).find(n=>n.textContent==='登录 B 站');assert.equal(start.disabled,false);
  delete f.context.response.services.bili.flow.reason;
  await vm.runInContext('refreshServiceLogins(container.children[0])',f.context);
  assert.equal(all(f.panel).find(n=>n.textContent==='登录 B 站').disabled,false);
+});
+async function riskUi(t){
+ const [{mkdtemp,rm,readFile},{join},{tmpdir},{EventEmitter},{createFetchClient},{createBrowserAuth},{runLoginFlow}]=await Promise.all([
+  import('node:fs/promises'),import('node:path'),import('node:os'),import('node:events'),import('../runner/fetcher.mjs'),import('../runner/browser-auth.mjs'),import('../runner/qr-login.mjs')]);
+ const home=await mkdtemp(join(tmpdir(),'team-risk-retry-')),e=env(),calls=[],tasks=[];
+ let f,auth,mode='risk',runningId,ready,release;
+ t.after(async()=>{try{if(release){await owner({service:'bili',id:runningId},'DELETE');release();await Promise.all(tasks);}}finally{await rm(home,{recursive:true,force:true});}});
+ const call=async(path,body,key='owner-secret',method)=>{
+  const before=e.DB.executed,response=await req(e,path,body,key,method);assert.ok(e.DB.executed-before<=48);return response;
+ };
+ const owner=(body,method)=>call('/api/team/service-login',body,'owner-secret',method);
+ const cloud=async(path,body)=>{const r=await call('/api/runner/fetch/'+path,body,'runner-secret');if(!r.ok){const error=Error('flow conflict');error.status=r.status;throw error;}return r.json();};
+ const execute=async()=>{
+  const {login}=await cloud('claim',{});assert.ok(login);runningId=login.id;
+  if(mode==='waiting'){
+   const shown=new Promise(resolve=>ready=resolve),pending=new Promise(resolve=>release=resolve);
+   const task=runLoginFlow(login,{home,client,auth,cloud,now:f.now,sleep:async()=>{ready();await pending;}});tasks.push(task);
+   await Promise.race([shown,task]);
+  }else return runLoginFlow(login,{home,client,auth,cloud,now:f.now});
+ };
+ f=ui(true,{now:new Date(2026,10,12,9,5).getTime(),session:'s'.repeat(43),fetch:async(path,options)=>{
+  if(path.startsWith('/api/local/')){
+   const id=new URL(path,'http://127.0.0.1:3391').searchParams.get('id');
+   try{return Response.json(JSON.parse(await readFile(join(home,'state/login-qr/bili-'+id+'.json'),'utf8')));}catch{return Response.json({error:'二维码暂未就绪'},{status:404});}
+  }
+  const method=options.method||'GET',body=options.body?JSON.parse(options.body):undefined;
+  if(method==='GET')await e.DB.prepare("INSERT INTO settings VALUES('fetcher:last-seen',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(f.now())).run();
+  const response=await call(path,body,'owner-secret',method);
+  if(method==='POST'&&response.ok)await execute();
+  return response;
+ }});
+ t.mock.method(Date,'now',f.now);
+ const client=createFetchClient({now:f.now,sleep:async ms=>f.advance(ms),random:()=>0,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),request:(options,callback)=>{
+  const request=new EventEmitter();request.destroy=()=>{};request.end=()=>{
+   calls.push(options);const response=new EventEmitter();response.statusCode=mode==='risk'?412:200;response.headers={};
+   const data=options.path.includes('/generate')?{url:'https://passport.bilibili.com/h5-app/passport/login/scan?qrcode_key='+'a'.repeat(32),qrcode_key:'a'.repeat(32)}:{code:86101};
+   callback(response);queueMicrotask(()=>{response.emit('data',Buffer.from(JSON.stringify({code:0,data})));response.emit('end');});
+  };return request;
+ }});
+ auth=createBrowserAuth({home,client,now:f.now,launch:async()=>{throw Error('must not open a browser');},notify:async()=>{},report:body=>cloud('auth-status',body)});
+ await auth.daily();
+ assert.equal((JSON.parse(await readFile(join(home,'state/auth-daily.json'),'utf8'))).day,'2026-11-12');
+ await owner({service:'bili'});assert.equal(await execute(),'failed');assert.equal(client.isPaused(),true);assert.equal(calls.length,1);
+ vm.runInContext("state={who:{role:'owner'}};view='system'",f.context);
+ await vm.runInContext('renderServiceLogins(container)',f.context);
+ const panel=f.context.container.children[0];f.ids.set('service-logins',panel);
+ return {...f,client,auth,calls,owner,execute,panel,waitForQr:()=>{mode='waiting';},start:()=>all(panel).find(n=>n.textContent==='登录 B 站')};
+}
+test('real shared runner gate rejects a newly claimed login during pause with zero Bili requests',async t=>{
+ const f=await riskUi(t),before=f.calls.length;
+ assert.equal((await f.owner({service:'bili'})).status,200,'Worker accepts the queue request; the local runner enforces the pause');
+ assert.equal(await f.execute(),'failed');assert.equal(f.calls.length,before);
+ const snapshot=await(await f.owner()).json();assert.equal(snapshot.services.bili.flow.phase,'failed');assert.equal(snapshot.services.bili.flow.reason,'risk');
+ assert.equal(all(f.panel).filter(n=>n.tagName==='svg').length,0);
+});
+test('risk retry is clickable, shows runner rejection without QR, and recovers after pause despite stale daily auth',async t=>{
+ const f=await riskUi(t),before=f.calls.length;
+ assert.equal(f.start().disabled,false);await f.start().onclick();
+ assert.match(text(f.panel),/B 站暂时限制，请稍后再试/);assert.equal(f.calls.length,before);assert.equal(all(f.panel).filter(n=>n.tagName==='svg').length,0);
+ await f.tick(600001);assert.equal(f.client.isPaused(),false);
+ await f.auth.daily();assert.equal(f.calls.length,before);
+ assert.equal((await(await f.owner()).json()).services.bili.auth.state,'risk','daily is already done; do not manually clear the persisted status');
+ assert.equal(f.start().disabled,false);f.waitForQr();await f.start().onclick();
+ assert.ok(f.calls.length>before);assert.equal(all(f.panel).filter(n=>n.tagName==='svg').length,1);assert.match(text(f.panel),/等待扫码/);
 });
 test('logged-in X offers an enabled relogin action for both auth and completed-flow state',async()=>{
  for(const entry of [{auth:{state:'ok'},flow:null},{auth:{state:'missing'},flow:{id:'x',phase:'ok',expires_at:Date.now()+300000}}]){
