@@ -338,3 +338,15 @@ test("all synchronized organization projects expose latest commit and author lin
   ).json();
   assert.deepEqual(p.context.head, head);
 });
+
+
+test("claimed login flow keeps the runner busy until it expires or finishes", async () => {
+  const e = env();
+  const now = Date.now();
+  await e.DB.prepare("INSERT INTO settings VALUES('login-flow:bili',?)")
+    .bind(JSON.stringify({id:'login-1',service:'bili',phase:'waiting',created_at:now,updated_at:new Date(now).toISOString(),expires_at:now+60000,claimed_at:now}))
+    .run();
+  assert.equal((await (await req(e, "/api/runner/idle", {}, "runner-secret")).json()).idle, false);
+  await e.DB.prepare("UPDATE settings SET value=json_set(value,'$.expires_at',?) WHERE key='login-flow:bili'").bind(now-1).run();
+  assert.equal((await (await req(e, "/api/runner/idle", {}, "runner-secret")).json()).idle, true);
+});

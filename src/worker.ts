@@ -1338,8 +1338,10 @@ async function api(r: Request, e: Env) {
         await set(e, "runner_pause_until", String(Date.now() + 60000));
       if (b.resume) await set(e, "runner_pause_until", "0");
       const busy = await e.DB.prepare(
-        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending') AS n",
-      ).first();
+        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending')+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
+      )
+        .bind(Date.now())
+        .first();
       if (b.quiesce && busy.n) await set(e, "runner_pause_until", "0");
       return json({ idle: busy.n === 0 });
     }
