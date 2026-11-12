@@ -3,7 +3,7 @@ import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit"]);
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -1219,7 +1219,7 @@ export async function agentAnswer(e: any, context: any) {
                 }
               : { unavailable: true };
             break;
-          case "repo_changes": case "repo_commit":
+          case "repo_changes": case "repo_commit": case "repo_file":
             result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
@@ -1237,7 +1237,7 @@ export async function agentAnswer(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: ["read_web", "repo_changes", "repo_commit"].includes(call.function.name)
+        content: ["read_web", "repo_changes", "repo_commit", "repo_file"].includes(call.function.name)
           ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });

@@ -3,7 +3,7 @@ import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
 export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
-export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "repo_changes", "repo_commit"]);
+export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
 
 /** Once external material enters a turn, later tool calls cannot shed its taint. */
 export function tainted(context: any, messages: any[]): boolean {
