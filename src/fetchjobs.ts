@@ -42,10 +42,13 @@ function bareMention(latest: Row, meta = metaOf(latest)): boolean {
   if (String(latest.body ?? "").replace(/<@!?[^>]+>/g, "").trim()) return false;
   return !meta.placeholder && !(meta.media || []).length;
 }
+const INHERIT_WINDOW_MS = 120000;
+/** Only a link posted shortly BEFORE the bare @ counts: never an older video, never one posted after it. */
 function recentLink(recent: Row[], latest: Row): VideoTarget | null {
-  const same = (recent || []).filter(r => r && (!latest.group_id || !r.group_id || r.group_id === latest.group_id));
-  const candidates = same.some(r => r.id === latest.id) ? same : [...same, latest];
-  for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
+  const at = Date.parse(latest.ts);
+  const same = (recent || []).filter(r => r && r.id !== latest.id && (!latest.group_id || !r.group_id || r.group_id === latest.group_id));
+  const before = same.filter(r => { const t = Date.parse(r.ts); return Number.isFinite(at) && Number.isFinite(t) && t <= at && at - t <= INHERIT_WINDOW_MS; });
+  for (const r of before.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
   return null;
 }
 export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any): VideoTarget | null {
