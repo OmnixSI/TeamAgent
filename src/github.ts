@@ -1,5 +1,5 @@
 /** Bounded, read-only GitHub access. Repository contents never authorize work. */
-import { REPOS } from "./policy";
+import { INITIAL_PROJECT_HINTS, REPOS } from "./policy";
 import { cutBytes, redactPatch, toolFailure } from "./repo";
 
 export const DENY_GLOBS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*",
@@ -12,11 +12,12 @@ export function deniedPath(path: string): boolean {
   // A protected directory hides its descendants, including nested .git trees.
   return parts.includes(".git") || denyPatterns.some(r => r.test(lower) || parts.some(part => r.test(part)));
 }
-export function parseRepo(value: unknown): { owner: string; repo: string; full: string; listed: boolean } | null {
+export type RepoRef = { owner: string; repo: string; full: string; listed: boolean; ambiguous?: boolean; candidates?: string[] };
+const repoKey = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+export function parseRepo(value: unknown, aliases: Record<string, string[]> = INITIAL_PROJECT_HINTS): RepoRef | null {
   if (typeof value !== "string") return null;
   let name = value.trim();
-  const alias = REPOS.find(r => r.toLowerCase() === name.toLowerCase() || r.split("/")[1].toLowerCase() === name.toLowerCase());
-  if (alias) name = alias;
+  if (!name) return null;
   if (/^https?:\/\//i.test(name)) {
     try {
       const url = new URL(name);
@@ -24,7 +25,18 @@ export function parseRepo(value: unknown): { owner: string; repo: string; full: 
       name = url.pathname.split("/").slice(1, 3).join("/");
     } catch { return null; }
   }
-  name = name.replace(/\.git$/, "");
+  name = name.replace(/\.git$/, "").replace(/\s+/g, "");
+  if (!name) return null;
+  // Resolve configured Chinese aliases and whitelist short names case-insensitively.
+  // Several hits are reported as ambiguous; never silently pick one.
+  const key = repoKey(name), hits = new Set<string>();
+  for (const [repo, list] of Object.entries(aliases || {})) {
+    if (!REPOS.includes(repo) || !Array.isArray(list)) continue;
+    if (list.some(alias => typeof alias === "string" && repoKey(alias) === key)) hits.add(repo);
+  }
+  if (!name.includes("/")) for (const repo of REPOS) if (repo.split("/")[1].toLowerCase() === key) hits.add(repo);
+  if (hits.size > 1) return { owner: "", repo: "", full: "", listed: false, ambiguous: true, candidates: [...hits].sort() };
+  if (hits.size === 1) name = [...hits][0];
   const parts = name.split("/");
   if (parts.length !== 2 || !/^[A-Za-z0-9-]{1,39}$/.test(parts[0]) ||
       !/^[A-Za-z0-9._-]{1,100}$/.test(parts[1]) || [".", ".."].includes(parts[1])) return null;

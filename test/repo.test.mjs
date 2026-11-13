@@ -171,3 +171,51 @@ test('review Worker redacts every GitHub credential prefix before storing or ret
   for(const key of ['author','subject','body','patch'])assert.ok(result[key].includes('[REDACTED]'));
  }
 });
+
+test('R1 project aliases resolve to whitelisted repositories, case and spaces ignored',()=>{
+ for(const [input,full] of [['面试软件','OmnixSI/NextThought'],['大肥鱼','OmnixSI/WhalePartner'],[' 大 肥 鱼 ','OmnixSI/WhalePartner'],['teamagent','OmnixSI/TeamAgent'],['TeamAgent','OmnixSI/TeamAgent'],['群助手','OmnixSI/TeamAgent']]){
+  const parsed=api.parseRepo(input);assert.equal(parsed?.full,full,input);assert.equal(parsed?.listed,true,input);
+ }
+});
+
+test('R2 ambiguous aliases return every candidate instead of silently picking one',()=>{
+ const peiwan='OmnixSI/peiwan-store-platform-blueprint';
+ // config/team.json currently registers this alias to exactly one repository.
+ assert.equal(api.parseRepo('陪玩店')?.full,peiwan);
+ // Same alias on two whitelisted repositories must not resolve silently.
+ const many=api.parseRepo('陪玩店',{[peiwan]:['陪玩店'],'OmnixSI/TeamAgent':['陪玩店']});
+ assert.equal(many?.ambiguous,true);assert.equal(many?.full,'');
+ assert.deepEqual([...many.candidates].sort(),[peiwan,'OmnixSI/TeamAgent'].sort());
+ const failure=api.toolFailure('repo_file',null,{kind:'ambiguous',candidates:many.candidates});
+ assert.equal(failure.error_kind,'ambiguous');assert.deepEqual(failure.candidates,many.candidates);
+ assert.match(failure.next_action,/陪玩店|owner\/repo/);
+});
+
+test('R3 invalid repo lists the whitelist and a transcribable next action',async()=>{
+ const e=env(),whitelist=JSON.parse(readFileSync('config/team.json','utf8')).repositories;
+ const r=await api.runRepoTool(e,'repo_changes',{repo:'我们仓库'});
+ assert.equal(r.error_kind,'invalid_args');assert.deepEqual(r.candidates,whitelist);
+ assert.match(r.next_action,/repo 要写 owner\/repo 或这几个名字之一/);
+ for(const repo of whitelist)assert.ok(r.next_action.includes(repo),repo);
+ assert.equal(e.DB.executed,0);
+});
+
+test('R4 repo_file falls back to local index patches without a GitHub token',async()=>{
+ const e=env();delete e.GITHUB_TOKEN;
+ const patch='diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n+const answer = 42;\ndiff --git a/src/other.ts b/src/other.ts\n+const other = 1;\n';
+ await api.ingestRepoIndex(e,{repos:[packet([{...commit(),files:[{path:'src/app.ts',status:'M',add:1,del:0},{path:'src/other.ts',status:'M',add:1,del:0}],patch}])]});
+ const found=await api.runRepoTool(e,'repo_file',{repo,mode:'find',query:'app'});
+ assert.equal(found.source,'local_index_patch');assert.equal(found.partial,true);
+ assert.ok(found.paths.includes('src/app.ts'));assert.match(found.note,/不是完整文件/);
+ assert.ok(found.indexedAt);assert.equal(typeof found.stale,'boolean');
+ const listed=await api.runRepoTool(e,'repo_file',{repo,mode:'list',path:'src/'});
+ assert.ok(listed.paths.includes('src/app.ts'));assert.ok(listed.paths.includes('src/other.ts'));
+ const read=await api.runRepoTool(e,'repo_file',{repo,mode:'read',path:'src/app.ts'});
+ assert.equal(read.source,'local_index_patch');assert.equal(read.partial,true);
+ assert.match(read.patch,/const answer = 42/);assert.ok(!read.patch.includes('const other = 1'),'only the requested file section');
+ assert.ok(read.lines<=200);assert.match(read.note,/GitHub 令牌/);
+ const missing=await api.runRepoTool(e,'repo_file',{repo,mode:'read',path:'src/missing.ts'});
+ assert.equal(missing.error_kind,'needs_token');
+ const changes=await api.runRepoTool(e,'repo_changes',{repo});
+ assert.equal(changes.source,'local_index');assert.ok(changes.indexedAt);assert.equal(typeof changes.stale,'boolean');
+});

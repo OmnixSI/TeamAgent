@@ -1,7 +1,8 @@
 /** Read-only, bounded index of pushed code and workspace file statistics (C1). */
 import { REPOS } from "./policy";
 import { chunks } from "./d1";
-import { parseRepo, runCloudRepoTool } from "./github";
+import { deniedPath, parseRepo, runCloudRepoTool } from "./github";
+export { parseRepo };
 
 export const REPO_TOOL_NAMES = new Set(["repo_changes", "repo_commit", "repo_file"]);
 export const repoTools: any[] = [
@@ -11,10 +12,17 @@ export const repoTools: any[] = [
 ];
 
 // C2 moves this small compatible failure constructor into capabilities.ts.
-const NEXT: Record<string, string> = { needs_token: "这是私有仓库，需要管理员配置 GitHub 只读 token", rate_limited: "GitHub 限流，稍后再问", too_large: "太大，请给更具体的 path 或行号", binary: "二进制或 LFS 文件，不展示内容", budget: "这一轮查 GitHub 次数用完了，换个问法或下一句再问", invalid_args: "参数不对，按正确格式再问", denied: "这是受保护内容，不提供", not_synced: "本机同步端还没上报过这个仓库，需要本机 runner 在线", not_found: "索引只有最近 90 天、每仓库 500 条已推送提交；更早的或未推送的要本机查（C3 上线后可派子代理）", ambiguous: "匹配到多个，请给更完整的编号或名字", upstream: "外部服务失败，可以换来源再试" };
-export function toolFailure(_name: string, _err: unknown, extra: { kind?: string; detail?: string } = {}) {
+const NEXT: Record<string, string> = { needs_token: "这是私有仓库，需要管理员配置 GitHub 只读 token", rate_limited: "GitHub 限流，稍后再问", too_large: "太大，请给更具体的 path 或行号", binary: "二进制或 LFS 文件，不展示内容", budget: "这一轮查 GitHub 次数用完了，换个问法或下一句再问", invalid_args: "repo 要写 owner/repo 或白名单短名", denied: "这是受保护内容，不提供", not_synced: "这个仓库本机同步端还没上报；可以先看云端 GitHub（需要令牌），或稍后再问", not_found: "索引只有最近 90 天、每仓库 500 条已推送提交；更早的或未推送的要本机查（C3 上线后可派子代理）", ambiguous: "匹配到多个仓库，请写明 owner/repo", upstream: "外部服务失败，可以换来源再试" };
+export function toolFailure(_name: string, _err: unknown, extra: { kind?: string; detail?: string; candidates?: string[] } = {}) {
   const kind = extra.kind || "upstream";
-  return { ok: false, error_kind: kind, retryable: kind === "upstream", next_action: NEXT[kind] || NEXT.upstream, ...(extra.detail ? { detail: redactPatch(extra.detail).slice(0, 120) } : {}) };
+  const candidates = kind === "invalid_args" ? [...REPOS]
+    : kind === "ambiguous" && Array.isArray(extra.candidates) ? extra.candidates.slice(0, 50) : undefined;
+  const next_action = kind === "invalid_args"
+    ? `repo 要写 owner/repo 或这几个名字之一：${REPOS.join("、")}`
+    : kind === "ambiguous"
+      ? `匹配到多个仓库，请写明 owner/repo 或更完整的名字${candidates?.length ? "：" + candidates.join("、") : ""}`
+      : NEXT[kind] || NEXT.upstream;
+  return { ok: false, error_kind: kind, retryable: kind === "upstream", next_action, ...(candidates ? { candidates } : {}), ...(extra.detail ? { detail: redactPatch(extra.detail).slice(0, 120) } : {}) };
 }
 export function redactPatch(s: string, preserveLines = false): string {
   // Scan delimiter tokens once; repeated unclosed BEGIN headers stay linear.
@@ -90,6 +98,59 @@ function ago(at: number): string {
 function totals(rows: any[]) {
   return { files: rows.length, add: rows.reduce((n, r) => n + number(r.add), 0), del: rows.reduce((n, r) => n + number(r.del), 0), topFiles: rows.slice(0, 5).map(r => r.path) };
 }
+function indexMeta(index: any, fallbackAt: number) {
+  const updated = index?.updated_at ?? fallbackAt, checked = index?.checked_at ?? fallbackAt;
+  const age = Math.max(0, Math.floor((Date.now() - number(checked)) / 60000));
+  const stale = Date.now() - number(checked) > 600000;
+  return { indexedAt: updated, stale, ...(stale ? { staleReason: `本机同步端 ${age} 分钟没上报，以下是 ${age} 分钟前的状态` } : {}) };
+}
+const LOCAL_PATCH_NOTE = "只是最近改动节选，不是完整文件；要完整内容需要 GitHub 令牌";
+function patchSection(patch: string, path: string) {
+  const lines = String(patch || "").split("\n");
+  let start = -1, end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i].match(/^diff --git a\/(.+) b\/(.+)$/);
+    if (header && header[2] === path) { start = i; break; }
+  }
+  if (start < 0) return null;
+  for (let i = start + 1; i < lines.length; i++) if (lines[i].startsWith("diff --git ")) { end = i; break; }
+  const section = lines.slice(start, end), selected = section.slice(0, 200).join("\n");
+  return { text: cutBytes(selected, 12000), lines: Math.min(section.length, 200), truncated: section.length > 200 };
+}
+// repo_file without a token can still read the file section captured in the local commit patch.
+export async function runLocalRepoFile(e: any, name: string, a: any): Promise<any> {
+  const repo = a.repo, mode = a.mode ?? "read";
+  const state = await e.DB.prepare("SELECT updated_at, checked_at FROM repo_state WHERE repo=?").bind(repo).first();
+  if (mode === "read") {
+    const path = typeof a.path === "string" ? a.path : "";
+    if (!path) return toolFailure(name, null, { kind: "needs_token" });
+    const pattern = '%"path":' + JSON.stringify(path).replace(/[\\%_]/g, "\\$&") + '%';
+    const row = await e.DB.prepare("SELECT sha,at,author,subject,patch,truncated FROM repo_commits WHERE repo=? AND files LIKE ? ESCAPE '\\' ORDER BY at DESC LIMIT 1").bind(repo, pattern).first();
+    if (!row) return toolFailure(name, null, { kind: "needs_token" });
+    const section = patchSection(row.patch, path);
+    if (!section) return toolFailure(name, null, { kind: "needs_token" });
+    return { repo, sha7: String(row.sha).slice(0, 7), path, author: row.author, at: row.at, subject: row.subject,
+      patch: redactPatch(section.text), lines: section.lines, truncated: section.truncated || row.truncated === 1,
+      source: "local_index_patch", partial: true, note: LOCAL_PATCH_NOTE, ...indexMeta(state, row.at), untrusted: true };
+  }
+  const rows = (await e.DB.prepare("SELECT files FROM repo_commits WHERE repo=? ORDER BY at DESC LIMIT 100").bind(repo).all()).results;
+  if (!rows.length) return toolFailure(name, null, { kind: "needs_token" });
+  const prefix = typeof a.path === "string" ? a.path : "", query = typeof a.query === "string" ? a.query.trim().toLowerCase() : "";
+  const seen = new Set<string>();
+  for (const row of rows) {
+    let items: any[] = [];
+    try { items = JSON.parse(row.files); } catch { continue; }
+    for (const item of Array.isArray(items) ? items : []) {
+      const p = item?.path;
+      if (typeof p !== "string" || deniedPath(p)) continue;
+      if (prefix && !p.startsWith(prefix)) continue;
+      if (query && !p.toLowerCase().includes(query)) continue;
+      seen.add(p);
+    }
+  }
+  const paths = [...seen].sort((x, y) => x.length - y.length || x.localeCompare(y)).slice(0, 50).map(p => redactPatch(p));
+  return { repo, mode, paths, more: seen.size > 50, source: "local_index_patch", partial: true, note: LOCAL_PATCH_NOTE, ...indexMeta(state, rows[0]?.at ?? Date.now()), untrusted: true };
+}
 export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<any> {
   if (!a || !REPOS.includes(a.repo) || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
   if (name === "repo_commit") {
@@ -97,8 +158,8 @@ export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<
     const rows = (await e.DB.prepare("SELECT * FROM repo_commits WHERE repo=? AND sha LIKE ? LIMIT 2").bind(a.repo, a.sha.toLowerCase() + "%").all()).results;
     if (!rows.length) return toolFailure(name, null, { kind: "not_found" });
     if (rows.length > 1) return toolFailure(name, null, { kind: "ambiguous" });
-    const row = rows[0];
-    return { sha: row.sha, author: row.author, at: row.at, subject: row.subject, body: row.body, files: JSON.parse(row.files), patch: row.patch, truncated: row.truncated, untrusted: true };
+    const row = rows[0], index = await e.DB.prepare("SELECT updated_at, checked_at FROM repo_state WHERE repo=?").bind(a.repo).first();
+    return { sha: row.sha, author: row.author, at: row.at, subject: row.subject, body: row.body, files: JSON.parse(row.files), patch: row.patch, truncated: row.truncated, source: "local_index", ...indexMeta(index, row.at), untrusted: true };
   }
   const since = a.since ?? "7d", limit = a.limit ?? 10;
   const duration: Record<string, number> = { "24h": 86400000, "3d": 3 * 86400000, "7d": 7 * 86400000 };
@@ -108,8 +169,8 @@ export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<
   if (!index) return toolFailure(name, null, { kind: "not_synced" });
   const scanLimit = a.author || a.path ? "" : " LIMIT 50";
   const rows = (await e.DB.prepare("SELECT sha,at,author,subject,files,truncated FROM repo_commits WHERE repo=? AND at>=? ORDER BY at DESC" + scanLimit).bind(a.repo, at).all()).results;
-  const data = JSON.parse(index.json), age = Math.max(0, Math.floor((Date.now() - index.checked_at) / 60000)), stale = Date.now() - index.checked_at > 600000;
-  return { repo: a.repo, indexedAt: index.updated_at, stale, ...(stale ? { staleReason: `本机同步端 ${age} 分钟没上报，以下是 ${age} 分钟前的状态` } : {}),
+  const data = JSON.parse(index.json);
+  return { repo: a.repo, source: "local_index", ...indexMeta(index, index.updated_at),
     head: { sha7: data.head.sha.slice(0, 7), at: data.head.at, ago: ago(data.head.at) },
     commits: rows.map((r: any) => ({ ...r, files: JSON.parse(r.files) })).filter((r: any) => (!a.author || r.author.toLowerCase().includes(a.author.toLowerCase())) && (!a.path || r.files.some((f: any) => f.path.startsWith(a.path)))).slice(0, limit).map((r: any) => ({ sha7: r.sha.slice(0, 7), author: r.author, ago: ago(r.at), subject: r.subject, ...totals(r.files) })),
     branches: data.branches.map((b: any) => ({ name: b.name, sha7: b.sha.slice(0, 7), ahead: b.ahead, behind: b.behind, ago: ago(b.at) })),
@@ -118,11 +179,12 @@ export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<
 }
 export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
   const parsed = parseRepo(a?.repo);
+  if (parsed?.ambiguous) return toolFailure(name, null, { kind: "ambiguous", candidates: parsed.candidates });
   if (!parsed || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
   try {
     const result = await runCloudRepoTool(e, name, a);
     if (parsed.listed && ["needs_token", "upstream"].includes(result?.error_kind)) {
-      return name === "repo_file" ? toolFailure(name, null, { kind: "needs_token" })
+      return name === "repo_file" ? await runLocalRepoFile(e, name, { ...a, repo: parsed.full })
         : await runIndexedRepoTool(e, name, { ...a, repo: parsed.full });
     }
     return result;
