@@ -10,6 +10,7 @@ import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
 import { model, activity, redact, utilityText } from "./runtime";
+import { ToolRecovery } from "./tool-audit";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
@@ -650,6 +651,7 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 
 export async function agentAnswer(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  const recovery = new ToolRecovery(context.resume?.recovery);
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
@@ -877,13 +879,15 @@ export async function agentAnswer(e: any, context: any) {
         ).results,
         context: promptContext,
   });
-  for (let turn = context.resume?.turn || 0; turn < 3; turn++) {
+  messages.push({ role: "system", content: "工具失败时先换路再放弃；如实说原因，不说『没拿到』了事。" });
+  for (let turn = context.resume?.turn || 0; turn < 4; turn++) {
     let m: any;
+    let offerTools = true;
     if (context.resume?.pending) {
       m = context.resume.pending;
       context.resume.pending = null;
     } else {
-      const offerTools = turn < 2 && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
+      offerTools = (turn < 2 || recovery.retrying && turn < 3) && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
       const d = await model(
         e,
         context.background ? "research" : "participation",
@@ -915,7 +919,7 @@ export async function agentAnswer(e: any, context: any) {
         authz: { tainted: tainted(context, messages) },
         intent: context.intent,
         background: true,
-        resume: { messages, pending: m, turn },
+        resume: { messages, pending: m, turn, recovery: recovery.state() },
       };
       await e.DB.prepare(
         "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
@@ -945,6 +949,7 @@ export async function agentAnswer(e: any, context: any) {
       );
     }
     if (!m.tool_calls?.length) {
+      if (offerTools && turn < 3 && recovery.retry(messages)) continue;
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
         !!context.mentioned ||
@@ -962,7 +967,7 @@ export async function agentAnswer(e: any, context: any) {
       const spoken = await speakBrief(
         e,
         {
-          facts: decision.brief,
+          facts: recovery.brief(decision.brief),
           learnedExpressions,
           acceptedActions,
           recentBot: recentBot.slice(-5),
@@ -975,15 +980,14 @@ export async function agentAnswer(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return spoken;
+      return recovery.voice(spoken);
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
-      try {
+      result = await recovery.run(e, context, call, offerTools && tools.some(t => t.function.name === call.function.name), async (a) => {
         if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
-        if (index >= 3) throw Error("本轮工具额度已用完");
-        const a = JSON.parse(call.function.arguments);
+        if (index >= 3) throw new ResourceLimitError();
         switch (call.function.name) {
           case "get_work_status": {
             const tasks = (
@@ -1213,7 +1217,7 @@ export async function agentAnswer(e: any, context: any) {
             break;
           }
           case "get_project":
-            if (!REPOS.includes(a.repo)) throw Error("unknown project");
+            if (!REPOS.includes(a.repo)) throw { kind: "invalid_args" };
             const row = await e.DB.prepare(
               "SELECT json,updated_at FROM repo_cache WHERE repo=?",
             )
@@ -1240,12 +1244,8 @@ export async function agentAnswer(e: any, context: any) {
           default:
             result = { error: "unknown tool" };
         }
-      } catch (error) {
-        result = {
-          unavailable: true,
-          reason: error instanceof AuthorizationError || error instanceof ResourceLimitError ? error.message : "未能获得资料，不能据此编造结论",
-        };
-      }
+        return result;
+      });
       if (result?.accepted === true)
         acceptedActions.push({ tool: call.function.name, ...result });
       messages.push({
@@ -1256,6 +1256,7 @@ export async function agentAnswer(e: any, context: any) {
           : JSON.stringify(result).slice(0, 40000),
       });
     }
+    recovery.retry(messages);
   }
-  throw Error("检索轮次已到，需要成员进一步指定问题");
+  return recovery.voice(await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context));
 }
