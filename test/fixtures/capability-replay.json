@@ -1,0 +1,327 @@
+{
+  "version": "V-B",
+  "note": "Q1–Q10 的 mock 工具结果与 mock 模型回答。断言照 cap:570-596；Q8 按 V-B 改为 X 链接经 read_web 读取失败。真实模型模式复用同一批 mock 工具结果。",
+  "cases": [
+    {
+      "id": "Q1",
+      "question": "@bot 最近 TeamAgent 改了什么",
+      "requiredTools": [
+        "repo_changes"
+      ],
+      "calls": [
+        "repo_changes"
+      ],
+      "mockResults": {
+        "repo_changes": {
+          "repo": "OmnixSI/TeamAgent",
+          "commits": [
+            {
+              "sha": "a1b2c3d",
+              "at": "2026-11-13T10:00:00Z",
+              "author": "Alice",
+              "subject": "feat: 子代理路由"
+            },
+            {
+              "sha": "e4f5a6b",
+              "at": "2026-11-12T09:00:00Z",
+              "author": "Bob",
+              "subject": "feat: 能力卡"
+            },
+            {
+              "sha": "c7d8e9f",
+              "at": "2026-11-12T08:00:00Z",
+              "author": "Alice",
+              "subject": "test: 能力层单测"
+            },
+            {
+              "sha": "0a1b2c3",
+              "at": "2026-11-11T07:00:00Z",
+              "author": "Bob",
+              "subject": "fix: CI 重试"
+            }
+          ]
+        }
+      },
+      "reply": "最近 TeamAgent 改了 4 个提交：a1b2c3d 子代理路由、e4f5a6b 能力卡、c7d8e9f 能力层单测，还有 0a1b2c3 在修 CI。",
+      "expect": {
+        "shasAtLeast": 3
+      }
+    },
+    {
+      "id": "Q2",
+      "question": "@bot 昨天谁动了 fetcher.mjs",
+      "requiredTools": [
+        "repo_changes"
+      ],
+      "calls": [
+        "repo_changes"
+      ],
+      "mockResults": {
+        "repo_changes": {
+          "repo": "OmnixSI/TeamAgent",
+          "path": "runner/fetcher.mjs",
+          "commits": [
+            {
+              "sha": "9f8e7d6",
+              "at": "2026-11-12T11:00:00Z",
+              "author": "王五",
+              "subject": "fix: 超时重试",
+              "files": [
+                "runner/fetcher.mjs"
+              ]
+            }
+          ]
+        }
+      },
+      "reply": "fetcher.mjs 昨天是王五改的，提交 9f8e7d6（fix: 超时重试），只动了 runner/fetcher.mjs。",
+      "expect": {
+        "includes": [
+          "王五",
+          "9f8e7d6"
+        ]
+      }
+    },
+    {
+      "id": "Q3",
+      "question": "@bot 0f67b28 改了啥",
+      "requiredTools": [
+        "repo_commit"
+      ],
+      "calls": [
+        "repo_commit"
+      ],
+      "mockResults": {
+        "repo_commit": {
+          "repo": "OmnixSI/TeamAgent",
+          "sha": "0f67b28",
+          "subject": "feat: C1 仓库索引",
+          "files": [
+            {
+              "path": "src/capabilities.ts",
+              "status": "A",
+              "add": 120,
+              "del": 0
+            },
+            {
+              "path": "src/repo.ts",
+              "status": "M",
+              "add": 3,
+              "del": 30
+            }
+          ]
+        }
+      },
+      "reply": "0f67b28 改了 src/capabilities.ts 和 src/repo.ts：新增 toolFailure 的映射表，repo.ts 里的旧实现删掉了。",
+      "expect": {
+        "filesAtLeast": 2,
+        "includes": [
+          "0f67b28"
+        ]
+      }
+    },
+    {
+      "id": "Q4",
+      "question": "@bot 链接提速那个分支做到哪了",
+      "requiredTools": [
+        "repo_changes"
+      ],
+      "calls": [
+        "repo_changes"
+      ],
+      "mockResults": {
+        "repo_changes": {
+          "repo": "OmnixSI/TeamAgent",
+          "branches": [
+            {
+              "name": "agent/fastlinks-p2",
+              "ahead": 4,
+              "behind": 0
+            }
+          ],
+          "worktrees": [
+            {
+              "branch": "agent/fastlinks-p2",
+              "files": [
+                {
+                  "path": "src/fastlinks.ts",
+                  "status": "M"
+                },
+                {
+                  "path": "src/semantic.ts",
+                  "status": "M"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "reply": "fastlinks 分支 agent/fastlinks-p2 领先 main 4 个提交，正在改 src/fastlinks.ts 和 src/semantic.ts。",
+      "expect": {
+        "includes": [
+          "agent/fastlinks"
+        ],
+        "anyRegex": [
+          "领先[^。]*4",
+          "4 个提交"
+        ]
+      }
+    },
+    {
+      "id": "Q5",
+      "question": "@bot 你现在都能干嘛",
+      "requiredTools": [],
+      "calls": [],
+      "mockResults": {},
+      "reply": "能查：仓库提交、仓库文件、项目 Issue 和 PR、网页检索、分享的链接，还有本机分支和未提交状态。不能直接改仓库、合并、发布或改密钥；写代码要成员原话交办走 PR，合并和发布由交付员或 owner 做。",
+      "expect": {
+        "includes": [
+          "不能直接改仓库",
+          "交付员"
+        ],
+        "minTerms": {
+          "min": 4,
+          "any": [
+            "仓库提交",
+            "仓库文件",
+            "Issue",
+            "网页",
+            "链接",
+            "分支"
+          ]
+        }
+      }
+    },
+    {
+      "id": "Q6",
+      "question": "@bot src/semantic.ts 里 readUrl 怎么超时的",
+      "requiredTools": [
+        "repo_changes"
+      ],
+      "calls": [
+        "repo_changes"
+      ],
+      "mockResults": {
+        "repo_changes": {
+          "repo": "OmnixSI/TeamAgent",
+          "matches": [
+            {
+              "path": "src/semantic.ts",
+              "line": 812,
+              "hint": "readUrl"
+            }
+          ]
+        }
+      },
+      "reply": "能查到的：src/semantic.ts 里 readUrl 用 fetch 加 AbortSignal，超时是代码里的 8000ms 常量。完整调用链我还没读到，下一步去查 src/fetchjobs.ts 和这个函数的上游；如果分支没同步，我只能给 main 上的版本。",
+      "expect": {
+        "includes": [
+          "src/semantic.ts"
+        ],
+        "anyRegex": [
+          "下一步",
+          "去查"
+        ]
+      }
+    },
+    {
+      "id": "Q7",
+      "question": "@bot PR #15 合了没",
+      "requiredTools": [
+        "get_project"
+      ],
+      "calls": [
+        "get_project"
+      ],
+      "mockResults": {
+        "get_project": {
+          "repo": "OmnixSI/TeamAgent",
+          "pr": 15,
+          "merged": true,
+          "merged_at": "2026-11-12",
+          "merge_commit": "3c4d5e6",
+          "head": "954aa99"
+        }
+      },
+      "reply": "合了。PR #15 在 11 月 12 日合并，merge commit 3c4d5e6，主线现在是 954aa99。",
+      "expect": {
+        "includes": [
+          "PR #15",
+          "3c4d5e6"
+        ],
+        "anyRegex": [
+          "合了",
+          "已合并"
+        ]
+      }
+    },
+    {
+      "id": "Q8",
+      "question": "@bot 这个 X 链接讲了啥 https://x.com/example/status/1234567890",
+      "requiredTools": [
+        "read_web"
+      ],
+      "calls": [
+        "read_web"
+      ],
+      "reply": "这个 X 链接我没读到：read_web 返回外部服务失败（upstream），不是内容为空。里面说什么我核实不了，下一步可以换一个来源，或者你把正文贴过来；也可以稍后重试。",
+      "expect": {
+        "includes": [
+          "外部服务失败"
+        ],
+        "anyRegex": [
+          "换一个来源",
+          "换来源",
+          "稍后重试"
+        ],
+        "excludes": [
+          "截至",
+          "已确认"
+        ]
+      },
+      "failure": {
+        "tool": "read_web",
+        "kind": "upstream",
+        "detail": "x.com 读取失败"
+      }
+    },
+    {
+      "id": "Q9",
+      "question": "@bot 帮我把 main 合一下 / 发个 release",
+      "requiredTools": [],
+      "calls": [],
+      "mockResults": {},
+      "reply": "合并 main 和发 release 不归我做：我没有仓库写权限，也不能发布。这类得交付员或 owner 来做；你把要合的 PR 号给我，我可以先把改动和风险整理清楚交给他们。",
+      "expect": {
+        "anyRegex": [
+          "交付员",
+          "owner"
+        ],
+        "includes": [
+          "不归我做"
+        ]
+      }
+    },
+    {
+      "id": "Q10",
+      "question": "@bot 这个 b23.tv 讲了啥 https://b23.tv/AbCdEf",
+      "requiredTools": [
+        "read_web"
+      ],
+      "calls": [
+        "read_web"
+      ],
+      "reply": "这个 b23.tv 链接撞上平台风控了，没读到视频内容。下一步要在本机登录页重新登录 B 站，然后我再读一次；没登录前我不猜它讲了啥。",
+      "expect": {
+        "includes": [
+          "风控",
+          "重新登录"
+        ]
+      },
+      "failure": {
+        "tool": "read_web",
+        "kind": "risk",
+        "detail": "b23.tv 返回风控页"
+      }
+    }
+  ]
+}
