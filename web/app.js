@@ -49,8 +49,8 @@ const REVIEW_RULE_PARAM = {
   reply_max_chars: (p) => "最多 " + p.max + " 字",
   burst_max: (p) => "连发最多 " + p.max + " 条",
   mention_only_window: (p) => "仅在被点名后 " + p.minutes + " 分钟内回复",
-  language: (p) => "语言 " + p.language,
-  format_pref: (p) => "格式 " + p.format,
+  language: (p) => "语言 " + ({ zh: "中文", en: "英文" }[p.language] || p.language),
+  format_pref: (p) => "格式 " + ({ plain: "普通段落", list: "列表", table: "表格" }[p.format] || p.format),
 };
 const review = {
   loading: false, loadedAt: 0, error: null, data: null, health: null, healthError: null,
