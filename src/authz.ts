@@ -58,6 +58,33 @@ function ownClauses(text: string): string[] {
   return own.split(/[，,。！？!?；;\n]/).map(part => part.trim().replace(/^@\S+\s+/, ""));
 }
 
+// A short heading before a colon ("小任务：请…", "接入验收小活：请…") labels the
+// request after it; it is not reported speech. Split it off so the existing
+// tone/action rules judge the request on its own. The head must stay short and
+// free of quotation, report and past-time markers, and a negated or quoted
+// tail stays in one piece, so "他说：请…" and "注意：请勿…" remain rejected.
+const LABEL_MAX = 16;
+const REPORTED_LABEL = /说|讲|问|写道|回复|提到|表示|称|转述|引用|贴|粘贴|转发|上次|昨天|之前|曾经|已经|刚才/;
+const NEGATED_LABEL = /^(?:别|不要|不用|不必|无需|勿|请勿|禁止)/;
+const NEGATED_REQUEST = /^(?:请|麻烦)?(?:你)?\s*(?:勿|不要|别|不用|不必|无需|不想|不需要)/;
+const HALF_COLON_REQUEST = /^\s*(?:请|麻烦|帮我|帮忙|给我|你来|去|劳驾|能不能|可以)/;
+function splitLabel(clause: string): string[] {
+  for (let at = 0; at < clause.length; at++) {
+    const mark = clause[at];
+    if (mark !== "：" && mark !== ":") continue;
+    const head = clause.slice(0, at).trim(), rawTail = clause.slice(at + 1), tail = rawTail.trim();
+    // A half-width colon only counts in front of a request ("任务: 请…"), so
+    // times, ratios and URLs keep their clause whole.
+    if (mark === ":" && !HALF_COLON_REQUEST.test(rawTail)) continue;
+    if (!head || [...head].length > LABEL_MAX || REPORTED_LABEL.test(head) || NEGATED_LABEL.test(head) || NEGATED_REQUEST.test(tail)) return [clause];
+    return [head, tail];
+  }
+  return [clause];
+}
+function workClauses(text: string): string[] {
+  return ownClauses(text).flatMap(splitLabel);
+}
+
 // A face alone between 不是 and 是 is the corrected old value: keep a one-char,
 // non-space, non-punctuation gap there. Everywhere else faces vanish, so
 // contiguous phrases and negative guards see the member's prose unchanged.
@@ -69,7 +96,7 @@ function neutralFaces(text: string): string {
 /** The only clean-turn work predicate, shared by file and project tools. */
 export function cleanWorkRequest(text: string): boolean {
   if (COMPLETED_WORK.test(text)) return false;
-  return ownClauses(text).some(clause => {
+  return workClauses(text).some(clause => {
     if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
     const task = TASK_REQUEST.exec(clause);
     if (task && imperativeMatch(clause, task, false)) return true;
@@ -87,7 +114,9 @@ function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean
   text = neutralFaces(text);
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
-  return ownClauses(text).some(clause => {
+  // Corrections keep the original clause splitter; labels only open work requests.
+  const clauses = tool === "remember_correction" ? ownClauses(text) : workClauses(text);
+  return clauses.some(clause => {
     if (COMMAND_EXCLUSIONS.commentQuestion.test(clause)) return false;
     if (tool === "remember_correction") {
       const correction = CORRECTION.exec(clause);
