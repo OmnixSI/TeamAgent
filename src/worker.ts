@@ -762,7 +762,7 @@ async function processJob(e: Env, id: string) {
         : [];
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
-        const imageOutcomes = await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
+        const imageOutcomes = await annotateTurn(e, cold);
         await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true, imageOutcomes });
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
