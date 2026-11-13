@@ -187,7 +187,7 @@ function quotaFailure(scope: string, used: number, limit: number) {
   const remaining = Math.max(0, limit - used);
   return failure(
     "quota",
-    `${scope}今天的生图额度用完了（已用 ${used}/${limit}，还剩 ${remaining} 张）；悉尼时间明天 0 点后重置`,
+    `${scope}今天的生图额度用完了（已用 ${used}/${limit}，还剩 ${remaining} 张）；按 24 小时滚动计算，过一阵就会恢复`,
     "如实告诉成员额度用完和重置时间；不要重试，也不要换个体裁重复调用",
   );
 }
