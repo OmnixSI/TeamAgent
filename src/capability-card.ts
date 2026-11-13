@@ -64,7 +64,10 @@ function clip(text: string, max: number): string {
 
 type Entry = { name: string; desc: string; limit: string; off: boolean };
 
-function compose(entries: Entry[], descMax: number): string {
+/** Wording the bot must repeat verbatim: never clipped, however many tools the card lists. */
+const KEEP_WHOLE = new Set(["prepare_project_task"]);
+
+function compose(entries: Entry[], descMax: number, compact = false): string {
   return [
     CARD_HEADER,
     ...entries.map(
@@ -72,9 +75,8 @@ function compose(entries: Entry[], descMax: number): string {
         "- " +
         e.name +
         "：" +
-        clip(e.desc, descMax) +
-        " / " +
-        e.limit +
+        clip(e.desc, KEEP_WHOLE.has(e.name) ? Number.POSITIVE_INFINITY : descMax) +
+        (compact && e.limit === DEFAULT_LIMIT ? "" : " / " + e.limit) +
         (e.off ? "（当前已关闭）" : ""),
     ),
     CARD_BOUNDARY,
@@ -104,9 +106,11 @@ export function capabilityCard(
   }
   const full = compose(entries, Number.POSITIVE_INFINITY);
   if ([...full].length <= CARD_MAX) return full;
-  for (const max of [40, 28, 20, 14, 10, 6, 3]) {
-    const shortened = compose(entries, max);
+  // Many tools (F7 toolkit): drop the generic "按用途使用" tail before cutting descriptions to nothing.
+  const tiers: Array<[number, boolean]> = [[40, false], [28, false], [20, false], [40, true], [28, true], [20, true], [14, true], [10, true], [6, true], [3, true]];
+  for (const [max, compact] of tiers) {
+    const shortened = compose(entries, max, compact);
     if ([...shortened].length <= CARD_MAX) return shortened;
   }
-  return [...compose(entries, 1)].slice(0, CARD_MAX).join("");
+  return [...compose(entries, 1, true)].slice(0, CARD_MAX).join("");
 }

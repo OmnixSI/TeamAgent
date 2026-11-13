@@ -1,5 +1,6 @@
 {
   "$schema": "./team.schema.json",
+  "mcp_servers": [],
   "model": {
     "name": "deepseek-flash",
     "quick_effort": "high",
@@ -131,6 +132,16 @@
     "caps": {
       "tag": 40,
       "send": 20
+    }
+  },
+  "voice": {
+    "tts": {
+      "enabled": false,
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "rate": "+0%",
+      "max_chars": 300,
+      "cache_minutes": 60,
+      "timeout_ms": 20000
     }
   }
 }

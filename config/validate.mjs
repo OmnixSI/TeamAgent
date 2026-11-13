@@ -121,5 +121,37 @@ export function validateTeamConfig(c) {
   // send is deliberately fail-closed at runtime: only literal true enables it.
   for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
   for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
+  errors.push(...validateMcpServers(c?.mcp_servers));
+  return errors;
+}
+
+
+// MCP is opt-in. Each configured endpoint and group is an explicit administrator allowlist.
+function validateMcpServers(servers) {
+  if (servers === undefined) return [];
+  const errors = [], seen = new Set();
+  if (!Array.isArray(servers) || servers.length > 8) return ['mcp_servers'];
+  for (const [i, server] of servers.entries()) {
+    const path = 'mcp_servers.' + i;
+    if (!server || typeof server !== 'object' || Array.isArray(server)) { errors.push(path); continue; }
+    const check = (ok, key) => { if (!ok) errors.push(path + '.' + key); };
+    check(typeof server.name === 'string' && /^[a-z][a-z0-9]{0,15}$/.test(server.name) && !seen.has(server.name), 'name');
+    seen.add(server.name);
+    check(server.transport === 'streamable-http', 'transport');
+    check(typeof server.enabled === 'boolean', 'enabled');
+    let urlOK = false;
+    try {
+      const url = new URL(server.url);
+      urlOK = typeof server.url === 'string' && server.url.length <= 2048 && !url.username && !url.password && !url.hash &&
+        (url.protocol === 'https:' || (url.protocol === 'http:' && ['127.0.0.1','[::1]','localhost'].includes(url.hostname)));
+    } catch {}
+    check(urlOK, 'url');
+    check(Array.isArray(server.allow_tools) && server.allow_tools.length > 0 && server.allow_tools.length <= 32 &&
+      new Set(server.allow_tools).size === server.allow_tools.length && server.allow_tools.every(x => typeof x === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(x)), 'allow_tools');
+    check(Array.isArray(server.group_ids) && server.group_ids.length > 0 && server.group_ids.length <= 100 &&
+      server.group_ids.every(x => typeof x === 'string' && x.trim().length > 0 && x.length <= 128), 'group_ids');
+    check(server.timeout_ms === undefined || (Number.isInteger(server.timeout_ms) && server.timeout_ms >= 1 && server.timeout_ms <= 15000), 'timeout_ms');
+    check(Object.keys(server).every(x => ['name','transport','url','enabled','allow_tools','group_ids','timeout_ms'].includes(x)), 'fields');
+  }
   return errors;
 }

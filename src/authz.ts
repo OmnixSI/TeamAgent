@@ -1,9 +1,10 @@
 import { UNTRUSTED_MARK } from "./untrusted";
+import { extraUntrustedNames } from "./toolkit";
 import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
 export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
-export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file"]);
+export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames()]);
 
 /** Once external material enters a turn, later tool calls cannot shed its taint. */
 export function tainted(context: any, messages: any[]): boolean {

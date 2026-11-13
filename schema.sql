@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS expressions(phrase TEXT PRIMARY KEY,meaning TEXT NOT 
 CREATE INDEX IF NOT EXISTS messages_group_time ON messages(group_id,ts);
 CREATE INDEX IF NOT EXISTS jobs_status_kind ON jobs(status,kind,created_at);
 CREATE INDEX IF NOT EXISTS facts_scope ON facts(repo,valid_to,valid_from);
+CREATE TABLE IF NOT EXISTS episodes(
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  source_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  superseded_by TEXT
+);
+CREATE INDEX IF NOT EXISTS episodes_group_time ON episodes(group_id, created_at);
+CREATE INDEX IF NOT EXISTS episodes_live ON episodes(group_id, superseded_by, expires_at);
 CREATE INDEX IF NOT EXISTS outbox_status_time ON outbox(status,created_at);
 CREATE TABLE IF NOT EXISTS activity(id TEXT PRIMARY KEY,kind TEXT NOT NULL,entity TEXT NOT NULL,actor TEXT NOT NULL,summary TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS activity_entity ON activity(entity,created_at);
@@ -74,6 +86,48 @@ CREATE TABLE IF NOT EXISTS repo_state(
   repo TEXT PRIMARY KEY, json TEXT NOT NULL, fingerprint TEXT NOT NULL,
   updated_at INTEGER NOT NULL, checked_at INTEGER NOT NULL);
 
+CREATE TABLE IF NOT EXISTS summaries(
+  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, from_ts TEXT NOT NULL, to_ts TEXT NOT NULL,
+  last_rowid INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS summaries_group_last ON summaries(group_id,last_rowid);
+CREATE INDEX IF NOT EXISTS summaries_group_time ON summaries(group_id,created_at);
+CREATE TABLE IF NOT EXISTS tool_calls(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id TEXT NOT NULL, turn_id TEXT NOT NULL, name TEXT NOT NULL,
+  args_hash TEXT NOT NULL, status TEXT NOT NULL, error_kind TEXT,
+  latency_ms INTEGER NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS tool_calls_group_turn ON tool_calls(group_id,turn_id,created_at);
+CREATE TABLE IF NOT EXISTS profiles(
+  group_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  source_ids TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY(group_id, user_id));
+CREATE INDEX IF NOT EXISTS profiles_group ON profiles(group_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS kb_docs(
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS kb_docs_group ON kb_docs(group_id, created_at);
+CREATE TABLE IF NOT EXISTS kb_chunks(
+  id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS kb_chunks_group_doc ON kb_chunks(group_id, doc_id, idx);
+CREATE INDEX IF NOT EXISTS kb_chunks_doc ON kb_chunks(doc_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
+  text,
+  title,
+  chunk_id UNINDEXED,
+  doc_id UNINDEXED,
+  group_id UNINDEXED,
+  tokenize='trigram');
 CREATE TABLE IF NOT EXISTS schedules(
   id TEXT PRIMARY KEY, group_id TEXT NOT NULL, owner TEXT NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('digest_daily','digest_weekly','reminder','mute')),
