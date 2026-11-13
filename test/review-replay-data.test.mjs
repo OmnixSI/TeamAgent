@@ -6,9 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 
 // These are local-only replay artifacts (`.agent/` is not committed).  In CI the
 // directory does not exist, so the checks skip instead of failing.
-const replayDir = fileURLToPath(
-  new URL("../../../.agent/releases/V-D-reflection-loop/replay/", import.meta.url),
-);
+const replayDir = (
+  process.env.V_D_REPLAY_DIR ||
+  fileURLToPath(new URL("../../../.agent/releases/V-D-reflection-loop/replay/", import.meta.url))
+).replace(/\/?$/, "/");
 const jsonl = (name) =>
   readFileSync(new URL(name, `file://${replayDir}`), "utf8")
     .split("\n")
