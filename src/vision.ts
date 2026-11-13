@@ -51,6 +51,7 @@ export type VisionEvent = {
   traceId?: string;
 };
 type Report = (event: VisionEvent) => void;
+type VisionInFlight = Map<string, Promise<{ note: ImageNote | null; failure?: VisionEvent }>>;
 // Never include URLs, hints, message/sender IDs, arbitrary headers or exception text.
 const reportVision: Report = event => console.info("vision", JSON.stringify(event));
 class VisionFault extends Error {
@@ -417,25 +418,54 @@ export async function describeImage(
   signal: AbortSignal,
   version = VISION_VERSION,
   report: Report = reportVision,
+  inFlight: VisionInFlight = new Map(),
 ): Promise<ImageNote | null> {
   try {
     aborted(signal);
     if (!img.url) throw new VisionFault("blocked");
     const fetched = await fetchImage(img.url, signal, 5_000_000, report);
     if (!fetched) return null;
-    return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version, report);
+    return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version, report, inFlight);
   } catch (error) {
     failed(report, "fetch", error, signal, "network");
     return null;
   }
 }
 
-export async function describeBytes(e: any, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal, version = VISION_VERSION, report: Report = reportVision): Promise<ImageNote | null> {
+export async function describeBytes(e: any, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal, version = VISION_VERSION, report: Report = reportVision, inFlight: VisionInFlight = new Map()): Promise<ImageNote | null> {
+  try {
+    aborted(signal);
+    const sha = (await sha256(bytes)) + ":" + version;
+    aborted(signal);
+    const pending = inFlight.get(sha);
+    if (pending) {
+      const result = await untilAbort(() => pending, signal);
+      if (result.failure) report(result.failure);
+      return result.note;
+    }
+    // Only this turn shares work; subsequent turns use the persisted note cache.
+    const work = (async () => {
+      let failure: VisionEvent | undefined;
+      const note = await describeHashedBytes(e, bytes, mime, hint, signal, sha, event => {
+        if (event.status === "failed") failure = event;
+        report(event);
+      });
+      return { note, failure };
+    })();
+    inFlight.set(sha, work);
+    try { return (await work).note; }
+    finally { inFlight.delete(sha); }
+  } catch (error) {
+    failed(report, "cache", error, signal, "database");
+    return null;
+  }
+}
+
+async function describeHashedBytes(e: any, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal, sha: string, report: Report): Promise<ImageNote | null> {
   let stage: VisionStage = "cache";
   try {
     aborted(signal);
     report({ stage, status: "attempt" });
-    const sha = (await sha256(bytes)) + ":" + version;
     const cached = await e.DB.prepare(
       "SELECT sha,desc,tags,sticker_like,text FROM image_notes WHERE sha=?",
     )
@@ -512,6 +542,7 @@ export async function annotateTurn(
   if (!picks.length) return [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs);
+  const inFlight: VisionInFlight = new Map();
   try {
     return await Promise.all(
       picks.map(async (p): Promise<ImageOutcome> => {
@@ -537,6 +568,7 @@ export async function annotateTurn(
             controller.signal,
             VISION_VERSION,
             report,
+            inFlight,
           );
           if (!note) return outcome;
           try {
