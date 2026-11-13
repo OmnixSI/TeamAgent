@@ -319,7 +319,7 @@ export async function buildTraces(e: any, run: TraceRun): Promise<TracePage> {
       switches: Object.fromEntries(Object.entries(parseJson(row.switches, {})).map(([k, v]: [string, any]) => {
         if (v === "on" || v === "off") return [k, v];
         const enabled = v === "1" || v === 1 || v === true;
-        return [k, k.startsWith("off:") ? (enabled ? "off" : "on") : (enabled ? "on" : "off")];
+        return [k, k.startsWith("off:") ? (enabled ? "on" : "off") : (enabled ? "on" : "off")];
       })),
       runner_ok: row.runner_ok === null || row.runner_ok === undefined ? null : (row.runner_ok ? 1 : 0),
       turn_id: String(row.turn_id),

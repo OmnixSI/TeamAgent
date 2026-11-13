@@ -189,7 +189,7 @@ test("D3 v2 tools_offered is unknown without turn_offers and stays historical wh
   const trace = find(page, "tr-in-fx-m-tools");
   assert.deepEqual(trace.tools_offered.names, ["repo_changes", "repo_commit"]);
   assert.equal(trace.tools_offered.catalog_version, "cat-v1");
-  assert.deepEqual(trace.tools_offered.switches, { "off:repo_tools": "off" });
+  assert.deepEqual(trace.tools_offered.switches, { "off:repo_tools": "on" });
   assert.equal(trace.tools_offered.runner_ok, 1);
   assert.equal(trace.tools_offered.turn_id, "turn-x");
   assert.deepEqual(trace.tools, [{ id: "tt-1", name: "repo_changes", ok: false, error_kind: "timeout", ms: 1200 }]);
@@ -281,8 +281,8 @@ test("D3 v2 snapshot uses the structured catalog and never reads auth values", a
 
   const snapshot = await capabilitySnapshot(e);
   assert.equal(snapshot.catalog_version, "cat-v1");
-  assert.equal(snapshot.switches["off:quote"], "off");
-  assert.equal(snapshot.switches["off:wait"], "on");
+  assert.equal(snapshot.switches["off:quote"], "on");
+  assert.equal(snapshot.switches["off:wait"], "off");
   assert.equal(snapshot.switches["auth:bili"], "on");
   assert.ok(!JSON.stringify(snapshot).includes("fake-auth-value"));
   assert.ok(snapshot.tools_catalog.filter((tool) => tool.name.startsWith("repo_")).every((tool) => tool.readonly));

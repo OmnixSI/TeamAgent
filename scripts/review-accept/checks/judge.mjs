@@ -196,13 +196,13 @@ export async function vdRBudget(ctx) {
 
 export async function vdRTrunc(ctx) {
   const api = await ctx.api();
-  equal(api.batchSize(4096, "primary"), 8, "primary batch size");
-  equal(api.batchSize(2048, "second"), 7, "second batch size");
-  equal(api.batchSize(1024, "primary"), 1, "small primary batch size");
+  equal(api.batchSize(4096, "primary"), 3, "primary batch size");
+  equal(api.batchSize(2048, "second"), 2, "second batch size");
+  equal(api.batchSize(1600, "primary"), 1, "small primary batch size");
   equal(api.batchSize(449, "primary"), 0, "too small to fit one verdict");
 
   const run = hasReplay() ? await traceRun(ctx.loadReview) : null;
-  const traces = run ? run.traces.slice(0, 8) : Array.from({ length: 8 }, (_, i) => synthTrace({ id: `t${i}` }));
+  const traces = run ? run.traces.slice(0, 3) : Array.from({ length: 3 }, (_, i) => synthTrace({ id: `t${i}` }));
   const ids = traces.map((trace) => trace.id);
   const { db, raw } = memoryDb();
   try {
@@ -227,7 +227,7 @@ export async function vdRTrunc(ctx) {
     const budget = raw.prepare("SELECT * FROM review_budget").get();
     equal(budget.calls, 3, "each retry is a fresh budgeted call");
     const halves = out.judgments.slice(1).map((judgment) => judgment.trace_ids.length).sort((a, b) => a - b);
-    equal(halves, [4, 4], "halves are 4+4");
+    equal(halves, [1, 2], "halves are 1+2");
 
     first = true;
     const single = await api.judgeBatches(env, ["one"], (batch) => CALL({ max_tokens: 4096, user: JSON.stringify({ ids: batch }) }), {
@@ -236,7 +236,7 @@ export async function vdRTrunc(ctx) {
     equal(single.failedTraceIds, ["one"], "singleton truncation becomes judge_failed");
     assert(single.judgments.every((judgment) => judgment.state !== "ok"), "no finding from a truncated singleton");
     return {
-      detail: `batchSize 4096→8、2048→7；所有请求显式 max_tokens；截断对半 4+4 各重试一次；单条截断→judge_failed 不产 finding`,
+      detail: `batchSize 4096→3、2048→2（D-0b 常量）；所有请求显式 max_tokens；截断对半 1+2 各重试一次；单条截断→judge_failed 不产 finding`,
       evidence: [`calls=${calls.length}`, `judged=${out.judgments.map((j) => j.trace_ids.length).join("+")}`],
     };
   } finally { raw.close(); }
@@ -337,7 +337,7 @@ export async function vdRDual(ctx) {
     synthTrace({ id: "t-p1" }),
     synthTrace({ id: "t-req" }),
     synthTrace({ id: "t-img", has_image: true }),
-    ...Array.from({ length: 4 }, (_, i) => synthTrace({ id: `t-pass${i}` })),
+    ...Array.from({ length: 3 }, (_, i) => synthTrace({ id: `t-pass${i}` })),
   ];
   const primary = {
     ...RESULT(),

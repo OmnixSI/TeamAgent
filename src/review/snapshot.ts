@@ -31,7 +31,7 @@ export async function capabilitySnapshot(
       ).bind(...offKeys, "runner_seen").all()).results
     : (await e.DB.prepare("SELECT key,value FROM settings WHERE key = ?").bind("runner_seen").all()).results;
   const values = new Map<string, string>(settings.map((row: any) => [row.key, row.value]));
-  for (const key of offKeys) switches[key] = values.get(key) === "1" ? "off" : "on";
+  for (const key of offKeys) switches[key] = values.get(key) === "1" ? "on" : "off"; // off:* 值 on = 开关被禁用（design 约定）
 
   if (authKeys.length) {
     // Literal keys: the SQL never selects the auth value, only the row's existence.
