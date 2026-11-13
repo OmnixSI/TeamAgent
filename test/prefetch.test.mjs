@@ -74,3 +74,34 @@ test('P4 a bare BV link and a bili2233 short link prefetch as well', async () =>
   const ids = (await rows(e, 'jobs')).filter(j => j.kind === 'fetch').map(j => j.id).sort();
   assert.deepEqual(ids, ['fetch-bili-AbCd1234', 'fetch-bili-BV1xx411c7mD']);
 });
+
+test('P5 replay: a prefetched short link feeds the next plain question', async () => {
+  const e = env(); await bind(e);
+  const result = { bvid: BV, title: '鸿蒙智行销量复盘', desc: '视频简介', owner: '超哥超车', tname: '汽车', duration: 695, pubdate: 1,
+    stat: { view: 1, like: 1, coin: 1, favorite: 1, reply: 1 }, subtitle: '字幕正文', subtitle_lang: 'zh-CN', subtitle_status: 'ok',
+    comments: [{ uname: '观众', message: '热评' }], tier: 'light', fetched_at: new Date().toISOString() };
+  await silentModel(async () => {
+    await qq(e, msg('link', 'https://b23.tv/' + short));
+    await queue(e, 'chat-link');
+  });
+  const job = (await rows(e, 'jobs')).find(j => j.id === 'fetch-bili-' + short);
+  assert.ok(job);
+  const fetched = await (await req(e, '/api/runner/fetch/claim', {}, 'runner-secret')).json();
+  assert.equal(fetched.job.id, job.id);
+  await req(e, '/api/runner/fetch/report', { id: job.id, lease: fetched.job.payload.lease, success: true, result }, 'runner-secret');
+
+  const seen = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (_url, o) => {
+    seen.push(JSON.parse(o.body));
+    return Response.json({ choices: [{ message: { content: '{"mode":"work","text":"这条视频讲了销量和理想 MEGA。"}' } }] });
+  };
+  try {
+    await qq(e, msg('follow', '这个视频讲了啥'));
+    await queue(e, 'chat-follow');
+  } finally { globalThis.fetch = old; }
+  const out = (await rows(e, 'outbox')).find(o => o.msg_id === 'follow');
+  assert.ok(out);
+  assert.ok(seen.some(b => JSON.stringify(b).includes('鸿蒙智行销量复盘')), 'the model must receive the prefetched video material');
+  assert.equal((await rows(e, 'video_waits')).length, 0);
+});
