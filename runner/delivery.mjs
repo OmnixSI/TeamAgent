@@ -59,6 +59,27 @@ export function recoverDeliveries(dir) {
 // confirmed files are removed at that limit. Unconfirmed files expire after
 // 24 hours, or earlier when the global 20-file / 100 MiB budget is exceeded.
 const MAX_ATTEMPTS = 3;
+// Retry waits owned here because the files never leave this machine.
+// Keep the schedule and the 15 min / 1 h bounds in step with src/delivery-retry.ts.
+export const RETRY_DELAYS_MS = [60_000, 300_000];
+export const RETRY_WINDOW_MS = 15 * 60 * 1000;
+export const RETRY_DEADLINE_MS = 60 * 60 * 1000;
+/** A safe failure may wait again only inside the 15 min window and 1 h deadline. */
+export function nextRetryAt(createdAt, attempts, now) {
+  if (attempts >= MAX_ATTEMPTS) return null;
+  const delay = RETRY_DELAYS_MS[Math.min(RETRY_DELAYS_MS.length - 1, Math.max(0, attempts - 1))];
+  const at = now + delay;
+  if (at > createdAt + RETRY_WINDOW_MS) return null;
+  if (at > createdAt + RETRY_DEADLINE_MS) return null;
+  return at;
+}
+function errorCode(error, attempted) {
+  if (attempted) return 'send_failed';
+  const message = String(error?.message || '');
+  if (message === 'file denied') return 'file_denied';
+  if (message === 'invalid files') return 'invalid_files';
+  return 'target_unavailable';
+}
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_FILES = 20;
 const MAX_RETAINED_BYTES = 100 * 1024 * 1024;
@@ -86,8 +107,12 @@ function sweepRetained(dir, root, now) {
     else write(file, d); // Keep only an unacknowledged receipt, never resend.
   }
 }
+function exhausted(d) {
+  return d.status === "sent" || d.attempts >= MAX_ATTEMPTS ||
+    (d.status === "failed" && !(Number(d.next_attempt) > 0));
+}
 async function finishDelivery(file, d, root, report) {
-  if (d.status !== "sent" && d.attempts < MAX_ATTEMPTS) return;
+  if (!exhausted(d)) return;
   d.exhausted = d.status !== "sent";
   write(file, d);
   cleanOutputs(d.status === 'unknown' && !d.retention_removed
@@ -96,6 +121,7 @@ async function finishDelivery(file, d, root, report) {
     try {
       await report({id:d.id,status:d.status,sent_count:d.sent_count || 0,
         attempts:d.attempts,exhausted:d.exhausted,
+        ...(d.status === 'failed' ? {error:d.error || 'send_failed'} : {}),
         ...(d.status === 'unknown' ? {unconfirmed_files:unconfirmed(d).map(file => path.basename(file)),
           retain_until:d.retain_until,retention_removed:!!d.retention_removed} : {})});
     } catch { return; } // Retry reporting without sending files again.
@@ -113,18 +139,49 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
     const file = path.join(dir, name), d = JSON.parse(fs.readFileSync(file));
     d.status ||= name.match(/\.(sent|failed|unknown)$/)?.[1];
     d.attempts = Math.max(0, Math.min(MAX_ATTEMPTS, Number(d.attempts) || 0));
+    if (d.status !== "sent" && d.status !== "unknown" && d.created_at == null) {
+      // Receipts written before the field existed use their first-seen file time,
+      // so an old spool entry is never treated as a fresh delivery.
+      try { d.created_at = fs.statSync(file).mtimeMs; }
+      catch { d.created_at = now; }
+    }
+    if (d.created_at != null) d.retry_deadline ||= d.created_at + RETRY_DEADLINE_MS;
     if (typeof d.id !== "string" || !d.id) {
       if (d.status === "sent") retire(file, d);
       else park(file);
       continue;
     }
-    if (d.status === "unknown" || d.status === "failed" && d.reported) {
+    // Pin the original age before any retry rewrites the manifest's mtime.
+    const created = typeof d.created_at === 'number' ? d.created_at : Date.parse(d.created_at);
+    d.created_at = Number.isFinite(created) ? created : fs.statSync(file).mtimeMs;
+    if (!['sent','unknown'].includes(d.status) && now - d.created_at > RETENTION_MS) {
+      d.status = 'failed';
+      d.error = 'expired';
+      d.attempts = MAX_ATTEMPTS;
+      delete d.next_attempt;
+      write(file, d);
+      await finishDelivery(file, d, root, report);
+      continue;
+    }
+    const retryExpired = d.status !== "sent" && d.status !== "unknown" && d.created_at != null &&
+      (now > d.created_at + RETRY_WINDOW_MS || now > d.created_at + RETRY_DEADLINE_MS);
+    if (retryExpired) {
+      d.status = "failed";
+      d.error = "retry_expired";
+      d.next_attempt = 0;
+      d.attempts = Math.max(1, d.attempts);
+      const base = file.replace(/\.(sent|failed|unknown)$/, ""), terminal = base + ".failed";
+      if (file === terminal) write(file, d);
+      else { write(file, d); fs.renameSync(file, terminal); }
+      await finishDelivery(terminal, JSON.parse(fs.readFileSync(terminal)), root, report);
+    } else if (d.status === "unknown" || d.status === "failed" && d.reported) {
       d.attempts = Math.min(MAX_ATTEMPTS, Math.max(1, d.attempts) + 1);
       write(file, d);
       await finishDelivery(file, d, root, report);
     } else if (d.status === "sent" || d.attempts >= MAX_ATTEMPTS) {
       await finishDelivery(file, d, root, report);
-    } else pending.push({file,d});
+    } else if (Number(d.next_attempt) > now) continue;
+    else pending.push({file,d});
   }
   for (const {file,d} of pending.slice(0,3)) {
     const base = file.replace(/\.(sent|failed|unknown)$/, ""), active = base + ".sending";
@@ -153,10 +210,33 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
         write(active, d);
       }
       d.status = "sent";
-    } catch { d.status = attempted ? "unknown" : "failed"; }
+      delete d.next_attempt;
+      delete d.error;
+    } catch (error) {
+      d.status = attempted ? "unknown" : "failed";
+      d.error = errorCode(error, attempted);
+      if (d.status === "failed") {
+        const next = nextRetryAt(d.created_at, d.attempts, now);
+        if (!next && d.attempts < MAX_ATTEMPTS) d.error = "retry_expired";
+        d.next_attempt = next || 0;
+      } else d.next_attempt = 0;
+    }
     write(active, d);
     const terminal = base + "." + d.status;
     fs.renameSync(active, terminal);
+    // A safe failure is visible in the cloud before the next attempt, so a
+    // retried delivery always has a delivery_retries row to explain it.
+    if (d.status === "failed" && d.next_attempt > 0) {
+      try {
+        await report({
+          id: d.id, status: "failed", sent_count: 0, attempts: d.attempts,
+          exhausted: false, error: d.error, next_attempt: d.next_attempt,
+          created_at: d.created_at, retry_deadline: d.retry_deadline,
+        });
+        d.progress_reported = true;
+        write(terminal, d);
+      } catch {}
+    }
     // Sweep before reporting so a new result that exceeds the budget reports
     // its actual retention state. Sweep every flush, even without active sends.
     sweepRetained(dir, root, now);

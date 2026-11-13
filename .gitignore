@@ -11,3 +11,4 @@ runner/sdk/node_modules/
 src/ui.generated.ts
 
 clients/node_modules/
+.venv-runner/

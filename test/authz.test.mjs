@@ -141,7 +141,7 @@ test('Authorization errors are specific while unrelated tool exceptions stay fil
   };
   await mocked([project('帮我建个任务修登录')],async({seen,tools})=>{
     await agentAnswer(e,context);
-    assert.ok(tools.some(t=>t.unavailable&&t.reason==='未能获得资料，不能据此编造结论'));
+    assert.ok(tools.some(t=>t.unavailable&&t.ok===false&&t.error_kind==='internal'&&t.next_action));
     assert.ok(!JSON.stringify(seen).includes('private-diagnostic-must-not-escape'));
   });
 });
@@ -263,4 +263,11 @@ test('round4 polite questions remain requests while third-person and commentary 
   for(const tool of ['prepare_project_task','create_file_task'])for(const [body,ok] of [['请问帮我修复登录错误',true],['请问你能不能帮我检查登录错误',true],['他是不是修复了登录错误',false],['帮我修复登录错误有必要吗',false],['请问他是不是修复了登录错误',false]]){
     const s={id:'current',body,meta:{direct:true}};assert.equal(az.authorize(tool,body,s,{batch:[s]},[]).ok,ok,tool+' / '+body);
   }
+});
+test('A13 list_repos results taint a later project write',async()=>{
+  const e=env(),context=await source(e,'帮我建个任务修登录');
+  await mocked([call('list_repos',{}),project('帮我建个任务修登录')],()=>agentAnswer(e,context));
+  const task=(await rows(e,'tasks'))[0];
+  assert.ok(task,'仓库清单来自 GitHub 外部文本，后续交办仍应保留');
+  assert.equal(task.status,'proposal','外部仓库清单进入本轮后，交办只能提案不能直接开工');
 });

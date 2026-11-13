@@ -1200,14 +1200,22 @@ test("exhausted delivery reports one explicit cleanup notice even when its recei
     const receipt={id:'delivery-exhausted',status,sent_count:0,attempts:3,exhausted:true,unconfirmed_files:['example.csv'],retain_until:Date.now()+86400000};
     for(let i=0;i<2;i++)assert.equal((await req(e,'/api/runner/delivery/report',receipt,'runner-secret')).status,200);
     const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
-    assert.equal(notices.length,1);
-    const notice=JSON.parse(notices[0].payload);
-    assert.match(notice.status,/停止|不再/);
     if(status==='unknown') {
+      assert.equal(notices.length,1);
+      const notice=JSON.parse(notices[0].payload);
+      assert.match(notice.status,/停止|不再/);
       assert.match(notice.status,/example\.csv/);assert.match(notice.status,/24 小时/);
       assert.match(notice.status,/20 个/);assert.match(notice.status,/100 MiB/);
       assert.doesNotMatch(notice.status,/临时文件已清理/);
-    } else assert.match(notice.status,/临时文件已清理/);
+    } else {
+      assert.equal(notices.length,0,'failed deliveries use one deterministic group explanation');
+      const row=await e.DB.prepare('SELECT status FROM deliveries WHERE id=?').bind('delivery-exhausted').first();
+      assert.equal(row.status,'failed');
+      const outbox=(await e.DB.prepare("SELECT * FROM outbox WHERE id=?").bind('delivery-attention-delivery-exhausted').all()).results;
+      assert.equal(outbox.length,1);
+      assert.match(outbox[0].body,/没发出去/);assert.match(outbox[0].body,/3 次/);
+      assert.match(outbox[0].body,/重新交办/);
+    }
   }
 });
 

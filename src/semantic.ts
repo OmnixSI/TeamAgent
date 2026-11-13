@@ -1,15 +1,21 @@
+import { addressedMessages, guardMentionDecision, withMentionReceipt } from './mention-guard';
 import {webFailText,LINK_FAIL_RULE} from './linkfail';
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
+import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
+import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
+import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
+import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
 import { model, activity, redact, utilityText } from "./runtime";
+import { ToolRecovery } from "./tool-audit";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
@@ -27,6 +33,16 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+import { capabilityCard } from "./capability-card";
+// A question about repository activity must reach the read-only repo tools even
+// in a round whose remaining D1 budget would normally hide every tool.
+const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
+export function isRepoActivityAsk(body: unknown): boolean {
+  return REPO_ACTIVITY_ASK.test(String(body ?? ""));
+}
+const REPO_ASK_HINT = { role: "system", content: "用户在问仓库动态，必须先调用 repo_changes" };
+const REPO_ASK_FLOOR = 16;
+import { biliNoteText } from "./fetchjobs";
 export type Services = {
   llm: (
     kind: "chat" | "plan" | "memory",
@@ -392,8 +408,8 @@ function tweetText(html: string) {
 }
 export type { ReadReason } from './linkfail';
 import type { ReadReason } from './linkfail';
-export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
-export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research' };
+export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek' | 'deepseek_fetch'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
+export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research'; group?: string; sender?: string };
 /** All sources, including response bodies, spend the same absolute budget. */
 export function slot(deadline: number, cap: number, reserve = 0): AbortSignal | null {
   const milliseconds = Math.floor(Math.min(cap, deadline - Date.now() - reserve));
@@ -408,9 +424,12 @@ export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok:
   const challenge = /just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i;
   const login = /sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i;
   const title = header.match(/^Title:\s*([^\r\n]*)/im)?.[1] || '';
+  if (/^(?:page not found|404(?:\s+(?:page\s+)?not found)?)(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'not_found'};
+  if (/^(?:sign in|log in|login|登录|登入)(?: to github)?(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'login_required'};
   if (challenge.test(title)) return {ok:false,reason:'risk'};
   if (login.test(title)) return {ok:false,reason:'login_required'};
   const body = boundary < 0 ? raw : raw.slice(boundary + marker.length);
+  if (/^\s*(?:#+\s*)?(?:sign in|log in)(?: to github)?\s*$/im.test(body.slice(0,300))&&/username or email address/i.test(body)&&/forgot (?:your )?password/i.test(body)) return {ok:false,reason:'login_required'};
   const text = body.replace(/^(?:\s*\[[^\]\n]*\]\([^\n)]*\)\s*[|·]?)+\s*$/gm, '').trim();
   if (text.length < 1500) {
     if (challenge.test(text)) return {ok:false,reason:'risk'};
@@ -489,6 +508,17 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
       if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
     } catch {if(Date.now()>=deadline-10)reason='timeout';}
   }
+  if (opt.purpose==='research' && deadline-Date.now()>=300) {
+    try {
+      const page=await fetchPageCore(e,url,{timeoutMs:Math.max(300,deadline-Date.now()),group:opt.group,sender:opt.sender});
+      if (page.ok===true && page.content.trim()) {
+        const checked=jinaOk(page.content,'deepseek');
+        if (checked.ok || 'reason' in checked && checked.reason==='short') return {ok:true,source:'deepseek_fetch',text:page.content};
+        if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
+      }
+      if (page.ok===false && page.error_kind==='denied') reason='login_required';
+    } catch {}
+  }
   return {ok:false,reason};
 }
 export function untrustedResults(results: any) {
@@ -510,7 +540,7 @@ export async function understandLinks(e: any, p: any, s: Services) {
   if (!m) return;
   const urls: string[] = (p.urls || []).filter(publicUrl).slice(0, 3);
   const deadline = Date.now() + 20000;
-  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline })));
+  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline, group: m.group_id, sender: m.sender })));
   const pages = reads.map((read, index) => {
     const url = urls[index];
     const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
@@ -641,17 +671,30 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 }
 
 export async function agentAnswer(e: any, context: any) {
+  return withMentionReceipt(e, context, async () => {
+    const answer = await answerWithTools(e, context), text = decodeVoice(answer).text;
+    return (context.mentioned || addressedMessages(context).length) && (!text.trim() || text.trim() === '[[SILENT]]')
+      ? JSON.stringify({mode:'work',text:'我在，正在看这条消息。'}) : answer;
+  });
+}
+async function answerWithTools(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  // F6-6 定时闭嘴：除被 @ 外不进模型、不出声；创建闭嘴的那条消息本身豁免。
+  if (!context.mentioned && await muted(e, context.latest?.group_id, context.latest?.id))
+    return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
+  const recovery = new ToolRecovery(context.resume?.recovery);
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
+  const repoAsk = isRepoActivityAsk(context.latest?.body) &&
+    (!!context.mentioned || context.latest?.meta?.direct === true);
   const facts = (
     await e.DB.prepare(
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
     ).all()
   ).results;
   const acceptedActions: any[] = [];
-  const tools = [
+  const baseTools = [
     {
       type: "function",
       function: {
@@ -741,7 +784,7 @@ export async function agentAnswer(e: any, context: any) {
       function: {
         name: "prepare_project_task",
         description:
-          "明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。高难度开发默认生成成员本机AI接力方案。",
+          "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。",
         parameters: {
           type: "object",
           properties: {
@@ -800,16 +843,68 @@ export async function agentAnswer(e: any, context: any) {
       type: "function",
       function: {
         name: "get_project",
-        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。",
+        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。repo 可填 owner/repo、代称或短名；repo_cache 里新发现的组织仓库也接受。",
         parameters: {
           type: "object",
-          properties: { repo: { type: "string", enum: REPOS } },
+          properties: {
+            repo: {
+              type: "string",
+              description: "owner/repo、项目代称或仓库短名",
+            },
+          },
           required: ["repo"],
         },
       },
     },
-    ...(isOn(sw, "repo_tools") ? repoTools : []),
+    ...(await extraToolDefs(e, context)),
+    {
+      type: "function",
+      function: {
+        name: "schedule_create",
+        description:
+          "成员明确要求定时推送日报/周报、几分钟后提醒、或让你闭嘴一段时间时调用。只建本群日程；时间按悉尼时间 HH:MM；不猜成员没说的时刻。",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["digest_daily", "digest_weekly", "reminder", "mute"] },
+            time: { type: "string", description: "每日/每周推送的悉尼时间 HH:MM，例如 08:00" },
+            weekdays: { type: "array", items: { type: "integer" }, description: "周报星期，0=周日" },
+            minutes: { type: "integer", description: "几分钟后提醒，或闭嘴多少分钟" },
+            run_at: { type: "string", description: "一次性提醒/闭嘴结束的绝对时间，ISO 8601 带时区" },
+            text: { type: "string", description: "提醒内容" },
+            source_id: { type: "string", description: "本条交办的消息ID，默认最新消息" },
+          },
+          required: ["kind"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_list",
+        description: "查本群当前的定时推送、提醒和闭嘴，带悉尼时间的下次执行时间与失败次数。",
+        parameters: {
+          type: "object",
+          properties: { include_done: { type: "boolean", description: "是否连已取消/已完成一起列出" } },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_cancel",
+        description: "取消本群一个定时任务。先用 schedule_list 拿到任务ID。",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "schedule_list 返回的任务ID" } },
+          required: ["id"],
+        },
+      },
+    },
   ];
+  // Keep switched-off tools in the capability card as 「当前已关闭」.
+  const allTools = [...baseTools, ...repoTools];
+  const tools = isOn(sw, "repo_tools") ? allTools : baseTools;
   const recentBot = (
     await e.DB.prepare(
       "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
@@ -841,8 +936,12 @@ export async function agentAnswer(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
+  const systemPrompt =
+    (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
+    "\n\n" +
+    capabilityCard(allTools, { switches: sw });
   const messages: any[] = context.resume?.messages || participationMessages({
-        system: rules.length ? PARTICIPATION + "\n" + rules.join("\n") : undefined,
+        system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
@@ -867,20 +966,23 @@ export async function agentAnswer(e: any, context: any) {
         ).results,
         context: promptContext,
   });
-  for (let turn = context.resume?.turn || 0; turn < 3; turn++) {
+  messages.push({ role: "system", content: "工具失败时先换路再放弃；如实说原因，不说『没拿到』了事。" });
+  for (let turn = context.resume?.turn || 0; turn < 4; turn++) {
     let m: any;
+    let offerTools = true;
     if (context.resume?.pending) {
       m = context.resume.pending;
       context.resume.pending = null;
     } else {
+      offerTools = (turn < 2 || recovery.retrying && turn < 3) && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
       const d = await model(
         e,
         context.background ? "research" : "participation",
         "high",
         {
           max_tokens: 8192,
-          messages,
-          ...(turn < 2 && left(e) >= COST.turn * 2 + COST.tool + COST.tail ? { tools } : {}),
+          messages: offerTools && repoAsk ? [...messages, REPO_ASK_HINT] : messages,
+          ...(offerTools ? { tools } : {}),
         },
       );
       m = d.choices?.[0]?.message;
@@ -904,7 +1006,7 @@ export async function agentAnswer(e: any, context: any) {
         authz: { tainted: tainted(context, messages) },
         intent: context.intent,
         background: true,
-        resume: { messages, pending: m, turn },
+        resume: { messages, pending: m, turn, recovery: recovery.state() },
       };
       await e.DB.prepare(
         "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
@@ -922,7 +1024,7 @@ export async function agentAnswer(e: any, context: any) {
         id,
       );
       stage(e, context.latest.id, "research_queued");
-      if (!context.mentioned)
+      if (!context.mentioned && !addressedMessages(context).length)
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       return speakBrief(
         e,
@@ -934,9 +1036,10 @@ export async function agentAnswer(e: any, context: any) {
       );
     }
     if (!m.tool_calls?.length) {
+      if (offerTools && turn < 3 && recovery.retry(messages)) continue;
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
-        !!context.mentioned ||
+        !!context.mentioned || addressedMessages(context).length > 0 ||
         !!context.videoWaited ||
         context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
@@ -944,14 +1047,14 @@ export async function agentAnswer(e: any, context: any) {
             (r: any) => r.body.trim() === String(q.content || "").trim(),
           ),
         );
-      const decision = parseDecision(m.content, { forced, allowWait: !!context.allowWait });
+      const decision = guardMentionDecision(parseDecision(m.content, { forced, allowWait: !!context.allowWait }), context);
       Object.assign(context.decisionOut ?? {}, decision, { forced });
       if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       const spoken = await speakBrief(
         e,
         {
-          facts: decision.brief,
+          facts: recovery.brief(decision.brief),
           learnedExpressions,
           acceptedActions,
           recentBot: recentBot.slice(-5),
@@ -964,15 +1067,14 @@ export async function agentAnswer(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return spoken;
+      return recovery.voice(spoken);
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
-      try {
+      result = await recovery.run(e, context, call, offerTools && tools.some(t => t.function.name === call.function.name), async (a) => {
         if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
-        if (index >= 3) throw Error("本轮工具额度已用完");
-        const a = JSON.parse(call.function.arguments);
+        if (index >= 3) throw new ResourceLimitError();
         switch (call.function.name) {
           case "get_work_status": {
             const tasks = (
@@ -982,19 +1084,49 @@ export async function agentAnswer(e: any, context: any) {
             ).results;
             const query = String(a.query || "").slice(0, 150),
               sourceId = String(a.source_id || "");
-            const materials = (
+            const media = (
               await e.DB.prepare(
                 "SELECT j.id,json_extract(j.payload,'$.title') AS title,json_extract(j.payload,'$.message') AS source_id,j.status,n.body AS result,d.status AS delivery_status,d.sent_count FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') LEFT JOIN deliveries d ON d.job_id=j.id LEFT JOIN messages m ON m.id=json_extract(j.payload,'$.message') WHERE j.kind='media' AND (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(COALESCE(m.body,''),?)>0) ORDER BY j.created_at DESC LIMIT 5",
               )
                 .bind(sourceId, sourceId, query, query, query)
                 .all()
             ).results;
+            // R8: the message -> video mapping survives cache hits, pending waits and title cards.
+            const sources = (
+              await e.DB.prepare(
+                "SELECT m.id AS source_id,r.body AS ref,a.body AS alias,n.body AS result FROM messages m JOIN media_notes r ON r.id='msgref:v1:'||m.id LEFT JOIN media_notes a ON a.id='alias:v1:bili:'||json_extract(r.body,'$.ref') LEFT JOIN media_notes n ON n.id='resource:v1:bili:'||json_extract(a.body,'$.bvid')||':p:'||json_extract(a.body,'$.page') WHERE (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(m.body,?)>0) ORDER BY m.rowid DESC LIMIT 5",
+              )
+                .bind(sourceId, sourceId, query, query, query)
+                .all()
+            ).results;
+            const materials: any[] = media.map((r: any) => ({
+              ...r,
+              result: utilityText(r.result).slice(0, 6000),
+            }));
+            for (const row of sources) {
+              if (materials.length >= 5 || !row.result) continue;
+              let note: string, fetchedAt = now();
+              try {
+                const value = JSON.parse(row.result);
+                note = biliNoteText(value);
+                if (typeof value.fetched_at === "string") fetchedAt = value.fetched_at;
+              } catch {
+                continue;
+              }
+              let ref: any = {};
+              try { ref = JSON.parse(row.ref); } catch {}
+              const prefix = ref.match === "title" ? "（按标题匹配，未必是同一视频）\n" : "";
+              materials.push({
+                id: "msgref:v1:" + row.source_id,
+                source_id: row.source_id,
+                ref: ref.ref ?? null,
+                match: ref.match === "title" ? "title" : "id",
+                result: prefix + untrusted("bilibili", note, fetchedAt),
+              });
+            }
             result = {
               tasks,
-              materials: materials.map((r: any) => ({
-                ...r,
-                result: utilityText(r.result).slice(0, 6000),
-              })),
+              materials,
               board: "https://inkboard-team.inkboard-server.workers.dev",
             };
             break;
@@ -1190,7 +1322,7 @@ export async function agentAnswer(e: any, context: any) {
             );
             break;
           case "read_web": {
-            const d = await readUrl(e, a.url, { purpose: "research" });
+            const d = await readUrl(e, a.url, { purpose: "research", group: context.latest?.group_id, sender: context.latest?.sender });
             result = d.ok
               ? {
                   source: d.source,
@@ -1201,50 +1333,124 @@ export async function agentAnswer(e: any, context: any) {
                   text: untrusted(a.url, JSON.stringify(d)) };
             break;
           }
-          case "get_project":
-            if (!REPOS.includes(a.repo)) throw Error("unknown project");
+          case "get_project": {
+            const resolution = await resolveRepoRef(e, a.repo, { text: context.latest?.body });
+            if (resolution.ambiguous) {
+              result = toolFailure("get_project", null, { kind: "ambiguous", candidates: resolution.candidates });
+              break;
+            }
+            if (!resolution.ref) throw Error("unknown project");
+            const repo = resolution.ref.full;
+            // Snapshot lookup only exists for organisation projects; public
+            // repositories stay readable through the repo_* tools instead.
+            if (!REPOS.includes(repo) && !isOrgRepo(repo)) {
+              result = toolFailure("get_project", null, { kind: "invalid_args" });
+              break;
+            }
             const row = await e.DB.prepare(
               "SELECT json,updated_at FROM repo_cache WHERE repo=?",
             )
-              .bind(a.repo)
+              .bind(repo)
               .first();
             result = row
               ? {
                   ...JSON.parse(row.json),
+                  repo,
                   syncedAt: row.updated_at,
                   facts: (
                     await e.DB.prepare(
                       "SELECT repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL AND repo IN (?, 'team') ORDER BY valid_from DESC LIMIT 30",
                     )
-                      .bind(a.repo)
+                      .bind(repo)
                       .all()
                   ).results,
                 }
-              : { unavailable: true };
+              : { unavailable: true, repo };
             break;
-          case "repo_changes": case "repo_commit": case "repo_file":
-            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
+          }
+          case "schedule_create": {
+            const source =
+              context.batch?.find((m: any) => m.id === a.source_id) ||
+              context.latest;
+            if (!source?.group_id || source.group_id !== context.latest?.group_id)
+              throw Error("只能在本群建日程");
+            try {
+              const schedule = await createSchedule(e, {
+                group_id: source.group_id,
+                owner: source.sender || "群友",
+                kind: a.kind,
+                spec: {
+                  time: a.time,
+                  weekdays: a.weekdays,
+                  minutes: a.minutes,
+                  run_at: a.run_at,
+                  text: a.text,
+                },
+                source_msg_id: source.id,
+              });
+              result = {
+                accepted: true,
+                ok: true,
+                id: schedule.id,
+                kind: schedule.kind,
+                next_run_at: schedule.next_run_at,
+                next_run_text: sydneyText(schedule.next_run_at, schedule.tz),
+              };
+            } catch (error: any) {
+              result = scheduleFailure(error?.message);
+            }
+            break;
+          }
+          case "schedule_list": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            result = {
+              ok: true,
+              schedules: await listSchedules(e, group, {
+                includeDone: a.include_done === true,
+              }),
+            };
+            break;
+          }
+          case "schedule_cancel": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            const schedule = await cancelSchedule(e, group, String(a.id || ""));
+            result = schedule
+              ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
+              : {
+                  ok: false,
+                  error_kind: "not_found",
+                  retryable: false,
+                  next_action: "先用 schedule_list 看本群任务，再拿ID取消",
+                };
+            break;
+          }
+          case "repo_changes": case "repo_commit": case "repo_file": case "list_repos":
+            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a, { text: context.latest?.body })
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
           default:
-            result = { error: "unknown tool" };
+            result = await runExtraTool(e, call.function.name, a, {
+              context,
+              source: context.batch?.find((m: any) => m.id === a.source_id) || context.latest,
+              messages,
+              isTainted: () => tainted(context, messages),
+            });
         }
-      } catch (error) {
-        result = {
-          unavailable: true,
-          reason: error instanceof AuthorizationError || error instanceof ResourceLimitError ? error.message : "未能获得资料，不能据此编造结论",
-        };
-      }
+        return result;
+      });
       if (result?.accepted === true)
         acceptedActions.push({ tool: call.function.name, ...result });
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: ["read_web", "repo_changes", "repo_commit", "repo_file"].includes(call.function.name)
+        content: ["read_web", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames(context)].includes(call.function.name)
           ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });
     }
+    recovery.retry(messages);
   }
-  throw Error("检索轮次已到，需要成员进一步指定问题");
+  return recovery.voice(await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context));
 }

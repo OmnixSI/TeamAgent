@@ -658,6 +658,7 @@ function renderMaterials() {
             pending: "附件待发送",
             sent: "QQ 附件已发送",
             failed: "附件发送失败",
+            needs_attention: "附件未送达，需要核对",
             unknown: "附件送达待核对",
           }[t.delivery_status],
           t.delivery_status === "sent" ? "ok" : "warn",

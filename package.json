@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "tsc --noEmit --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,WebWorker src/*.ts src/review/*.ts --resolveJsonModule",
+    "check": "tsc --noEmit --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,WebWorker src/*.ts src/tools/*.ts src/review/*.ts --resolveJsonModule",
     "dev": "wrangler dev",
     "deploy": "node scripts/deploy.mjs",
     "test:runner": "python3 -m unittest discover -s test -p '*_test.py' && node --test runner/test_fetcher.mjs",
@@ -24,5 +24,8 @@
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "wrangler": "4.159.0"
+  },
+  "dependencies": {
+    "silk-wasm": "3.7.1"
   }
 }

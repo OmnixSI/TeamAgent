@@ -1,5 +1,6 @@
 {
   "$schema": "./team.schema.json",
+  "mcp_servers": [],
   "model": {
     "name": "deepseek-flash",
     "quick_effort": "high",
@@ -51,6 +52,7 @@
     "OmnixSI/NextThought-Website",
     "OmnixSI/WhalePartner",
     "OmnixSI/peiwan-store-platform-blueprint",
+    "OmnixSI/peiwan-club-saas",
     "OmnixSI/TeamAgent"
   ],
   "project_aliases": {
@@ -69,13 +71,23 @@
       "官网"
     ],
     "OmnixSI/peiwan-store-platform-blueprint": [
-      "陪玩店",
-      "陪玩店那个项目"
+      "陪玩店蓝图",
+      "陪玩店平台蓝图",
+      "peiwan蓝图"
     ],
     "OmnixSI/TeamAgent": [
       "群助手",
       "群机器人",
       "团队开发台"
+    ],
+    "OmnixSI/peiwan-club-saas": [
+      "陪玩店",
+      "陪玩店那个项目",
+      "最新陪玩店",
+      "陪玩店SaaS",
+      "陪玩店 SaaS",
+      "陪玩俱乐部",
+      "陪玩店新仓库"
     ]
   },
   "vision": {
@@ -120,6 +132,16 @@
     "caps": {
       "tag": 40,
       "send": 20
+    }
+  },
+  "voice": {
+    "tts": {
+      "enabled": false,
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "rate": "+0%",
+      "max_chars": 300,
+      "cache_minutes": 60,
+      "timeout_ms": 20000
     }
   }
 }

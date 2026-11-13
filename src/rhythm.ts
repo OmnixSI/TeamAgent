@@ -36,7 +36,7 @@ export async function unansweredProactive(e: any, groupId: string, now = Date.no
     WHERE group_id=?1 AND outbox_id IS NOT NULL ORDER BY created_at DESC LIMIT 1),
   lastout AS (
     SELECT CASE WHEN instr(id,'~')>0 THEN substr(id,1,instr(id,'~')-1) ELSE id END AS base
-    FROM outbox WHERE group_id=?1 AND status IN ('pending','sent') AND id NOT LIKE '%~s'
+    FROM outbox WHERE group_id=?1 AND status IN ('pending','sent','voice','voice_sending') AND id NOT LIKE '%~s'
     ORDER BY created_at DESC LIMIT 1),
   after AS (
     SELECT m.mentioned,json_extract(mm.json,'$.replyTo.kind') AS rk
@@ -49,16 +49,23 @@ export async function unansweredProactive(e: any, groupId: string, now = Date.no
   return hardRuleHit(row, now, r);
 }
 export async function recordDecision(e: any, row: any): Promise<void> {
+  // chat_decisions is the durable reply marker for every merged source, not just
+  // outbox.msg_id (the tail). Preserve latest_id even for a partial batch input.
+  const batchIds = Array.isArray(row.batch_ids) ? row.batch_ids : JSON.parse(row.batch_ids || '[]');
+  const ids = [...new Set([...batchIds, row.latest_id].filter(Boolean))];
+  const covered = ids.length <= 60 ? ids : [...ids.filter(id => id !== row.latest_id).slice(0, 59), row.latest_id];
   await e.DB.prepare(`INSERT OR REPLACE INTO chat_decisions(id,group_id,latest_id,batch_ids,mentioned,forced,waited,gate,action,spoken_kind,target_id,wait_seconds,reason,outbox_id,policy,model_ms,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(row.id, row.group_id, row.latest_id, Array.isArray(row.batch_ids) ? JSON.stringify(row.batch_ids.slice(0, 60)) : row.batch_ids || "[]",
+    .bind(row.id, row.group_id, row.latest_id, JSON.stringify(covered),
       row.mentioned ? 1 : 0, row.forced ? 1 : 0, row.waited ? 1 : 0, row.gate || "model", row.action || "stop", row.spoken_kind || null,
       row.target_id || null, row.wait_seconds ?? null, row.reason || null, row.outbox_id || null, row.policy || "live", row.model_ms ?? null, row.created_at ?? Date.now()).run();
 }
-export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools"] as const;
+export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "gate:mode", "gate:config", "vision:provider", "vision:ds_model", "workers_ai:neurons_cap"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
-  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
+  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ") OR key IN ('voice:mode','tts:provider') OR key LIKE 'voice:mode:%'").bind(...SWITCH_KEYS).all()).results;
+  e.voiceSwitches = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith("voice:mode") || r.key === "tts:provider").map((r:any)=>[r.key,r.value]));
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
-  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  // Vision reads its provider/model from the same switch snapshot to avoid an extra D1 query per image.
+  return (e.switches = Object.fromEntries(rows.map((r: any) => [r.key, r.value])));
 }
 export const isOn = (sw: Record<string, string | undefined>, name: string) => sw["off:" + name] !== "1";

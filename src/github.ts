@@ -1,5 +1,5 @@
 /** Bounded, read-only GitHub access. Repository contents never authorize work. */
-import { REPOS } from "./policy";
+import { INITIAL_PROJECT_HINTS, REPOS } from "./policy";
 import { cutBytes, redactPatch, toolFailure } from "./repo";
 
 import denyGlobs from "../shared/deny_globs.json";
@@ -12,11 +12,16 @@ export function deniedPath(path: string): boolean {
   // A protected directory hides its descendants, including nested .git trees.
   return parts.includes(".git") || denyPatterns.some(r => r.test(lower) || parts.some(part => r.test(part)));
 }
-export function parseRepo(value: unknown): { owner: string; repo: string; full: string; listed: boolean } | null {
+export type RepoRef = { owner: string; repo: string; full: string; listed: boolean; ambiguous?: boolean; candidates?: string[] };
+const repoKey = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+// Repository names may be written with spaces, hyphens or underscores; all
+// three are presentation, not identity.
+const fuzzyKey = (value: string) => value.replace(/[\s_-]+/g, "").toLowerCase();
+export function parseRepo(value: unknown, aliases: Record<string, string[]> = INITIAL_PROJECT_HINTS,
+    repos: Iterable<string> = REPOS): RepoRef | null {
   if (typeof value !== "string") return null;
   let name = value.trim();
-  const alias = REPOS.find(r => r.toLowerCase() === name.toLowerCase() || r.split("/")[1].toLowerCase() === name.toLowerCase());
-  if (alias) name = alias;
+  if (!name) return null;
   if (/^https?:\/\//i.test(name)) {
     try {
       const url = new URL(name);
@@ -24,11 +29,24 @@ export function parseRepo(value: unknown): { owner: string; repo: string; full: 
       name = url.pathname.split("/").slice(1, 3).join("/");
     } catch { return null; }
   }
-  name = name.replace(/\.git$/, "");
+  name = name.replace(/\.git$/, "").replace(/\s+/g, "");
+  if (!name) return null;
+  // Resolve configured Chinese aliases and short names case-insensitively.
+  // Several hits are reported as ambiguous; never silently pick one.
+  const known = repos ? [...new Set(Array.from(repos).filter(repo => typeof repo === "string"))] : [];
+  const key = repoKey(name), fuzzy = fuzzyKey(name), hits = new Set<string>();
+  for (const [repo, list] of Object.entries(aliases || {})) {
+    if (!known.includes(repo) || !Array.isArray(list)) continue;
+    if (list.some(alias => typeof alias === "string" && (repoKey(alias) === key || fuzzyKey(alias) === fuzzy))) hits.add(repo);
+  }
+  if (!name.includes("/")) for (const repo of known) if (fuzzyKey(repo.split("/")[1]) === fuzzy) hits.add(repo);
+  if (hits.size > 1) return { owner: "", repo: "", full: "", listed: false, ambiguous: true, candidates: [...hits].sort() };
+  if (hits.size === 1) name = [...hits][0];
   const parts = name.split("/");
   if (parts.length !== 2 || !/^[A-Za-z0-9-]{1,39}$/.test(parts[0]) ||
       !/^[A-Za-z0-9._-]{1,100}$/.test(parts[1]) || [".", ".."].includes(parts[1])) return null;
-  const canonical = REPOS.find(r => r.toLowerCase() === name.toLowerCase());
+  const canonical = known.find(r => r.toLowerCase() === name.toLowerCase()) ||
+    known.find(r => fuzzyKey(r) === fuzzy);
   const full = canonical || name, [owner, repo] = full.split("/");
   return { owner, repo, full, listed: !!canonical };
 }
@@ -244,8 +262,8 @@ async function commits(c: Call, name: string, a: any, since: string | null, path
   return { repo: c.rp.full, sha7: String(data.sha || a.sha).slice(0, 7), files, hidden,
     message: redactKnown(c.e, String(data.commit?.message || "")).slice(0, 2000), untrusted: true };
 }
-export async function runCloudRepoTool(e: any, name: string, a: any): Promise<any> {
-  const rp = parseRepo(a?.repo), path = validPath(a?.path), mode = a?.mode ?? "read";
+export async function runCloudRepoTool(e: any, name: string, a: any, resolved?: RepoRef): Promise<any> {
+  const rp = resolved ?? parseRepo(a?.repo), path = validPath(a?.path), mode = a?.mode ?? "read";
   const since = name === "repo_changes" ? sinceISO(a?.since) : null;
   if (!rp || path === null || !validRef(a?.ref) || !["repo_file", "repo_changes", "repo_commit"].includes(name) ||
       name === "repo_commit" && (typeof a.sha !== "string" || !/^[a-f0-9]{7,40}$/i.test(a.sha)) ||

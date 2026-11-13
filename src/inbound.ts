@@ -1,12 +1,12 @@
 import { redact } from "./runtime";
 import {extractUrls} from './policy';
-import {scanBiliPayload,SHORT_HOSTS} from './bili-links';
+import {parseBiliTarget,scanBiliPayload} from './bili-links';
 import {BILI_CARD_NOTE,cleanCardTitle,isBiliCard,titleRef} from './bilititle';
 
 export type Mention = { id: string; name: string; isBot: boolean };
 export type Card = { type: string; name?: string; title?: string; desc?: string; url?: string; source?: string; preview?: string; note?: string };
 export type Media = { kind: "image" | "video" | "voice" | "file"; url?: string; contentType?: string; width?: number; height?: number; size?: number; filename?: string; asr?: string };
-export type Bili = { bvid?: string; aid?: string; short?: string; url: string };
+export type Bili = { bvid?: string; aid?: string; short?: string; page?: number; url: string };
 export type Quoted = { authorId?: string; authorName?: string; text: string; msgIdx?: string; media: Media[]; card?: Card; biliCard?: {title:string} };
 export type Inbound = {
   senderId: string; senderName: string; body: string;
@@ -43,16 +43,12 @@ export function parseCard(ark: any): Card | undefined {
 }
 export function extractBili(urls: string[], _text: string): Bili[] {
   return urls.flatMap<Bili>(url => {
-    let u: URL;
-    try { u = new URL(url); } catch { return []; }
-    if (SHORT_HOSTS.has(u.hostname)) {
-      const short = u.pathname.split("/").filter(Boolean)[0];
-      return short ? [{ url, short }] : [];
-    }
-    if (u.hostname !== "bilibili.com" && !u.hostname.endsWith(".bilibili.com")) return [];
-    const bvid = u.pathname.match(/\bBV[0-9A-Za-z]{10}\b/)?.[0] || u.searchParams.get('bvid')?.match(/^BV[0-9A-Za-z]{10}$/)?.[0];
-    const aid = u.pathname.match(/\bav\d+\b/i)?.[0];
-    return bvid || aid ? [{ url, ...(bvid ? { bvid } : { aid }) }] : [];
+    const target = parseBiliTarget(url);
+    if (!target) return [];
+    if (target.kind === 'short') return [{ url, short: target.base, page: target.page }];
+    if (target.kind === 'bv') return [{ url, bvid: target.base, page: target.page }];
+    if (target.kind === 'aid') return [{ url, aid: target.base, page: target.page }];
+    return [];
   });
 }
 export function mediaOf(attachments: any): Media[] {

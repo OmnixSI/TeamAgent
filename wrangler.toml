@@ -7,7 +7,7 @@ binding = "DB"
 database_name = "inkboard-team"
 database_id = "42e95fb2-16f8-46d9-bf32-34f3e88a4443"
 [triggers]
-crons = ["* * * * *"]
+crons = ["* * * * *", "*/5 * * * *"]
 [[queues.producers]]
 binding = "WORK"
 queue = "inkboard-team"
@@ -40,3 +40,13 @@ max_batch_size = 1
 max_batch_timeout = 1
 max_concurrency = 2
 max_retries = 2
+
+[ai]
+binding = "AI"
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
+
+[observability.logs]
+invocation_logs = false

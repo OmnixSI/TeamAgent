@@ -1,4 +1,5 @@
 import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
+import { biliNoteText } from "./fetchjobs";
 
 export type ViewMsg = {
   id: string; sortAt: number; ord: number; at: string; from: string; fromId: string;
@@ -78,6 +79,19 @@ function stamp(at: number) {
   const p = Object.fromEntries(parts.map(v => [v.type, v.value]));
   return { date: `${p.year}-${p.month}-${p.day}`, label: `${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
 }
+/** A voice transcript is evidence, so it carries the marker and a warning. */
+export function voiceText(media: any): string | undefined {
+  if (typeof media?.asr === "string" && media.asr.trim()) {
+    const marks =
+      "[语音转写]（自动转写，可能有误）" +
+      (media.asrTruncated === true ? "（语音较长，只转写了前 110 秒）" : "");
+    return marks + "\n" + media.asr.trim();
+  }
+  if (typeof media?.asrError?.reason_text === "string" && media.asrError.reason_text)
+    return "[语音] 转写失败：" + media.asrError.reason_text;
+  return undefined;
+}
+
 export function mediaViews(
   meta: any,
   messageId: string,
@@ -90,8 +104,10 @@ export function mediaViews(
     if (m.kind !== "image")
       return m.kind === "voice"
         ? m.asr
-          ? "语音转写：" + m.asr
-          : "语音"
+          ? "语音（已转写）"
+          : m.asrError
+            ? "语音（转写失败）"
+            : "语音"
         : m.kind === "video"
           ? "视频"
           : "文件" + (m.filename ? " " + m.filename : "");
@@ -124,9 +140,20 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
   const media = mediaViews(meta, row.id, imageNotes, imagePicks);
   if (media) material.media = media;
+  const voice = (Array.isArray(meta.media) ? meta.media : []).find((m: any) => m.kind === "voice");
+  const spoken = voice ? voiceText(voice) : undefined;
   const links = [...new Set<string>([...(meta.ownUrls || []), ...(meta.quotedUrls || [])])].slice(0, 5);
   if (links.length) material.links = links;
-  if (row.analysed_media) material.analysed = String(row.analysed_media).slice(0, 600);
+  if (row.analysed_media) {
+    let text = String(row.analysed_media);
+    if (text.startsWith("{")) {
+      try {
+        const note = JSON.parse(text);
+        if (note && typeof note.bvid === "string" && Array.isArray(note.comments)) text = biliNoteText(note);
+      } catch {}
+    }
+    material.analysed = text.slice(0, 600);
+  }
   const flags: NonNullable<ViewMsg["flags"]> = [];
   const mentionsBot = !!row.mentioned || mentions.some(m => m.isBot);
   if (mentionsBot) flags.push("mentionsYou");
@@ -136,7 +163,7 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
     id: row.id, sortAt, ord: row.ordinal || 0, at: stamp(sortAt).time,
     from: named(row.sender || "", names.get(row.sender) || meta.senderName, names), fromId: String(row.sender || "").slice(-6),
     to: addressee({ ...meta, mentionsBot }, names), re: target?.id,
-    text: displayText(String(row.body || ""), mentions) || meta.placeholder || "",
+    text: displayText(String(row.body || ""), mentions) || spoken || meta.placeholder || "",
     ...(Object.keys(material).length ? { material } : {}), ...(flags.length ? { flags } : {}),
   };
   mentionsOf.set(v, mentions);
