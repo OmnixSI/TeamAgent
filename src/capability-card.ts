@@ -26,7 +26,7 @@ const CARD_HEADER = "能力卡（当前部署真实存在的工具）：";
 const CARD_TAIL = "没列出的就是不能做，不要声称能做。";
 /** SK-2: how the model finds out about itself instead of guessing. */
 export const SELF_HINT =
-  "被问到你自己的能力怎么实现、用哪家模型/接口、跑在哪、开关、代码在哪、仓库怎么组成时，先调用 describe_self 取事实，需要代码细节再用 repo_file 读 OmnixSI/TeamAgent 并给出文件和大致行号；查不到就说没查到，不要猜，也不要输出任何密钥、令牌、凭据的值。";
+  "被问到你自己的能力怎么实现、用哪家模型/接口、跑在哪、开关、代码在哪、仓库怎么组成时，先调用 describe_self 取事实，需要代码细节再用 repo_file 读 OmnixSI/TeamAgent 并给出文件和大致行号；回答仓库怎么组成时要带上数据表数量和核心表、定时、队列、绑定、顶层目录与入口；查不到就说没查到，不要猜，也不要输出任何密钥、令牌、凭据的值。";
 /** Unknown tools get no invented constraint: their own description is the limit. */
 const DEFAULT_LIMIT = "";
 const EXTRA_LEAD = "还能：";
