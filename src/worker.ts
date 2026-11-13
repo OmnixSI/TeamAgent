@@ -6,7 +6,10 @@ import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
 import { stage, flushTail } from "./timing";
-import { quoteRef, quoteOutcome } from "./quote";
+import { quoteRef } from "./quote";
+import {enqueueText} from "./send/enqueue";
+import {claimStatements,resultStatements,releaseStatement,readyRowsSQL,recoverSendingSQL,prevId} from "./send/lane";
+import {sendOutcome} from "./send/codes";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
@@ -65,6 +68,7 @@ type Env = {
   QQ_APP_SECRET?: string;
   MODEL?: string;
   RELEASE?: string;
+  enqueued?: boolean;
 };
 const enc = new TextEncoder();
 const iso = () => new Date().toISOString();
@@ -366,18 +370,8 @@ async function receive(r: Request, e: Env) {
         .first())
     )
       await requestPlan(e, task, String(m.author.member_openid || m.author.id));
-    await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
-      .bind(
-        "ack-" + m.id,
-        m.group_openid,
-        m.id,
-        c.execute
-          ? "收到，方案整理好后会交给本机开发；进展写到团队开发台。"
-          : "收到，我会把详细方案整理到团队开发台。",
-        "pending",
-        Date.now(),
-      )
-      .run();
+    await enqueueText(e,{id:"ack-"+m.id,group:m.group_openid,msgId:m.id,body:c.execute
+      ?"收到，方案整理好后会交给本机开发；进展写到团队开发台。":"收到，我会把详细方案整理到团队开发台。"});
   } else if (!/^\/(绑定|登录)(?:\s|$)/.test(text)) {
     const recentTs = (await e.DB.prepare("SELECT ts FROM messages WHERE group_id=? ORDER BY rowid DESC LIMIT 10").bind(m.group_openid).all()).results;
     const humansLast2m = recentTs.filter((r: any) => Date.now() - Date.parse(r.ts) < 120000).length;
@@ -827,18 +821,7 @@ async function processJob(e: Env, id: string) {
             .bind(t.source_id)
             .first();
           if (source)
-            await e.DB.prepare(
-              "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)",
-            )
-              .bind(
-                "ready-" + t.id,
-                source.group_id,
-                t.source_id,
-                "方案已整理到团队开发台：" + t.title.slice(0, 120),
-                "pending",
-                Date.now(),
-              )
-              .run();
+            await enqueueText(e,{id:"ready-"+t.id,group:source.group_id,msgId:t.source_id,body:"方案已整理到团队开发台："+t.title.slice(0,120)});
         }
       }
     }
@@ -934,153 +917,100 @@ async function processJob(e: Env, id: string) {
   }
 }
 let qqToken: { app: string; value: string; expires: number } | undefined;
-async function sendOutbox(e: Env) {
+export async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
-  let rows = (
-    await e.DB.prepare(
-      "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
-    ).all()
-  ).results;
-  if (!rows.length) return;
-  let switches: Record<string, string | undefined> | undefined;
-  const stickerSources = new Map<string, any>();
-  const stickerRows = rows.filter((o: any) => o.id.endsWith("~s"));
-  if (stickerRows.length) {
-    if (left(e) < 2) return;
-    switches = await loadSwitches(e);
-    if (!stickerSendOn(switches, Date.now())) {
-      // One statement also keeps a disabled backlog within the invocation budget.
-      await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE status='pending' AND id IN ("+stickerRows.map(()=>"?").join(",")+")")
-        .bind(...stickerRows.map((o: any)=>o.id)).run();
-      rows = rows.filter((o: any)=>!o.id.endsWith("~s"));
-    } else for (const o of stickerRows) {
-      if (left(e) < 2) return;
-      const source = o.msg_id ? await e.DB.prepare("SELECT ts FROM messages WHERE id=?").bind(o.msg_id).first() : null;
-      if (!source || !(Date.now()-Date.parse(source.ts)<240000)) {
-        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
-        rows = rows.filter((r: any)=>r.id!==o.id);
-      } else stickerSources.set(o.id,source);
+  if (left(e)<19) { if(e.enqueued)await e.WORK?.send({send:1});return; }
+  const switches=await loadSwitches(e);
+  if(Number(switches['qq:muted_until']||0)>Date.now())return;
+  const unknownResend=switches['off:unknown_resend']==='0';
+  const rows=(await e.DB.prepare(readyRowsSQL(unknownResend)).bind(Date.now()).all()).results;
+  if(!rows.length)return;
+  const tok=crypto.randomUUID(),retryAt=new Map<string,number>();
+  let truncated=false,occupied=false;
+  for(const o of rows){
+    const sticker=o.id.endsWith('~s'),reserve=COST.send_row+(sticker?COST.sticker:0);
+    if(left(e)<reserve+2){truncated=true;break;}
+    if(o.status==='held'&&prevId(o.id)&&['failed','skipped'].includes(o.prev_status)){
+      await e.DB.batch([
+        e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status IN ('pending','retry','held')").bind(o.id),
+        e.DB.prepare("INSERT INTO outbox_send(id,reason) VALUES(?,'prev_failed') ON CONFLICT(id) DO UPDATE SET reason=excluded.reason").bind(o.id),
+      ]);continue;
     }
-    if (!rows.length) return;
-  }
-  if (!qqToken || qqToken.app !== e.QQ_APP_ID || qqToken.expires < Date.now()) {
-    const tokenR = await fetch("https://api.bot.qq.com/app/getAppAccessToken", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        appId: e.QQ_APP_ID,
-        clientSecret: e.QQ_APP_SECRET,
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!tokenR.ok) return;
-    const tok: any = await tokenR.json();
-    if (!tok.access_token) return;
-    qqToken = {
-      app: e.QQ_APP_ID,
-      value: tok.access_token,
-      expires:
-        Date.now() + Math.max(30, Number(tok.expires_in || 300) - 60) * 1000,
-    };
-  }
-  const accessToken = qqToken?.value;
-  if (!accessToken) return;
-  for (const o of rows) {
-    if (o.id.endsWith("~s")) {
-      if (!stickerSendOn(switches!, Date.now())) {
-        if (left(e) < 1) break;
-        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
-      } else {
-        if (left(e) < COST.send_row + COST.sticker) break;
-        const status = await sendSticker(e, o, accessToken, stickerSources.get(o.id), switches!, messageSequence(o.id));
-        if (status === 401) qqToken = undefined;
+    if(o.status==='held'&&o.prev_status!=='sent')continue;
+    if(sticker&&!stickerSendOn(switches,Date.now())){
+      await e.DB.batch([e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status IN ('pending','retry','held')").bind(o.id),
+        e.DB.prepare("INSERT INTO outbox_send(id,reason) VALUES(?,'sticker_disabled') ON CONFLICT(id) DO UPDATE SET reason=excluded.reason").bind(o.id)]);continue;
+    }
+    if (!qqToken || qqToken.app!==e.QQ_APP_ID || qqToken.expires<Date.now()) {
+      const response=await fetch('https://api.bot.qq.com/app/getAppAccessToken',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({appId:e.QQ_APP_ID,clientSecret:e.QQ_APP_SECRET}),signal:AbortSignal.timeout(10000)});
+      if(!response.ok)return;
+      const token:any=await response.json();if(!token.access_token)return;
+      qqToken={app:e.QQ_APP_ID,value:token.access_token,expires:Date.now()+Math.max(30,Number(token.expires_in||300)-60)*1000};
+    }
+    const accessToken=qqToken?.value;if(!accessToken)return;
+    let meta:any={};try{meta=JSON.parse(o.meta||'{}');}catch{}
+    for(let attempt=0;attempt<2;attempt++){
+      if(left(e)<reserve+2){truncated=true;break;}
+      const claim={tok,now:Date.now(),borrow:isOn(switches,'passive_borrow'),activeSeq:switches['qq:active_rejected']==='1'?null:messageSequence(o.id),unknownResend};
+      const locked=await e.DB.batch(claimStatements(e,o,claim));
+      if(!locked[2]?.results?.length){await releaseStatement(e,o.group_id,tok).run();occupied=true;break;}
+      const pair=locked[6]?.results?.[0];
+      const reference=!sticker&&pair?.reason!=='ref_invalid'&&typeof meta.reference==='string'&&isOn(switches,'quote')?meta.reference:undefined;
+      let http:number|null=null,result:any,outcome:ReturnType<typeof sendOutcome>|'no_passive'|'sticker_unavailable';
+      if(pair?.msg_seq==null)outcome='no_passive';
+      else {
+        try {
+          if(sticker){const receipt=await sendSticker(e,o,accessToken,pair.passive_msg_id,switches,pair.msg_seq,claim);http=receipt.http;result=receipt.result;outcome=receipt.skipped?'sticker_unavailable':sendOutcome(http??0,result,false);}
+          else {
+            const response=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+'/messages',{
+              method:'POST',headers:{Authorization:'QQBot '+accessToken,'Content-Type':'application/json'},
+              body:JSON.stringify({content:o.body.slice(0,4000),msg_type:0,...(pair.passive_msg_id?{msg_id:pair.passive_msg_id}:{}),msg_seq:pair.msg_seq,...(reference?{message_reference:{message_id:reference}}:{})}),signal:AbortSignal.timeout(20000)});
+            http=response.status;try{result=await response.json();}catch{}
+            outcome=sendOutcome(http,result,!!reference);
+          }
+        }catch{outcome='unknown';}
       }
-      continue;
-    }
-    if (left(e) < COST.send_row) break;
-    let meta: any = {};
-    if (o.meta) {
-      try { meta = JSON.parse(o.meta); } catch {}
-      switches ??= await loadSwitches(e);
-    }
-    const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
-    const locked = await e.DB.prepare(
-      "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
-    )
-      .bind(o.id)
-      .first();
-    if (!locked) continue;
-    await e.DB.prepare(
-      "INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)",
-    )
-      .bind(o.id, Date.now())
-      .run();
-    try {
-      const source = o.msg_id
-        ? await e.DB.prepare("SELECT ts FROM messages WHERE id=?")
-            .bind(o.msg_id)
-            .first()
-        : null;
-      const send = (ref?: string, increment = 0) => fetch(
-        "https://api.bot.qq.com/v2/groups/" + encodeURIComponent(o.group_id) + "/messages",
-        {
-          method: "POST",
-          headers: { Authorization: "QQBot " + accessToken, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: o.body.slice(0, 4000), msg_type: 0,
-            msg_id: source && Date.now() - Date.parse(source.ts) < 240000 ? o.msg_id : undefined,
-            msg_seq: messageSequence(o.id) + increment,
-            ...(ref ? { message_reference: { message_id: ref } } : {}),
-          }),
-          signal: AbortSignal.timeout(20000),
-        },
-      );
-      let response = await send(reference), result: any, recovered = false;
-      try { result = await response.json(); } catch {}
-      if (reference && quoteOutcome(response.status, result) === "maybe_ref") {
-        response = await send(undefined, 1);
-        result = undefined;
-        try { result = await response.json(); } catch {}
-        recovered = quoteOutcome(response.status, result) === "ok";
+      const tries=Number(pair?.tries||0)+1;
+      let status='failed',notBefore=0,clearPair=false;
+      if(outcome==='sent')status='sent';
+      else if(outcome==='unknown')status='unknown';
+      else if(outcome==='no_passive'||outcome==='sticker_unavailable')status='skipped';
+      else if(outcome==='ref_invalid'){status='retry';clearPair=true;notBefore=claim.now;}
+      else if(outcome==='passive_invalid'){status=pair?.reason==='passive_invalid'?'failed':'retry';clearPair=true;notBefore=claim.now;}
+      else if(outcome==='rate_limited'){status=tries>=3?'failed':'retry';notBefore=claim.now+30000*2**(tries-1);}
+      const receipt=await e.DB.batch(resultStatements(e,o,claim,{
+        status,reason:outcome==='sent'?null:outcome,http,code:String(result?.code??''),notBefore,clearPair,reference:!!reference,
+        refIdx:status==='sent'&&typeof result?.ext_info?.ref_idx==='string'?result.ext_info.ref_idx:undefined,
+        passiveInvalid:outcome==='passive_invalid'?pair?.passive_msg_id:undefined,
+        mutedUntil:outcome==='muted'?claim.now+600000:undefined,
+      }));
+      if(status==='sent')stage(e,o.msg_id,'sent');
+      const failures=outcome==='ref_invalid'?Number(receipt.flatMap((r:any)=>r.results||[]).find((r:any)=>r.value!==undefined)?.value||0):0;
+      if(failures>=3){
+        await e.DB.prepare("INSERT INTO settings VALUES('off:quote','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+        await activity(e,'quote.disabled','quote','Bot','引用连续失败，已自动关闭引用回复');switches['off:quote']='1';
       }
-      const status =
-        response.ok && (result?.id || result?.code === 0)
-          ? "sent"
-          : response.status >= 500 || !result
-            ? "unknown"
-            : "failed";
-      const sent = await e.DB.batch([
-        e.DB.prepare("UPDATE outbox SET status=? WHERE id=?").bind(
-          status,
-          o.id,
-        ),
-        e.DB.prepare(
-          "UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?",
-        ).bind(response.status, String(result?.code || ""), o.id),
-        ...(status === "sent" && typeof result?.ext_info?.ref_idx === "string"
-          ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'bot',?,?,?)").bind(result.ext_info.ref_idx, o.id, o.group_id, Date.now())]
-          : []),
-        ...(reference && status === "sent" ? [recovered
-          ? e.DB.prepare("INSERT INTO settings VALUES('quote_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value")
-          : e.DB.prepare("UPDATE settings SET value='0' WHERE key='quote_fail' AND value!='0'")] : []),
-      ]);
-      if (status === "sent") stage(e, o.msg_id, "sent");
-      if (reference && status === "sent") {
-        const failures = recovered ? Number(sent.at(-1)?.results?.[0]?.value || 0) : 0;
-        switches!.quote_fail = String(failures);
-        if (failures >= 3) {
-          await e.DB.prepare("INSERT INTO settings VALUES('off:quote','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
-          await activity(e, "quote.disabled", "quote", "Bot", "引用连续失败，已自动关闭引用回复");
-          switches!["off:quote"] = "1";
-        }
-      }
-      if (response.status === 401) qqToken = undefined;
-    } catch {
-      await e.DB.prepare("UPDATE outbox SET status='unknown' WHERE id=?")
-        .bind(o.id)
-        .run();
+      if(http===401)qqToken=undefined;
+      if(outcome==='muted'){switches['qq:muted_until']=String(claim.now+600000);return;}
+      o.reason=outcome==='sent'?null:outcome;o.tries=tries;
+      if(status==='retry')retryAt.set(o.id,notBefore);else retryAt.delete(o.id);
+      if(status!=='retry'||!['ref_invalid','passive_invalid'].includes(outcome)||attempt===1)break;
     }
+    if(occupied||truncated)break;
   }
+  if(occupied)return;
+  const next=Math.min(...retryAt.values());
+  if(truncated||next<=Date.now()+900000)await e.WORK?.send({send:1},!truncated&&next>Date.now()?{delaySeconds:Math.ceil((next-Date.now())/1000)}:undefined);
+}
+
+export async function pruneEventLayer(e:any){
+ const now=Date.now();await e.DB.batch([
+  e.DB.prepare('DELETE FROM passive_claims WHERE source_ts<?').bind(now-3600000),
+  e.DB.prepare('DELETE FROM outbox_send WHERE id IN (SELECT id FROM outbox WHERE created_at<?)').bind(now-7*86400000),
+  e.DB.prepare('DELETE FROM message_refs WHERE created_at<?').bind(now-30*86400000),
+ ]);
 }
 
 export async function optionalCron(e: any, fn: () => Promise<any>, cost: number) {
@@ -1172,10 +1102,11 @@ async function scheduled(e: Env) {
     .bind(Date.now())
     .run();
   await e.DB.prepare(
-    "UPDATE outbox SET status='unknown' WHERE status='sending' AND id IN (SELECT id FROM outbox_attempts WHERE started_at<?)",
+    recoverSendingSQL,
   )
     .bind(Date.now() - 120000)
     .run();
+  await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE status IN ('pending','retry','held') AND created_at<?").bind(Date.now()-900000).run();
   const sampleAt = Math.floor(Date.now() / 300000) * 300000;
   const gateway = JSON.parse((await setting(e, "qq_gateway")) || "null");
   const runnerAt = Date.parse((await setting(e, "runner_seen")) || "");
@@ -1222,6 +1153,7 @@ async function scheduled(e: Env) {
     .run();
   if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
+  await optionalCron(e, () => pruneEventLayer(e), 3);
   await retryStickerTags(e);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
@@ -2189,16 +2121,7 @@ async function api(r: Request, e: Env) {
     if (path.endsWith("/announce")) {
       const group = await setting(e, "group_id");
       if (!group) return json({ error: "group unbound" }, 409);
-      await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
-        .bind(
-          "setup-welcome",
-          group,
-          null,
-          "已接入。普通讨论会安静整理进记忆；@我可以聊天。详细方案用 /方案 仓库名 需求，自动开发用 /开工 仓库名 需求。团队开发台已上线。",
-          "pending",
-          Date.now(),
-        )
-        .run();
+      await enqueueText(e,{id:"setup-welcome",group,msgId:null,body:"已接入。普通讨论会安静整理进记忆；@我可以聊天。详细方案用 /方案 仓库名 需求，自动开发用 /开工 仓库名 需求。团队开发台已上线。"});
       await sendOutbox(e);
       return json({ ok: true });
     }
@@ -2386,7 +2309,7 @@ export default {
     for (let i = 0; i < batch.messages.length; i++) {
       const m = batch.messages[i];
       e = metered(base);
-      await processJob(e, m.body.id);
+      if(!m.body.send)await processJob(e, m.body.id);
       if (i < batch.messages.length - 1) await flushTail(e);
       m.ack();
     }

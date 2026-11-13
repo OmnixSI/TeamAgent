@@ -10,6 +10,8 @@ const {metered,left,COST,stage,flushTail,fragments,fetcherSeen}=await import('..
 const counts={};function save(){mkdirSync('.agent',{recursive:true});writeFileSync('.agent/fastlinks-counts.json',JSON.stringify(counts,null,2));}
 async function measured(base,label,run){const e=metered(base),before=base.DB.executed;await run(e);const used=e.meter.used;assert.equal(used,base.DB.executed-before,label);assert.ok(used<=48,label+' '+used);counts[label]=used;save();return used;}
 const queue=(e,id)=>worker.queue({messages:[{body:{id},ack(){}}]},e);
+const sendQueue=e=>worker.queue({messages:[{body:{send:1},ack(){}}]},e);
+async function completeSend(base,label,bind){for(let i=0;i<3;i++)await measured(base,label+'-send-'+i,e=>{bind?.(e);return sendQueue(e);});}
 const stages=e=>e.DB.prepare('SELECT * FROM stage_timings ORDER BY at').all().then(x=>x.results);
 test('P0a stage is memory-only and five points flush as one SQL execution',async()=>{
  const base=env(),e=metered(base),before=base.DB.executed;for(let i=0;i<5;i++)stage(e,'t','model_start',{kind:'chat'});
@@ -42,9 +44,9 @@ async function imageFixture(){const e=env();e.QQ_APP_ID='fastlinks-budget';await
 test('P0a three images, a reference and both segments send before the timing tail',async()=>{
  const {e,id}=await imageFixture(),old=globalThis.fetch,sent=[];let active;globalThis.fetch=async(target,opt)=>{
  const u=String(target);if(u.endsWith('.png'))return new Response(new TextEncoder().encode(u),{headers:{'content-type':'image/png'}});if(u.includes('getAppAccessToken'))return Response.json({access_token:'fake',expires_in:300});
- const b=JSON.parse(opt.body);if(!b.messages){sent.push(b);assert.equal(active.tail.timing.filter(r=>r.turn===id&&r.stage==='sent').length,sent.length-1,'tail is still in memory while sending');return Response.json({id:'ok',ext_info:{ref_idx:'FAST-BOT-'+sent.length}});}
+ const b=JSON.parse(opt.body);if(!b.messages){sent.push(b);assert.equal(active.tail.timing.filter(r=>r.turn===id&&r.stage==='sent').length,0,'each invocation keeps its sent stage in memory until after its HTTP call');return Response.json({id:'ok',ext_info:{ref_idx:'FAST-BOT-'+sent.length}});}
  return Response.json({choices:[{message:{content:b.reasoning_effort==='none'?'{"desc":"图片资料","text":"","tags":[],"meme":false}':b.messages[0].content.includes('最后的嘴替模块')?voice:JSON.stringify({action:'reply',kind:'direct',target:'reference',brief:'按实际资料回复'})}}]});};
- try{await measured(e,'P0a-B3-image',x=>{active=x;return queue(x,'chat-'+id);});await measured(e,'P0a-B3-answer',x=>{active=x;return queue(x,'chat-v-'+id);});assert.equal(sent.length,2);assert.ok(sent[0].message_reference);const points=(await stages(e)).filter(r=>r.turn_id===id);for(const name of ['chat_claimed','model_start','model_end','outbox','sent'])assert.ok(points.some(r=>r.stage===name),name);assert.equal(points.filter(r=>r.stage==='sent').length,2);}finally{globalThis.fetch=old;}
+ try{await measured(e,'P0a-B3-image',x=>{active=x;return queue(x,'chat-'+id);});await measured(e,'P0a-B3-answer',x=>{active=x;return queue(x,'chat-v-'+id);});await completeSend(e,'P0a-B3',x=>{active=x;});assert.equal(sent.length,2);assert.ok(sent[0].message_reference);const points=(await stages(e)).filter(r=>r.turn_id===id);for(const name of ['chat_claimed','model_start','model_end','outbox','sent'])assert.ok(points.some(r=>r.stage===name),name);assert.equal(points.filter(r=>r.stage==='sent').length,2);}finally{globalThis.fetch=old;}
 });
 
 test('P0a unserializable optional timing is dropped without throwing',async()=>{
@@ -73,9 +75,9 @@ test('P0a video wait, claim, report, reply and cached follow-up have correlated 
  let job;await measured(base,'P0a-fetch-claim',async e=>{const r=await req(e,'/api/runner/fetch/claim',{},'runner-secret');assert.equal(r.status,200);job=(await r.json()).job;assert.ok(job);});
  await measured(base,'P0a-fetch-report',async e=>{const r=await req(e,'/api/runner/fetch/report',{id:job.id,lease:job.payload.lease,success:true,result:videoResult},'runner-secret');assert.equal(r.status,200);});
  const points=await stages(base);for(const name of ['fetch_claimed','fetch_reported','wait_woken'])assert.ok(points.some(r=>r.turn_id===id&&r.stage===name),name);
- await modelFixture(async state=>{await measured(base,'P0a-video-reply',e=>queue(e,'video-vw-'+id));assert.equal(state.sent.length,2);});
+ await modelFixture(async state=>{await measured(base,'P0a-video-reply',e=>queue(e,'video-vw-'+id));await completeSend(base,'P0a-video-reply');assert.equal(state.sent.length,2);});
  const cached=splitId('chat-');await qq(base,msg(cached,'再看这个 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');
- await modelFixture(async state=>{await measured(base,'P0a-bili-cache-hit',e=>queue(e,'chat-'+cached));assert.equal(state.sent.length,2);});
+ await modelFixture(async state=>{await measured(base,'P0a-bili-cache-hit',e=>queue(e,'chat-'+cached));await completeSend(base,'P0a-bili-cache-hit');assert.equal(state.sent.length,2);});
  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='fetch'").first()).n,1);
  assert.ok(!(await stages(base)).some(r=>r.turn_id===cached&&r.stage==='fetch_claimed'));
 });
@@ -107,7 +109,7 @@ test('P0a cron removes seven-day-old timing only on minute zero',async()=>{
 });
 test('P0a research handoff stays durable and records its source turn',async()=>{
  const base=env(),id=splitId('chat-');base.QQ_APP_ID='fast-handoff';await req(base,'/api/admin/bind',{groupId:'GROUP000001'});await qq(base,msg(id,'请读这个 https://example.com/doc'),'GROUP_AT_MESSAGE_CREATE');
- await modelFixture(async state=>{await measured(base,'P0a-research-handoff',e=>queue(e,'chat-'+id));assert.equal(state.sent.length,2);},n=>n===1?[{id:'read',type:'function',function:{name:'read_web',arguments:'{"url":"https://example.com/doc"}'}}]:null);
+ await modelFixture(async state=>{await measured(base,'P0a-research-handoff',e=>queue(e,'chat-'+id));await completeSend(base,'P0a-research-handoff');assert.equal(state.sent.length,2);},n=>n===1?[{id:'read',type:'function',function:{name:'read_web',arguments:'{"url":"https://example.com/doc"}'}}]:null);
  assert.ok(await base.DB.prepare('SELECT id FROM jobs WHERE id=?').bind('research-'+id).first());assert.ok((await stages(base)).some(r=>r.turn_id===id&&r.stage==='research_queued'));assert.ok(!(await stages(base)).some(r=>r.stage==='inline_read'));
 });
 test('P0a a multi-message delivery flushes each source buffer without losing earlier stages',async()=>{
