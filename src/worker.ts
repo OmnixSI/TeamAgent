@@ -1,3 +1,4 @@
+import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
@@ -497,7 +498,7 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
     .bind(now + 660000, id, now, now)
     .first();
@@ -727,6 +728,15 @@ async function processJob(e: Env, id: string) {
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
+      const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;
+      if(videoPlan?.media==='start'){
+        if(await startVideoWait(e,{groupId:m.group_id,ref:ref!,title:target?.title,latest,batchIds:batch.map((r:any)=>r.id),mentioned,lightReady:true})){
+          await recordDecision(e,{...decisionRow,gate:'video',action:'reply',forced:true});
+          await advanceCursor(e,m.group_id,cursor,batch);
+          await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();return;
+        }
+        videoPlan.materials.push(mediaFailMaterial('pending',cached as any));
+      }
       const failure = ref && !cached ? await biliFailure(e, ref) : null;
       if (failure && mentioned) {
         await enqueueVoice(e, id, latest.group_id, latest.id, biliFailReply(failure, {title:isTitleRef(ref!)}));
@@ -756,7 +766,7 @@ async function processJob(e: Env, id: string) {
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
-        ...(cached ? { materials: [videoMaterial(cached,ref || '')] } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
+        ...(cached ? { materials: videoPlan?.materials ?? [videoMaterial(cached,ref || '')] } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
@@ -1155,7 +1165,7 @@ async function scheduled(e: Env) {
   await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now(), Date.now())
       .all()
