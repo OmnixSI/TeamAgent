@@ -168,8 +168,9 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
   base.AI={async run(){visionCalls++;return {response:'{"desc":"图中有红圆","tags":[],"meme":false}'};}};
   globalThis.fetch=async(url,options)=>{
     if(String(url).endsWith('.png'))return new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'image/png'}});
-    const b=JSON.parse(options.body),voice=b.messages[0].content.includes('最后的嘴替模块');
-    let content;if(b.reasoning_effort==='none'){visionCalls++;content='{"desc":"图中有红圆","text":"","tags":[],"meme":false}';}
+    const b=JSON.parse(options.body),first=b.messages?.[0]?.content,voice=typeof first==='string'&&first.includes('最后的嘴替模块');
+    const imageRequest=Array.isArray(first)&&first.some(p=>p.type==='image_url');
+    let content;if(imageRequest||b.reasoning_effort==='none'){visionCalls++;content='{"desc":"图中有红圆","text":"","tags":[],"meme":false}';}
     else if(voice)content='{"mode":"work","text":"图中有红圆。"}';
     else{decisions++;content='{"should_reply":true,"kind":"direct","brief":"红圆"}';}
     return Response.json({choices:[{message:{content}}]});
@@ -190,7 +191,8 @@ async function decide(action,run,options={}){
   globalThis.fetch=async(url,init)=>{
     if(String(url).endsWith('.png')){state.images++;return new Response(new Uint8Array([3,2,1]),{headers:{'content-type':'image/png'}});}
     const b=JSON.parse(init.body);state.seen.push(b);let message;
-    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    const imageRequest=Array.isArray(b.messages?.[0]?.content)&&b.messages[0].content.some(p=>p.type==='image_url');
+    if(imageRequest||b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
     else if(b.messages[0].content.includes('最后的嘴替模块')){state.voices++;message={content:JSON.stringify({mode:'work',text:options.text||'这是当前问题的回答。'})};}
     else{state.decisions++;message=typeof action==='function'?action(state.decisions,b):{content:JSON.stringify(action)};}
     return Response.json({choices:[{message}]});
@@ -416,7 +418,8 @@ async function budgetModel(run,{calls,voice=splitVoice}={}){
     const b=JSON.parse(init.body);
     if(!b.messages){state.sent.push(b);return Response.json({id:'qq-'+state.sent.length,ext_info:{ref_idx:'BOT-'+state.sent.length}});}
     let message;
-    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    const imageRequest=Array.isArray(b.messages?.[0]?.content)&&b.messages[0].content.some(p=>p.type==='image_url');
+    if(imageRequest||b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
     else if(b.messages[0].content.includes('最后的嘴替模块'))message={content:voice};
     else{state.decisions++;state.requests.push(structuredClone(b));message=calls?calls(state.decisions,b):{content:'{"action":"reply","kind":"direct","target":"budget-reference","brief":"具体问题"}'};}
     return Response.json({choices:[{message}]});

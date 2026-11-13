@@ -9,6 +9,12 @@ await build({ entryPoints: ['src/vision.ts'], bundle: true, format: 'esm', platf
 const v = await import('../' + outfile);
 const bytes = Uint8Array.from(Buffer.from(v.SELFTEST_PNG, 'base64'));
 const signal = () => new AbortController().signal;
+// F6P 默认链路改为 DeepSeek；这组用例只覆盖 Workers AI 绑定，显式固定 provider。
+async function workersEnv() {
+  const e = env();
+  await e.DB.prepare("INSERT OR REPLACE INTO settings VALUES('vision:provider','workers')").run();
+  return e;
+}
 const answer = { desc: '红色测试图', text: 'TEST', tags: ['测试'], meme: false };
 function binding(e, run = async () => ({ response: JSON.stringify(answer), usage: { prompt_tokens: 12, completion_tokens: 8 } })) {
   const calls = [];
@@ -22,7 +28,7 @@ async function offline(fetcher, run) {
 }
 
 test('F6-V1 image reaches AI binding, never DeepSeek; prompt redacted and model usage retained', async () => {
-  const e = env(), calls = binding(e);
+  const e = await workersEnv(), calls = binding(e);
   const note = await offline(() => assert.fail('no HTTP model request'), () =>
     v.describeBytes(e, bytes, 'image/png', 'Authorization: secret-token', signal()));
   assert.equal(note?.desc, answer.desc);
@@ -36,7 +42,7 @@ test('F6-V1 image reaches AI binding, never DeepSeek; prompt redacted and model 
 });
 
 test('F6-V2 concurrent identical image shares budget/model and persists one cache note', async () => {
-  const e = env(), calls = binding(e, async () => {
+  const e = await workersEnv(), calls = binding(e, async () => {
     await new Promise(resolve => setTimeout(resolve, 20));
     return { response: JSON.stringify(answer) };
   });
@@ -51,7 +57,7 @@ test('F6-V2 concurrent identical image shares budget/model and persists one cach
 });
 
 test('F6-V7 concurrent failed descriptions preserve quota reason for every image and allow retry', async () => {
-  const e = env();
+  const e = await workersEnv();
   binding(e, async () => {
     await new Promise(r => setTimeout(r, 30));
     throw Object.assign(Error('quota'), { status: 429 });
@@ -74,7 +80,7 @@ for (const [name, setup, fetcher, kind, reason] of [
   ['Workers AI timeout code', e => binding(e, async () => { throw Error('AiError: 3007: Request timeout'); }), null, 'timeout', /超时/],
   ['daily cap', async e => { binding(e); const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(new Date()); await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('budget:vision:' + day, '300').run(); }, null, 'budget', /预算/],
 ]) test('F6-V3 structured failure: ' + name, async () => {
-  const e = env(); await setup(e);
+  const e = await workersEnv(); await setup(e);
   const outcomes = await offline(fetcher || (() => new Response(bytes, { headers: { 'content-type': 'image/png' } })), () =>
     v.annotateTurn(e, [{ messageId: 'failure', idx: 0, media: { kind: 'image', url: 'https://gchat.qpic.cn/test.png' }, hint: '' }], 500));
   assert.equal(outcomes[0].ok, false);
@@ -88,7 +94,7 @@ for (const [name, setup, fetcher, kind, reason] of [
 });
 
 test('F6-V4 deadline returns timeout; late binding result cannot populate cache; retry works', async () => {
-  const e = env(); let resolve;
+  const e = await workersEnv(); let resolve;
   binding(e, () => new Promise(r => { resolve = r; }));
   const outcomes = await offline(() => new Response(bytes, { headers: { 'content-type': 'image/png' } }), () =>
     v.annotateTurn(e, [{ messageId: 'slow', idx: 0, media: { kind: 'image', url: 'https://gchat.qpic.cn/slow.png' }, hint: '' }], 500));
@@ -101,7 +107,7 @@ test('F6-V4 deadline returns timeout; late binding result cannot populate cache;
 });
 
 test('F6-V6 owner smoke endpoint calls real provider path without D1 writes and returns safe failure', async () => {
-  const e = env(); binding(e);
+  const e = await workersEnv(); binding(e);
   const before = (await e.DB.prepare('SELECT COUNT(*) n FROM model_runs').first()).n;
   const result = await (await req(e, '/api/team/vision/selftest')).json();
   assert.equal(result.ok, true);
@@ -115,7 +121,7 @@ test('F6-V6 owner smoke endpoint calls real provider path without D1 writes and 
 
 test('F6-V5 real msg305/383/384 metadata replay: expired download then test data URL → linked descriptions', async () => {
   const fixture = JSON.parse(readFileSync(new URL('./fixtures/f6-vision-history.json', import.meta.url)));
-  const rows = fixture.rows, e = env(), calls = binding(e);
+  const rows = fixture.rows, e = await workersEnv(), calls = binding(e);
   const first = v.pickImages(rows.slice(0, 2), rows.find(r => r.ordinal === 305), new Map());
   assert.deepEqual(first.map(p => p.messageId), ['history-304']);
   const second = v.pickImages(rows.slice(2), rows.find(r => r.ordinal === 386), new Map([['history-383', rows.find(r => r.ordinal === 383)]]));

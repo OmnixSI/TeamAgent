@@ -55,10 +55,11 @@ export async function recordDecision(e: any, row: any): Promise<void> {
       row.mentioned ? 1 : 0, row.forced ? 1 : 0, row.waited ? 1 : 0, row.gate || "model", row.action || "stop", row.spoken_kind || null,
       row.target_id || null, row.wait_seconds ?? null, row.reason || null, row.outbox_id || null, row.policy || "live", row.model_ms ?? null, row.created_at ?? Date.now()).run();
 }
-export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools"] as const;
+export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "vision:provider", "vision:ds_model"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
   const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
-  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  // Vision reads its provider/model from the same switch snapshot to avoid an extra D1 query per image.
+  return (e.switches = Object.fromEntries(rows.map((r: any) => [r.key, r.value])));
 }
 export const isOn = (sw: Record<string, string | undefined>, name: string) => sw["off:" + name] !== "1";
