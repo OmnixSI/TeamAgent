@@ -16,7 +16,6 @@ const VISION_TIMEOUT_MS = 25_000;
 const EST_COST_MICRO_USD = 225; // one page at $0.225 / 1,000 pages
 const FALLBACK_HINT =
   "只提取图中可见文字，原样输出；不要描述人物、不要猜测；图中没有文字就返回空。";
-const SUCCESS_NEXT_ACTION = "只引用识别出的文字；看不清或疑似异常就说明可能不准，不要补全。";
 
 type VisionModule = typeof import("../vision");
 type FetchImage = VisionModule["fetchImage"];
@@ -331,7 +330,7 @@ export function createReadImageTextTool(deps: ReadImageTextDeps = {}): BotTool {
         return fail("invalid_args", "需要 message_id：让成员重新发一次图片再问。", "没有指定消息");
       }
       const row = await e.DB.prepare(
-        "SELECT m.id,m.group_id,m.sender,m.body,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=? AND m.group_id=?",
+        "SELECT m.id,m.group_id,m.sender,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.id=? AND m.group_id=?",
       )
         .bind(messageId, groupId)
         .first();
