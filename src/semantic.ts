@@ -884,7 +884,7 @@ async function answerWithTools(e: any, context: any) {
         },
       },
     },
-    ...extraToolDefs(),
+    ...(await extraToolDefs(e, context)),
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
