@@ -23,7 +23,7 @@ export async function listMessages(e: any, q: HistoryQuery): Promise<HistoryRow[
   if (q.beforeTs) { where.push("ts<?"); args.push(q.beforeTs); }
   if (q.sender) { where.push("sender=?"); args.push(q.sender); }
   for (const t of (q.terms || []).slice(0, 6)) { if (!t) continue; where.push("body LIKE ? ESCAPE '\\'"); args.push(like(t.slice(0, 40))); }
-  const limit = Math.min(200, Math.max(1, q.limit || 50));
+  const limit = Math.min(200, Math.max(1, q.limit ?? 50));
   const rows = (await e.DB.prepare(
     "SELECT id,sender,body,ts,mentioned FROM messages WHERE " + where.join(" AND ") + " ORDER BY ts " + (q.newestFirst === false ? "ASC" : "DESC") + " LIMIT ?",
   ).bind(...args, limit).all()).results as HistoryRow[];
