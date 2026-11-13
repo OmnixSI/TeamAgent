@@ -106,9 +106,14 @@ export async function runWorkersAi<T = any>(
   body: any,
 ): Promise<T> {
   if (typeof e.AI?.run !== "function") throw new Error("AI binding unavailable");
-  // DB-less callers are the owner smoke path (`DB: undefined`), which must not
-  // write production counters; it also has nowhere to keep a hold.
-  if (!e.DB) return e.AI.run(model, body) as Promise<T>;
+  // The owner smoke path runs with `DB: undefined` so it writes no business
+  // data, but its Workers AI spend still counts: it passes the real database as
+  // `aiBudgetDB` and the same hold/cap applies. No database at all means a
+  // caller that cannot account, which is refused rather than left uncapped.
+  if (!e.DB) {
+    if (!e.aiBudgetDB) throw new WorkersAiBudgetFault();
+    e = { ...e, DB: e.aiBudgetDB };
+  }
   const at = Date.now();
   const hold = estimateNeurons(model, body);
   const cap = await aiNeuronsCap(e);

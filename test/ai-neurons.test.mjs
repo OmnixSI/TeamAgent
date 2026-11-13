@@ -9,6 +9,7 @@ await build({
     contents:
       'export { describeBytes, applyImageOutcomes } from "./src/vision";' +
       'export { reserve, refund, adjust } from "./src/budget";' +
+      'export { runWorkersAi } from "./src/ai-budget";' +
       'export { estimateNeurons, actualNeurons, aiNeuronsCap, AI_NEURONS_DAILY_CAP } from "./src/ai-budget";',
     resolveDir: process.cwd(),
     loader: "ts",
@@ -112,8 +113,8 @@ test("CF-AI-3 超限退回 DeepSeek 并带标注", async () => {
 
 test("CF-AI-4 跨日重置", async () => {
   const e = env();
-  const day1 = Date.parse("2026-11-14T00:00:00+11:00");
-  const day2 = Date.parse("2026-11-15T00:00:00+11:00");
+  const day1 = Date.parse("2026-11-14T00:00:00Z");
+  const day2 = Date.parse("2026-11-15T00:00:00Z");
   assert.equal(await v.reserve(e, "workers_ai_neurons", 35, 35, day1), true);
   assert.equal(await v.reserve(e, "workers_ai_neurons", 35, 35, day1), false);
   assert.equal(await v.reserve(e, "workers_ai_neurons", 35, 35, day2), true);
@@ -177,4 +178,31 @@ test("CF-AI-7 强制 workers 且额度用完：群回复用人话，不报原始
   ]);
   assert.match(notes.get("m")[0], /今天看图额度用完了/);
   assert.doesNotMatch(notes.get("m")[0], /workers_ai_neurons|binding|Error/);
+});
+
+test("CF-AI-8 悉尼跨日不翻倍：同一 UTC 日只有一份额度", async () => {
+  const e = env();
+  // 2026-11-14 12:59 Sydney-late and 2026-11-15 00:30 Sydney are the same UTC day.
+  const a = Date.parse("2026-11-14T12:59:00Z");
+  const b = Date.parse("2026-11-14T13:01:00Z"); // Sydney already rolled to 11-15
+  assert.equal(await v.reserve(e, "workers_ai_neurons", 35, 35, a), true);
+  assert.equal(await v.reserve(e, "workers_ai_neurons", 1, 35, b), false);
+});
+
+test("CF-AI-9 自检路径也过硬闸：额度为零时不调用 AI", async () => {
+  const e = env();
+  await setting(e, "workers_ai:neurons_cap", "0");
+  const calls = ai(e, () => ({ response: "x" }));
+  const smoke = { ...e, DB: undefined, aiBudgetDB: e.DB };
+  await assert.rejects(
+    () => v.runWorkersAi(smoke, "@cf/meta/llama-3.2-11b-vision-instruct", { messages: [] }),
+    (err) => err.reason === "provider_cap",
+  );
+  assert.equal(calls.length, 0);
+  // Without any database to account against, the call is refused too.
+  await assert.rejects(
+    () => v.runWorkersAi({ ...e, DB: undefined }, "@cf/meta/llama-3.2-11b-vision-instruct", { messages: [] }),
+    (err) => err.reason === "provider_cap",
+  );
+  assert.equal(calls.length, 0);
 });

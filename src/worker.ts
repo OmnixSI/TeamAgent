@@ -2028,7 +2028,7 @@ async function api(r: Request, e: Env) {
       return json({ error: "owner only" }, 403);
     const started = Date.now();
     try {
-      const provider = visionProvider({ ...e, DB: undefined }); // Smoke must not mutate production D1.
+      const provider = visionProvider({ ...e, DB: undefined, aiBudgetDB: e.DB }); // Smoke writes no business data; only the AI spend counter is shared.
       if (!provider)
         return json({ ok: false, error: "vision disabled" }, 503);
       const bytes = Uint8Array.from(atob(SELFTEST_PNG), (c) =>

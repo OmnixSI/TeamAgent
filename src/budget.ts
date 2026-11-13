@@ -13,6 +13,15 @@ function budgetKey(name: string, at: number) {
   return "budget:" + name + ":" + sydneyDay(at);
 }
 
+/**
+ * Held-units counters (reserve/refund/adjust) back provider quotas that reset at
+ * 00:00 UTC (Workers AI neurons), so they key on the UTC day. A Sydney-day key
+ * would allow two caps inside one UTC day.
+ */
+function utcBudgetKey(name: string, at: number) {
+  return "budget:" + name + ":utc:" + new Date(at).toISOString().slice(0, 10);
+}
+
 /** Atomic daily counter; the RETURNING value is the post-increment count. */
 export async function budget(
   e: any,
@@ -44,7 +53,7 @@ export async function reserve(
   const row = await e.DB.prepare(
     "INSERT INTO settings(key,value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+? WHERE CAST(value AS INTEGER)+? <= ? RETURNING value",
   )
-    .bind(budgetKey(name, at), String(n), n, n, cap)
+    .bind(utcBudgetKey(name, at), String(n), n, n, cap)
     .first();
   return !!row;
 }
@@ -61,7 +70,7 @@ export async function refund(
   await e.DB.prepare(
     "UPDATE settings SET value=MAX(0,CAST(value AS INTEGER)-?) WHERE key=?",
   )
-    .bind(n, budgetKey(name, at))
+    .bind(n, utcBudgetKey(name, at))
     .run();
 }
 
@@ -77,7 +86,7 @@ export async function adjust(
   await e.DB.prepare(
     "INSERT INTO settings(key,value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=MAX(0,CAST(value AS INTEGER)+?)",
   )
-    .bind(budgetKey(name, at), String(Math.max(0, d)), d)
+    .bind(utcBudgetKey(name, at), String(Math.max(0, d)), d)
     .run();
 }
 
