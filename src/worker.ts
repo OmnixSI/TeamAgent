@@ -13,7 +13,9 @@ import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
+import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { runCronExtras } from "./cron-extra";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -831,9 +833,19 @@ async function processJob(e: Env, id: string) {
         return;
       }
       const spoken = decodeVoice(answer).text !== "[[SILENT]]";
+      const forcedPath = mentioned || !!decision.forced || isDirectRequest(latest, { batch });
+      const gateMode = parseGateMode(sw["gate:mode"]);
+      const gate = spoken && gateMode !== "off" && !forcedPath ? await gateCheck(e, { groupId: latest.group_id, latest, mentioned, forced: forcedPath, now: Date.now(), settings: sw }) : null;
+      if (gate && !gate.speak && gateMode === "on") {
+        await recordDecision(e, { ...decisionRow, gate: "gate", action: "stop", forced: false, reason: "gate:" + gate.reason, model_ms: Date.now() - modelStarted });
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const shadowReason = gate && !gate.speak ? "gate_shadow:" + gate.reason : "";
       if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
       await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
-        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
+        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: [shadowReason, decision.reason].filter(Boolean).join(" ") || undefined, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
       await set(
         e,
@@ -1294,6 +1306,7 @@ async function scheduled(e: Env) {
   if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
   await retryStickerTags(e);
+  await optionalCron(e, () => runCronExtras(e), 2);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Finish mandatory maintenance before the sender spends its remaining budget.
