@@ -36,6 +36,18 @@ function targetOf(meta: any): VideoTarget | null {
   const title = meta.biliCard?.title, ref = typeof title === 'string' ? titleRef(title) : null;
   return ref ? {ref,title} : null;
 }
+/** A bare @ carries no content of its own; it may inherit the closest recent video. */
+function bareMention(latest: Row, meta = metaOf(latest)): boolean {
+  if (!latest?.mentioned) return false;
+  if (String(latest.body ?? "").replace(/<@!?[^>]+>/g, "").trim()) return false;
+  return !meta.placeholder && !(meta.media || []).length;
+}
+function recentLink(recent: Row[], latest: Row): VideoTarget | null {
+  const same = (recent || []).filter(r => r && (!latest.group_id || !r.group_id || r.group_id === latest.group_id));
+  const candidates = same.some(r => r.id === latest.id) ? same : [...same, latest];
+  for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
+  return null;
+}
 export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any): VideoTarget | null {
   if (!cfg.bili?.enabled) return null;
   const meta = metaOf(latest);
@@ -46,6 +58,7 @@ export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any)
   const ref = refIn(extractBili(meta.quotedBiliUrls ?? meta.quotedUrls ?? [], ""));
   if (ref) return {ref};
   const embedded = targetOf(meta.quoted || {}); if (embedded) return embedded;
+  if (bareMention(latest, meta)) { const inherited = recentLink(recent, latest); if (inherited) return inherited; }
   if (/视频|讲了?啥|讲的什么|说了什么|总结|值得看|up主/i.test(latest.body || "")) {
     const candidates = recent.some(r => r.id === latest.id) ? recent : [...recent, latest];
     for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
@@ -86,6 +99,17 @@ function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitC
 export async function requestBili(e: any, ref: string, tier: string, waiter: string): Promise<void> {
   if (!validRef(ref) || tier !== "light") throw Error("invalid fetch request");
   await fetchStatement(e, ref, tier, waiter).run();
+}
+/** A sender's own plain Bilibili link gets one silent light fetch; never reopen a job. */
+export async function prefetchBili(e: any, latest: Row, cfg: any): Promise<boolean> {
+  if (!cfg?.bili?.enabled || !latest || latest.mentioned) return false;
+  const ref = refIn(metaOf(latest).bili || []);
+  if (!ref || !validRef(ref) || isTitleRef(ref) || left(e) < 2) return false;
+  const note = await e.DB.prepare("SELECT created_at FROM media_notes WHERE id=?").bind("bili:" + ref).first();
+  if (note && Date.parse(note.created_at) >= Date.now() - 86400000) return false;
+  const row = await e.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,'fetch',?,?) ON CONFLICT(id) DO NOTHING RETURNING id")
+    .bind("fetch-bili-" + ref, JSON.stringify({ type: "bili", tier: "light", ref, waiters: [] }), Date.now()).first();
+  return !!row;
 }
 /** A committed handoff remains authoritative even after its reply finishes. */
 export async function videoWaitExists(e: any, groupId: string, latestId: string | string[]): Promise<boolean> {

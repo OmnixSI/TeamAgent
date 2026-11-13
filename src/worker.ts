@@ -13,7 +13,7 @@ import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected, prefetchBili } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -781,6 +781,7 @@ async function processJob(e: Env, id: string) {
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
+      if (!transferred) await prefetchBili(e, latest, TEAM);
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;
