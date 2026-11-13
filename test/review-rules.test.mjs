@@ -7,7 +7,7 @@ const output = `.wrangler/review-rules-${process.pid}.mjs`;
 await build({ stdin: { contents: `export * from './src/review/db.ts'; export * from './src/review/rules.ts'; export {metered} from './src/d1.ts';`, resolveDir: process.cwd() }, bundle: true, format: 'esm', platform: 'browser', outfile: output });
 const api = await import('../' + output);
 rmSync(output);
-const { reviewWrite, reviewRead, reviewBatch, metered, applyRequirements, advanceRules, revokeRule, activeRulesFor } = api;
+const { reviewWrite, reviewRead, reviewBatch, metered, applyRequirements, advanceRules, revokeRule, activeRulesFor, approveRule, applyMemoryCandidate, reviewWriteAdmin } = api;
 const now = Date.parse('2026-11-14T00:00:00Z'), day = 86400000;
 const run = (id = 'night1', at = now, group_id = 'g') => ({ id, group_id, now: at });
 const get = (e, sql, ...params) => e.DB.prepare(sql).bind(...params).first();
@@ -21,13 +21,14 @@ async function setup() {
   return e;
 }
 async function message(e, id, body, sender = 'bound', group = 'g', at = now) {
-  await e.DB.prepare('INSERT INTO messages(id,group_id,sender,body,ts) VALUES(?,?,?,?,?)').bind(id, group, sender, body, new Date(at).toISOString()).run();
+  await e.DB.prepare('INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,1)').bind(id, group, sender, body, new Date(at).toISOString()).run();
 }
-const req = (rule = '先给结论', scene = '回答', evidence = [{ source: 'message', id: 'original', quote: '以后先给结论' }], ttl_days = 30) => ({ rule, scene, evidence, ttl_days });
+const req = (rule = '先给结论', scene = '回答', evidence = [{ source: 'message', id: 'original', quote: '以后先给结论', origin: 'direct' }], ttl_days = 30) => ({ kind: 'free', params: {}, rule, scene, evidence, ttl_days });
 const ruleRow = async (e, id) => get(e, 'SELECT * FROM behavior_rules WHERE id=?', id);
 async function seed(e, id, status = 'canary', patch = {}) {
   const v = { group: 'g', rule: '先给结论', scene: '回答', until: status === 'active' ? now : now + 3 * day, expires: now + 30 * day, hits: 0, corrections: 0, ...patch };
   await e.DB.prepare(`INSERT INTO behavior_rules(id,group_id,rule,scene,evidence_json,source,status,canary_until,expires_at,hits,corrections,created_at,updated_at) VALUES(?,?,?,?,'[]','member:bound',?,?,?,?,?,?,?)`).bind(id,v.group,v.rule,v.scene,status,v.until,v.expires,v.hits,v.corrections,now,now).run();
+  for(let i=0;i<v.hits;i++) await e.DB.prepare("INSERT INTO review_consumed(kind,subject,event,run_id,created_at) VALUES('rule_hit',?,?,?,?)").bind(id,'seed'+i,'seed',now).run();
 }
 async function correction(e, finding, runId, quote = '纠正：不要再遵循「先给结论」', options = {}) {
   const mid = 'm-' + finding;
@@ -104,7 +105,7 @@ test('two distinct active corrections retire rule; same finding and overlapping 
   await advanceRules(e, run('night2',now+day)); await advanceRules(e, run('night2',now+day));
   assert.equal((await ruleRow(e,'r')).corrections,1); assert.equal((await ruleRow(e,'r')).status,'active');
   // A second finding about the same message is not a second member correction.
-  await e.DB.prepare("INSERT INTO review_findings SELECT 'f-duplicate','night3','tr-duplicate',failure_type,severity,fix_layer,gap_type,capability,should_use_tool,dimensions,evidence_json,what_happened,expected,root_cause,next_attempt_plan,confidence,status,fingerprint,reviewed_by,reviewed_at,created_at FROM review_findings WHERE id='f1'").run();
+  await e.DB.prepare("INSERT INTO review_findings(id,run_id,trace_id,failure_type,severity,fix_layer,gap_type,capability,should_use_tool,dimensions,evidence_json,what_happened,expected,root_cause,next_attempt_plan,confidence,status,fingerprint,reviewed_by,reviewed_at,created_at) SELECT 'f-duplicate','night3','tr-duplicate',failure_type,severity,fix_layer,gap_type,capability,should_use_tool,dimensions,evidence_json,what_happened,expected,root_cause,next_attempt_plan,confidence,status,fingerprint,reviewed_by,reviewed_at,created_at FROM review_findings WHERE id='f1'").run();
   await advanceRules(e,run('night3',now+2*day)); assert.equal((await ruleRow(e,'r')).corrections,1);
   await correction(e,'f2','night3'); await advanceRules(e,run('night3',now+2*day));
   assert.equal((await ruleRow(e,'r')).status,'retired'); assert.equal((await ruleRow(e,'r')).corrections,2);
@@ -208,7 +209,7 @@ test('quoted, forwarded and code-block evidence never authorizes a candidate',as
   const e=await setup();
   for(const [id,body,meta] of [['quoted','“以后先给结论”',{}],['code','```以后先给结论```',{}],['forward','以后先给结论',{forwarded:[{content:'以后先给结论'}]}]]) {
     await message(e,id,body); await e.DB.prepare('INSERT INTO message_meta VALUES(?,?)').bind(id,JSON.stringify(meta)).run();
-    assert.deepEqual(await applyRequirements(e,run(),[req('先给结论','回答',[{source:'message',id,quote:'以后先给结论'}])]),[]);
+    assert.deepEqual(await applyRequirements(e,run(),[req('先给结论','回答',[{source:'message',id,quote:'以后先给结论',origin:'direct'}])]),[]);
   }
 });
 
@@ -258,3 +259,219 @@ for(const [name,sql,params] of [
  ['empty task source',"INSERT INTO tasks(id,status,source_id,title) VALUES('x','proposal','review:','[复盘] test')",[]],
  ['bound source is validated',"INSERT INTO tasks(id,status,source_id,title) VALUES('x','proposal',?,'[复盘] test')",['member:x']],
 ]) test(name,async()=>{ const e=await setup(), before=e.DB.executed; await assert.rejects(()=>reviewWrite(e,sql,params)); assert.equal(e.DB.executed,before); });
+
+const direct = (id='original',quote='以后先给结论') => [{source:'message',id,quote,origin:'direct'}];
+const typed = (kind='burst_max',params={max:1},evidence=direct(),ttl_days=7) => ({kind,params,rule:'模型自由发挥不要用这句',scene:'回答',evidence,ttl_days});
+async function agreement(e,state='agree',runId='night1',evidence=direct()) {
+  await e.DB.prepare(`INSERT INTO review_findings(id,run_id,trace_id,failure_type,severity,fix_layer,dimensions,evidence_json,what_happened,expected,root_cause,next_attempt_plan,confidence,agreement,created_at) VALUES(?,?,?,'reasoning.output.format','p1','prompt','{}',?,'发生','期望','根因','计划',0.9,?,?)`).bind('agree-'+runId,runId,'trace-'+runId,JSON.stringify(evidence),state,now).run();
+}
+
+test('VD-R1-G13 typed burst rule renders template, enters trial with agreement, supersedes predecessor',async()=>{
+  const e=await setup(); await agreement(e); await seed(e,'prior','active');
+  const [id]=await applyRequirements(e,run(),[typed()]); const r=await ruleRow(e,id);
+  assert.equal(r.kind,'burst_max'); assert.deepEqual(JSON.parse(r.params),{max:1}); assert.equal(r.rule,'每次连续回复最多1条。'); assert.equal(r.status,'canary');
+  assert.equal(r.canary_until,now+3*day); assert.equal(r.expires_at,now+7*day); assert.equal(r.supersedes_id,'prior'); assert.equal((await ruleRow(e,'prior')).status,'frozen');
+  await applyRequirements(e,run('later',now+day),[typed()]); assert.equal((await all(e,"SELECT * FROM behavior_rules WHERE kind='burst_max'")).length,1);
+});
+for(const [kind,params,ttl,expected] of [
+ ['reply_max_chars',{max:80},30,'回复最多80字。'],['reply_max_chars',{max:2000},30,'回复最多2000字。'],
+ ['burst_max',{max:4},30,'每次连续回复最多4条。'],['mention_only_window',{minutes:30},1,'未来30分钟仅在被点名时回复。'],
+ ['mention_only_window',{minutes:120},1,'未来120分钟仅在被点名时回复。'],['language',{language:'zh'},30,'使用中文回复。'],
+ ['language',{language:'en'},30,'使用英文回复。'],['format_pref',{format:'plain'},30,'优先使用普通段落回复。'],['format_pref',{format:'list'},30,'优先使用列表回复。'],['format_pref',{format:'table'},30,'优先使用表格回复。'],
+]) test('VD-R1 typed boundary '+kind+' '+JSON.stringify(params),async()=>{
+  const e=await setup(); await agreement(e); const [id]=await applyRequirements(e,run(),[typed(kind,params,direct(),ttl)]);
+  const row=await ruleRow(e,id); assert.equal(row.status,'canary'); assert.equal(row.rule,expected);
+});
+for(const [kind,params,ttl] of [
+ ['reply_max_chars',{max:79},30],['reply_max_chars',{max:2001},30],['reply_max_chars',{max:'80'},30],['burst_max',{max:0},30],['burst_max',{max:5},30],['burst_max',{max:1.5},30],
+ ['burst_max',{max:1,extra:'关闭主动参与'},30],['mention_only_window',{minutes:29},1],['mention_only_window',{minutes:121},1],['mention_only_window',{minutes:30},2],
+ ['language',{language:'fr'},30],['format_pref',{format:'html'},30],['participation_off',{},1],
+]) test('VD-R1 rejects parameter escape '+kind+' '+JSON.stringify(params),async()=>{
+  const e=await setup(); await agreement(e); assert.deepEqual(await applyRequirements(e,run(),[typed(kind,params,direct(),ttl)]),[]);
+});
+for(const state of ['single','pending','disagree']) test('VD-R1 agreement '+state+' cannot auto promote',async()=>{
+  const e=await setup(); await agreement(e,state); const ids=await applyRequirements(e,run(),[typed()]);
+  if(state==='disagree') assert.deepEqual(ids,[]); else assert.equal((await ruleRow(e,ids[0])).status,'candidate');
+});
+test('VD-R1 agreement on unrelated evidence cannot authorize promotion',async()=>{
+  const e=await setup(); await agreement(e,'agree','night1',direct('absent','请简短回复')); const [id]=await applyRequirements(e,run(),[typed()]); assert.equal((await ruleRow(e,id)).status,'candidate');
+});
+test('VD-R1-FREE candidate needs explicit admin approval; approval and expiry are idempotent',async()=>{
+  const e=await setup(); await agreement(e); const [id]=await applyRequirements(e,run(),[req()]); assert.equal((await ruleRow(e,id)).status,'candidate');
+  assert.equal(typeof approveRule,'function'); assert.equal(await approveRule(e,id,'admin:owner'),true);
+  const first=await ruleRow(e,id); assert.equal(first.status,'canary'); assert.equal(first.approved_by,'admin:owner');
+  assert.equal(await approveRule(e,id,'other-admin'),true); assert.equal((await ruleRow(e,id)).canary_until,first.canary_until); assert.equal((await ruleRow(e,id)).approved_by,'admin:owner');
+});
+for(const sample of ['quoted','forwarded','code','image','unbound','revoked','other','statement','fake-origin']) test('VD-R1-PROV rejects '+sample,async()=>{
+  const e=await setup(); let body='以后请简短回复',sender='bound',meta={},origin='direct',mentioned=1;
+  if(sample==='quoted') body='有人说“以后请简短回复”';
+  if(sample==='forwarded') meta={forwarded:[{content:body}]};
+  if(sample==='code') body='```以后请简短回复```';
+  if(sample==='image') {body='图片';origin='image_text';}
+  if(sample==='unbound') sender='stranger';
+  if(sample==='revoked') await e.DB.prepare("UPDATE members SET revoked=1").run();
+  if(sample==='other') mentioned=0;
+  if(sample==='statement') body='他昨天回复很简短';
+  if(sample==='fake-origin') origin='quoted';
+  await message(e,'p',body,sender); await e.DB.prepare('UPDATE messages SET mentioned=? WHERE id=?').bind(mentioned,'p').run();
+  await e.DB.prepare('INSERT INTO message_meta VALUES(?,?)').bind('p',JSON.stringify(meta)).run();
+  const evidence=direct('p','以后请简短回复'); if(sample==='statement') evidence[0].quote=body; evidence[0].origin=origin;
+  await agreement(e,'agree','night1',evidence); assert.deepEqual(await applyRequirements(e,run(),[typed('reply_max_chars',{max:100},evidence)]),[]);
+});
+test('VD-R1 qq-prefixed live binding and explicit bot reply pass admission',async()=>{
+  const e=await setup(); await e.DB.prepare("UPDATE members SET id='qq:bound'").run(); await e.DB.prepare('UPDATE messages SET mentioned=0').run();
+  await e.DB.prepare('INSERT INTO message_meta VALUES(?,?)').bind('original',JSON.stringify({replyTo:{kind:'bot'}})).run();
+  await agreement(e); const [id]=await applyRequirements(e,run(),[typed()]); assert.equal((await ruleRow(e,id)).status,'canary');
+});
+test('VD-R4-IDEM counters are counts of unique ledger events and do not trust stale counters',async()=>{
+  const e=await setup(); await seed(e,'r','active'); await e.DB.prepare('UPDATE behavior_rules SET hits=999,corrections=999').run();
+  await e.DB.prepare("INSERT INTO review_consumed VALUES('rule_hit','r','event','night1',?)").bind(now).run();
+  await correction(e,'c1','night2'); await advanceRules(e,run('night2',now+day)); await advanceRules(e,run('night2',now+day));
+  const r=await ruleRow(e,'r'); assert.equal(r.hits,1); assert.equal(r.corrections,1); assert.equal(r.status,'active');
+  assert.equal((await get(e,"SELECT count(*) AS n FROM review_consumed WHERE kind='rule_correction' AND subject='r'")).n,1);
+});
+
+async function memory(e,id='mc-add',patch={}) {
+  const v={op:'ADD',repo:'team',subject:'成员',predicate:'偏好',value:'先给结论',target_fact_id:null,target_version:null,source_msg_id:'original',evidence_json:JSON.stringify(direct()),...patch};
+  await e.DB.prepare(`INSERT INTO review_memory_candidates(id,run_id,group_id,op,repo,subject,predicate,value,target_fact_id,target_version,source_msg_id,evidence_json,created_at) VALUES(?,'night1','g',?,?,?,?,?,?,?,?,?,?)`).bind(id,v.op,v.repo,v.subject,v.predicate,v.value,v.target_fact_id,v.target_version,v.source_msg_id,v.evidence_json,now).run();
+}
+const candidate=(e,id)=>get(e,'SELECT * FROM review_memory_candidates WHERE id=?',id);
+async function oldFact(e,id='old',value='旧偏好') { await e.DB.prepare("INSERT INTO facts VALUES(?,'team','成员','偏好',?,'原话','old-msg','confirmed','v1',NULL)").bind(id,value).run(); }
+
+test('VD-R2-MEM memory isolation and explicit admin application replay return one original fact id',async()=>{
+  const e=await setup(); await memory(e); assert.equal((await all(e,'SELECT * FROM facts')).length,0);
+  assert.equal(typeof applyMemoryCandidate,'function'); assert.equal(reviewWriteAdmin.applyMemoryCandidate,applyMemoryCandidate);
+  const id=await applyMemoryCandidate(e,'mc-add','admin:owner'); assert.ok(id); assert.equal(await applyMemoryCandidate(e,'mc-add','admin:other'),id);
+  assert.equal((await candidate(e,'mc-add')).status,'applied'); const rows=await all(e,'SELECT * FROM facts'); assert.equal(rows.length,1); assert.equal(rows[0].id,id); assert.equal(rows[0].status,'confirmed');
+});
+test('VD-R2-MEM tombstone for any evidence source blocks writing facts',async()=>{
+  const e=await setup(); await memory(e); await e.DB.prepare("INSERT INTO memory_blocks VALUES('original','其他','其他')").run();
+  assert.equal(await applyMemoryCandidate(e,'mc-add','admin'),null); assert.equal((await candidate(e,'mc-add')).status,'blocked'); assert.equal((await all(e,'SELECT * FROM facts')).length,0);
+});
+test('VD-R2-MEM duplicate fact supersedes candidate without adding a row',async()=>{
+  const e=await setup(); await oldFact(e,'existing','先给结论'); await memory(e);
+  await applyMemoryCandidate(e,'mc-add','admin'); assert.equal((await candidate(e,'mc-add')).status,'superseded'); assert.equal((await all(e,'SELECT * FROM facts')).length,1);
+});
+for(const op of ['UPDATE','DELETE']) test('VD-R2-MEM '+op+' stale version conflicts and preserves active fact',async()=>{
+  const e=await setup(); await oldFact(e); await memory(e,'mc-op',{op,target_fact_id:'old',target_version:'v0'});
+  assert.equal(await applyMemoryCandidate(e,'mc-op','admin'),null); assert.equal((await candidate(e,'mc-op')).status,'conflict'); assert.equal((await get(e,"SELECT * FROM facts WHERE id='old'")).valid_to,null);
+});
+for(const op of ['UPDATE','DELETE']) test('VD-R2-MEM '+op+' explicitly approved is versioned and replay-safe',async()=>{
+  const e=await setup(); await oldFact(e); await memory(e,'mc-op',{op,target_fact_id:'old',target_version:'v1'});
+  const id=await applyMemoryCandidate(e,'mc-op','admin'); assert.ok(id); assert.ok((await get(e,"SELECT * FROM facts WHERE id='old'")).valid_to);
+  assert.equal(await applyMemoryCandidate(e,'mc-op','admin'),id);
+  assert.equal((await all(e,'SELECT * FROM facts WHERE valid_to IS NULL')).length,op==='UPDATE'?1:0);
+  if(op==='DELETE') assert.ok(await get(e,"SELECT * FROM memory_blocks WHERE source_id='old-msg'"));
+});
+for(const patch of [ {value:'sk-Abcdef123456'}, {evidence_json:JSON.stringify([{source:'image',id:'original',quote:'以后先给结论'}])}, {source_msg_id:'missing'}, {evidence_json:JSON.stringify(direct('original','不在原话'))} ]) test('VD-R2-MEM invalid or sensitive candidate blocked '+JSON.stringify(patch),async()=>{
+  const e=await setup(); await memory(e,'bad',patch); assert.equal(await applyMemoryCandidate(e,'bad','admin'),null); assert.equal((await candidate(e,'bad')).status,'blocked'); assert.equal((await all(e,'SELECT * FROM facts')).length,0);
+});
+test('VD-R2-MEM admin surface exposes no arbitrary SQL writer and worker surface rejects protected tables',async()=>{
+  assert.equal(typeof reviewWriteAdmin,'object'); assert.deepEqual(Object.keys(reviewWriteAdmin),['applyMemoryCandidate']);
+  const e=await setup(); for(const sql of ["UPDATE facts SET value='x'","INSERT INTO memory_blocks VALUES('x','s','p')","INSERT INTO turn_offers(turn_id) VALUES('x')","UPDATE turn_offers SET names='[]'"]) await assert.rejects(()=>reviewWrite(e,sql));
+});
+test('VD-R2-MEM review v2 tables are writable but turn_offers stays readable only',async()=>{
+  const e=await setup();
+  await reviewBatch(e,[
+    {sql:"INSERT INTO review_budget(day_utc,provider,unit,cap,updated_at) VALUES('2026-11-14','openai','usd_micros',100,0)"},
+    {sql:"INSERT INTO review_cursors(group_id,stream,updated_at) VALUES('g','messages',0)"},
+    {sql:"INSERT INTO review_judgments(id,run_id,gen,role,provider,model,trace_ids,reserved,max_tokens,created_at) VALUES('j','r',1,'primary','deepseek','m','[]',1,10,0)"},
+    {sql:"INSERT INTO review_consumed VALUES('rule_hit','r','event','night1',0)"},
+  ]); assert.deepEqual(await reviewRead(e,'SELECT * FROM turn_offers'),[]);
+});
+
+test('VD-R1 bounded mention-only window expires after its minutes instead of resetting on each prompt',async()=>{
+  const e=await setup(); await agreement(e); const [id]=await applyRequirements(e,run(),[typed('mention_only_window',{minutes:30},direct(),1)]);
+  assert.equal((await ruleRow(e,id)).expires_at,now+30*60000); assert.equal((await activeRulesFor(e,'g',now+30*60000)).length,0);
+});
+test('VD-R4 task proposals support INSERT OR IGNORE replay without changing an existing proposal',async()=>{
+  const e=await setup(); const sql="INSERT OR IGNORE INTO tasks(id,repo,title,detail,status,source_id,created_at,updated_at) VALUES('rv-f','team','[复盘] test',?,'proposal','review:f','','')";
+  await reviewWrite(e,sql,['first']); await reviewWrite(e,sql,['second']); assert.equal((await get(e,"SELECT detail FROM tasks WHERE id='rv-f'")).detail,'first');
+});
+test('VD-R1 approved candidate cannot race a member revocation',async()=>{
+  const e=await setup(); const [id]=await applyRequirements(e,run(),[req()]);
+  const batch=e.DB.batch.bind(e.DB); let revoke=true;
+  e.DB.batch=async list=>{ if(revoke) {revoke=false; await e.DB.prepare('UPDATE members SET revoked=1').run();} return batch(list); };
+  assert.equal(await approveRule(e,id,'admin'),false); assert.equal((await ruleRow(e,id)).status,'candidate');
+});
+test('VD-R1 automatic admission cannot race a member revocation',async()=>{
+  const e=await setup(); await agreement(e); const batch=e.DB.batch.bind(e.DB);
+  e.DB.batch=async list=>{ await e.DB.prepare('UPDATE members SET revoked=1').run(); return batch(list); };
+  await applyRequirements(e,run(),[typed()]); assert.equal((await all(e,"SELECT * FROM behavior_rules WHERE status='canary'")).length,0);
+});
+test('VD-R2-MEM incomplete code fence is never direct memory evidence',async()=>{
+  const e=await setup(); await e.DB.prepare("UPDATE messages SET body='```以后先给结论' WHERE id='original'").run(); await memory(e);
+  assert.equal(await applyMemoryCandidate(e,'mc-add','admin'),null); assert.equal((await candidate(e,'mc-add')).status,'blocked');
+});
+test('VD-R1 freeze policy uses ledger hits instead of stale hit counters',async()=>{
+  const e=await setup(); for(let i=0;i<6;i++) await seed(e,'r'+i,'active',{scene:'s'+i,hits:i});
+  await e.DB.prepare("UPDATE behavior_rules SET hits=999 WHERE id='r0'").run(); await applyRequirements(e,run(),[req()]);
+  assert.equal((await ruleRow(e,'r0')).status,'frozen');
+});
+
+// D1 batch is transactional; exercise the SQL against SQLite with the same contract.
+function atomic(e) {
+  const db=e.DB; let tail=Promise.resolve();
+  db.batch=list=>{
+    const result=tail.then(async()=>{
+      await db.prepare('BEGIN IMMEDIATE').run();
+      try { const results=[]; for(const s of list) results.push(await s.run()); await db.prepare('COMMIT').run(); return results; }
+      catch(error) { await db.prepare('ROLLBACK').run(); throw error; }
+    });
+    tail=result.catch(()=>{}); return result;
+  };
+  return e;
+}
+test('VD-R2-MEM concurrent approvals of one candidate return the same fact and one audit event',async()=>{
+  const e=atomic(await setup()); await memory(e);
+  const ids=await Promise.all([applyMemoryCandidate(e,'mc-add','a'),applyMemoryCandidate(e,'mc-add','b')]);
+  assert.ok(ids[0]); assert.equal(ids[0],ids[1]); assert.equal((await all(e,'SELECT * FROM facts')).length,1);
+  assert.equal((await all(e,"SELECT * FROM activity WHERE kind='review_memory_applied'")).length,1);
+});
+test('VD-R2-MEM competing edits detect target_version inside transaction',async()=>{
+  const e=atomic(await setup()); await oldFact(e); await memory(e,'edit1',{op:'UPDATE',value:'新偏好甲',target_fact_id:'old',target_version:'v1'});
+  await memory(e,'edit2',{op:'UPDATE',value:'新偏好乙',target_fact_id:'old',target_version:'v1'});
+  await Promise.all([applyMemoryCandidate(e,'edit1','a'),applyMemoryCandidate(e,'edit2','b')]);
+  const rows=await all(e,"SELECT * FROM facts WHERE valid_to IS NULL"); assert.equal(rows.length,1);
+  assert.deepEqual((await all(e,'SELECT status FROM review_memory_candidates ORDER BY status')).map(r=>r.status),['applied','conflict']);
+});
+test('VD-R2-MEM failed facts insert rolls back old-version expiration and candidate approval',async()=>{
+  const e=atomic(await setup()); await oldFact(e); await memory(e,'edit',{op:'UPDATE',target_fact_id:'old',target_version:'v1'});
+  await e.DB.prepare("CREATE TRIGGER reject_new_fact BEFORE INSERT ON facts BEGIN SELECT RAISE(ABORT,'test refusal'); END").run();
+  await assert.rejects(()=>applyMemoryCandidate(e,'edit','a'),/test refusal/);
+  assert.equal((await get(e,"SELECT valid_to FROM facts WHERE id='old'")).valid_to,null); assert.equal((await candidate(e,'edit')).status,'candidate');
+});
+test('VD-R2-MEM tombstone arriving after preflight is checked in the write transaction',async()=>{
+  const e=atomic(await setup()); await memory(e); const batch=e.DB.batch.bind(e.DB);
+  e.DB.batch=async list=>{ await e.DB.prepare("INSERT INTO memory_blocks VALUES('original','成员','偏好')").run(); return batch(list); };
+  assert.equal(await applyMemoryCandidate(e,'mc-add','a'),null); assert.equal((await candidate(e,'mc-add')).status,'blocked'); assert.equal((await all(e,'SELECT * FROM facts')).length,0);
+});
+test('VD-R4-IDEM simultaneous advancement consumes each correction once',async()=>{
+  const e=atomic(await setup()); await seed(e,'r','active'); await correction(e,'once','night2');
+  await Promise.all([advanceRules(e,run('night2',now+day)),advanceRules(e,run('night2',now+day))]);
+  assert.equal((await ruleRow(e,'r')).corrections,1); assert.equal((await ruleRow(e,'r')).status,'active');
+  assert.equal((await get(e,"SELECT count(*) AS n FROM review_consumed WHERE kind='rule_correction'")).n,1);
+});
+test('VD-R1 ownClauses helper stays equivalent to authz on quoted/code fixtures',async()=>{
+  for(const [body,expected] of [
+    ['以后请简短回复',['以后请简短回复']], ['他说“不要回”，请少发一点',['他说','请少发一点']],
+    ['```以后不要回```\n@Bot 以后用列表',['','以后用列表']], ["'请不要回复'，以后先给结论",['','以后先给结论']],
+  ]) assert.deepEqual(api.reviewOwnClauses(body),expected);
+});
+test('VD-R2-MEM ordinary review write parameters redact short OpenAI keys',async()=>{
+  const e=await setup(); await reviewWrite(e,'INSERT INTO activity VALUES(?,?,?,?,?,?)',['secret-log','review','x','review','sk-Abcdef123456','date']);
+  const row=await get(e,"SELECT summary FROM activity WHERE id='secret-log'"); assert.equal(row.summary,'[密钥已隐藏]');
+});
+
+test('VD-R1 disagree prevents free-text candidates as well as typed trial rules',async()=>{
+  const e=await setup(); await agreement(e,'disagree'); assert.deepEqual(await applyRequirements(e,run(),[req()]),[]);
+});
+test('VD-R1 empty finding quotation cannot supply dual agreement',async()=>{
+  const e=await setup(); await agreement(e,'agree','night1',direct('original','')); const [id]=await applyRequirements(e,run(),[typed()]);
+  assert.equal((await ruleRow(e,id)).status,'candidate');
+});
+test('VD-R1 admission race does not return a phantom candidate id',async()=>{
+  const e=await setup(); await agreement(e); const batch=e.DB.batch.bind(e.DB);
+  e.DB.batch=async list=>{ await e.DB.prepare('UPDATE members SET revoked=1').run(); return batch(list); };
+  assert.deepEqual(await applyRequirements(e,run(),[typed()]),[]);
+});
