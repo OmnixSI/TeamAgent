@@ -170,15 +170,19 @@ function simulate(group, config, botCountMode) {
   const reasons = new Map();
   const blockedSamples = [];
   let direct = 0, directBlocked = 0, blocked = 0;
+  let mentionChecked = 0, mentionBlocked = 0, modeChecked = 0, modeBlocked = 0;
   for (const s of speeches) {
     const budget = botCountMode === "proactive" ? keptProactive : kept;
     const bots = countBetween(budget, s.ts - HOUR, s.ts);
     const lastBotTs = kept.length ? kept[kept.length - 1] : null;
     const humanWindowMs = config.humanWindowMinutes * 60000;
     const humansRecent = countBetween(humans, s.ts - humanWindowMs, s.ts);
+    const isMention = s.direct && s.categories.includes("mention");
+    // Exercise the mention bypass itself for @ replies; only quote/forced direct replies use mode:"direct".
+    const mode = s.direct ? (isMention ? "proactive" : "direct") : "proactive";
     const result = gate.shouldSpeak({
-      mode: s.direct ? "direct" : "proactive",
-      mentioned: s.categories.includes("mention"),
+      mode,
+      mentioned: isMention,
       lastBotTs,
       now: s.ts,
       recentBotCount: bots,
@@ -188,7 +192,12 @@ function simulate(group, config, botCountMode) {
     });
     if (s.direct) {
       direct++;
-      if (!result.speak) { directBlocked++; continue; }
+      if (isMention) mentionChecked++; else modeChecked++;
+      if (!result.speak) {
+        directBlocked++;
+        if (isMention) mentionBlocked++; else modeBlocked++;
+        continue;
+      }
       kept.push(s.ts);
       keptDirect.push(s.ts);
     } else if (result.speak) {
@@ -202,7 +211,7 @@ function simulate(group, config, botCountMode) {
     }
   }
   return {
-    direct, directBlocked, blocked,
+    direct, directBlocked, mentionChecked, mentionBlocked, modeChecked, modeBlocked, blocked,
     keptProactive: keptProactive.length,
     maxProactivePerHour: maxPerHour(keptProactive),
     maxAllPerHour: maxPerHour(kept),
@@ -284,10 +293,14 @@ const totals = reports.reduce((t, g) => {
   t.direct += g.baseline.direct;
   t.proactive += g.baseline.proactive;
   t.directBlocked += g.fitted.result.directBlocked;
+  t.mentionChecked += g.fitted.result.mentionChecked;
+  t.mentionBlocked += g.fitted.result.mentionBlocked;
+  t.modeChecked += g.fitted.result.modeChecked;
+  t.modeBlocked += g.fitted.result.modeBlocked;
   t.proactiveKept += g.fitted.result.keptProactive;
   t.proactiveBlocked += g.fitted.result.blocked;
   return t;
-}, { groups: 0, messages: 0, speeches: 0, direct: 0, proactive: 0, directBlocked: 0, proactiveKept: 0, proactiveBlocked: 0 });
+}, { groups: 0, messages: 0, speeches: 0, direct: 0, proactive: 0, directBlocked: 0, mentionChecked: 0, mentionBlocked: 0, modeChecked: 0, modeBlocked: 0, proactiveKept: 0, proactiveBlocked: 0 });
 
 const payload = {
   schema: "f7-4-gate-fit/1",
@@ -347,13 +360,14 @@ if (asJson) {
     const cut = g.baseline.proactive ? ((f.blocked / g.baseline.proactive) * 100).toFixed(1) : "0.0";
     lines.push(`fitted result: proactive ${g.baseline.proactive} -> ${f.keptProactive} kept, ${f.blocked} suppressed (${cut}%), max ${g.baseline.maxProactivePerHour}/h -> ${f.maxProactivePerHour}/h`);
     lines.push(`blocked reasons: ${Object.entries(f.reasons).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
-    lines.push(`direct replies: ${f.direct} kept, ${f.directBlocked} blocked${f.directBlocked ? "  <-- FAIL" : ""}`);
+    lines.push(`direct replies: ${f.direct} kept, ${f.directBlocked} blocked (mention ${f.mentionChecked} checked/${f.mentionBlocked} blocked; direct mode ${f.modeChecked} checked/${f.modeBlocked} blocked)${f.directBlocked ? "  <-- FAIL" : ""}`);
     if (f.blockedSamples.length) lines.push(`blocked examples: ${f.blockedSamples.map((s) => s.at + " " + s.reason).join("; ")}`);
     lines.push("");
   }
   lines.push("## totals");
   lines.push("");
   lines.push(`direct replies: ${totals.direct} kept, ${totals.directBlocked} blocked${totals.directBlocked ? "  <-- FAIL" : ""}`);
+  lines.push(`mention bypass: ${totals.mentionChecked} checked, ${totals.mentionBlocked} blocked; direct mode: ${totals.modeChecked} checked, ${totals.modeBlocked} blocked`);
   lines.push(`proactive: ${totals.proactive} -> ${totals.proactiveKept} kept, ${totals.proactiveBlocked} suppressed`);
   lines.push("");
   console.log(lines.join("\n"));
