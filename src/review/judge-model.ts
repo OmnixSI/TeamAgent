@@ -1,6 +1,7 @@
 import { PROVIDERS,type Provider,type JudgeCall,type JudgeReply } from './types';
 import { redact } from './redact';
 import { parseJudgeReply } from './validate';
+import { batchSize, MAX_JUDGE_INPUT_CHARS } from './prompt';
 export type JudgePrice={unit:'usd_micros'|'neurons';input:number;output:number};
 export type JudgeOptions={price?:JudgePrice;prices?:Partial<Record<Provider,JudgePrice>>;dayCap?:number;monthCapUsdMicros?:number;
   workersAiEnabled?:boolean;mode?:'nightly'|'replay';chargeFullReservation?:boolean;now?:()=>number;fetch?:typeof fetch;offline?:(call:JudgeCall)=>Promise<JudgeReply>};
@@ -53,7 +54,7 @@ function usageOf(raw:any):{input:number;output:number;neurons?:number}|null {
 export async function judgeModel(e:JudgeEnv,call:JudgeCall,opts:JudgeOptions={}):Promise<JudgeReply> {
   if(!PROVIDERS.includes(call.provider)||!call.model||!Number.isInteger(call.max_tokens)||call.max_tokens<1||call.max_tokens>32768||
     !Number.isFinite(call.timeout_ms)||call.timeout_ms<1||call.timeout_ms>180000||typeof call.system!=='string'||typeof call.user!=='string'||
-    call.system.length+call.user.length>24000)return errorReply('invalid_call');
+    call.system.length+call.user.length>MAX_JUDGE_INPUT_CHARS)return errorReply('invalid_call');
   if(call.provider==='codex-offline'){
     if(opts.mode!=='replay'||!opts.offline)return errorReply('offline_nightly_forbidden');
     try{const r=await opts.offline({...call,system:redact(call.system),user:redact(call.user)});return{...r,text:redact(r.text)};}catch{return errorReply('offline_failed');}
@@ -109,7 +110,11 @@ export type BatchJudgment={trace_ids:string[];reply:JudgeReply;state:ReturnType<
 export async function judgeBatches(e:JudgeEnv,traceIds:readonly string[],makeCall:(ids:string[])=>JudgeCall,opts:JudgeOptions={}){
   const judgments:BatchJudgment[]=[],failedTraceIds:string[]=[];
   async function run(ids:string[],retry:boolean,isRetry=false){
-    const call=makeCall(ids),reply=await judgeModel(e,call,{...opts,chargeFullReservation:opts.chargeFullReservation||isRetry}),parsed=parseJudgeReply(reply,call.system.includes('只判不提，输出 ta.review.second.v1')?'ta.review.second.v1':'ta.review.result.v2');
+    const call=makeCall(ids),limit=batchSize(call.max_tokens,call.provider==='openai'?'second':'primary');
+    if(ids.length>1&&(ids.length>limit||call.system.length+call.user.length>MAX_JUDGE_INPUT_CHARS)){
+      const half=Math.ceil(ids.length/2);await run(ids.slice(0,half),retry,isRetry);await run(ids.slice(half),retry,isRetry);return;
+    }
+    const reply=await judgeModel(e,call,{...opts,chargeFullReservation:opts.chargeFullReservation||isRetry}),parsed=parseJudgeReply(reply,call.system.includes('只判不提，输出 ta.review.second.v1')?'ta.review.second.v1':'ta.review.result.v2');
     judgments.push({trace_ids:ids,reply,...parsed});
     if(parsed.state==='truncated'&&retry&&ids.length>1){const half=Math.ceil(ids.length/2);await run(ids.slice(0,half),false,true);await run(ids.slice(half),false,true);}
     else if(parsed.state==='invalid'&&retry)await run(ids,false,true);
