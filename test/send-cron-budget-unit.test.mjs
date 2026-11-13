@@ -8,6 +8,9 @@ const outfile=`.wrangler/send-cron-budget-unit-${process.pid}.mjs`;
 await build({stdin:{contents:'export {metered} from "./src/d1";export {SWITCH_KEYS} from "./src/rhythm";',resolveDir:process.cwd(),loader:'ts'},bundle:true,format:'esm',platform:'browser',outfile});
 const cronCounts={};
 const {metered,SWITCH_KEYS}=await import('../'+outfile);
+test('M1-R event-v2 registers exactly five supported settings after the legacy keys',()=>{
+ assert.deepEqual(SWITCH_KEYS.slice(10),['off:passive_borrow','off:unknown_resend','off:forward_expand','qq:active_rejected','qq:muted_until']);
+});
 for(const [name,at] of [['night-and-sticker-retry',Date.UTC(2026,10,12,16,7)],['daily-cleanup',Date.UTC(2026,10,13,0,0)]])test(`M1-S W-14 all switches enabled: ${name} stays within 48 statements`,async()=>{
  const NativeDate=Date,oldFetch=globalThis.fetch;
  class Clock extends NativeDate{constructor(...args){if(args.length)super(...args);else super(at);}static now(){return at;}}
