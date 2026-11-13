@@ -27,6 +27,7 @@ import {
   tokenRoute,
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
+import { featureRequestRoute, sweepFeatureRequests } from "./feature-request-api";
 import { queueFor } from "./lanes";
 import { runSchedules } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
@@ -1307,12 +1308,14 @@ async function scheduled(e: Env) {
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Finish mandatory maintenance before the sender spends its remaining budget.
+  await sweepFeatureRequests(e);
   await sendOutbox(e);
   await flushTail(e);
 }
 function requestBodyLimit(r: Request) {
   const path = new URL(r.url).pathname;
   if (r.method === 'POST' && path === '/api/team/stickers') return 4 * Math.ceil(TEAM.stickers.max_bytes / 3) + 1024;
+  if (r.method === 'POST' && path.startsWith('/api/team/feature-requests')) return 16384;
   // Paired with runner/repo_index.py's 900_000-byte JSON batching limit.
   if (r.method === 'POST' && path === '/api/runner/repo_index') return 1048576;
   return 262144;
@@ -1905,6 +1908,8 @@ async function api(r: Request, e: Env) {
       403,
     );
   if (path === "/api/team/ai-tokens") return tokenRoute(r, e, who);
+  const fr = await featureRequestRoute(r, e, who, path, method);
+  if (fr) return fr;
   if (path === "/api/team/tasks" && method === "GET")
     return listTasks(e, u, who);
   if (path === "/api/team/task/claim" && method === "POST")
