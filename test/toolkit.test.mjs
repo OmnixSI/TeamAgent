@@ -7,10 +7,15 @@ async function load() {
   return import("data:text/javascript;base64," + Buffer.from(out.outputFiles[0].text).toString("base64"));
 }
 
-test("empty registry: no extra defs, unknown tool is an error", async () => {
+test("registry: every extra def resolves to its tool, unknown tool is an error", async () => {
   const k = await load();
-  assert.deepEqual(k.extraToolDefs(), []);
+  for (const def of k.extraToolDefs()) {
+    const tool = k.findExtraTool(def.function.name);
+    assert.ok(tool, "extra def without tool: " + def.function.name);
+    assert.equal(tool.def.function.name, tool.name);
+    assert.equal(typeof tool.untrusted, "boolean");
+  }
   assert.equal(k.findExtraTool("nope"), undefined);
-  assert.deepEqual(k.extraUntrustedNames(), []);
+  assert.equal(k.extraUntrustedNames().length, k.extraToolDefs().filter((def) => k.findExtraTool(def.function.name).untrusted).length);
   assert.deepEqual(await k.runExtraTool({ DB: {} }, "nope", {}, { context: {}, messages: [], isTainted: () => false }), { error: "unknown tool" });
 });
