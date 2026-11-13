@@ -31,6 +31,7 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+import { capabilityCard } from "./capability-card";
 // A question about repository activity must reach the read-only repo tools even
 // in a round whose remaining D1 budget would normally hide every tool.
 const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
@@ -676,7 +677,7 @@ async function answerWithTools(e: any, context: any) {
     ).all()
   ).results;
   const acceptedActions: any[] = [];
-  const tools = [
+  const baseTools = [
     {
       type: "function",
       function: {
@@ -766,7 +767,7 @@ async function answerWithTools(e: any, context: any) {
       function: {
         name: "prepare_project_task",
         description:
-          "明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。高难度开发默认生成成员本机AI接力方案。",
+          "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。",
         parameters: {
           type: "object",
           properties: {
@@ -882,8 +883,10 @@ async function answerWithTools(e: any, context: any) {
         },
       },
     },
-    ...(isOn(sw, "repo_tools") ? repoTools : []),
   ];
+  // Keep switched-off tools in the capability card as 「当前已关闭」.
+  const allTools = [...baseTools, ...repoTools];
+  const tools = isOn(sw, "repo_tools") ? allTools : baseTools;
   const recentBot = (
     await e.DB.prepare(
       "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
@@ -915,8 +918,12 @@ async function answerWithTools(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
+  const systemPrompt =
+    (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
+    "\n\n" +
+    capabilityCard(allTools, { switches: sw });
   const messages: any[] = context.resume?.messages || participationMessages({
-        system: rules.length ? PARTICIPATION + "\n" + rules.join("\n") : undefined,
+        system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
