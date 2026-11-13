@@ -144,7 +144,7 @@ test('I5 an oldest pending message beyond the cap permits a non-newest job',asyn
   const e=await bound();await qq(e,{...msg('A','前半句'),timestamp:new Date(Date.now()-9000).toISOString()});
   await qq(e,msg('B','接着说'));await qq(e,msg('C','最后一句'));
   await withAnswer(async seen=>{await queue(e,'chat-B');assert.equal(seen.filter(b=>!b.messages[0].content.includes('最后的嘴替模块')).length,1);});
-  assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'3');
+  assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor:GROUP000001'").first()).value,'3');
 });
 const d1Out=`.wrangler/meter-p1-${process.pid}.mjs`;
 await build({entryPoints:['src/d1.ts'],bundle:true,format:'esm',platform:'browser',outfile:d1Out});
@@ -177,7 +177,7 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
     const imageEnv=metered(base),before=base.DB.executed;await queue(imageEnv,'chat-image-turn');
     assert.equal(imageEnv.meter.used,base.DB.executed-before);
     assert.equal(visionCalls,1);assert.equal(decisions,0);
-    assert.equal(await base.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
+    assert.equal((await base.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor:GROUP000001'").first()).value,'0');
     assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM chat_decisions').first()).n,0);
     assert.ok(await base.DB.prepare("SELECT id FROM jobs WHERE id='chat-v-image-turn' AND status='pending'").first());
     const replyEnv=metered(base);await queue(replyEnv,'chat-v-image-turn');
@@ -198,7 +198,7 @@ async function decide(action,run,options={}){
 }
 async function seedHard(kind='proactive',age=1000){
   const e=await bound();await qq(e,msg('seed','话题开头'));
-  await e.DB.prepare("INSERT INTO settings VALUES('chat_cursor','1')").run();
+  await e.DB.prepare("INSERT INTO settings VALUES('chat_cursor:GROUP000001','1')").run();
   await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('seed-bot','GROUP000001','seed','主动发言','sent',Date.now()-age).run();
   await rhythm.recordDecision(e,{id:'seed-bot',group_id:'GROUP000001',latest_id:'seed',batch_ids:['seed'],gate:'model',action:'reply',spoken_kind:kind,outbox_id:'seed-bot',created_at:Date.now()-age});
   return e;
@@ -211,7 +211,7 @@ test('I9/G1 hard unanswered gate skips all models, even for two unseen images',a
       await queue(e,'chat-two');assert.equal(state.decisions,0);assert.equal(state.vision,0);assert.equal(state.images,0);
       const d=await e.DB.prepare("SELECT * FROM chat_decisions WHERE id='chat-two'").first();assert.equal(d.gate,'hard_unanswered');assert.equal(d.action,'stop');
       assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM image_notes').first()).n,0);
-      assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'3');
+      assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor:GROUP000001'").first()).value,'3');
     });
   }
 });
@@ -247,13 +247,13 @@ test('I6 wait defers without advancing cursor and a second wait becomes stop',as
   await decide({action:'wait',wait_seconds:10},async state=>{
     const before=Date.now();await queue(e,'chat-half');
     assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,0);
-    assert.equal(await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first(),null);
+    assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor:GROUP000001'").first()).value,'0');
     const j=await e.DB.prepare("SELECT * FROM jobs WHERE id='chat-wait-half'").first();assert.ok(j);
     const payload=JSON.parse(j.payload);assert.ok(payload.notBefore>=before+10000);assert.equal(payload.waited,true);
     assert.equal((await e.DB.prepare("SELECT action FROM chat_decisions WHERE id='chat-half'").first()).action,'wait');
     const real=Date.now;try{Date.now=()=>payload.notBefore+1;await queue(e,j.id);}finally{Date.now=real;}
     const d=await e.DB.prepare('SELECT * FROM chat_decisions WHERE id=?').bind(j.id).first();assert.equal(d.action,'stop');assert.equal(d.waited,1);
-    assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value,'1');assert.equal(state.decisions,2);
+    assert.equal((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor:GROUP000001'").first()).value,'1');assert.equal(state.decisions,2);
   });
 });
 for(const mentioned of [false,true])test('I7/I8 new messages supersede old wait, mentioned='+mentioned,async()=>{
@@ -585,7 +585,7 @@ test('P2-1 unparseable oldest timestamp cannot starve an older queued message',a
     assert.equal(decisions.length,1);
     assert.deepEqual(JSON.parse(decisions[0].messages[1].content).conversation.map(v=>v.id),['invalid-oldest','invalid-middle','invalid-newest']);
   });
-  assert.equal(await setting(e,'chat_cursor'),'3');
+  assert.equal(await setting(e,'chat_cursor:GROUP000001'),'3');
 });
 
 test('Codex P1 unmentioned explicit assignment survives the unanswered-proactive gate',async()=>{
