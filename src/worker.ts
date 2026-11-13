@@ -1134,6 +1134,9 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   await fn();
 }
 async function scheduled(e: Env) {
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
+  // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
+  await runSchedules(e);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",
@@ -1271,8 +1274,6 @@ async function scheduled(e: Env) {
   await retryStickerTags(e);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
-  // F6-6 用户日程（日推/提醒/闭嘴到期）先入 outbox，再由本 tick 的发送器发出。
-  await runSchedules(e);
   // Finish mandatory maintenance before the sender spends its remaining budget.
   await sendOutbox(e);
   await flushTail(e);

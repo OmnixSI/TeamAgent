@@ -1296,7 +1296,7 @@ export async function agentAnswer(e: any, context: any) {
                   time: a.time,
                   weekdays: a.weekdays,
                   minutes: a.minutes,
-                  run_at: typeof a.run_at === "number" ? a.run_at : a.run_at ? Date.parse(a.run_at) : undefined,
+                  run_at: a.run_at,
                   text: a.text,
                 },
                 source_msg_id: source.id,

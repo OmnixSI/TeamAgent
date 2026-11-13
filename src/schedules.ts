@@ -8,7 +8,7 @@ export type ScheduleKind = "digest_daily" | "digest_weekly" | "reminder" | "mute
 export type ScheduleSpec = {
   time?: string;
   weekdays?: number[];
-  run_at?: number;
+  run_at?: number | string;
   text?: string;
   minutes?: number;
 };
@@ -71,6 +71,18 @@ function addDays(y: number, m: number, d: number, n: number) {
   return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, d: x.getUTCDate() };
 }
 
+/** run_at 接受毫秒、带时区的 ISO，也接受成员口中的「明天 9:00」无时区写法（按悉尼墙上时间）。 */
+function parseRunAt(value: unknown, tz: string) {
+  if (typeof value === "number") return value;
+  const text = String(value ?? "").trim();
+  if (!text) return 0;
+  if (/^\d{10,}$/.test(text)) return Number(text);
+  if (/(?:z|[+-]\d{2}:?\d{2})$/i.test(text)) return Date.parse(text);
+  const local = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(text);
+  if (local) return zonedToUtc(Number(local[1]), Number(local[2]), Number(local[3]), Number(local[4]), Number(local[5]), tz);
+  return Date.parse(text);
+}
+
 function parseTime(value: unknown): [number, number] | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(String(value ?? "").trim());
   if (!match) return null;
@@ -116,7 +128,7 @@ export function describeSchedule(schedule: any) {
   if (schedule?.kind === "digest_weekly")
     return `每周${(spec.weekdays || [0]).map((d: number) => WEEKDAY_NAMES[d] || d).join("、")} ${spec.time || "08:00"}（悉尼）周报`;
   if (schedule?.kind === "reminder") return `提醒：${spec.text || "未写内容"}`;
-  if (schedule?.kind === "mute") return `闭嘴到 ${sydneyText(spec.run_at)}`;
+  if (schedule?.kind === "mute") return `闭嘴到 ${sydneyText(Number(spec.run_at) || null)}`;
   return String(schedule?.kind || "日程");
 }
 
@@ -169,8 +181,9 @@ export async function createSchedule(e: any, input: NewSchedule, now = Date.now(
     spec.weekdays = days;
   }
   if (kind === "reminder" || kind === "mute") {
-    const runAt = Number(spec.run_at) > 0
-      ? Number(spec.run_at)
+    const explicit = parseRunAt(spec.run_at, tz);
+    const runAt = explicit > 0
+      ? explicit
       : Number(spec.minutes) > 0
         ? now + Number(spec.minutes) * MINUTE
         : 0;
@@ -328,6 +341,7 @@ export async function runSchedules(e: any, now = Date.now()) {
       .all()
   ).results;
   for (const schedule of due) {
+    if (left(e) < 24) break;
     const dueAt = Number(schedule.next_run_at);
     const runId = `run-${schedule.id}-${dueAt}`;
     await e.DB.prepare(

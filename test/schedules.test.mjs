@@ -484,3 +484,14 @@ test("S13 the cron handler itself sends a due reminder into the outbox", async (
   assert.equal(s.foreign, 0, "no real QQ call from the cron handler in the fake env");
   assert.equal((await row(e, "SELECT status FROM schedules WHERE id='sched-wiring'")).status, "done");
 });
+
+test("S14 run_at without a timezone is read as Sydney wall time", async () => {
+  const e = env();
+  const created = await api.createSchedule(
+    e,
+    { group_id: GROUP, owner: "U1", kind: "reminder", spec: { run_at: "2026-11-14T09:00:00", text: "开会" }, source_msg_id: "msg-local" },
+    at("2026-11-14T01:00:00+11:00"),
+  );
+  assert.equal(created.next_run_at, at("2026-11-14T09:00:00+11:00"));
+  assert.equal(new Date(created.next_run_at).toISOString(), "2026-11-13T22:00:00.000Z");
+});
