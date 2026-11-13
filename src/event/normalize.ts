@@ -159,7 +159,7 @@ export function normalize(eventType: string, raw: any): NormalizedEvent {
     for (const node of elements) {
       const nodeKind = elementKind(node);
       if (nodeKind === "101" || kind === "101" && !["102", "103"].includes(nodeKind)) {
-        if (!text(d.content)) ne.segments.push(...bodySegments(elementText(node), records(node.mentions)));
+        if (!text(d.content).trim()) ne.segments.push(...bodySegments(elementText(node), records(node.mentions)));
         ne.segments.push(...attachmentsOf(node.attachments, actor.id, "own"));
         const nodeCard = parseEventCard(node.ark_data);
         if (nodeCard) ne.segments.push({ type: "card", card: nodeCard });

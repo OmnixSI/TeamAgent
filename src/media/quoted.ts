@@ -17,7 +17,8 @@ export function quotedImages(payload:any,limit=3):QuotedImage[] {
       if(kind==='102')continue;
       const isQuote=quoted || kind==='103',author=String(element.author?.member_openid || element.author?.id || owner);
       if(isQuote && Array.isArray(element.attachments))for(const attachment of element.attachments){
-        if(images.length>=limit)return;
+        if(remaining<=0 || images.length>=limit)return;
+        remaining--;
         if(!attachment || typeof attachment!=='object')continue;
         const contentType=String(attachment.content_type || '').toLowerCase(),type=String(attachment.type || '').toLowerCase(),url=String(attachment.url || '').trim();
         if(!url || seen.has(url) || !(contentType.startsWith('image/') || ['image','emoji','face','sticker','mface'].includes(type)))continue;

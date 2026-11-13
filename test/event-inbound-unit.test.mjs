@@ -78,3 +78,11 @@ test('rework unmatched mention tokens never replace real mention identities',()=
  assert.deepEqual(out.mentions,[{id:'u1',name:'真实成员',isBot:true}]);
  assert.equal(out.mentionsBot,true);
 });
+
+for(const content of [' ', '\n', '', '真正的正文'])
+ test('rework2 bridge uses 101 text and exact mention spelling after blank content '+JSON.stringify(content),()=>{
+  const fallback='大家早上好呀 <@!other>';
+  const out=api.parseInbound('GROUP_MESSAGE_CREATE',{content,message_type:101,
+   msg_elements:[{message_type:101,content:fallback,mentions:[{id:'other'}]}]});
+  assert.equal(out.body,content.trim()||fallback);
+ });

@@ -81,3 +81,11 @@ for(const kind of [0,101])for(const source of ['both','element','content'])
   assert.equal(ne.segments.find(s=>s.type==='mention').self,true);
   assert.equal(ne.segments.filter(s=>s.type==='image').length,1);
  });
+
+for(const content of [' ', '\n', '', '真正的正文'])
+ test('rework2 101 treats trimmed blank content as absent '+JSON.stringify(content),()=>{
+  const ne=normalize('GROUP_MESSAGE_CREATE',{...base,content,message_type:101,
+   msg_elements:[{message_type:101,content:'大家早上好呀',attachments:[{url:image,content_type:'image/png'}]}]});
+  assert.equal(ne.segments.filter(s=>s.type==='text').map(s=>s.text).join('').trim(),content.trim()||'大家早上好呀');
+  assert.equal(ne.segments.filter(s=>s.type==='image').length,1);
+ });
