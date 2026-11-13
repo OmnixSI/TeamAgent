@@ -4,7 +4,8 @@ except ModuleNotFoundError:
     from settings import settings, api_key, dsh_program
 #!/usr/bin/env python3
 """Local file/media agent. Separate workspaces, no repository writes or cloud-account credentials."""
-import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client, shutil
+import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client, shutil, fcntl
+from contextlib import contextmanager
 
 ACTIVE = None
 H = pathlib.Path.home() / ".inkboard-team"
@@ -166,6 +167,19 @@ def clear_receipt(path):
     path.parent.rmdir()
 
 
+def preserve_outputs(path, report):
+    try:
+        stage_outputs(path, report)
+    except (FileNotFoundError, ValueError):
+        report.update(success=False, local_files=[], files=[],
+                      result="资料产物未能保留，任务未完成；请根据原消息重新交办。临时输入将自动清理。")
+        save_json(path, report)
+    if report.get("success") is False:
+        # The durable failure no longer references this set; remove any partial move.
+        key = hashlib.sha256(report["id"].encode()).hexdigest()[:32]
+        shutil.rmtree(H / "utility" / "_deliveries" / key, ignore_errors=True)
+
+
 def finish(path, report):
     # Stage before reporting, so a network outage can retry without rerunning work.
     q = H / "file-deliveries"
@@ -180,7 +194,7 @@ def finish(path, report):
         clear_receipt(path)
         return
     if not report.get("reported"):
-        stage_outputs(path, report)
+        preserve_outputs(path, report)
     try:
         answer = {"ok": True} if report.get("reported") else cloud(
             "media/report",
@@ -210,7 +224,74 @@ def finish(path, report):
 
 def flush_reports():
     for path in sorted((H / "utility-reports").glob("*/completion.json")):
-        finish(path, json.loads(path.read_text()))
+        # The other service may still be staging this receipt's outputs.
+        with utility_workspace(H / "utility" / path.parent.name) as owned:
+            if owned and path.exists():
+                finish(path, json.loads(path.read_text()))
+
+
+@contextmanager
+def defer_stop():
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+@contextmanager
+def utility_root_lock():
+    root = H / "utility"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (root / ".sweep.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield root
+
+
+def discard_workspace(work):
+    completion = H / "utility-reports" / work.name / "completion.json"
+    if completion.exists():
+        report = json.loads(completion.read_text())
+        if not report.get("reported"):
+            # Both a normal stop and startup after SIGKILL can resume a move
+            # before deleting inputs. A receipt must never reference deleted outputs.
+            preserve_outputs(completion, report)
+    else:
+        completion.with_suffix(".tmp").unlink(missing_ok=True)
+        if completion.parent.exists():
+            completion.parent.rmdir()
+    shutil.rmtree(work, ignore_errors=True)
+
+
+@contextmanager
+def utility_workspace(work, create=True):
+    owner, owned = None, False
+    try:
+        # Serialize directory creation/removal so a sweep cannot unlink a lock
+        # between mkdir and flock. The task lock stays held through final cleanup.
+        with defer_stop(), utility_root_lock():
+            if work.is_symlink():
+                raise ValueError("utility directory denied")
+            marker = work / ".owner.lock"
+            legacy_recent = (not create and work.exists() and not marker.exists()
+                             and time.time() - work.stat().st_mtime < 86400)
+            if (create or work.exists()) and not legacy_recent:
+                work.mkdir(exist_ok=True, mode=0o700)
+                owner = marker.open("a")
+                try:
+                    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    owned = True
+                except BlockingIOError:
+                    pass
+        yield owned
+    finally:
+        if owner is not None:
+            try:
+                if owned:
+                    with defer_stop(), utility_root_lock():
+                        discard_workspace(work)
+            finally:
+                owner.close()  # Kernel also releases ownership after SIGKILL; no PID-reuse race.
 
 
 def reap_process(proc):
@@ -267,30 +348,32 @@ def once():
     p = job["payload"]
     key = hashlib.sha256(job["id"].encode()).hexdigest()[:32]
     work = H / "utility" / key
-    completion = receipt_path(job["id"])
-    try:
-        if completion.exists():
-            cached = json.loads(completion.read_text())
-            cached["lease"] = p["lease"]
-            save_json(completion, cached)
-            finish(completion, cached)
+    with utility_workspace(work) as owned:
+        if not owned:
             return
-        inputs, outputs = work / "inputs", work / "outputs"
-        inputs.mkdir(parents=True, exist_ok=True, mode=0o700)
-        outputs.mkdir(exist_ok=True)
-        execute(job, work, inputs, outputs, completion)
-    except (KeyboardInterrupt, SystemExit):
-        if not completion.exists():
-            save_json(completion, {"id": job["id"], "lease": p["lease"], "message": p["message"],
-                "success": False, "result": "资料任务已停止，本机临时输入将自动清理。可根据原消息重新交办。"})
-        raise
-    finally:
+        completion = receipt_path(job["id"])
         try:
-            if ACTIVE is not None:
-                reap_process(ACTIVE)
+            if completion.exists():
+                cached = json.loads(completion.read_text())
+                cached["lease"] = p["lease"]
+                save_json(completion, cached)
+                finish(completion, cached)
+                return
+            inputs, outputs = work / "inputs", work / "outputs"
+            inputs.mkdir(exist_ok=True, mode=0o700)
+            outputs.mkdir(exist_ok=True)
+            execute(job, work, inputs, outputs, completion)
+        except (KeyboardInterrupt, SystemExit):
+            if not completion.exists():
+                save_json(completion, {"id": job["id"], "lease": p["lease"], "message": p["message"],
+                    "success": False, "result": "资料任务已停止，本机临时输入将自动清理。可根据原消息重新交办。"})
+            raise
         finally:
-            ACTIVE = None
-            shutil.rmtree(work, ignore_errors=True)
+            try:
+                if ACTIVE is not None:
+                    reap_process(ACTIVE)
+            finally:
+                ACTIVE = None
 
 
 def execute(job, work, inputs, outputs, completion):
@@ -530,18 +613,20 @@ def execute(job, work, inputs, outputs, completion):
 
 
 def clean_utility_root():
-    # A single process runs one task at a time, so any leftover task directory at
-    # startup belongs to a killed run. The delivery spool has its own retention.
+    # Quick and heavy share this root. Kernel-held task locks identify live owners;
+    # unmarked pre-upgrade directories get a conservative 24-hour grace period.
     root = H / "utility"
     if not root.is_dir():
         return
     for child in root.iterdir():
-        if child.name == "_deliveries":
+        if child.name in ("_deliveries", ".sweep.lock"):
             continue
         if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child, ignore_errors=True)
+            with utility_workspace(child, create=False):
+                pass
         else:
-            child.unlink(missing_ok=True)
+            with defer_stop(), utility_root_lock():
+                child.unlink(missing_ok=True)
 
 
 def stop(signum, frame):

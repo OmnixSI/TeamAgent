@@ -203,6 +203,110 @@ process.stdout.write(JSON.stringify(sent));
                 u.flush_reports()
             self.deliver(h, [CSV, CSV + 'extra'])
 
+    def test_sigterm_after_success_receipt_before_staging_preserves_referenced_outputs(self):
+        with self.fixture() as (u, h):
+            save, interrupted = u.save_json, False
+            def stop_after_receipt(path, report):
+                nonlocal interrupted
+                save(path, report)
+                if path.name == 'completion.json' and report.get('local_files') and not interrupted:
+                    interrupted = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+            handler = signal.signal(signal.SIGTERM, u.stop)
+            try:
+                with self.execution(u, h, extra_output=True) as state:
+                    with patch.object(u, 'save_json', side_effect=stop_after_receipt), self.assertRaises(SystemExit):
+                        u.once()
+                    receipt = json.loads(next((h / 'utility-reports').glob('*/completion.json')).read_text())
+                    self.assertTrue(all(pathlib.Path(p).is_file() for p in receipt['local_files']))
+                    self.assert_clean_work(h)
+                    u.flush_reports()
+                    self.assertEqual(len(state['processes']), 1)
+                self.deliver(h, [CSV, CSV + 'extra'])
+            finally:
+                signal.signal(signal.SIGTERM, handler)
+
+    def test_other_service_preserves_live_workspace_and_receipt_then_recovers_after_sigkill(self):
+        with self.fixture() as (u, h):
+            driver = '''
+import importlib.util,json,pathlib,sys
+spec=importlib.util.spec_from_file_location('live_utility',sys.argv[1])
+u=importlib.util.module_from_spec(spec);spec.loader.exec_module(u)
+u.cloud=lambda path,body:{'job':{'id':'file-cleanup','payload':{'message':'source','lease':'lease'}}}
+def execute(job,work,inputs,outputs,completion):
+    (inputs/'cookies.txt').write_text('synthetic')
+    output=outputs/'example.csv';output.write_text('ready')
+    u.save_json(completion,{'id':job['id'],'lease':'lease','message':'source','local_files':[str(output)],'files':[{'name':'example.csv','bytes':5}],'result':'ready'})
+    (u.H/'ready').write_text('ready')
+    sys.stdin.buffer.read(1)
+u.execute=execute
+u.once()
+'''
+            sweep = '''
+import importlib.util,sys
+spec=importlib.util.spec_from_file_location('sweep_utility',sys.argv[1])
+u=importlib.util.module_from_spec(spec);spec.loader.exec_module(u)
+u.cloud=lambda *args: (_ for _ in ()).throw(AssertionError('live receipt must not be reported by another worker'))
+u.clean_utility_root();u.flush_reports()
+'''
+            env = {**os.environ, 'HOME': str(h.parent)}
+            proc = subprocess.Popen([sys.executable, '-c', driver, str(ROOT / 'runner/utility.py')],
+                                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not (h / 'ready').exists() and proc.poll() is None:
+                    time.sleep(.01)
+                self.assertTrue((h / 'ready').exists())
+                other = subprocess.run([sys.executable, '-c', sweep, str(ROOT / 'runner/utility.py')],env=env,capture_output=True,text=True,timeout=8)
+                self.assertEqual(other.returncode, 0, other.stderr)
+                self.assertEqual((h / 'utility' / KEY / 'outputs/example.csv').read_text(), 'ready')
+                self.assertTrue((h / 'utility' / KEY / 'inputs/cookies.txt').exists())
+                proc.kill();proc.communicate(timeout=5)
+                u.clean_utility_root()
+                self.assert_clean_work(h)
+                receipt = json.loads(next((h / 'utility-reports').glob('*/completion.json')).read_text())
+                self.assertTrue(all(pathlib.Path(p).is_file() for p in receipt['local_files']))
+                with patch.object(u,'cloud',return_value={'ok':True}):
+                    u.flush_reports()
+                self.deliver(h, ['ready'])
+            finally:
+                if proc.poll() is None:
+                    proc.kill();proc.communicate(timeout=5)
+
+    def test_recent_unmarked_legacy_task_survives_until_conservative_cleanup_age(self):
+        with self.fixture() as (u, h):
+            legacy = h / 'utility' / 'legacy'
+            legacy.mkdir(parents=True)
+            (legacy / 'input.txt').write_text('could belong to an older live service')
+            u.clean_utility_root()
+            self.assertTrue((legacy / 'input.txt').exists())
+            old = time.time() - 2 * 86400
+            os.utime(legacy, (old, old))
+            u.clean_utility_root()
+            self.assertFalse(legacy.exists())
+
+    def test_missing_output_receipt_recovers_as_failure_without_blocking_the_next_claim(self):
+        with self.fixture() as (u, h):
+            completion = u.receipt_path('file-cleanup')
+            staged = h / 'utility' / '_deliveries' / KEY / 'outputs'
+            staged.mkdir(parents=True)
+            (staged / 'partial.csv').write_text(CSV)
+            u.save_json(completion, {'id':'file-cleanup','lease':'lease','message':'source',
+                'local_files':[str(staged / 'missing.csv')],
+                'files':[{'name':'missing.csv','bytes':1}],'result':'ready'})
+            calls = []
+            def cloud(path, body):
+                calls.append((path, body))
+                return {'ok':True, 'job':None}
+            with patch.object(u,'cloud',side_effect=cloud):
+                u.once()
+            self.assertEqual([p for p,b in calls], ['media/report','media/claim'])
+            self.assertFalse(calls[0][1]['success'])
+            self.assertEqual(calls[0][1]['files'], [])
+            self.assertFalse(completion.exists())
+            self.assertFalse(staged.parent.exists(), 'failed recovery must not strand unreferenced staged artifacts')
+            self.assert_clean_work(h)
+
     def test_video_attachments_are_skipped_and_audio_attachments_share_the_link_limit(self):
         sources = [{'attachments': [
             {'filename': 'upload.mp4', 'content_type': 'video/mp4', 'url': 'https://example.invalid/video'},
@@ -247,8 +351,11 @@ process.stdout.write(JSON.stringify(sent));
             outside.mkdir()
             (outside / 'sentinel.txt').write_text('keep')
             (utility / 'linked').symlink_to(outside, target_is_directory=True)
+            for name in ['task-one', 'task-two']:
+                old = time.time() - 2 * 86400
+                os.utime(utility / name, (old, old))
             u.clean_utility_root()
-            self.assertEqual(sorted(p.name for p in utility.iterdir()), ['_deliveries'])
+            self.assertEqual(sorted(p.name for p in utility.iterdir()), ['.sweep.lock', '_deliveries'])
             self.assertEqual((kept / 'ready.csv').read_text(), CSV)
             self.assertFalse((utility / 'linked').exists(), 'only the symlink itself is removed')
             self.assertEqual((outside / 'sentinel.txt').read_text(), 'keep', 'cleanup must not follow symlinks')

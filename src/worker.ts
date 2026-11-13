@@ -1600,18 +1600,18 @@ async function api(r: Request, e: Env) {
       if (m) {
         if (b.success === false) {
           const ref = mediaRefOf(p);
-          const noticeKey = "media-notice:" + (ref || p.message);
+          const noticeKey = ref ? "media-notice:" + ref : "utility-notice:" + b.id;
           const seen = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind(noticeKey).first();
-          const answered = await e.DB.prepare("SELECT id FROM outbox WHERE msg_id=? AND id NOT LIKE 'media-result-%' AND status IN ('sent','pending') LIMIT 1").bind(p.message).first();
-          if (!seen && !answered) {
+          // An earlier chat acknowledgement is not this task's terminal outcome.
+          if (!seen) {
             await enqueueVoice(
               e,
-              "media-result-" + p.message,
+              "media-result-" + b.id,
               m.group_id,
               m.id,
               JSON.stringify({ mode: "work", text: body }),
             );
-            if (ref) await e.DB.prepare("INSERT OR IGNORE INTO settings VALUES(?,?)").bind(noticeKey, iso()).run();
+            await e.DB.prepare("INSERT OR IGNORE INTO settings VALUES(?,?)").bind(noticeKey, iso()).run();
           }
         } else if (!files.length)
           await job(e, "media-result-" + p.message, "voice_notice", {

@@ -698,6 +698,21 @@ test("duplicate video failure notices are suppressed per normalized b23 ref", as
   assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM outbox").first()).n, 1);
 });
 
+test("accepted file tasks still notify terminal failure after a pending or sent acknowledgement", async () => {
+  for (const status of ['pending','sent']) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('ack-source','整理附件'));
+    await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('chat-ack','GROUP000001','ack-source','任务已创建，正在处理',status,Date.now()).run();
+    await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('ack-file-job','media',JSON.stringify({message:'ack-source'}),Date.now()).run();
+    const {job}=await (await req(e,'/api/runner/media/claim',{},'runner-secret')).json();
+    const report={id:job.id,lease:job.payload.lease,success:false,result:'资料任务超时，请重新交办'};
+    assert.equal((await req(e,'/api/runner/media/report',report,'runner-secret')).status,200);
+    assert.equal((await req(e,'/api/runner/media/report',report,'runner-secret')).status,409);
+    const out=(await e.DB.prepare("SELECT body FROM outbox WHERE id!='chat-ack'").all()).results;
+    assert.equal(out.length,1);assert.match(out[0].body,/超时/);
+  }
+});
+
 test("file failure is terminal once and never leaks local commands or paths to QQ", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
