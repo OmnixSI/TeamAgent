@@ -310,16 +310,17 @@ let quoteFixture=0;
 async function outgoing(count=1,reference=true){
   const e=env();e.QQ_APP_ID='quote-test-'+(++quoteFixture);
   await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?)').bind('source','GROUP000001','U1','原始问题',new Date().toISOString(),1,0).run();
+  await e.DB.prepare('INSERT INTO passive_claims VALUES(?,?,?,0)').bind('source','GROUP000001',Date.now()).run();
   for(let i=0;i<count;i++)await enqueueVoice(e,'out-'+i,'GROUP000001','source','{"mode":"work","text":"可核验的回复。"}',reference?{reference:'REF'}:undefined);
   return e;
 }
-async function deliver(e,reply){
+async function deliver(e,reply,rounds=1){
   const old=globalThis.fetch,bodies=[];
   globalThis.fetch=async(url,options)=>{
     if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'fake-qq-token',expires_in:300});
     const body=JSON.parse(options.body);bodies.push(body);return reply(body,bodies.length);
   };
-  try{await queue(e,'nonexistent-job');return bodies;}finally{globalThis.fetch=old;}
+  try{for(let i=0;i<rounds;i++)await queue(e,'nonexistent-job');return bodies;}finally{globalThis.fetch=old;}
 }
 const setting=(e,key)=>e.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first().then(r=>r?.value);
 test('Q2 rejected reference retries once without it and increments sequence and failure counter',async()=>{
@@ -329,7 +330,7 @@ test('Q2 rejected reference retries once without it and increments sequence and 
   assert.equal((await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'sent');
 });
 test('Q2b three confirmed reference failures disable subsequent references in the same send',async()=>{
-  const e=await outgoing(4),bodies=await deliver(e,b=>b.message_reference?Response.json({code:123},{status:400}):Response.json({id:'sent'}));
+  const e=await outgoing(4),bodies=await deliver(e,b=>b.message_reference?Response.json({code:123},{status:400}):Response.json({id:'sent'}),4);
   assert.equal(bodies.length,7);assert.equal(bodies[6].message_reference,undefined);assert.equal(await setting(e,'off:quote'),'1');assert.equal(await setting(e,'quote_fail'),'3');
   assert.ok((await e.DB.prepare("SELECT * FROM activity WHERE kind='quote.disabled'").all()).results.length);
 });
@@ -345,13 +346,13 @@ test('Q2d non-reference errors and malformed responses never trigger another QQ 
     const bodies=await deliver(e,()=>{if(mode==='network')throw Error('offline');return mode==='bad-json'?new Response('not-json',{status:400}):Response.json({code:123},{status:mode});});
     assert.equal(bodies.length,1,String(mode));assert.equal(await setting(e,'quote_fail'),'2');
     const state=(await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status;
-    assert.equal(state,[500,'network','bad-json'].includes(mode)?'unknown':'failed',String(mode));
+    assert.equal(state,[500,'network','bad-json'].includes(mode)?'unknown':mode===429?'retry':'failed',String(mode));
   }
 });
-test('Q2e failure after dropping the reference does not count as a reference fault',async()=>{
+test('Q2e ref_invalid is counted before its unreferenced retry outcome',async()=>{
   const e=await outgoing();await e.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
   const bodies=await deliver(e,()=>Response.json({code:123},{status:400}));
-  assert.equal(bodies.length,2);assert.equal(await setting(e,'quote_fail'),'2');
+  assert.equal(bodies.length,2);assert.equal(await setting(e,'quote_fail'),'3');
   assert.equal((await e.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'failed');
 });
 test('Q3 runtime quote switch and absent reference mappings avoid reference metadata',async()=>{
@@ -363,11 +364,13 @@ test('Q3 runtime quote switch and absent reference mappings avoid reference meta
   const out=await outgoing();await out.DB.prepare("INSERT INTO settings VALUES('off:quote','1')").run();
   const bodies=await deliver(out,()=>Response.json({id:'ok'}));assert.equal(bodies[0].message_reference,undefined);
 });
-test('Q4 ordinary message fields and the passive 240-second boundary stay unchanged',async()=>{
+test('Q4 passive ledger sequences and the 280-second claim window determine send fields',async()=>{
   const e=await outgoing(1,false),bodies=await deliver(e,()=>Response.json({id:'ok'}));
-  assert.deepEqual(bodies[0],{content:'可核验的回复。',msg_type:0,msg_id:'source',msg_seq:messageSequence('out-0')});
-  const old=await outgoing(1,false);await old.DB.prepare('UPDATE messages SET ts=?').bind(new Date(Date.now()-241000).toISOString()).run();
-  const older=await deliver(old,()=>Response.json({id:'ok'}));assert.equal(older[0].msg_id,undefined);
+  assert.deepEqual(bodies[0],{content:'可核验的回复。',msg_type:0,msg_id:'source',msg_seq:1});
+  const old=await outgoing(1,false);await old.DB.prepare('UPDATE passive_claims SET source_ts=?').bind(Date.now()-241000).run();
+  const older=await deliver(old,()=>Response.json({id:'ok'}));assert.equal(older[0].msg_id,'source');assert.equal(older[0].msg_seq,1);
+  const expired=await outgoing(1,false);await expired.DB.prepare('UPDATE passive_claims SET source_ts=?').bind(Date.now()-280001).run();
+  const active=await deliver(expired,()=>Response.json({id:'ok'}));assert.equal(active[0].msg_id,undefined);assert.equal(active[0].msg_seq,messageSequence('out-0'));
 });
 test('quote metadata is wired from a model-selected member message in the real chat path',async()=>{
   const e=await bound();
@@ -427,6 +430,7 @@ test('B3 three cold images, a reference and two sent segments fit both phases',a
   await budgetModel(async state=>{
     const image=await measured(base,'p1-B3-image',e=>queue(e,'chat-'+id));
     const answer=await measured(base,'p1-B3-answer',e=>queue(e,'chat-v-'+id));
+    for(let i=0;i<3;i++)await measured(base,'p1-B3-send-'+i,e=>worker.queue({messages:[{body:{send:1},ack(){}}]},e));
     assert.equal(state.vision,3);assert.equal(state.decisions,1);assert.equal(state.sent.length,2);
     assert.ok(state.sent[0].message_reference);assert.ok(image<=30,'image '+image);assert.ok(answer<=45,'answer '+answer);
   });
@@ -500,16 +504,16 @@ test('B8 newer unmentioned message between image and answer coalesces without a 
     await queue(base,'chat-v-budget-old-image');assert.equal(state.decisions,1);
   },{voice:'{"mode":"work","text":"合并后的回答。"}'});
 });
-test('budget guards leave a low-budget send and sweep durable; reference fuse costs ten including switches',async()=>{
+test('budget guards leave a low-budget send and sweep durable; v2 reference recovery reserves both fenced attempts',async()=>{
   const sendBase=await outgoing(),low=metered(sendBase,10);
   const bodies=await deliver(low,()=>Response.json({id:'sent'}));
-  assert.equal(bodies.length,0);assert.equal(low.meter.used,2);
+  assert.equal(bodies.length,0);assert.equal(low.meter.used,1);
   assert.equal((await sendBase.DB.prepare("SELECT status FROM outbox WHERE id='out-0'").first()).status,'pending');
   const fuseBase=await outgoing();await fuseBase.DB.prepare("INSERT INTO settings VALUES('quote_fail','2')").run();
   let before=fuseBase.DB.executed;const fuse=metered(fuseBase);
   await deliver(fuse,b=>b.message_reference?Response.json({code:1},{status:422}):Response.json({id:'sent',ext_info:{ref_idx:'FUSE-BOT'}}));
-  assert.equal(fuse.meter.used,fuseBase.DB.executed-before);assert.equal(fuse.meter.used,13); // Two sender reads, ten fuse-row queries, one optional timing tail.
-  assert.equal(COST.send_row,10);
+  assert.equal(fuse.meter.used,fuseBase.DB.executed-before);assert.equal(fuse.meter.used,30); // Job read + sender reads + two fenced attempts + fuse + tail.
+  assert.equal(COST.send_row,15);
   assert.equal(await setting(fuseBase,'off:quote'),'1');
   const out=`.wrangler/sweep-budget-${process.pid}.mjs`;
   await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});

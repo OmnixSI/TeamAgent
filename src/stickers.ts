@@ -4,6 +4,7 @@ import { budget } from './budget';
 import { activity } from './runtime';
 import { queueFor } from './lanes';
 import { left } from './d1';
+import {sendOutcome} from './send/codes';
 
 const cfg = TEAM.stickers;
 export const stickerSendOn = (sw: Record<string,string|undefined>, now: number) =>
@@ -95,51 +96,43 @@ export async function enqueueSticker(e: any, x:{id:string;group:string;message:s
       .bind(now,x.sha,old,id),
   ]);
 }
-/** Rich media is attempted once. No retry, including ambiguous network outcomes. */
-export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<string,string|undefined>,sequence:number):Promise<number|null> {
-  const passive=()=>source&&o.msg_id&&Date.now()-Date.parse(source.ts)<240000;
-  if(!stickerSendOn(sw,Date.now())||!passive()){
-    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();return null;
-  }
-  const locked=await e.DB.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id").bind(o.id).first();if(!locked)return null;
-  await e.DB.prepare('INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)').bind(o.id,Date.now()).run();
-  let http:number|null=null,code='',ok=false;
+/** The caller owns the lane, passive pair and fenced outbox receipt. */
+export async function sendSticker(e:any,o:any,token:string,msgId:string|null,sw:Record<string,string|undefined>,sequence:number,claim:{tok:string;now:number}):Promise<{http:number|null;result:any;skipped?:boolean}> {
+  if(!stickerSendOn(sw,Date.now()))return {http:null,result:undefined,skipped:true};
+  const stamp="EXISTS(SELECT 1 FROM outbox_send WHERE id=? AND lock_tok=? AND claimed_at=?)";
+  const fence=[o.id,claim.tok,claim.now];
+  let http:number|null=null,result:any;
   try{
     const meta=JSON.parse(o.meta||'{}'),row=await e.DB.prepare('SELECT * FROM stickers WHERE sha=? AND state=2').bind(meta.sticker).first();
-    if(!row)throw Error('sticker unavailable');
+    if(!row)return {http:null,result:undefined,skipped:true};
     let fileInfo=row.file_info_expires>Date.now()+60000?row.file_info:null;
     const post=async(path:string,body:any)=>{
-      const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'error'});
-      http=r.status;let d:any;try{d=await r.json();}catch{}
-      code=String(d?.code||'');return {r,d};
+      http=null;result=undefined;
+      const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'manual'});
+      http=r.status;result=undefined;try{result=await r.json();}catch{}
+      return r;
     };
     if(!fileInfo){
-      const {r,d}=await post('/files',{file_type:1,file_data:b64(new Uint8Array(row.data)),srv_send_msg:false});
-      if(!r.ok||typeof d?.file_info!=='string'||!d.file_info||(d.code!==undefined&&d.code!==0))throw Error('upload not accepted');
-      fileInfo=d.file_info;
-      const ttl=Number(d.ttl)>0&&Number.isFinite(Number(d.ttl))?Number(d.ttl):3600;
-      await e.DB.prepare('UPDATE stickers SET file_info=?,file_info_expires=? WHERE sha=?').bind(fileInfo,Date.now()+ttl*1000,row.sha).run();
+      const r=await post('/files',{file_type:1,file_data:b64(new Uint8Array(row.data)),srv_send_msg:false});
+      if(!r.ok||typeof result?.file_info!=='string'||!result.file_info||(result.code!==undefined&&result.code!==0))throw Error('upload not accepted');
+      fileInfo=result.file_info;
+      const ttl=Number(result.ttl)>0&&Number.isFinite(Number(result.ttl))?Number(result.ttl):3600;
+      await e.DB.prepare('UPDATE stickers SET file_info=?,file_info_expires=? WHERE sha=? AND '+stamp).bind(fileInfo,Date.now()+ttl*1000,row.sha,...fence).run();
     }
-    if(!passive()){
-      await e.DB.batch([e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=?").bind(o.id),e.DB.prepare('UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?').bind(http,code,o.id)]);return http;
-    }
-    const {r,d}=await post('/messages',{msg_type:7,media:{file_info:fileInfo},msg_id:o.msg_id,msg_seq:sequence});
-    ok=r.ok&&!!(d?.id||d?.code===0);
+    await post('/messages',{msg_type:7,media:{file_info:fileInfo},...(msgId?{msg_id:msgId}:{}),msg_seq:sequence});
   }catch{}
-  const result=await e.DB.batch([
-    e.DB.prepare('UPDATE outbox SET status=? WHERE id=?').bind(ok?'sent':'skipped',o.id),
-    e.DB.prepare('UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?').bind(http,code,o.id),
-    ok?e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail'"):
-      e.DB.prepare("INSERT INTO settings VALUES('sticker_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value"),
-  ]);
-  if(!ok&&Number(result[2]?.results?.[0]?.value)>=3){
+  const ok=sendOutcome(http??0,result,false)==='sent';
+  const counted=await e.DB.batch([ok
+    ?e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail' AND "+stamp).bind(...fence)
+    :e.DB.prepare("INSERT INTO settings SELECT 'sticker_fail','1' WHERE "+stamp+" ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value").bind(...fence)]);
+  if(!ok&&Number(counted[0]?.results?.[0]?.value)>=3){
     const until=String(Date.now()+86400000);
     await e.DB.batch([
-      e.DB.prepare("INSERT INTO settings VALUES('sticker_paused_until',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(until),
-      e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail'"),
+      e.DB.prepare("INSERT INTO settings SELECT 'sticker_paused_until',? WHERE "+stamp+" ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(until,...fence),
+      e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail' AND "+stamp).bind(...fence),
+      e.DB.prepare("INSERT INTO activity SELECT ?,'sticker.paused','stickers','Bot',?,? WHERE "+stamp).bind(crypto.randomUUID(),'表情连续发送失败，已暂停一天',new Date().toISOString(),...fence),
     ]);
     sw.sticker_paused_until=until;
-    await activity(e,'sticker.paused','stickers','Bot','表情连续发送失败，已暂停一天');
   }
-  return http;
+  return {http,result};
 }

@@ -291,7 +291,7 @@ test("E4 proactive reply uses structured conversation", async () => {
   await mocked(async seen => { await proactiveReply(e, { source: "proactive", context: "资料" }, {}); const c = JSON.parse(seen.participation[0].messages[1].content).conversation; assert.ok(c.length); assert.ok(c.every(v => v.from)); });
 });
 test("F1 schema can replay twice over old data without changing positional inserts", () => {
-  const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8"), old = schema.replace(/CREATE TABLE IF NOT EXISTS (?:message_refs|member_names)\([^;]+;/g, ""), d = new DatabaseSync(":memory:");
+  const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8"), old = schema.replace(/CREATE TABLE IF NOT EXISTS (?:message_refs|member_names)\([^;]+;|CREATE INDEX IF NOT EXISTS message_refs_g[^;]+;/g, ""), d = new DatabaseSync(":memory:");
   try {
     d.exec(old); d.prepare("INSERT INTO messages VALUES(?,?,?,?,?,?,?)").run("old", group, "U1", "原文", "2026-11-11", 0, 0);
     d.exec(schema); d.exec(schema);

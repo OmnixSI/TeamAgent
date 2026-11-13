@@ -36,7 +36,7 @@ export async function unansweredProactive(e: any, groupId: string, now = Date.no
     WHERE group_id=?1 AND outbox_id IS NOT NULL ORDER BY created_at DESC LIMIT 1),
   lastout AS (
     SELECT CASE WHEN instr(id,'~')>0 THEN substr(id,1,instr(id,'~')-1) ELSE id END AS base
-    FROM outbox WHERE group_id=?1 AND status IN ('pending','sent') AND id NOT LIKE '%~s'
+    FROM outbox WHERE group_id=?1 AND status IN ('sent','pending','sending','retry','held') AND id NOT LIKE '%~s'
     ORDER BY created_at DESC LIMIT 1),
   after AS (
     SELECT m.mentioned,json_extract(mm.json,'$.replyTo.kind') AS rk
@@ -55,10 +55,10 @@ export async function recordDecision(e: any, row: any): Promise<void> {
       row.mentioned ? 1 : 0, row.forced ? 1 : 0, row.waited ? 1 : 0, row.gate || "model", row.action || "stop", row.spoken_kind || null,
       row.target_id || null, row.wait_seconds ?? null, row.reason || null, row.outbox_id || null, row.policy || "live", row.model_ms ?? null, row.created_at ?? Date.now()).run();
 }
-export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools"] as const;
+export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "off:passive_borrow", "off:unknown_resend", "off:forward_expand", "off:chunk_send", "qq:active_rejected", "qq:muted_until"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
   const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
-  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  return {"off:unknown_resend":"1",...Object.fromEntries(rows.map((r: any) => [r.key, r.value]))};
 }
 export const isOn = (sw: Record<string, string | undefined>, name: string) => sw["off:" + name] !== "1";

@@ -1,3 +1,5 @@
+import {enqueueText} from "./send/enqueue";
+import {splitForQQ} from "./send/split";
 import { TEAM } from "./config";
 import { stage } from "./timing";
 import { COST, left } from "./d1";
@@ -33,6 +35,7 @@ function seed(id: string) {
 export function fragments(raw: string, id: string): string[] {
   const v = decodeVoice(raw);
   if (v.text === "[[SILENT]]") return [];
+  if (v.text.length>1800) return splitForQQ(v.text,{max:1800,parts:3});
   if (
     v.mode !== "banter" ||
     v.text.length > 180 ||
@@ -69,19 +72,9 @@ export async function enqueueVoice(
   const stickerSwitches=wantsSticker?await loadSwitches(e):undefined;
   if(parts.length && message && left(e)>=COST.tail+parts.length+3){
     const reminders=await replyAuthReminders(e,id);
-    if(reminders.length){const suffix='\n'+reminders.join('\n');parts[parts.length-1]=parts[parts.length-1].slice(0,4000-suffix.length)+suffix;}
+    if(reminders.length){const suffix='\n'+reminders.join('\n');parts[parts.length-1]=parts[parts.length-1].slice(0,1800-suffix.length)+suffix;}
   }
-  for (let i = 0; i < parts.length; i++)
-    await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
-      .bind(
-        id + (i ? "~" + i : ""),
-        group,
-        message,
-        parts[i],
-        "pending",
-        Date.now() + i,
-      )
-      .run();
+  await enqueueText(e,{id,group,msgId:message,body:parts.join("\n"),parts});
   if (parts.length) stage(e, message, "outbox");
   if (parts.length && opts?.reference)
     await e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({ reference: opts.reference })).run();

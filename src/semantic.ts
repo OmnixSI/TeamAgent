@@ -1,3 +1,4 @@
+import {enqueueText} from "./send/enqueue";
 import {webFailText,LINK_FAIL_RULE} from './linkfail';
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
@@ -524,9 +525,7 @@ export async function understandLinks(e: any, p: any, s: Services) {
       LINK_FAIL_RULE + UNTRUSTED_RULE,
     { message: m.body, pages, projects: INITIAL_PROJECT_HINTS },
   );
-  await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
-    .bind("links-" + m.id, m.group_id, m.id, text, "pending", Date.now())
-    .run();
+  await enqueueText(e,{id:"links-"+m.id,group:m.group_id,msgId:m.id,body:text});
 }
 export async function scout(e: any, p: any, s: Services) {
   const cache = (
@@ -810,8 +809,8 @@ export async function agentAnswer(e: any, context: any) {
   ];
   const recentBot = (
     await e.DB.prepare(
-      "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
-    ).all()
+      "SELECT id,body,created_at,msg_id FROM outbox WHERE (?1 IS NULL OR group_id=?1) AND status IN ('sent','pending','sending','retry','held') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
+    ).bind(context.latest?.group_id??null).all()
   ).results.reverse();
   Object.assign(context, buildViews(context, recentBot));
   const learnedExpressions = await relevantExpressions(

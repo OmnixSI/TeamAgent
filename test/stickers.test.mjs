@@ -134,13 +134,13 @@ let appCounter=0;
 async function sendingFixture(patch={send:true}){
  const e=await setupWith({stickers:patch});e.QQ_APP_ID='sticker-app-'+(++appCounter);
  await seed(e,sha,{state:2});await e.DB.prepare('UPDATE stickers SET desc=?,tags=? WHERE sha=?').bind('无语凝视','["无语","凝视"]',sha).run();
- await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?)').bind('sticker-source','GROUP000001','m1','原始问题',new Date().toISOString(),1,0).run();return e;
+ await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?)').bind('sticker-source','GROUP000001','m1','原始问题',new Date().toISOString(),1,0).run();await e.DB.prepare('INSERT INTO passive_claims VALUES(?,?,?,0)').bind('sticker-source','GROUP000001',Date.now()).run();return e;
 }
 async function mediaRow(e,id='reply',source='sticker-source'){
  await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind(id+'~s','GROUP000001',source,'[表情]','pending',Date.now()).run();
  await e.DB.prepare('INSERT INTO outbox_meta VALUES(?,?)').bind(id+'~s',JSON.stringify({sticker:sha})).run();
 }
-async function deliverSticker(e,{upload,send}={}){
+async function deliverSticker(e,{upload,send,rounds=1}={}){
  const old=globalThis.fetch,calls=[];
  globalThis.fetch=async(url,init)=>{
   const body=JSON.parse(init.body);calls.push({url:String(url),body});
@@ -148,7 +148,7 @@ async function deliverSticker(e,{upload,send}={}){
   if(String(url).endsWith('/files'))return upload?upload(body):Response.json({file_info:'mock-file-info',ttl:7200});
   return send?send(body):Response.json({id:'sent-'+calls.length});
  };
- try{await queue(e,'no-sticker-job');return calls;}finally{globalThis.fetch=old;}
+ try{for(let i=0;i<rounds;i++)await queue(e,'no-sticker-job');return calls;}finally{globalThis.fetch=old;}
 }
 const voiceSticker=JSON.stringify({mode:'care',text:'这下确实有点无语。',sticker:'无语'});
 test('S7 keyword matching, threshold, daily reuse and GIF policy select only eligible images',async()=>{
@@ -182,7 +182,7 @@ test('same-image concurrent selection reserves one sticker segment and increment
 test('S10 BLOB upload and rich message fields are exact, with reusable file_info cache',async()=>{
  const e=await sendingFixture();await mediaRow(e,'first');let calls=await deliverSticker(e);
  const upload=calls.find(c=>c.url.endsWith('/files'));assert.ok(upload);assert.deepEqual(upload.body,{file_type:1,file_data:Buffer.from(bytes).toString('base64'),srv_send_msg:false});
- const message=calls.find(c=>c.body.msg_type===7);const v=await patched('src/voice.ts');assert.deepEqual(message.body,{msg_type:7,media:{file_info:'mock-file-info'},msg_id:'sticker-source',msg_seq:v.messageSequence('first~s')});
+ const message=calls.find(c=>c.body.msg_type===7);const v=await patched('src/voice.ts');assert.deepEqual(message.body,{msg_type:7,media:{file_info:'mock-file-info'},msg_id:'sticker-source',msg_seq:1});
  assert.equal((await row(e)).file_info,'mock-file-info');assert.ok((await row(e)).file_info_expires>Date.now()+3600000);
  await mediaRow(e,'second');calls=await deliverSticker(e);assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,0);assert.equal(calls.filter(c=>c.body.msg_type===7).length,1);
  assert.ok((await all(e,'outbox')).every(o=>o.status==='sent'));
@@ -191,14 +191,14 @@ test('S11 upload failure skips once while text succeeds; no duplicate delivery',
  const e=await sendingFixture(),v=await patched('src/voice.ts');await v.enqueueVoice(e,'text','GROUP000001','sticker-source','{"mode":"work","text":"文字仍然送达。"}');await mediaRow(e);
  const calls=await deliverSticker(e,{upload:()=>Response.json({code:123},{status:400})});
  assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,1);assert.equal(calls.filter(c=>c.body.msg_type===7).length,0);
- assert.equal((await all(e,'outbox')).find(o=>o.id==='text').status,'sent');assert.equal((await all(e,'outbox')).find(o=>o.id==='reply~s').status,'skipped');
+ assert.equal((await all(e,'outbox')).find(o=>o.id==='text').status,'sent');assert.equal((await all(e,'outbox')).find(o=>o.id==='reply~s').status,'failed');
  assert.equal((await all(e,'settings')).find(r=>r.key==='sticker_fail').value,'1');
  assert.equal((await all(e,'outbox_attempts')).find(r=>r.id==='reply~s').http_status,400);
  assert.equal((await deliverSticker(e)).length,0);
 });
 test('S11b three failures pause for a day, and a successful sticker resets the counter',async()=>{
  const e=await sendingFixture();for(let i=0;i<3;i++)await mediaRow(e,'bad-'+i);
- await deliverSticker(e,{upload:()=>Response.json({code:123},{status:400})});
+ await deliverSticker(e,{upload:()=>Response.json({code:123},{status:400}),rounds:2});
  const settings=Object.fromEntries((await all(e,'settings')).map(r=>[r.key,r.value]));assert.equal(settings.sticker_fail,'0');assert.ok(Number(settings.sticker_paused_until)>=Date.now()+86400000-1000);
  assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.paused').length,1);
  const good=await sendingFixture();await put(good,'sticker_fail','2');await mediaRow(good);await deliverSticker(good);assert.equal((await all(good,'settings')).find(r=>r.key==='sticker_fail').value,'0');
@@ -208,7 +208,7 @@ test('sticker failures start a new three-attempt cycle after the daily pause exp
  try{
   const e=await sendingFixture(),failure={upload:()=>Response.json({code:123},{status:400})};
   for(let i=0;i<3;i++)await mediaRow(e,'first-cycle-'+i);
-  const firstCalls=await deliverSticker(e,failure);
+  const firstCalls=await deliverSticker(e,{...failure,rounds:2});
   assert.equal(firstCalls.filter(c=>c.url.endsWith('/files')).length,3);
   const settings=()=>all(e,'settings').then(rows=>Object.fromEntries(rows.map(r=>[r.key,r.value])));
   const paused=await settings(),until=Number(paused.sticker_paused_until);
@@ -234,13 +234,13 @@ test('sticker failures start a new three-attempt cycle after the daily pause exp
 test('message rejection and network uncertainty never retry rich media',async()=>{
  for(const failure of ['rejected','network']){
   const e=await sendingFixture();await mediaRow(e);const calls=await deliverSticker(e,{send:()=>{if(failure==='network')throw Error('connection lost');return Response.json({code:777},{status:400});}});
-  assert.equal(calls.filter(c=>c.body.msg_type===7).length,1);assert.equal((await all(e,'outbox'))[0].status,'skipped');assert.equal((await deliverSticker(e)).length,0);
+  assert.equal(calls.filter(c=>c.body.msg_type===7).length,1);assert.equal((await all(e,'outbox'))[0].status,failure==='network'?'unknown':'failed');assert.equal((await deliverSticker(e)).length,0);
  }
 });
-test('S12 expired or absent passive source is skipped before any QQ request',async()=>{
+test('S12 expired or absent quota with active sending rejected never uploads or sends',async()=>{
  for(const source of ['expired',null]){
-  const e=await sendingFixture();await e.DB.prepare('UPDATE messages SET ts=?').bind(new Date(Date.now()-241000).toISOString()).run();await mediaRow(e,'expired',source===null?null:'sticker-source');
-  assert.equal((await deliverSticker(e)).length,0);assert.equal((await all(e,'outbox'))[0].status,'skipped');
+  const e=await sendingFixture();await e.DB.prepare('UPDATE passive_claims SET source_ts=?').bind(Date.now()-280001).run();await put(e,'qq:active_rejected','1');await mediaRow(e,'expired',source===null?null:'sticker-source');
+  const calls=await deliverSticker(e);assert.equal(calls.filter(c=>c.url.endsWith('/files')||c.body.msg_type===7).length,0);assert.equal((await all(e,'outbox'))[0].status,'skipped');assert.equal((await all(e,'outbox_send'))[0].reason,'no_passive');
  }
 });
 test('S15/S15b queued sticker switch is checked before token, while same-batch text still sends',async()=>{
@@ -251,7 +251,7 @@ test('S15/S15b queued sticker switch is checked before token, while same-batch t
 });
 test('S16 first failure fuses the same invocation before a second queued sticker is uploaded',async()=>{
  const e=await sendingFixture();await put(e,'sticker_fail','2');await mediaRow(e,'a');await mediaRow(e,'b');
- const calls=await deliverSticker(e,{upload:()=>Response.json({code:9},{status:400})});assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,1);assert.ok((await all(e,'outbox')).every(o=>o.status==='skipped'));
+ const calls=await deliverSticker(e,{upload:()=>Response.json({code:9},{status:400})});assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,1);assert.deepEqual((await all(e,'outbox')).map(o=>o.status).sort(),['failed','skipped']);
 });
 test('S17 send missing or string true is closed both when queued and when sent',async()=>{
  for(const send of [undefined,'true',1,false,true]){
@@ -274,13 +274,13 @@ test('sticker selection and the largest sender failure path count actual D1 stat
  assert.equal(e.meter.used,base.DB.executed-before);assert.equal(e.meter.used,7);assert.ok((await all(base,'outbox')).some(o=>o.id.endsWith('~s')));
  // Worst row: upload cache write, rejected message, failure counter and fuse activity.
  const fail=await sendingFixture();await put(fail,'sticker_fail','2');await mediaRow(fail);before=fail.DB.executed;e=metered(fail);
- await deliverSticker(e,{send:()=>Response.json({code:9},{status:400})});assert.equal(e.meter.used,fail.DB.executed-before);assert.ok(e.meter.used<=48);assert.equal(e.meter.used,14);
+ await deliverSticker(e,{send:()=>Response.json({code:9},{status:400})});assert.equal(e.meter.used,fail.DB.executed-before);assert.ok(e.meter.used<=48);assert.equal(e.meter.used,20);
  const {writeFileSync}=await import('node:fs');writeFileSync('.agent/p2-send-counts.json',JSON.stringify({selectionIncludingText:7,largestFailureInvocation:e.meter.used},null,2));
 });
-test('closed sticker backlog can be skipped within four remaining statements and zero QQ calls',async()=>{
+test('v2 closed sticker backlog waits below the 19-statement entry threshold',async()=>{
  const {metered}=await load('src/d1.ts','sticker-backlog-meter'),base=await sendingFixture();await put(base,'off:sticker_send','1');for(let i=0;i<5;i++)await mediaRow(base,'backlog-'+i);
  const e=metered(base);e.meter.used=44;const before=base.DB.executed;
- assert.equal((await deliverSticker(e)).length,0);assert.equal(e.meter.used,48);assert.equal(base.DB.executed-before,4);assert.ok((await all(base,'outbox')).every(o=>o.status==='skipped'));
+ assert.equal((await deliverSticker(e)).length,0);assert.equal(e.meter.used,45);assert.equal(base.DB.executed-before,1);assert.ok((await all(base,'outbox')).every(o=>o.status==='pending'));await deliverSticker(base,{rounds:2});assert.ok((await all(base,'outbox')).every(o=>o.status==='skipped'));
 });
 test('low remaining send budget leaves rich media pending for a later invocation',async()=>{
  const {metered}=await load('src/d1.ts','sticker-defer-meter'),base=await sendingFixture();await mediaRow(base);const e=metered(base);e.meter.used=40;
@@ -293,4 +293,19 @@ test('upload TTL missing or zero uses one hour and stale file_info is uploaded a
   const before=Date.now(),calls=await deliverSticker(e,{upload:()=>Response.json({file_info:'renewed',...(ttl===undefined?{}:{ttl})})});
   assert.equal(calls.filter(c=>c.url.endsWith('/files')).length,1);assert.equal((await row(e)).file_info,'renewed');assert.ok((await row(e)).file_info_expires>=before+3600000);
  }
+});
+
+test('M1-S sticker POST uses manual redirects and a bodyless 302 is terminal failed',async()=>{
+ const e=await sendingFixture();await mediaRow(e);const old=globalThis.fetch,posts=[];
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'synthetic',expires_in:300});
+  posts.push({url:String(url),redirect:init.redirect});return new Response('',{status:302,headers:{location:'https://example.com/untrusted'}});
+ };
+ try{await queue(e,'no-sticker-job');assert.equal(posts.length,1);assert.equal(posts[0].redirect,'manual');assert.equal((await all(e,'outbox'))[0].status,'failed');await queue(e,'no-sticker-job');assert.equal(posts.length,1);}finally{globalThis.fetch=old;}
+});
+
+for(const remaining of [24,25])test(`M1-S sticker row reserves 21 plus a two-query tail at left=${remaining}`,async()=>{
+ const {metered,COST}=await load('src/d1.ts','sticker-reserve-v2'),base=await sendingFixture();await mediaRow(base);const e=metered(base);e.meter.used=48-remaining;
+ const old=globalThis.fetch,calls=[];globalThis.fetch=async(url,init)=>{if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'synthetic',expires_in:300});calls.push(JSON.parse(init.body));return String(url).endsWith('/files')?Response.json({file_info:'synthetic',ttl:3600}):Response.json({id:'sent'});};
+ try{await base.testWorker.queue({messages:[{body:{send:1},ack(){}}]},e);assert.equal(COST.send_row+COST.sticker,21);assert.ok(e.meter.used<=46);assert.equal(calls.filter(x=>x.msg_type===7).length,remaining===25?1:0);assert.equal((await all(base,'outbox'))[0].status,remaining===25?'sent':'pending');}finally{globalThis.fetch=old;}
 });

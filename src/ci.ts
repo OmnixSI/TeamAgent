@@ -1,3 +1,4 @@
+import {enqueueStatements} from "./send/enqueue";
 import { digest } from "./accounts";
 import { activity, promptData, redact } from "./runtime";
 import { decodeVoice } from "./voice";
@@ -259,18 +260,8 @@ export async function observeChecks(
             ? "此前关联的 GitHub Actions 检查已恢复通过。"
             : repo + " 的 " + incident.check_name + " 已恢复通过。") +
           "详情已同步工作台。";
-        notices.push(
-          e.DB.prepare(
-            "INSERT OR IGNORE INTO outbox SELECT ?,?,NULL,?,'pending',? FROM ci_incidents WHERE id=? AND cycle=? AND state='open' AND NOT EXISTS(SELECT 1 FROM ci_observations o WHERE o.incident_id=ci_incidents.id AND o.conclusion!='success')",
-          ).bind(
-            "ci2-recovered-" + incident.id + "-" + incident.cycle,
-            group,
-            text,
-            now,
-            incident.id,
-            incident.cycle,
-          ),
-        );
+        notices.push(...enqueueStatements(e,{id:"ci2-recovered-"+incident.id+"-"+incident.cycle,group,msgId:null,body:text,
+          from:{sql:"FROM ci_incidents WHERE id=? AND cycle=? AND state='open' AND NOT EXISTS(SELECT 1 FROM ci_observations o WHERE o.incident_id=ci_incidents.id AND o.conclusion!='success')",args:[incident.id,incident.cycle]}}));
       }
     } else if (incident.active && incident.state === "open") {
       if (group && incident.notified_cycle < incident.cycle)
@@ -307,6 +298,7 @@ export async function observeChecks(
     }
   }
   if (endings.length) {
+    const enqueued=notices.length>0;
     notices.push(
       e.DB.prepare(
         "UPDATE ci_incidents SET state=CASE id " +
@@ -321,6 +313,7 @@ export async function observeChecks(
       ),
     );
     await e.DB.batch(notices);
+    if(enqueued)e.enqueued=true;
   }
 }
 export async function triageCI(e: any, p: any, services: any) {
@@ -382,9 +375,7 @@ export async function triageCI(e: any, p: any, services: any) {
   if (!group) return;
   const id = "ci2-" + incident.id + "-c" + p.cycle;
   await e.DB.batch([
-    e.DB.prepare(
-      "INSERT OR IGNORE INTO outbox SELECT ?,?,NULL,?,'pending',? FROM ci_incidents WHERE id=? AND cycle=? AND state='open' AND notified_cycle<cycle",
-    ).bind(id, group, redact(text), Date.now(), incident.id, p.cycle),
+    ...enqueueStatements(e,{id,group,msgId:null,body:redact(text),from:{sql:"FROM ci_incidents WHERE id=? AND cycle=? AND state='open' AND notified_cycle<cycle",args:[incident.id,p.cycle]}}),
     e.DB.prepare(
       "UPDATE ci_incidents SET notified_cycle=cycle,summary=? WHERE id=? AND cycle=? AND state='open' AND EXISTS(SELECT 1 FROM outbox WHERE id=?)",
     ).bind(redact(analysis), incident.id, p.cycle, id),
@@ -401,6 +392,7 @@ export async function triageCI(e: any, p: any, services: any) {
       p.cycle,
     ),
   ]);
+  e.enqueued=true;
   await activity(
     e,
     "ci.triaged",

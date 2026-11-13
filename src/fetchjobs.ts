@@ -1,3 +1,4 @@
+import {enqueueStatements} from "./send/enqueue";
 import {FAILURE_PREFIX,OFFLINE_MS,READ_REASONS,fetchFailure,failureTtl,jobReason,biliFailReply,biliFailMaterial,type ReadReason} from './linkfail';
 import { left } from "./d1";
 import { stage, flushTail } from "./timing";
@@ -229,10 +230,10 @@ export async function runVideoWait(e: any, waitId: string): Promise<void> {
 async function failVideoWait(e: any, w: Row): Promise<void> {
   const guard = "id=? AND status='running' AND lease_until=? AND attempts>=3";
   await e.DB.batch([
-    e.DB.prepare("INSERT OR IGNORE INTO outbox SELECT ?,group_id,latest_id,?,'pending',? FROM video_waits WHERE " + guard)
-      .bind("video-" + w.id, "视频解读暂时无法完成，已停止自动重试。请稍后再问。", Date.now(), w.id, w.lease_until),
+    ...enqueueStatements(e,{id:"video-"+w.id,group:{col:"group_id"},msgId:{col:"latest_id"},body:"视频解读暂时无法完成，已停止自动重试。请稍后再问。",from:{sql:"FROM video_waits WHERE "+guard,args:[w.id,w.lease_until]}}),
     e.DB.prepare("UPDATE video_waits SET status='failed' WHERE " + guard).bind(w.id, w.lease_until),
   ]);
+  e.enqueued=true;
 }
 export async function sweepVideoWaits(e: any): Promise<void> {
   const now = Date.now();
