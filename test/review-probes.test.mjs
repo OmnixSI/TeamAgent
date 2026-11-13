@@ -58,8 +58,10 @@ test("layer 2 uses the recorded turn_offers and never backfills from the snapsho
   assert.equal(verdict.get("fp-repo-open"), "unknown_switch_or_policy_off");
   assert.equal(verdict.get("fp-xhs-fixed"), "consistent");
   assert.equal(verdict.get("fp-xhs-not-offered"), "unknown_tool_not_offered");
-  assert.equal(verdict.get("fp-attach-open"), "probe_fail_gap_open");
-  assert.equal(verdict.get("fp-attach-fixed"), "gap_fixed_probe_fail");
+  // V-D-authz fixed the #18 label-colon denial, so attachment_send now passes.
+  // fp-attach-open's fixture turn ran with the runner offline, hence unknown.
+  assert.equal(verdict.get("fp-attach-open"), "unknown_capability_offline");
+  assert.equal(verdict.get("fp-attach-fixed"), "consistent");
   assert.equal(verdict.get("fp-bili-open"), "unknown_no_turn_offer");
   assert.equal(verdict.get("fp-bili-fixed"), "consistent");
   assert.equal(verdict.get("fp-bili-pass-open"), "probe_pass_gap_open");
