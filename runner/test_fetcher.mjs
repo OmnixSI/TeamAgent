@@ -1,14 +1,17 @@
 import {test} from 'node:test';
 import './test_browser_auth.mjs';
 import './test_qr_login.mjs';
+import './test_card_samples.mjs';
+import './test_local_login_page.mjs';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import https from 'node:https';
 import {createBrowserAuth,writeBiliCookies} from './browser-auth.mjs';
-import {createFetchClient,createSafeLookup,isPublic,wbiSign,sanitize,runJob} from './fetcher.mjs';
+import {createFetchClient,createSafeLookup,isPublic,wbiSign,sanitize,runJob,runFetchLoop} from './fetcher.mjs';
+import {createWakePort,mentionsBili,writeFetchWake} from './fetch-wake.mjs';
 const BV='BV1xx411c7mD';
 const titleModule=()=>import('./bili-title.mjs');
 test('N-T1 title matching preserves punctuation/case and checks every candidate after the fifth',async()=>{
@@ -43,7 +46,7 @@ test('N-T2 title search signs all parameters, is anonymous, then preserves logge
 });
 test('N-T3 vouchers cool down search only while HTTP 412 and risk codes keep the global pause',async()=>{
  const {biliByTitle}=await titleModule();let calls=0,searchPaused=false,globalPauses=0;
- const client={isPaused:()=>false,isSearchPaused:()=>searchPaused,prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>{calls++;return {code:0,data:{v_voucher:'redacted-challenge'}};},pauseForRisk:()=>globalPauses++,pauseSearch:ms=>{assert.equal(ms,6*3600000);searchPaused=true;},biliLight:async()=>{throw Error('must not read a video');}};
+ const client={isPaused:()=>false,isSearchPaused:()=>searchPaused,prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>{calls++;return {code:0,data:{v_voucher:'redacted-challenge'}};},pauseForRisk:()=>globalPauses++,pauseSearch:ms=>{assert.equal(ms,30*60*1000);searchPaused=true;},biliLight:async()=>{throw Error('must not read a video');}};
  await assert.rejects(biliByTitle(client,'标题'),/风控/);assert.equal(calls,1);assert.equal(globalPauses,0);assert.equal(searchPaused,true);
  await assert.rejects(biliByTitle(client,'标题'),/风控/);assert.equal(calls,1);
  for(const code of [412,-352,-412]){
@@ -76,7 +79,7 @@ test('N-T6 valid title jobs search exactly once and report matches or misses wit
   assert.equal(searches,1);assert.equal(lights,matches.length);assert.equal(reports[0].success,true);assert.ok(!JSON.stringify(logs).includes('标题'));
  }
 });
-test('N-T7 voucher leaves BV reads running, blocks all title requests for six hours and then retries once',async()=>{
+test('N-T7 voucher leaves BV reads running, blocks all title requests for 30 minutes and then retries once',async()=>{
  const f=fixture(o=>o.path.includes('/search/type')?{body:{code:0,data:{v_voucher:'synthetic-challenge'}}}:o.path.includes('/spi')?{body:{code:0,data:{b_3:'anon'}}}:o.path.includes('/nav')?{body:{code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:o.path.includes('/view')?{body:{code:0,data:{title:'标题',aid:1,cid:1,owner:{name:'合成UP'}}}}:{body:{code:0,data:{}}});
  const reports=[],cloud=async(_path,body)=>reports.push(body),task=title=>({id:'search-task',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title}});
  await runJob(task('标题'),f.client,cloud);const challengedAt=f.time;
@@ -86,10 +89,73 @@ test('N-T7 voucher leaves BV reads running, blocks all title requests for six ho
  assert.equal(searches(),1);
  for(const title of ['标题','另一个标题']){await runJob(task(title),f.client,cloud);assert.equal(reports.at(-1).success,false);assert.equal(reports.at(-1).reason,'risk');assert.equal(reports.at(-1).retryAfter,3600);}
  assert.equal(f.calls.length,count);
- f.setTime(challengedAt+6*3600000-1);await runJob(task('标题'),f.client,cloud);assert.equal(f.calls.length,count);
- f.setTime(challengedAt+6*3600000);assert.equal(f.client.isSearchPaused(),false);
+ f.setTime(challengedAt+30*60*1000-1);await runJob(task('标题'),f.client,cloud);assert.equal(f.calls.length,count);
+ f.setTime(challengedAt+30*60*1000);assert.equal(f.client.isSearchPaused(),false);
  await runJob(task('标题'),f.client,cloud);assert.equal(searches(),2);assert.equal(f.calls.length,count+1);assert.equal(f.client.isPaused(),false);
 });
+test('C5R-1 vouchers pause search 30 minutes twice a day, then 60 minutes, and reset next day',async()=>{
+ const {createVoucherPause}=await titleModule();
+ let t=Date.parse('2026-11-14T10:00:00+11:00');const pause=createVoucherPause(()=>t);
+ for(const expected of [1800000,1800000,3600000,3600000])assert.equal(pause(),expected);
+ t=Date.parse('2026-11-15T00:10:00+11:00');assert.equal(pause(),1800000);
+});
+test('C5R-1b the third voucher in a day keeps biliByTitle search paused for 60 minutes',async()=>{
+ const {biliByTitle}=await titleModule();
+ const f=fixture(o=>o.path.includes('/search/type')?{body:{code:0,data:{v_voucher:'synthetic-challenge'}}}:o.path.includes('/spi')?{body:{code:0,data:{b_3:'anon'}}}:o.path.includes('/nav')?{body:{code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+'b'.repeat(32)+'.png'}}}}:{body:{code:0,data:{}}});
+ for(const step of [0,30*60*1000,30*60*1000]){f.setTime(f.time+step);await assert.rejects(biliByTitle(f.client,'标题'),/风控/);}
+ const pausedAt=f.time;assert.equal(f.client.isSearchPaused(),true);
+ f.setTime(pausedAt+60*60*1000-1);assert.equal(f.client.isSearchPaused(),true);
+ f.setTime(pausedAt+60*60*1000);assert.equal(f.client.isSearchPaused(),false);
+});
+test('C5R-2 gateway wake file is a 0600 timestamp written only for bilibili messages',async t=>{
+ assert.equal(mentionsBili('{"d":{"content":"看这个 https://b23.tv/AbCd12"}}'),true);
+ assert.equal(mentionsBili('{"d":{"content":"https://www.bilibili.com/video/BV1xx411c7mD"}}'),true);
+ assert.equal(mentionsBili('BV1xx411c7mD'),true);
+ for(const raw of ['{"d":{"content":"https://example.com/video/1"}}','随便聊聊','{"d":{"content":""}}'])assert.equal(mentionsBili(raw),false);
+ const home=await mkdtemp(join(tmpdir(),'team-fetch-wake-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const file=writeFetchWake(home,1234567890);
+ assert.equal(file,join(home,'fetch-wake'));
+ assert.equal(await readFile(file,'utf8'),'1234567890');
+ assert.equal((await stat(file)).mode&0o777,0o600);
+});
+test('C5R-3 a wake during the idle wait claims again immediately',async()=>{
+ const clock={t:0},waiters=[];let claims=0;const controller=new AbortController();
+ const loop=runFetchLoop({now:()=>clock.t,signal:controller.signal,claim:async()=>{claims++;return {};},work:async()=>{},login:()=>true,wait:ms=>new Promise(resolve=>waiters.push(resolve)),wake:{check:()=>false},log:()=>{}});
+ await flushLoop();assert.equal(claims,1);assert.equal(waiters.length,1);
+ waiters.shift()(true);await flushLoop();
+ assert.equal(claims,2);assert.ok(clock.t<1000);
+ controller.abort();waiters.shift()?.(false);await loop;
+});
+test('C5R-4 polling runs at 2 s for 60 s after a wake, then returns to 10 s',async()=>{
+ const clock={t:0},delays=[];let firstWake=true;const controller=new AbortController();
+ const loop=runFetchLoop({now:()=>clock.t,signal:controller.signal,claim:async()=>({}),work:async()=>{},login:()=>true,
+  wait:async ms=>{delays.push(ms);clock.t+=ms;if(delays.length>=31)controller.abort();return false;},
+  wake:{check:()=>{const value=firstWake;firstWake=false;return value;}},log:()=>{}});
+ await loop;
+ assert.deepEqual(delays.slice(0,30),Array(30).fill(2000));assert.equal(delays[30],10000);
+});
+test('C5R-5 a finished job also switches to 2 s polling',async()=>{
+ const clock={t:0},delays=[];let claims=0;const controller=new AbortController();
+ const loop=runFetchLoop({now:()=>clock.t,signal:controller.signal,claim:async()=>++claims===1?{job:{id:'job-1'}}:{},work:async()=>{},login:()=>true,
+  wait:async ms=>{delays.push(ms);controller.abort();return false;},wake:{check:()=>false},log:()=>{}});
+ await loop;
+ assert.deepEqual(delays,[2000]);
+});
+test('C5R-6 a running login never blocks claiming fetch jobs',async()=>{
+ const worked=[];let claims=0;const controller=new AbortController(),pendingLogin=new Promise(()=>{});
+ const loop=runFetchLoop({now:()=>0,signal:controller.signal,claim:async()=>++claims===1?{login:{id:'login-1'}}:{job:{id:'job-1'}},work:async job=>{worked.push(job.id);controller.abort();},login:()=>pendingLogin,wait:async()=>{},wake:{check:()=>false},log:()=>{}});
+ await loop;
+ assert.deepEqual(worked,['job-1']);
+});
+test('C5R-7 the local wake port notices a new file within one second',async t=>{
+ const home=await mkdtemp(join(tmpdir(),'team-wake-port-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const port=createWakePort(join(home,'fetch-wake')),started=Date.now();t.after(()=>port.close());
+ const waiting=port.wait(10000);
+ await new Promise(resolve=>setTimeout(resolve,20));
+ writeFetchWake(home,Date.now());
+ assert.equal(await waiting,true);assert.ok(Date.now()-started<1000);
+});
+const flushLoop=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
  let t=10000; const calls=[],logs=[],times=[]; let destroys=0;
  const request=(o,cb)=>{const req=new EventEmitter();req.end=()=>{o.lookup(o.host,{},(err)=>{if(err){req.emit('error',err);return;}calls.push(o);times.push(t);const r=handler(o,calls.length);const res=new EventEmitter();res.statusCode=r.status||200;res.headers=r.headers||{};cb(res);queueMicrotask(()=>{for(const chunk of r.chunks||[Buffer.from(JSON.stringify(r.body||{}))])res.emit('data',chunk);res.emit('end');});});};req.destroy=(err)=>{destroys++;req.emit('error',err||Error('destroyed'));};return req;};
@@ -352,9 +418,9 @@ test('R5 two risk responses report a bounded retryAfter',async()=>{
  await runJob({id:'risk',payload:{type:'bili',tier:'light',ref:BV}},f.client,async(_p,b)=>reports.push(b));
  assert.deepEqual(reports[0],{id:'risk',lease:undefined,success:false,reason:'risk',retryAfter:600});
 });
-test('R6 search challenge reports risk for one hour while preserving six-hour search pause',async()=>{
+test('R6 search challenge reports risk for one hour while preserving the 30-minute search pause',async()=>{
  const {biliByTitle}=await titleModule();let paused=false;
- const client={isPaused:()=>false,isSearchPaused:()=>paused,pauseSearch:ms=>{assert.equal(ms,6*3600000);paused=true;},prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>({code:0,data:{v_voucher:'challenge'}}),sanitize:x=>x};
+ const client={isPaused:()=>false,isSearchPaused:()=>paused,pauseSearch:ms=>{assert.equal(ms,30*60*1000);paused=true;},prepare:async()=>['a'.repeat(32),'b'.repeat(32)],biliApi:async()=>({code:0,data:{v_voucher:'challenge'}}),sanitize:x=>x};
  const reports=[];for(let i=0;i<2;i++)await runJob({id:'search',payload:{type:'bili',tier:'light',ref:'t-0123456789abcdef',title:'标题'}},client,async(_p,b)=>reports.push(b));
  assert.equal(paused,true);for(const report of reports)assert.deepEqual(report,{id:'search',lease:undefined,success:false,reason:'risk',retryAfter:3600});
 });

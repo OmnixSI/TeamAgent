@@ -1,4 +1,5 @@
 import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
+import { biliNoteText } from "./fetchjobs";
 
 export type ViewMsg = {
   id: string; sortAt: number; ord: number; at: string; from: string; fromId: string;
@@ -143,7 +144,16 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   const spoken = voice ? voiceText(voice) : undefined;
   const links = [...new Set<string>([...(meta.ownUrls || []), ...(meta.quotedUrls || [])])].slice(0, 5);
   if (links.length) material.links = links;
-  if (row.analysed_media) material.analysed = String(row.analysed_media).slice(0, 600);
+  if (row.analysed_media) {
+    let text = String(row.analysed_media);
+    if (text.startsWith("{")) {
+      try {
+        const note = JSON.parse(text);
+        if (note && typeof note.bvid === "string" && Array.isArray(note.comments)) text = biliNoteText(note);
+      } catch {}
+    }
+    material.analysed = text.slice(0, 600);
+  }
   const flags: NonNullable<ViewMsg["flags"]> = [];
   const mentionsBot = !!row.mentioned || mentions.some(m => m.isBot);
   if (mentionsBot) flags.push("mentionsYou");

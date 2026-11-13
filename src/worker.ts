@@ -16,9 +16,10 @@ import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
-import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected, prefetchBili } from "./fetchjobs";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
+import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -734,6 +735,7 @@ async function processJob(e: Env, id: string) {
     if (claim.kind === "voice_asr") await runVoiceCloudJob(e, p);
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
+    if (claim.kind === "video_deadline") await wakeVideoWait(e, p.wait);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
       const claimedAt = Date.now();
@@ -800,7 +802,10 @@ async function processJob(e: Env, id: string) {
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
-      if (!transferred) await prefetchBili(e, latest, TEAM);
+      if (!transferred) await prefetchTurn(e, { latest, recent: context.recent, target, cfg: TEAM });
+      if(target)(e as any).tail?.cache.push(['msgref:v1:'+target.target.sourceId,JSON.stringify({ref:target.ref,match:target.target.kind==='title'?'title':'id'}),iso()]);
+      // R8: map the message to the video it asked about, even when the fetch is already cached or still waiting.
+      if (target && (e as any).tail) (e as any).tail.cache.push(["msgref:v1:" + latest.id, JSON.stringify({ ref: target.ref, match: isTitleRef(target.ref) ? "title" : "id" }), iso()]);
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;
