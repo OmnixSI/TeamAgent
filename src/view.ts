@@ -78,6 +78,18 @@ function stamp(at: number) {
   const p = Object.fromEntries(parts.map(v => [v.type, v.value]));
   return { date: `${p.year}-${p.month}-${p.day}`, label: `${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
 }
+/** A voice transcript is evidence, so it carries the marker and a warning. */
+export function voiceText(media: any): string | undefined {
+  if (typeof media?.asr === "string" && media.asr.trim()) {
+    let text = "[语音转写] " + media.asr.trim();
+    if (media.asrTruncated === true) text += "\n（语音较长，只转写了前 110 秒）";
+    return text + "\n（自动转写，可能有误）";
+  }
+  if (typeof media?.asrError?.reason_text === "string" && media.asrError.reason_text)
+    return "[语音] 转写失败：" + media.asrError.reason_text;
+  return undefined;
+}
+
 export function mediaViews(
   meta: any,
   messageId: string,
@@ -90,8 +102,10 @@ export function mediaViews(
     if (m.kind !== "image")
       return m.kind === "voice"
         ? m.asr
-          ? "语音转写：" + m.asr
-          : "语音"
+          ? "语音（已转写）"
+          : m.asrError
+            ? "语音（转写失败）"
+            : "语音"
         : m.kind === "video"
           ? "视频"
           : "文件" + (m.filename ? " " + m.filename : "");
@@ -124,6 +138,8 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
   const media = mediaViews(meta, row.id, imageNotes, imagePicks);
   if (media) material.media = media;
+  const voice = (Array.isArray(meta.media) ? meta.media : []).find((m: any) => m.kind === "voice");
+  const spoken = voice ? voiceText(voice) : undefined;
   const links = [...new Set<string>([...(meta.ownUrls || []), ...(meta.quotedUrls || [])])].slice(0, 5);
   if (links.length) material.links = links;
   if (row.analysed_media) material.analysed = String(row.analysed_media).slice(0, 600);
@@ -136,7 +152,7 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
     id: row.id, sortAt, ord: row.ordinal || 0, at: stamp(sortAt).time,
     from: named(row.sender || "", names.get(row.sender) || meta.senderName, names), fromId: String(row.sender || "").slice(-6),
     to: addressee({ ...meta, mentionsBot }, names), re: target?.id,
-    text: displayText(String(row.body || ""), mentions) || meta.placeholder || "",
+    text: displayText(String(row.body || ""), mentions) || spoken || meta.placeholder || "",
     ...(Object.keys(material).length ? { material } : {}), ...(flags.length ? { flags } : {}),
   };
   mentionsOf.set(v, mentions);

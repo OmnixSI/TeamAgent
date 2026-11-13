@@ -8,6 +8,7 @@ import {execFileSync} from 'node:child_process';
 import {createFetchClient,createSafeLookup,sanitize,classifyMedia} from './fetcher.mjs';
 import {loadBiliCookies} from './browser-auth.mjs';
 import {runAsr,runCommand,expandHome,fault} from './asr.mjs';
+import {runVoiceCycle} from './voice.mjs';
 const DAY=86400000,MAX_TMP=2048*1024**2,BV=/^BV[0-9A-Za-z]{10}$/;
 const DEFAULT={enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048};
 const DEFAULT_MODEL=join(homedir(),'Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03');
@@ -211,10 +212,14 @@ export async function main(argv=process.argv.slice(2)){
    const r=result.report.result;console.log(JSON.stringify({bvid,subtitle_status:light.subtitle_status,duration:r.duration,covered:r.covered,partial:r.partial,chunks:r.chunks,chars:r.text.length,head:r.text.slice(0,300),files_seen:result.files_seen,max_rss_mb:result.max_rss_mb,nice:result.nice,wall_s:result.wall_s,cleanup:result.cleanup}));return 0;
   }catch(error){console.log(JSON.stringify({bvid,error:error.reason||'download_failed',cleanup:{residue:0,paths:[]}}));return 1;}finally{release()}
  }
- if(!cfg.enabled)return 0;
  const config=JSON.parse(fs.readFileSync(join(home,'config.json'),'utf8')),url=new URL(config.url);if(url.protocol!=='https:'||url.username||url.password)throw fault('asr_unavailable');
- const cloud=async(path,body)=>{const r=await fetch(new URL('/api/runner/fetch/media/'+path,url),{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+config.runnerToken,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});return {status:r.status,data:await r.json().catch(()=>({}))}};
+ const cloudAt=base=>async(path,body)=>{const r=await fetch(new URL(base+path,url),{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+config.runnerToken,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});return {status:r.status,data:await r.json().catch(()=>({}))}};
+ const cloud=cloudAt('/api/runner/fetch/media/'),voiceCloud=cloudAt('/api/runner/voice/');
  const controller=new AbortController(),stop=()=>controller.abort(fault('media_timeout'));process.once('SIGTERM',stop);
- try{await runCycle({home,client,settings:cfg,asrConfig:config.asr,cloud,signal:controller.signal,log:s=>console.error(s)});}finally{process.removeListener('SIGTERM',stop)}return 0;
+ try{
+  // Voice replies are interactive: drain the short voice queue before long Bili work.
+  await runVoiceCycle({cloud:voiceCloud,deps:{home,log:s=>console.error(s)},max:2});
+  if(cfg.enabled) await runCycle({home,client,settings:cfg,asrConfig:config.asr,cloud,signal:controller.signal,log:s=>console.error(s)});
+ }finally{process.removeListener('SIGTERM',stop)}return 0;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().then(code=>{process.exitCode=code}).catch(()=>{console.error('media worker unavailable');process.exitCode=1});
