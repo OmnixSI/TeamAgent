@@ -132,7 +132,7 @@ test('P0b failure report, fixed video reply and cached repeat stay within budget
  const base=env();await req(base,'/api/admin/bind',{groupId:'GROUP000001'});
  await qq(base,msg('fail-budget','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');
  await queue(base,'chat-fail-budget');const {job}=await(await req(base,'/api/runner/fetch/claim',{},'runner-secret')).json();
- await measured(base,'P0b-failure-report',async e=>{assert.equal((await req(e,'/api/runner/fetch/report',{id:job.id,lease:job.payload.lease,success:false,reason:'risk',retryAfter:600},'runner-secret')).status,200);});
+ await measured(base,'P0b-failure-report',async e=>{assert.equal((await req(e,'/api/runner/fetch/report',{id:job.id,lease:job.payload.lease,proto:2,success:false,reason:'risk',retryAfter:600},'runner-secret')).status,200);});
  await modelFixture(async state=>{
   await measured(base,'P0b-failed-video-reply',e=>queue(e,'video-vw-fail-budget'));assert.equal(state.models,0);
   await qq(base,msg('cached-failure','这个视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD'),'GROUP_AT_MESSAGE_CREATE');

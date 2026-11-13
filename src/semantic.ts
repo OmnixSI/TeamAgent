@@ -408,9 +408,12 @@ export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok:
   const challenge = /just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i;
   const login = /sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i;
   const title = header.match(/^Title:\s*([^\r\n]*)/im)?.[1] || '';
+  if (/^(?:page not found|404(?:\s+(?:page\s+)?not found)?)(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'not_found'};
+  if (/^(?:sign in|log in|login|登录|登入)(?: to github)?(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'login_required'};
   if (challenge.test(title)) return {ok:false,reason:'risk'};
   if (login.test(title)) return {ok:false,reason:'login_required'};
   const body = boundary < 0 ? raw : raw.slice(boundary + marker.length);
+  if (/^\s*(?:#+\s*)?(?:sign in|log in)(?: to github)?\s*$/im.test(body.slice(0,300))&&/username or email address/i.test(body)&&/forgot (?:your )?password/i.test(body)) return {ok:false,reason:'login_required'};
   const text = body.replace(/^(?:\s*\[[^\]\n]*\]\([^\n)]*\)\s*[|·]?)+\s*$/gm, '').trim();
   if (text.length < 1500) {
     if (challenge.test(text)) return {ok:false,reason:'risk'};
