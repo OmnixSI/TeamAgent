@@ -5,6 +5,14 @@ import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {StringDecoder} from 'node:string_decoder';
 export const SCRIPT=fileURLToPath(new URL('./xasr_transcribe.py',import.meta.url));
+/** Pure music often decodes as repeated fillers; they are not evidence of speech. */
+export const FILLERS=['嗯哼','嗯','啊','呃','哦','唔','la','♪'];
+const fillerPatterns=FILLERS.filter(x=>x!=='la'&&x!=='♪');
+export function speechChars(text){
+ let value=String(text).replace(/\bla\b/gi,'').replace(/[\p{P}\p{S}\s]/gu,'');
+ for(const filler of fillerPatterns)value=value.split(filler).join('');
+ return [...value].length;
+}
 export const expandHome=(p,home=homedir())=>typeof p==='string'&&p.startsWith('~/')?join(home,p.slice(2)):p;
 export const childEnv=(env=process.env)=>({PATH:env.PATH||'/usr/bin:/bin',HOME:env.HOME||homedir(),LANG:env.LANG||'en_US.UTF-8'});
 export const fault=reason=>Object.assign(Error(reason),{reason});
@@ -51,6 +59,7 @@ export function runCommand(command,args,options={},deps={}){
 export async function runAsr(wav,{python,modelDir,memCapMb=1300,timeoutMs=120000,signal,onProgress,onChild}={},deps={}){
  const child=await runCommand(expandHome(python),['-u',SCRIPT,wav,'--model-dir',expandHome(modelDir),'--max-rss-mb',String(memCapMb)],{memCapMb,timeoutMs,signal,onProgress,onChild},deps);
  if(child.code!==0)throw fault([2,5].includes(child.code)?'asr_unavailable':child.code===6?'mem_limit':'asr_failed');
- const result=parseAsrOutput(child.stdout);if(result.segments.map(s=>s.text).join('').trim().length<10)throw fault('no_speech');
+ const result=parseAsrOutput(child.stdout),chars=speechChars(result.segments.map(s=>s.text).join('')),minutes=result.audio_s/60;
+ if(chars<10||(minutes>0&&chars/minutes<8))throw fault('no_speech');
  return {...result,max_rss_mb:Math.max(result.max_rss_mb,child.max_rss_mb),nice:child.nice};
 }
