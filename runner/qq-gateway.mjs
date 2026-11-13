@@ -1,4 +1,7 @@
+import { processVoiceOutbox } from "./voice-delivery.mjs";
 import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
+import { sampleCardEvent, sweepCardSamples } from "./card-samples.mjs";
+import { mentionsBili, writeFetchWake } from "./fetch-wake.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +9,15 @@ import path from "node:path";
 import crypto from "node:crypto";
 const home = path.join(os.homedir(), ".inkboard-team");
 const config = JSON.parse(fs.readFileSync(path.join(home, "config.json")));
+const cardConfig = () => {
+  try {
+    const live = JSON.parse(fs.readFileSync(path.join(home, "config.json")));
+    return { card_sample_until: live.card_sample_until };
+  } catch {
+    return {};
+  }
+};
+try { sweepCardSamples(cardConfig()); } catch {}
 const secret = JSON.parse(
   fs.readFileSync(path.join(home, "worker-secrets.json")),
 );
@@ -113,6 +125,12 @@ bot.on("message", async (ctx) => {
   const target = path.join(spool, name);
   fs.writeFileSync(target + ".tmp", raw, { mode: 0o600 });
   fs.renameSync(target + ".tmp", target);
+  try { sampleCardEvent(m.raw, { config: cardConfig() }); } catch {}
+  try {
+    if (mentionsBili(raw)) writeFetchWake(home);
+  } catch {
+    console.log("fetch wake write failed");
+  }
   await flush();
 });
 bot.on("ready", () => {
@@ -153,11 +171,12 @@ async function cloud(pathname, body) {
   if (!response.ok) throw Error("cloud HTTP " + response.status);
   return response.json();
 }
-let delivering = false;
+let delivering = false, voiceReady = false;
 setInterval(async () => {
   if (delivering) return;
   delivering = true;
   try {
+    if (voiceReady && connected) await processVoiceOutbox({ cloud, bot, deps: { log: console.log } });
     await deliverFiles({
       dir: deliveryDir,
       root: path.join(home, "utility"),
@@ -175,7 +194,7 @@ setInterval(async () => {
 
 setInterval(async () => {
   try {
-    await fetch(config.url + "/api/runner/gateway-status", {
+    const response = await fetch(config.url + "/api/runner/gateway-status", {
       method: "POST",
       headers: {
         Authorization: "Bearer " + config.runnerToken,
@@ -184,6 +203,7 @@ setInterval(async () => {
       body: JSON.stringify({ connected, blocked }),
       signal: AbortSignal.timeout(15000),
     });
+    if (response.ok) voiceReady = (await response.json()).voice === true;
   } catch {}
 }, 30000);
 const abort = new AbortController();

@@ -23,7 +23,9 @@ export type NewSchedule = {
 
 const MINUTE = 60000;
 const LATE_AFTER = 5 * MINUTE;
-const MAX_MISSED_AGE_MS = 2 * 60 * MINUTE;
+// F6P-3：错过窗口超过 15 分钟不再补发（与 FIX-resend 的补发上界同口径）；
+// mute 到期只解除静默，不受这个上界影响。
+export const MAX_MISSED_AGE_MS = 15 * MINUTE;
 const RETRY_AFTER = 5 * MINUTE;
 const DEFAULT_TZ = "Australia/Sydney";
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -164,7 +166,20 @@ export function scheduleFailure(detail: string) {
   };
 }
 
-export async function createSchedule(e: any, input: NewSchedule, now = Date.now()) {
+export type PlannedSchedule = {
+  id: string;
+  group_id: string;
+  owner: string;
+  kind: ScheduleKind;
+  tz: string;
+  spec: ScheduleSpec;
+  next_run_at: number;
+  created_at: number;
+  source_msg_id: string | null;
+};
+
+/** 校验并算出将要写入 schedules 的那一行；dry-run 和真实创建共用同一套规则。 */
+export function planSchedule(input: NewSchedule, now = Date.now()): PlannedSchedule {
   const kind = input.kind;
   if (!["digest_daily", "digest_weekly", "reminder", "mute"].includes(kind))
     throw Error("不支持的日程类型");
@@ -200,20 +215,34 @@ export async function createSchedule(e: any, input: NewSchedule, now = Date.now(
 
   const next = nextRun(spec, now, tz);
   if (next === null) throw Error("这个时间已经过去，请说下一次的时间");
-  const id = `sched-${kind}-${input.source_msg_id || crypto.randomUUID()}`;
+  return {
+    id: `sched-${kind}-${input.source_msg_id || crypto.randomUUID()}`,
+    group_id: input.group_id,
+    owner: input.owner,
+    kind,
+    tz,
+    spec,
+    next_run_at: next,
+    created_at: now,
+    source_msg_id: input.source_msg_id || null,
+  };
+}
+
+export async function createSchedule(e: any, input: NewSchedule, now = Date.now()) {
+  const plan = planSchedule(input, now);
   await e.DB.prepare(
     "INSERT OR IGNORE INTO schedules(id,group_id,owner,kind,tz,spec,status,next_run_at,fail_count,created_at,source_msg_id) VALUES(?,?,?,?,?,?,'active',?,0,?,?)",
   )
-    .bind(id, input.group_id, input.owner, kind, tz, JSON.stringify(spec), next, now, input.source_msg_id || null)
+    .bind(plan.id, plan.group_id, plan.owner, plan.kind, plan.tz, JSON.stringify(plan.spec), plan.next_run_at, plan.created_at, plan.source_msg_id)
     .run();
-  const row = await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(id).first();
+  const row = await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first();
   if (row?.status === "cancelled")
     await e.DB.prepare(
       "UPDATE schedules SET status='active',spec=?,tz=?,next_run_at=?,fail_count=0,last_error=NULL WHERE id=?",
     )
-      .bind(JSON.stringify(spec), tz, next, id)
+      .bind(JSON.stringify(plan.spec), plan.tz, plan.next_run_at, plan.id)
       .run();
-  return (await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(id).first()) || row;
+  return (await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first()) || row;
 }
 
 export async function listSchedules(e: any, groupId: string, opts: { includeDone?: boolean } = {}) {
@@ -358,12 +387,16 @@ export async function runSchedules(e: any, now = Date.now()) {
     if (!claim) continue;
     const spec = specOf(schedule);
     let outboxId: string | null = null;
-    if (schedule.kind !== 'mute' && now - dueAt > MAX_MISSED_AGE_MS) {
+    if (schedule.kind !== "mute" && now - dueAt > MAX_MISSED_AGE_MS) {
+      // 错过窗口：不调用模型、不入 outbox；周期任务推进到下一次，一次提醒直接结束。
       const next = nextRun(spec, now, schedule.tz || DEFAULT_TZ);
       await e.DB.batch([
-        e.DB.prepare("UPDATE schedule_runs SET finished_at=?,status='skipped',error='expired' WHERE id=?").bind(now, runId),
-        e.DB.prepare("UPDATE schedules SET next_run_at=?,status=?,fail_count=0,last_error='expired' WHERE id=?")
-          .bind(next, next === null ? 'done' : 'active', schedule.id),
+        e.DB.prepare(
+          "UPDATE schedule_runs SET finished_at=?,status='skipped',error='expired' WHERE id=?",
+        ).bind(now, runId),
+        e.DB.prepare(
+          "UPDATE schedules SET next_run_at=?,status=?,fail_count=0,last_error='expired' WHERE id=?",
+        ).bind(next, next === null ? "done" : "active", schedule.id),
       ]);
       continue;
     }

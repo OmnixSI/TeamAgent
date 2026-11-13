@@ -24,5 +24,8 @@
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "wrangler": "4.159.0"
+  },
+  "dependencies": {
+    "silk-wasm": "3.7.1"
   }
 }

@@ -1,0 +1,336 @@
+{
+  "source": "F7-2 read-only production export 2026-11-14T01:57 Sydney (462 rows, sha256 6df7610e...) + F6 postdeploy online read-only 2026-11-14T01:50 Sydney",
+  "note": "真实消息原文子集；id/ts/sender 未改。用于 F6P-3 日推本地独立库回放。",
+  "request": {
+    "rid": 351,
+    "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT2V5hU3d-j6xzhbCQeAQ6Z.OwSP3g49XjNFz-7MfTy-y7SwXrIDy1.sk-8ujK3u2doyiDiEnBsDjRwFKyBrETjzvJYw94Gf2XvduFhFPmyNe",
+    "group_id": "9968A083EE07797A987010E64CD421B9",
+    "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+    "body": "然后悉尼时间每天早上8点在群里推送一下昨日聊天内容总结，一定要精简。<@204AE67DE34A4448CEE8EA52208A2BB0>",
+    "ts": "2026-11-13T01:11:39+08:00",
+    "mentioned": 1
+  },
+  "outbox_206": {
+    "rowid": 206,
+    "created_at": 1794522720196,
+    "created_at_sydney": "2026-11-13T09:32:00+11:00",
+    "body": "我的问题，昨晚只定了口径，定时任务没真落地，今早才没推。补发昨日精简总结：\n\n- 大肥鱼：马哥只梳理方案、不改代码；main 停 a1cfc82「发布 0.3.5」，开放 PR 为 0，#154–#161 重设计相关还开着，没收完。\n- TeamAgent：CI check 曾失败（job 131394725532，只报 exit code 1、无日志），00:54 恢复通过。\n- AI 中转站：换平台不改变“对外生成式AI服务提供者”定性；上游协议普遍禁 key 共享/转售"
+  },
+  "messages": [
+    {
+      "rid": 234,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Yscez0xC0d8eDe0QxDpvcwun5Y8v3hvmpQ83DJCTgFPzsin89jfcC0FHrIJvqw7wh.LFOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "Bot，你帮我分析分析，我集成很多小模型，然后呢，全部打包做成一个手机程序，体积控制在500M里面，集成llm小模型，还有图像识别小模型，还有tts小模型，有没有前景？",
+      "ts": "2026-11-11T21:04:02+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 235,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbj3kH0rw3zKHRJX9m-9CW0nJ59-2MdUjw5fJBpRtSCORw6vWK0EeAFlSftXg8eCBdzQBFwX7yRDMBXyUt-mH56ANIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "你别在这插话了",
+      "ts": "2026-11-11T21:04:03+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 238,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce8amdcBOQrmzV.v5bBmhkN2GlmMyIAcgxKL.PhnCOSPl1e.a1ItUkoFIDPMFmV1W6ufc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "就是离线助手，个人离线助手，私人AI管家。你来帮我看看，做这么一个程序怎么样？",
+      "ts": "2026-11-11T21:06:07+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 246,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce.zpvH4hRuT3srfsx3wr85A1srHBmSRwPezarHWN-5smA0EfE9XxOnJYOq8mBcILncWcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "你可千万别改我的大肥鱼，你马哥正在干活呢",
+      "ts": "2026-11-11T21:14:33+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 261,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbr4Jg7N3DJE-VPV2hzX73pIt0KiFqYuIVn4218KaK9spO5Fso0H6qN4x9LNEOmrD4mypd813aAV2wBo5yHbniWANIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "你帮我查查 我记得有知乎文章还是什么说了华为干了很多事情 挣了很多钱 特别在 5g 基站等等 请帮我认真核实华为的各种坏事",
+      "ts": "2026-11-11T21:19:01+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 269,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtrKZrgYaVeHlABPavWVVD2MLYO3-mKYYBAfZIRgH8R0wKM0uTL3t3bBdhHW7f9O6-fc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "https://github.com/Mai-with-u/MaiBot",
+      "ts": "2026-11-11T21:22:57+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 282,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtoViCk9jCf9hMhZeiypT1Tk83YuBH23TNFSoMsz7Nc1QpDzY9d4.hlR7y-zYYTEDMWcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "https://github.com/OmnixSI/TeamAgent\n你来看看怎么改一下，我把所有的部件都放上去了",
+      "ts": "2026-11-11T21:27:40+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 286,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce7MZYQbAGS--g10JZojNN1lQk7wPVOFbF4E4Hl-90.BJuRuSXnbUT1ZOzYnL4LFO2ufc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "你先闭嘴10分钟bot设个定时任务十分钟后再说话",
+      "ts": "2026-11-11T21:29:28+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 306,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT6CKiTWyD7nuCZMdx893U2uaIq5nYJW-XaXXrMcCKbMrwC-LGy8cBP1T7Y62aXpomSyyDuGvLjK6Bl1tXeB6thANIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "总结昨天和今天的全部消息，并整理出要点以及对应链接入口。",
+      "ts": "2026-11-12T13:08:51+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 341,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce-Hr2uuYV0HvpCkR5W7pDjJUR17FD0ix-a0-.VEuTi-01x343AAC.KFzvIXUwE1r-VH9HxDH9.-Q3OYSc3I2YcoNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "ai中转站在国内合法吗？比如我卖deepseek token<@204AE67DE34A4448CEE8EA52208A2BB0>",
+      "ts": "2026-11-12T19:54:34+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 342,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce62At8RGZVYQhP7OJOxY8sUaRcTG.MgQCajLfCZz9yHQpbEh2jhzvUv1kOn5PA-4KMWcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "我做API中转站，我申请别人的API，然后我自己平台生成独立的key，然后这些key走的是我申请的那个API的通道",
+      "ts": "2026-11-12T20:03:07+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 344,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2YscexWcReDPkByv0AWZM7P8hUavI9zfN0IbH57gLUpOB5IW6ry6LYHS38NTOB7IlAZfT8WcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "我不卖deep seek的，我去弄别的平台，比如说b点AI",
+      "ts": "2026-11-12T20:04:31+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 345,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbrpg2ZtAa9Cg9j9LSbp11M0vQBLlqFIG4-R2vRlOcpf8H7.7pPP.C2aHoAGH4Du1q-fc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "你肯定得自己搭个软件，直接卖 api 太蠢了",
+      "ts": "2026-11-12T20:06:13+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 346,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbt9NbEuFEVsCnj7k4eMI03PwQIeC.iUZ972pDzHw3JnxgesDcMB7WwYDWEsne2AQC-fc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "溢价也很低 没啥可卖",
+      "ts": "2026-11-12T20:06:22+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 347,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtZKtqcyrrpjIj-DNIHuAnVyiRd7daGFU5OgwiVMKGkOKwtrkz0DAihfsA4XnYtWYefc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "把模型能力转化为产品能力",
+      "ts": "2026-11-12T20:07:22+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 348,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTzmV4jDkkWYxwGHZ.Ld-z-rFpM0meAmTjpA.5S-hxix9YEe5EwVkjoHzdOxxWbTILRWHuhCmI3jVYWHzLcp87XUNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "把今天群里的对话和讨论的内容给我总结一个日报。",
+      "ts": "2026-11-13T01:08:38+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 349,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT32JjK-COc5WXfBJbT8jsNz1nPjD3-YcUohlMmgvOcsCW3JTPX9Ey3FDzWOcH8QWJOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "你不给我总结你就是gay",
+      "ts": "2026-11-13T01:09:04+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 350,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTy.ZpCTQJKtt41LsedQH.sfUY4d9fcJNRpIgddfT7TeHxn7fhf5NgxUP7td6AFw3iIm4OUZVVKsvr3O3aHhAaSINIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "按周吧，每个星期日是一周的开始<@204AE67DE34A4448CEE8EA52208A2BB0>",
+      "ts": "2026-11-13T01:11:20+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 351,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT2V5hU3d-j6xzhbCQeAQ6Z.OwSP3g49XjNFz-7MfTy-y7SwXrIDy1.sk-8ujK3u2doyiDiEnBsDjRwFKyBrETjzvJYw94Gf2XvduFhFPmyNe",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "然后悉尼时间每天早上8点在群里推送一下昨日聊天内容总结，一定要精简。<@204AE67DE34A4448CEE8EA52208A2BB0>",
+      "ts": "2026-11-13T01:11:39+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 352,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT6TOqlRbLA3s758JnjlweFPjegzF.WWbecyl8ijubaX.SpwOR76ifHxrxqWDEHQEjOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "不回的是gay",
+      "ts": "2026-11-13T01:11:44+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 353,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTwIu23yQ3zgrdPsSx9K9mlITi0X4hQg9P4.kl71U68AShAjX2vpBLSe-Y0qBuipHH-fc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "这周开始",
+      "ts": "2026-11-13T01:12:04+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 354,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT5C4.xebp8N5JDTNkmNSdybrTX8dDRNqQimMXgwtboX5Tjj2eB-7CfLOY5hVq1zGP-fc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "👍👍👍",
+      "ts": "2026-11-13T01:12:19+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 355,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT4V7lFNmHhrdCa8hRANWFrzv3bjyMzh8wdkBozXBqchRK4rkTNb2-iGSJOQkaQMsYOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "你妈的，我的日报呢？",
+      "ts": "2026-11-13T06:31:32+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 359,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbpbRlncCxBt1eAXE2h9ICsDlmotV1PpEyoMukxlQo-DzkzbwUJqqF1iLThpaUuh-MOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "给我看看马斯克最新的 x 内容和回复",
+      "ts": "2026-11-13T06:33:27+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 362,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbsk.gbCRyFQnFLP-62vDuR6WUEh0Fvfdqtl4GVjePbbG0.3MTjFSFhKXTugD-j7LEMWcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "这 byd 不好优化，我昨晚弄了好久",
+      "ts": "2026-11-13T06:35:14+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 364,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbmZsSxxffUqnZvcKEwtFYrRRZ1FqsChR9Cm.pX6CRdK3mBtiE1.qmX3OC8.cknA7Cufc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "我在群里发配置的包了，你让你的 ai 根据你的情况修修改改，然后让他给你配置好",
+      "ts": "2026-11-13T06:35:57+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 368,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbof8e1WzpbBE1OAhqIWPV8PzFOIOtS9-0LwefyV-yQBBxPQS3nB66ouIe1Hb8.z79F3W6gvTNLn63w0sa-7IkrcNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "【10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了-哔哩哔哩】 https://b23.tv/MV29F7r 总结一下视频内容和评论区观点",
+      "ts": "2026-11-13T06:37:46+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 379,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbh1CHKykcM7IpEJv7PKho2VZucPbOMwrPl-O5a0ZgopyG8Wjhq7nBYFVffcpmx5I7efc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "这么说黄仁勋是真正的做 ai 高手",
+      "ts": "2026-11-13T06:57:41+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 382,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTz4Oh7KrirTFsN.xy5m9fcTliKtmdGGv8oSvh6sYAbwkaHoWLn37QD8faiF3DYyJKm3ue-sNjTA3AYfWA2ficw4NIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "工作台UI修改指导<@204AE67DE34A4448CEE8EA52208A2BB0> 把这个发布到工作台作为一个新任务。",
+      "ts": "2026-11-13T07:27:54+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 394,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT.dJdWK-flnNnfOXAVwqPWpQc.PVctLDZwzclNMDEjyHeoUublaSGJoAeFLZmc4EZCwBi73Uty7eJltpDFXyeXMNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "记账报销额度\n我￥360，卡特龙￥50，Souvereign￥90",
+      "ts": "2026-11-13T15:35:06+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 395,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT45wFEN9ZyS6JYEDo-w0aq0Beojdw.jUrsyzh08xcTqZ0fBzHkkM8UBrZ63m2x.n6efc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "后续我们直接@ 你，给某人增加或者减少这个数值，当前是已经充值好的",
+      "ts": "2026-11-13T15:36:01+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 414,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtDEJOCPUdua-bjB1i5oAq3J3fJW0dSlGJIEs1AI9YhhcZ6bzR.G-KVTKeY4RxdBcnYVykl1QbN0P6gv2Vss-EkNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "黄仁勋辞职之后，x 上面大家都是什么反应",
+      "ts": "2026-11-13T15:41:53+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 420,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2YscewQT7AcXuvoQNevswGdbdRBkepPqDVJWVA6jPU9w2r0VInD6uIaNQAk-p6hnDxtz.ZZQx-KX8yP9UStKC8HOWnMNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "这牛客面试ai编程题让ai解题用的啥垃圾模型？",
+      "ts": "2026-11-13T18:12:27+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 422,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce20XNPY-KFtii9VMmbubLFwJEgUK1v5n7.NclLHzKeZJ27.vjjtvKO.4nw.ZYEpi.Ofc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "你去互联网上搜索一下，看有没有人提出跟我同样的吐槽",
+      "ts": "2026-11-13T18:14:26+08:00",
+      "mentioned": 0
+    },
+    {
+      "rid": 424,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbjCu1bjdtZ7YqvQ1hFZSvkiRyU5ZT0TWsTlSqfHnRhNYvwc7NF55EADiNEPJGGNJbb66MIs39qQMkqCCfr8GBx8NIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "你人呢 查到哪里去了",
+      "ts": "2026-11-13T18:40:11+08:00",
+      "mentioned": 1
+    }
+  ]
+}

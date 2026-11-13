@@ -1,145 +1,166 @@
-import { test } from 'node:test';
+import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import { worker, env, req, qq, msg } from './support.mjs';
+import {build} from 'esbuild';
+import {env,worker,req,qq,msg} from './support.mjs';
 
-const group = 'GROUP000001', short = 'AbCd1234', BV = 'BV1xx411c7mD';
+const outfile = `.wrangler/prefetch-${process.pid}.mjs`;
+await build({
+  stdin: {
+    contents: 'export {videoTarget,needsVideo,requestPrefetch} from "./src/fetchjobs"; export {prefetchTurn,retryFailedBili,complaintIntent,bareMention} from "./src/prefetch"; export {metered} from "./src/d1";',
+    resolveDir: process.cwd(), loader: 'ts',
+  },
+  bundle: true, format: 'esm', platform: 'browser', outfile,
+});
+const api = await import('../' + outfile);
+const SHORT = 'F1DkQFC';
+const REF = SHORT;
+const FAIL = 'failure:v1:bili:';
+const group = 'GROUP000001';
+const body417 = '【余承东：给大家变个小魔术！-哔哩哔哩】 https://b23.tv/F1DkQFC\n余承东在这干啥呢，不好好卖车怎么还变魔术';
+const body419 = '你真是个废物 b 站短链接都读不了';
+
+const queue = (e, id) => (e.testWorker || worker).queue({messages: [{body: {id}, ack() {}}]}, e);
 const rows = (e, table) => e.DB.prepare('SELECT * FROM ' + table).all().then(x => x.results);
-const queue = (e, id) => worker.queue({ messages: [{ body: { id }, ack() {} }] }, e);
-const bind = e => req(e, '/api/admin/bind', { groupId: group });
-async function silentModel(run) {
-  const old = globalThis.fetch, seen = [];
-  globalThis.fetch = async (_url, o) => {
-    seen.push(JSON.parse(o.body));
-    return Response.json({ choices: [{ message: { content: '{"should_reply":false,"kind":"proactive","brief":"链接"}' } }] });
-  };
-  try { return await run(seen); } finally { globalThis.fetch = old; }
-}
-
-test('P1 plain b23 link starts one silent light fetch, no wait and no reply', async () => {
-  const e = env(); await bind(e);
-  await silentModel(async () => {
-    await qq(e, msg('plain', 'https://b23.tv/' + short));
-    await queue(e, 'chat-plain');
-  });
-  const fetchJobs = (await rows(e, 'jobs')).filter(j => j.kind === 'fetch');
-  assert.equal(fetchJobs.length, 1);
-  assert.equal(fetchJobs[0].id, 'fetch-bili-' + short);
-  assert.deepEqual(JSON.parse(fetchJobs[0].payload).waiters, []);
-  assert.equal(fetchJobs[0].status, 'pending');
-  assert.equal((await rows(e, 'video_waits')).length, 0);
-  assert.equal((await rows(e, 'outbox')).length, 0);
-});
-
-test('P2 a fresh note or an existing job is never reopened', async () => {
-  const e = env(); await bind(e);
-  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)')
-    .bind('bili:' + short, JSON.stringify({ bvid: BV, title: '已有缓存', fetched_at: new Date().toISOString() }), new Date().toISOString()).run();
-  await silentModel(async () => {
-    await qq(e, msg('cached', 'https://b23.tv/' + short));
-    await queue(e, 'chat-cached');
-  });
-  assert.equal((await rows(e, 'jobs')).filter(j => j.kind === 'fetch').length, 0);
-
-  const e2 = env(); await bind(e2);
-  await e2.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?, 'fetch', ?, ?)")
-    .bind('fetch-bili-' + short, JSON.stringify({ type: 'bili', tier: 'light', ref: short, waiters: ['vw-other'] }), Date.now()).run();
-  await silentModel(async () => {
-    await qq(e2, msg('existing', 'https://b23.tv/' + short));
-    await queue(e2, 'chat-existing');
-  });
-  const job = (await rows(e2, 'jobs')).find(j => j.id === 'fetch-bili-' + short);
-  assert.deepEqual(JSON.parse(job.payload).waiters, ['vw-other']);
-});
-
-test('P3 an @ message keeps the wait path and never prefetches', async () => {
-  const e = env(); await bind(e);
-  await silentModel(async () => {
-    await qq(e, msg('at', 'https://b23.tv/' + short), 'GROUP_AT_MESSAGE_CREATE');
-    await queue(e, 'chat-at');
-  });
-  const waits = await rows(e, 'video_waits');
-  assert.equal(waits.length, 1);
-  const job = (await rows(e, 'jobs')).find(j => j.kind === 'fetch');
-  assert.deepEqual(JSON.parse(job.payload).waiters, [waits[0].id]);
-});
-
-test('P4 a bare BV link and a bili2233 short link prefetch as well', async () => {
-  const e = env(); await bind(e);
-  await silentModel(async () => {
-    await qq(e, msg('bv', 'https://www.bilibili.com/video/' + BV));
-    await queue(e, 'chat-bv');
-    await qq(e, msg('alias', 'https://bili2233.cn/' + short));
-    await queue(e, 'chat-alias');
-  });
-  const ids = (await rows(e, 'jobs')).filter(j => j.kind === 'fetch').map(j => j.id).sort();
-  assert.deepEqual(ids, ['fetch-bili-AbCd1234', 'fetch-bili-BV1xx411c7mD']);
-});
-
-test('P5 replay: a prefetched short link feeds the next plain question', async () => {
-  const e = env(); await bind(e);
-  const result = { bvid: BV, title: '鸿蒙智行销量复盘', desc: '视频简介', owner: '超哥超车', tname: '汽车', duration: 695, pubdate: 1,
-    stat: { view: 1, like: 1, coin: 1, favorite: 1, reply: 1 }, subtitle: '字幕正文', subtitle_lang: 'zh-CN', subtitle_status: 'ok',
-    comments: [{ uname: '观众', message: '热评' }], tier: 'light', fetched_at: new Date().toISOString() };
-  await silentModel(async () => {
-    await qq(e, msg('link', 'https://b23.tv/' + short));
-    await queue(e, 'chat-link');
-  });
-  const job = (await rows(e, 'jobs')).find(j => j.id === 'fetch-bili-' + short);
-  assert.ok(job);
-  const fetched = await (await req(e, '/api/runner/fetch/claim', {}, 'runner-secret')).json();
-  assert.equal(fetched.job.id, job.id);
-  await req(e, '/api/runner/fetch/report', { id: job.id, lease: fetched.job.payload.lease, success: true, result }, 'runner-secret');
-
-  const seen = [];
+const runner = (e, path, b) => req(e, '/api/runner/fetch/' + path, b, 'runner-secret');
+const iso = at => new Date(at).toISOString();
+async function mockModel(run) {
   const old = globalThis.fetch;
-  globalThis.fetch = async (_url, o) => {
-    seen.push(JSON.parse(o.body));
-    return Response.json({ choices: [{ message: { content: '{"mode":"work","text":"这条视频讲了销量和理想 MEGA。"}' } }] });
+  globalThis.fetch = async (_url, opt) => {
+    const body = JSON.parse(opt.body || '{}');
+    const content = body.messages?.[0]?.content?.includes('最后的嘴替模块')
+      ? '{"mode":"work","text":"收到。"}'
+      : '{"action":"reply","kind":"direct","brief":"按实际资料回复"}';
+    return Response.json({choices: [{message: {content}}]});
   };
-  try {
-    await qq(e, msg('follow', '这个视频讲了啥'));
-    await queue(e, 'chat-follow');
-  } finally { globalThis.fetch = old; }
-  const out = (await rows(e, 'outbox')).find(o => o.msg_id === 'follow');
-  assert.ok(out);
-  assert.ok(seen.some(b => JSON.stringify(b).includes('鸿蒙智行销量复盘')), 'the model must receive the prefetched video material');
-  assert.equal((await rows(e, 'video_waits')).length, 0);
+  try { return await run(); } finally { globalThis.fetch = old; }
+}
+async function setup() { const e = env(); await req(e, '/api/admin/bind', {groupId: group}); return e; }
+const atMsg = (id, body) => ({...msg(id, body), mentions: [{member_openid: 'bot', is_you: true}]});
+const fetchJobs = async e => (await rows(e, 'jobs')).filter(j => j.kind === 'fetch');
+
+test('P1 msg417 real shape: a non-@ short link with weak intent creates one light fetch and no reply wait', async () => {
+  const e = await setup();
+  await qq(e, msg('417', body417));
+  await mockModel(() => queue(e, 'chat-417'));
+  const jobs = await fetchJobs(e);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].id, 'fetch-bili-' + REF);
+  const p = JSON.parse(jobs[0].payload);
+  assert.equal(p.v, 2);
+  assert.equal(p.type, 'bili');
+  assert.equal(p.tier, 'light');
+  assert.equal(p.ref, REF);
+  assert.equal(p.kind, 'short');
+  assert.equal(p.base, SHORT);
+  assert.deepEqual(p.waiters, []);
+  assert.equal((await rows(e, 'video_waits')).length, 0, 'prefetch must stay silent');
 });
 
-test('P6 replay: a bare @ five seconds after the short link inherits that link', async () => {
-  const e = env(); await bind(e);
-  const link = '【【听懂杰克逊】首次揭秘全球最屌的专辑，BAD磁带中隐藏的秘密——MichaelJackson专家级听法系列3-哔哩哔哩】 https://b23.tv/Oto4dmi\n总结这个视频讲了什么';
-  await silentModel(async () => {
-    await qq(e, msg('link-real', link));
-    await qq(e, msg('at-real', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), 'GROUP_AT_MESSAGE_CREATE');
-    await queue(e, 'chat-at-real');
-  });
+test('P2 empty @ targets the recent short link from message 417 and joins the same fetch', async () => {
+  const e = await setup();
+  await qq(e, msg('417', body417));
+  await mockModel(() => queue(e, 'chat-417'));
+  await qq(e, atMsg('418', ''), 'GROUP_AT_MESSAGE_CREATE');
+  await mockModel(() => queue(e, 'chat-418'));
   const waits = await rows(e, 'video_waits');
   assert.equal(waits.length, 1);
-  assert.equal(waits[0].ref, 'Oto4dmi');
-  assert.equal(waits[0].latest_id, 'at-real');
-  const job = (await rows(e, 'jobs')).find(j => j.kind === 'fetch');
-  assert.equal(job.id, 'fetch-bili-Oto4dmi');
-  assert.deepEqual(JSON.parse(job.payload).waiters, [waits[0].id]);
-  assert.equal((await rows(e, 'outbox')).length, 0);
+  assert.equal(waits[0].latest_id, '418');
+  assert.equal(waits[0].ref, REF);
+  assert.equal(waits[0].mentioned, 1);
+  assert.equal((await fetchJobs(e)).length, 1, 'must reuse the 417 fetch instead of creating another');
+  assert.ok(JSON.parse((await fetchJobs(e))[0].payload).waiters.includes('vw-418'));
 });
 
-test('P7 a bare @ never inherits a link older than two minutes', async () => {
-  const e = env(); await bind(e);
-  await silentModel(async () => {
-    await qq(e, { ...msg('old-link', 'https://b23.tv/' + short), timestamp: new Date(Date.now() - 8 * 86400000).toISOString() });
-    await qq(e, msg('at-late', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), 'GROUP_AT_MESSAGE_CREATE');
-    await queue(e, 'chat-at-late');
-  });
+test('P3 complaint rebuilds a failed short link once, and not again within ten minutes', async () => {
+  const e = await setup();
+  await qq(e, msg('417', body417));
+  await mockModel(() => queue(e, 'chat-417'));
+  const {job} = await (await runner(e, 'claim', {})).json();
+  assert.equal((await runner(e, 'report', {id: job.id, lease: job.payload.lease, proto: 2, success: false, reason: 'risk', retryAfter: 600})).status, 200);
+  const failure = (await rows(e, 'media_notes')).find(n => n.id === FAIL + REF);
+  assert.ok(failure, 'failed read must leave a failure note');
+
+  await qq(e, msg('419', body419));
+  await mockModel(() => queue(e, 'chat-419'));
+  assert.equal((await rows(e, 'media_notes')).find(n => n.id === FAIL + REF), undefined, 'failure cache is cleared for the retry');
+  const marker = (await rows(e, 'media_notes')).find(n => n.id.startsWith('prefetch-retry:v1:'));
+  assert.ok(marker && marker.id.endsWith(REF));
+  const reopened = (await rows(e, 'jobs')).find(j => j.id === 'fetch-bili-' + REF);
+  assert.equal(reopened.status, 'pending', 'the failed fetch is rebuilt');
+  assert.equal(reopened.attempts, 0);
+  const waits = (await rows(e, 'video_waits')).filter(w => w.latest_id === '419');
+  assert.equal(waits.length, 1);
+  assert.equal(waits[0].ref, REF);
+
+  // Same ref failed again right away: the ten-minute fuse keeps the failure note and job terminal.
+  await e.DB.prepare("UPDATE jobs SET status='failed',attempts=2 WHERE id=?").bind('fetch-bili-' + REF).run();
+  await e.DB.prepare('INSERT OR REPLACE INTO media_notes VALUES(?,?,?)').bind(FAIL + REF, JSON.stringify({reason: 'risk', until: Date.now() + 600000}), iso(Date.now())).run();
+  const markerAt = marker.created_at;
+  await qq(e, msg('419b', body419));
+  await mockModel(() => queue(e, 'chat-419b'));
+  const kept = (await rows(e, 'media_notes')).find(n => n.id === FAIL + REF);
+  assert.ok(kept, 'a second complaint inside ten minutes must not clear the failure');
+  assert.equal((await rows(e, 'media_notes')).find(n => n.id.startsWith('prefetch-retry:v1:')).created_at, markerAt);
+  assert.equal((await rows(e, 'jobs')).find(j => j.id === 'fetch-bili-' + REF).status, 'failed');
+  assert.equal((await rows(e, 'video_waits')).filter(w => w.latest_id === '419b').length, 0);
+});
+
+test('P4 ordinary links and plain non-@ chatter do not create fetches', async () => {
+  const e = await setup();
+  await qq(e, msg('plain-link', '看看这个 https://example.com/doc'));
+  await mockModel(() => queue(e, 'chat-plain-link'));
+  await qq(e, msg('plain-talk', '今天天气不错'));
+  await mockModel(() => queue(e, 'chat-plain-talk'));
+  assert.equal((await fetchJobs(e)).length, 0);
   assert.equal((await rows(e, 'video_waits')).length, 0);
 });
 
-test('P8 a bare @ never inherits a link posted after it', async () => {
-  const e = env(); await bind(e);
-  await silentModel(async () => {
-    await qq(e, { ...msg('at-first', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), timestamp: new Date(Date.now() - 5000).toISOString() }, 'GROUP_AT_MESSAGE_CREATE');
-    await qq(e, msg('link-after', 'https://b23.tv/' + short));
-    await queue(e, 'chat-at-first');
-  });
-  assert.equal((await rows(e, 'video_waits')).length, 0);
+test('P5 recent links never cross groups', async () => {
+  const e = await setup();
+  await req(e, '/api/admin/bind', {groupId: 'GROUP000002'});
+  await qq(e, msg('a-link', '看这个 https://b23.tv/' + SHORT, 'GROUP000001'));
+  await mockModel(() => queue(e, 'chat-a-link'));
+  await qq(e, atMsg('b-empty', ''), 'GROUP_AT_MESSAGE_CREATE');
+  await mockModel(() => queue(e, 'chat-b-empty'));
+  assert.equal((await rows(e, 'video_waits')).filter(w => w.latest_id === 'b-empty').length, 0);
+
+  const cfg = {bili: {enabled: true}}, empty = {id: 'empty', group_id: 'A', body: '', mentioned: 1, ts: new Date().toISOString()}, earlier = new Date(Date.now() - 5000).toISOString();
+  assert.equal(api.videoTarget([], empty, [{id: 'b', group_id: 'B', ts: earlier, body: 'x', meta: {bili: [{short: SHORT}]}}], cfg), null);
+  assert.equal(api.videoTarget([], empty, [{id: 'a', group_id: 'A', ts: earlier, body: 'x', meta: {bili: [{short: SHORT}]}}], cfg).ref, REF);
+});
+
+test('P6 a short link already read within 24h is not fetched again', async () => {
+  const e = await setup();
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:' + REF, JSON.stringify({bvid: 'BV1xx411c7mD', page: 1}), iso(Date.now() - 3600000)).run();
+  await qq(e, msg('417', body417));
+  await mockModel(() => queue(e, 'chat-417'));
+  assert.equal((await fetchJobs(e)).length, 0);
+
+  const stale = await setup();
+  await stale.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:' + REF, JSON.stringify({bvid: 'BV1xx411c7mD', page: 1}), iso(Date.now() - 25 * 3600000)).run();
+  await qq(stale, msg('417', body417));
+  await mockModel(() => queue(stale, 'chat-417'));
+  assert.equal((await fetchJobs(stale)).length, 1, 'a 25h old note is stale');
+});
+
+test('P7 prefetch, empty-@ and complaint paths stay within the 48-statement budget', async () => {
+  const counts = {};
+  async function measured(base, label, run) {
+    const e = api.metered(base), before = base.DB.executed;
+    await run(e);
+    const used = e.meter.used;
+    assert.equal(used, base.DB.executed - before, label);
+    assert.ok(used <= 48, label + ' ' + used);
+    counts[label] = used;
+  }
+  const base = await setup();
+  await qq(base, msg('417', body417));
+  await mockModel(() => measured(base, 'C4b-prefetch-link', e => queue(e, 'chat-417')));
+  await qq(base, atMsg('418', ''), 'GROUP_AT_MESSAGE_CREATE');
+  await mockModel(() => measured(base, 'C4b-empty-at', e => queue(e, 'chat-418')));
+  const {job} = await (await runner(base, 'claim', {})).json();
+  await runner(base, 'report', {id: job.id, lease: job.payload.lease, proto: 2, success: false, reason: 'risk', retryAfter: 600});
+  await qq(base, msg('419', body419));
+  await mockModel(() => measured(base, 'C4b-complaint-retry', e => queue(e, 'chat-419')));
+  assert.ok(counts['C4b-prefetch-link'] > 0);
 });

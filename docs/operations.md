@@ -107,7 +107,13 @@ fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天�
 
 `bili.media.enabled=false` 时不安装转写定时项，不影响元数据抓取。启用后 `com.inkboard.team-media` 每60秒短命启动一次，单实例、最多连续3个任务、后台低优先级；空闲即退出。
 运行库由暂存时安装，或单独执行 `python3 scripts/install-local.py --xasr-only`；仅按固定 requirements 安装运行库，模型只读引用 NextThought 已有目录。`--apply` 不安装依赖、不加载模型。
-本机验收：`node runner/media.mjs once <BV>`；只取一条 DASH 音频、转成16kHz单声道PCM后分块转写。stdout仅输出一次统计，不连云、不报群；音频和每任务目录在 finally 删除。
+本机验收：`node runner/media.mjs once <BV>`；只取一条 DASH 音频、转成16kHz单声道PCM后分块转写。默认自动选择云端 ASR，失败保留本机 X-ASR 备用；不向 Worker 回报、不报群，音频和每任务目录在 finally 删除。
+
+长音频 ASR：runner 配置的 `settings["asr:provider"]` 为 `auto`（默认）、`cloud` 或 `local`；私密 runner 配置也支持 `asr.provider`。任务若已携带 `payload.settings`，会覆盖 runner 同名设置。本包不新增 Worker 设置同步；D1 设置及日限额的读取、审核和入账需由集成层传递，不能把本机配置当作全局实时限额。`off:dstools` / `off:ds_asr` 开启，或传入的 `ds:asr:user_daily` / `ds:asr:group_daily` / `ds:daily_cap_micro_usd` 已耗尽时，直接使用本机；对应已用量字段为 `ds:asr:user_used` / `ds:asr:group_used` / `ds:daily_used_micro_usd`。
+
+密钥只从 `DEEPSEEK_API_KEY_FILE` 或私密 runner 配置 `deepseek.key_file` 交给共用客户端，不写入报告。云端每片 100 秒、相邻重叠 1 秒，最多 4 路，标准 PCM 每片约 3.2 MB（小于 8 MiB）；切片直接读取标准 WAV 的 PCM，不启动额外转码进程。单片失败顺序调用本机 X-ASR，避免同时加载多份模型；全部失败只跑一次整段本机转写。报告保留时间戳文本，并附 `provider`、`chunks`、`cloud_chunks`、`local_chunks`、`units`（成功云端上传的音频秒数，含重叠；不是客户端内部的毫秒数）和失败回退 `meta`。本包不写线上 D1。
+
+只读真实对比脚本：先将安全凭据文件路径交给 `DEEPSEEK_API_KEY_FILE`，运行 `node scripts/f9ds-1b-live.mjs`。固定取 BV1irWP6PExT 一条不超过两分钟的音频，云端/本机各一次、119 秒拼接切片及合成中英混合句验证；估算累计花费硬限 $0.05，所有音频在 `/tmp/f9ds-1b-live-*`，退出即清理。脚本不改线上 Worker/D1、不发送 QQ；DS-0 合入前可用 `F9DS_CLIENT_MODULE` 指定其现有客户端文件做集成实测。
 1300MB内存看门狗、30秒心跳、最多90分钟、磁盘/内存启动闸共同限制负载；下载不含Cookie，API仅只读复用已有登录，日志不留签名链接。
 日志为 `~/.inkboard-team/media.log` 和 `media-error.log`。启动时仅按目录项/时间清过期报告，超限日志直接截空，不读取旧日志内容、不留清扫标记。
 暂停：关闭配置并按正常暂存/apply流程移除定时项；彻底回滚运行库和临时文件用 `python3 scripts/install-local.py --remove-media`，其他运行时文件和登录数据不动。

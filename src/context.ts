@@ -44,7 +44,7 @@ export async function loadChatContext(
 ): Promise<ChatContext> {
   const recent = (
     await e.DB.prepare(
-      "SELECT m.rowid AS ordinal,m.id,m.group_id,m.sender,m.body,m.ts,m.mentioned,mm.json AS metadata,n.body AS analysed_media FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id LEFT JOIN media_notes n ON n.id=m.id WHERE m.group_id=? ORDER BY m.rowid DESC LIMIT 24",
+      "SELECT m.rowid AS ordinal,m.id,m.group_id,m.sender,m.body,m.ts,m.mentioned,mm.json AS metadata,COALESCE(n.body,res.body) AS analysed_media FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id LEFT JOIN media_notes n ON n.id=m.id LEFT JOIN media_notes r ON r.id='msgref:v1:'||m.id LEFT JOIN media_notes a ON a.id='alias:v1:bili:'||json_extract(r.body,'$.ref') LEFT JOIN media_notes res ON res.id='resource:v1:bili:'||json_extract(a.body,'$.bvid')||':p:'||json_extract(a.body,'$.page') WHERE m.group_id=? ORDER BY m.rowid DESC LIMIT 24",
     )
       .bind(x.groupId)
       .all()

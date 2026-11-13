@@ -1,5 +1,23 @@
 import {wbiSign} from './fetcher.mjs';
 const BV=/^BV[0-9A-Za-z]{10}$/;
+export const VOUCHER_PAUSE_MS=30*60*1000;
+export const VOUCHER_PAUSE_LONG_MS=60*60*1000;
+// Search challenges are cheap to recover from: 30 minutes, or an hour after three a day.
+export function createVoucherPause(now=Date.now){
+ let day='',count=0;
+ return ()=>{
+  const date=new Date(now()),key=[date.getFullYear(),date.getMonth()+1,date.getDate()].join('-');
+  if(key!==day){day=key;count=0;}
+  count+=1;
+  return count>=3?VOUCHER_PAUSE_LONG_MS:VOUCHER_PAUSE_MS;
+ };
+}
+const vouchers=new WeakMap();
+function voucherPause(client){
+ let pause=vouchers.get(client);
+ if(!pause){pause=createVoucherPause();vouchers.set(client,pause);}
+ return pause();
+}
 export const normTitle=s=>s.normalize('NFKC').replace(/\s+/gu,' ').trim();
 export function stripHl(value){
  const names={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' '};
@@ -20,7 +38,7 @@ export async function biliByTitle(client,title){
  const keys=await client.prepare(true);if(!keys)throw Error('抓取失败');
  const response=await client.biliApi('/x/web-interface/wbi/search/type',wbiSign({search_type:'video',keyword:title,page:1,order:'totalrank'},...keys),{anonymous:true});
  // A successful HTTP/code response may carry a verification challenge, not search results.
- if(response.data?.v_voucher){client.pauseSearch(6*3600000);throw Object.assign(Error('风控'),{scope:'search'});}
+ if(response.data?.v_voucher){client.pauseSearch(voucherPause(client));throw Object.assign(Error('风控'),{scope:'search'});}
  if(response.code!==0||!Array.isArray(response.data?.result)&&response.data?.numResults!==0)throw Error('抓取失败');
  const picked=pickByTitle(response.data?.result||[],title);
  return picked.bvid?client.biliLight(picked.bvid):picked;

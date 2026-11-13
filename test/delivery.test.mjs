@@ -87,14 +87,15 @@ test("failed before sending retries at most three times then cleans outputs and 
       await deliverFiles({...options,now});
       assert.ok(fs.existsSync(f.file));
       assert.equal(JSON.parse(fs.readFileSync(f.manifest+'.failed')).attempts,attempt);
-      assert.equal(reports.length,0);
+      assert.equal(reports.length,attempt);
+      assert.equal(reports.at(-1).exhausted,false);
       now += 300_000;
     }
     await deliverFiles({...options,now});
     assert.equal(targets,3);assert.equal(sends,0);
-    assert.equal(reports.length,1);assert.equal(reports[0].status,'failed');assert.equal(reports[0].exhausted,true);
+    assert.equal(reports.length,3);assert.equal(reports.at(-1).status,'failed');assert.equal(reports.at(-1).exhausted,true);
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
-    await deliverFiles({...options,now});assert.equal(reports.length,1);assert.equal(targets,3);
+    await deliverFiles({...options,now});assert.equal(reports.length,3);assert.equal(targets,3);
   } finally {f.clean();}
 });
 test("unknown send is never repeated and is retained for a bounded time", async () => {
@@ -122,8 +123,8 @@ test("a safe failure may succeed on the next attempt and leaves no terminal cach
     sendFile:async()=>{sends++;},report:async receipt=>reports.push(receipt)};
   try {
     await deliverFiles(options);await deliverFiles({...options,now:now+60_000});
-    assert.equal(targets,2);assert.equal(sends,1);assert.equal(reports.length,1);
-    assert.equal(reports[0].status,'sent');assert.equal(reports[0].attempts,2);
+    assert.equal(targets,2);assert.equal(sends,1);assert.equal(reports.length,2);
+    assert.equal(reports.at(-1).status,'sent');assert.equal(reports.at(-1).attempts,2);
     assert.deepEqual(fs.readdirSync(f.queue),[]);assert.deepEqual(fs.readdirSync(f.root),[]);
   } finally {f.clean();}
 });
@@ -148,13 +149,15 @@ test("partial uncertain delivery cleans confirmed files and names retained uncon
   } finally {f.clean();}
 });
 test("exhausted delivery keeps only its receipt until cloud acknowledgement, without more sends", async () => {
-  const f=fixture();let targets=0,reports=0,now=1_764_000_000_000;
+  const f=fixture();let targets=0,reports=0,now=1_764_000_000_000,online=false;
   const options={dir:f.queue,root:f.root,target:async()=>{targets++;throw Error('offline');},sendFile:async()=>assert.fail('no send'),
-    report:async()=>{if(++reports===1)throw Error('cloud offline');}};
+    report:async()=>{reports++;if(!online)throw Error('cloud offline');}};
   try {
     for(let i=0;i<3;i++){await deliverFiles({...options,now});now+=300_000;}
     assert.deepEqual(fs.readdirSync(f.root),[]);assert.ok(fs.existsSync(f.manifest+'.failed'));
-    await deliverFiles({...options,now});assert.equal(targets,3);assert.equal(reports,2);assert.deepEqual(fs.readdirSync(f.queue),[]);
+    assert.equal(reports,3,'progress and terminal receipts stay unacknowledged');
+    online=true;
+    await deliverFiles({...options,now});assert.equal(targets,3);assert.equal(reports,4);assert.deepEqual(fs.readdirSync(f.queue),[]);
   } finally {f.clean();}
 });
 test("already acknowledged terminal manifests are removed with their controlled outputs", async () => {
