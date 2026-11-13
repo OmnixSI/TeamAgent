@@ -47,6 +47,11 @@ const valueOf = (name, fallback = null) => {
 
 const MODE = valueOf("--mode", has("--facts") ? "facts" : "a");
 const LIMIT = Number(valueOf("--limit", "0")) || 0;
+const GROUPS = String(valueOf("--groups", "") || "")
+  .split(",")
+  .map((x) => x.trim())
+  .filter(Boolean);
+const inGroups = (group) => !GROUPS.length || GROUPS.includes(group.id);
 const STRICT = has("--strict");
 const QUIET = has("--quiet");
 const FACTS = readFacts();
@@ -142,6 +147,7 @@ if ((MODE === "a" || MODE === "all") && availability.ready) {
   const api = await loadReplayApi();
   let index = 0;
   for (const group of QUESTIONS.groups) {
+    if (!inGroups(group)) continue;
     for (const question of group.questions) {
       if (LIMIT && index >= LIMIT) break;
       const states = group.states?.length
@@ -215,6 +221,7 @@ if (MODE === "b" || MODE === "all") {
   const realFetch = globalThis.fetch.bind(globalThis);
   let index = 0;
   for (const group of QUESTIONS.groups) {
+    if (!inGroups(group)) continue;
     for (const question of group.questions) {
       if (LIMIT && index >= LIMIT) break;
       const states = group.states?.length
