@@ -1,0 +1,51 @@
+{
+  "id": "E14-101-content-priority",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "synth",
+    "where": "plan-event-layer-v2.md §事件验收表 第 8 组 E14（adapter 文档结构）",
+    "collected": "2026-11-13",
+    "note": "线上无 101 样本（410 条 message_meta 中 forwarded 仅 103 与无类型两种）。本夹具按 adapter 字段结构合成，只用于锁定「顶层 content 非空优先」。"
+  },
+  "raw": {
+    "id": "MSG_SYNTH_101A",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T20:00:00+08:00",
+    "message_type": 101,
+    "content": "顶层正文优先 <@OPENID_SAMPLE_02>",
+    "mentions": [
+      {
+        "member_openid": "OPENID_SAMPLE_02",
+        "nickname": "成员乙",
+        "is_you": false
+      }
+    ],
+    "msg_elements": [
+      {
+        "message_type": 101,
+        "content": "元素正文不应出现",
+        "attachments": [
+          {
+            "content_type": "image/png",
+            "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=FILEID_SAMPLE_01&rkey=RKEY_SAMPLE_01&spec=0"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "body": "顶层正文优先 <@OPENID_SAMPLE_02>",
+    "segmentTypes": [
+      "text",
+      "mention",
+      "image"
+    ],
+    "absentText": [
+      "元素正文不应出现"
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "E15-legacy-merged-forward-a",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：msg_elements 无 message_type，内容为合并转发的文本渲染。当前实现当作引用，见差异说明。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_09",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-11T18:08:21+08:00",
+    "content": "测试正文",
+    "msg_elements": [
+      {
+        "content": "=== 消息 1 ===\n[消息内容]   测试文本\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 测试文本\n    [消息类型] 引用消息"
+      }
+    ]
+  },
+  "expect": {
+    "body": "测试正文",
+    "segmentTypes": [
+      "text",
+      "reply"
+    ],
+    "quoted": {
+      "text": "=== 消息 1 ===\n[消息内容]   测试文本\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 测试文本\n    [消息类型] 引用消息",
+      "media": []
+    }
+  }
+}

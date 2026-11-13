@@ -1,0 +1,52 @@
+{
+  "id": "E15-103-quote-text",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：message_type=103，content 为顶层正文，msg_elements 为被引用消息。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_26",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T15:42:54+08:00",
+    "content": "测试正文",
+    "message_scene": {
+      "ext": [
+        "msg_idx=REFIDX_SAMPLE_07",
+        "ref_msg_idx=REFIDX_SAMPLE_06"
+      ]
+    },
+    "mentions": [
+      {
+        "member_openid": "OPENID_SAMPLE_03",
+        "nickname": "成员丙",
+        "is_you": true
+      }
+    ],
+    "msg_elements": [
+      {
+        "content": "测试引用文本",
+        "message_type": 103,
+        "msg_idx": "REFIDX_SAMPLE_06"
+      }
+    ]
+  },
+  "expect": {
+    "body": "测试正文",
+    "refIdx": "REFIDX_SAMPLE_06",
+    "segmentTypes": [
+      "text",
+      "reply"
+    ],
+    "quoted": {
+      "text": "测试引用文本",
+      "media": []
+    }
+  }
+}
