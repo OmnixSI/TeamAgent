@@ -245,7 +245,7 @@ test('F-T5 title wait timeout is card-only fallback and title chat stays within 
 test('F1 cron excludes fetch but dispatches ordinary jobs',async()=>{const e=env(),sent=[];e.WORK={async send(b){sent.push(b.id);}};await insertJob(e,'fetch','fetch');await insertJob(e,'plain','discussion');await cron(e);assert.ok(sent.includes('plain'));assert.ok(!sent.includes('fetch'));assert.equal((await rows(e,'jobs')).find(x=>x.id==='fetch').attempts,0);});
 test('F2 misdelivered fetch is not claimed by generic worker',async()=>{const e=env();await f.requestBili(e,BV,'light','w');await queue(e,'fetch-bili-'+BV);const j=(await rows(e,'jobs'))[0];assert.equal(j.status,'pending');assert.equal(j.attempts,0);assert.ok((await (await runner(e,'claim',{})).json()).job);});
 test('F3 expired fetch retry stays local and exhausted lease fails',async()=>{const e=env(),sent=[];e.WORK={async send(b){sent.push(b.id);}};await insertJob(e,'retry','fetch','running',1,now()-1);await insertJob(e,'exhausted','fetch','running',2,now()-1);await cron(e);assert.ok(!sent.includes('retry'));assert.equal((await rows(e,'jobs')).find(x=>x.id==='exhausted').status,'failed');assert.equal((await (await runner(e,'claim',{})).json()).job.id,'retry');});
-test('W1 mentioned link transfers batch to persistent wait and advances cursor',async()=>{const e=await setup(),w=await first(e);assert.equal(w.status,'waiting');assert.equal(w.mentioned,1);assert.deepEqual(JSON.parse(w.batch_ids),['question']);assert.equal((await rows(e,'outbox')).length,0);const j=(await rows(e,'jobs')).find(x=>x.kind==='fetch');assert.deepEqual(JSON.parse(j.payload).waiters,[w.id]);assert.ok(Number((await e.DB.prepare("SELECT value FROM settings WHERE key='chat_cursor'").first()).value)>0);assert.equal((await rows(e,'jobs')).find(x=>x.id==='chat-question').status,'done');});
+test('W1 mentioned link transfers batch to persistent wait and advances cursor',async()=>{const e=await setup(),w=await first(e);assert.equal(w.status,'waiting');assert.equal(w.mentioned,1);assert.deepEqual(JSON.parse(w.batch_ids),['question']);assert.equal((await rows(e,'outbox')).length,0);const j=(await rows(e,'jobs')).find(x=>x.kind==='fetch');assert.deepEqual(JSON.parse(j.payload).waiters,[w.id]);assert.ok(Number((await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind('chat_cursor:'+group).first()).value)>0);assert.equal((await rows(e,'jobs')).find(x=>x.id==='chat-question').status,'done');});
 test('W2 reports resume original question after newer chat advanced cursor',async()=>{const e=await setup(),w=await first(e);await mockModel(async seen=>{for(let i=0;i<3;i++){await qq(e,msg('later'+i,'普通消息'+i));await queue(e,'chat-later'+i);}await report(e);await queue(e,'video-'+w.id);const out=(await rows(e,'outbox')).filter(x=>x.id.startsWith('video-'));assert.equal(out.length,1);assert.equal(out[0].msg_id,'question');const prompt=seen.map(x=>JSON.parse(x.messages[1].content)).find(x=>x.materials);assert.match(JSON.stringify(prompt.materials),/测试视频标题/);assert.ok(prompt.conversation.some(x=>x.text.includes('普通消息2')));});});
 test('W3 cron waits for due_at then answers once with fallback',async()=>{const e=await setup(),w=await first(e);await cron(e);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));await e.DB.prepare('UPDATE video_waits SET due_at=?').bind(now()-1).run();await cron(e);await mockModel(async seen=>{await queue(e,'video-'+w.id);assert.match(JSON.stringify(seen),/读取超时/);await cron(e);await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
 test('W4 report and deadline wakes racing still answer once',async()=>{const e=await setup(),w=await first(e);await e.DB.prepare('UPDATE video_waits SET due_at=?').bind(now()-1).run();await Promise.all([report(e),cron(e)]);await mockModel(async()=>{await Promise.all([queue(e,'video-'+w.id),queue(e,'video-'+w.id)]);assert.equal((await rows(e,'outbox')).length,1);});});
@@ -283,7 +283,7 @@ test('W6b three simultaneous questioners wait; the fourth follows the ordinary r
 });
 test('W6c repeat chat delivery never duplicates its wait or fetch waiter',async()=>{
   const e=await setup(),w=await first(e);
-  await e.DB.prepare("DELETE FROM settings WHERE key='chat_cursor'").run();
+  await e.DB.prepare("DELETE FROM settings WHERE key=?").bind('chat_cursor:'+group).run();
   await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0 WHERE id='chat-question'").run();
   await queue(e,'chat-question');
   assert.equal((await rows(e,'video_waits')).length,1);
@@ -337,6 +337,7 @@ test('P1-1 chat retry after wait commit never answers the transferred question t
   for (const state of ['waiting', 'running', 'done']) {
     const e = await setup();
     await qq(e, msg('crash-question', '视频讲了啥 https://www.bilibili.com/video/' + BV), 'GROUP_AT_MESSAGE_CREATE');
+    await e.DB.prepare("INSERT INTO settings VALUES(?,'0')").bind('chat_cursor:'+group).run();
     const prepare = e.DB.prepare.bind(e.DB);
     let crash = true;
     e.DB.prepare = sql => {
@@ -344,7 +345,7 @@ test('P1-1 chat retry after wait commit never answers the transferred question t
       if (sql.startsWith('INSERT INTO settings')) {
         const bind = statement.bind;
         statement.bind = (...args) => {
-          if (args[0] === 'chat_cursor' && crash) {
+          if (args[0] === 'chat_cursor:' + group && crash) {
             crash = false;
             throw Error('interrupted after wait commit');
           }
@@ -372,7 +373,7 @@ test('P1-1 chat retry after wait commit never answers the transferred question t
 
 async function unmentionedVideo(e, quoted, cached) {
   await qq(e, { ...msg('video-source', 'https://www.bilibili.com/video/' + BV), message_scene: { ext: ['msg_idx=video-source-idx'] } });
-  await e.DB.prepare("INSERT INTO settings VALUES('chat_cursor','1')").run();
+  await e.DB.prepare("INSERT INTO settings VALUES(?,'1')").bind('chat_cursor:'+group).run();
   if (cached) await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:' + BV, JSON.stringify(result), new Date().toISOString()).run();
   await qq(e, { ...msg('video-question', quoted ? '这个讲了啥' : '这个视频讲了啥'), ...(quoted ? { message_type: 103, msg_elements: [{ msg_idx: 'video-source-idx', content: 'https://www.bilibili.com/video/' + BV, author: { id: 'member1' } }] } : {}) });
   await queue(e, 'chat-video-question');
@@ -450,7 +451,7 @@ test('P2-3 crash during the third attempt is finalized by cron without another m
     assert.equal((await rows(e, 'outbox')).length, 1);
     assert.equal((await rows(e, 'video_waits'))[0].status, 'failed');
     // The original chat may retry after the terminal fallback as well.
-    await e.DB.prepare("DELETE FROM settings WHERE key='chat_cursor'").run();
+    await e.DB.prepare("DELETE FROM settings WHERE key=?").bind('chat_cursor:'+group).run();
     await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0 WHERE id='chat-question'").run();
     await queue(e, 'chat-question');
     assert.equal(seen.length, 0);
@@ -490,11 +491,12 @@ test('I12 video handoff is recorded before the W7 recovery path runs',async()=>{
 test('P2-2 interrupted video handoff survives a newer latest message without another reply',async()=>{
   const e=await setup();
   await qq(e,msg('handoff-old','视频讲了啥 https://www.bilibili.com/video/'+BV),'GROUP_AT_MESSAGE_CREATE');
+  await e.DB.prepare("INSERT INTO settings VALUES(?,'0')").bind('chat_cursor:'+group).run();
   const prepare=e.DB.prepare.bind(e.DB);let crash=true;
   e.DB.prepare=sql=>{
     const statement=prepare(sql),bind=statement.bind;
     statement.bind=(...args)=>{
-      if(crash&&sql.startsWith('INSERT INTO settings')&&args[0]==='chat_cursor'){
+      if(crash&&sql.startsWith('INSERT INTO settings')&&args[0]==='chat_cursor:'+group){
         crash=false;throw Error('interrupted after video wait commit');
       }
       return bind(...args);

@@ -717,7 +717,7 @@ test("P1-A a quoted image outside the 24-message window is visible in the prompt
       }),
     )
     .run();
-  await e.DB.prepare("INSERT OR REPLACE INTO settings VALUES('chat_cursor','1')").run();
+  await e.DB.prepare("INSERT OR REPLACE INTO settings VALUES(?,'1')").bind('chat_cursor:GROUP000001').run();
   await e.DB.prepare(
     "INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
   )
