@@ -13,6 +13,8 @@ const CURSOR_PAGES = 3;
 
 function groupOf(ctx: ToolCtx): string {
   const c: any = ctx?.context || {};
+  const direct = c.group_id ?? c.groupId;
+  if (direct) return String(direct);
   const rows = [c.latest, ...(c.batch || []), ...(c.recent || []), ctx?.source];
   for (const row of rows) {
     const id = row?.group_id ?? row?.groupId;
