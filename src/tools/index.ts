@@ -2,6 +2,7 @@
 import type { BotTool } from "../toolkit";
 import { calcTool } from "./calc";
 import { emojiSearchTool } from "./emoji-search";
+import { fetchPageTool } from "./fetch-page";
 import { recallEpisodeTool } from "./episodes";
 import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
@@ -10,10 +11,12 @@ import { readDocumentTool } from "./read-document";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
 import { summarizeChatTool } from "./summarize-chat";
+import { webSearchTool } from "./web-search";
 
 export const EXTRA_TOOLS: BotTool[] = [
   calcTool,
   emojiSearchTool,
+  fetchPageTool,
   forgetProfileTool,
   getProfileTool,
   newsSearchTool,
@@ -23,4 +26,5 @@ export const EXTRA_TOOLS: BotTool[] = [
   searchHistoryTool,
   searchKbTool,
   summarizeChatTool,
+  webSearchTool,
 ];
