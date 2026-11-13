@@ -684,6 +684,35 @@ test("nightly slang promotion requires real group evidence; opt-out survives fut
   );
 });
 
+
+test("duplicate video failure notices are suppressed per normalized b23 ref", async () => {
+  const e = env();
+  await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
+  for (const [id, ref] of [["dup-a", "https://b23.tv/MV29F7r"], ["dup-b", "https://b23.tv/MV29F7r"]]) {
+    await qq(e, msg(id, "总结视频"));
+    await e.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)")
+      .bind("job-" + id, "media", JSON.stringify({message:id,urls:[ref],effort:"high",lane:"heavy"}), Date.now()).run();
+    const {job} = await (await req(e, "/api/runner/media/claim", {}, "runner-secret")).json();
+    await req(e, "/api/runner/media/report", {id:job.id,lease:job.payload.lease,success:false,result:"跑了 8 分钟没跑完"}, "runner-secret");
+  }
+  assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM outbox").first()).n, 1);
+});
+
+test("accepted file tasks still notify terminal failure after a pending or sent acknowledgement", async () => {
+  for (const status of ['pending','sent']) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('ack-source','整理附件'));
+    await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('chat-ack','GROUP000001','ack-source','任务已创建，正在处理',status,Date.now()).run();
+    await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('ack-file-job','media',JSON.stringify({message:'ack-source'}),Date.now()).run();
+    const {job}=await (await req(e,'/api/runner/media/claim',{},'runner-secret')).json();
+    const report={id:job.id,lease:job.payload.lease,success:false,result:'资料任务超时，请重新交办'};
+    assert.equal((await req(e,'/api/runner/media/report',report,'runner-secret')).status,200);
+    assert.equal((await req(e,'/api/runner/media/report',report,'runner-secret')).status,409);
+    const out=(await e.DB.prepare("SELECT body FROM outbox WHERE id!='chat-ack'").all()).results;
+    assert.equal(out.length,1);assert.match(out[0].body,/超时/);
+  }
+});
+
 test("file failure is terminal once and never leaks local commands or paths to QQ", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
@@ -729,7 +758,7 @@ test("file failure is terminal once and never leaks local commands or paths to Q
   assert.ok(!/Command|Users|480/.test(out[0].body));
 });
 
-test("quoting old video results never starts another video task; markdown URLs stay separate", async () => {
+test("quoting old video results and new video links never start automatic media tasks", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   await qq(e, {
@@ -753,13 +782,7 @@ test("quoting old video results never starts another video task; markdown URLs s
       "看看这两个：[A](https://www.bilibili.com/video/AAA/?t=8)、[B](https://www.bilibili.com/video/BBB/?t=17)",
     ),
   );
-  const row = (
-    await e.DB.prepare("SELECT payload FROM jobs WHERE kind='media'").all()
-  ).results[0];
-  assert.deepEqual(JSON.parse(row.payload).urls, [
-    "https://www.bilibili.com/video/AAA/?t=8",
-    "https://www.bilibili.com/video/BBB/?t=17",
-  ]);
+  assert.equal((await e.DB.prepare("SELECT * FROM jobs WHERE kind='media'").all()).results.length, 0);
 });
 
 test("message bursts coalesce into one high response instead of delayed replies to every line", async () => {
@@ -1158,6 +1181,60 @@ test("file production and QQ delivery are separate, terminal receipts are idempo
     ).status,
     409,
   );
+});
+
+test("exhausted delivery reports one explicit cleanup notice even when its receipt is retried", async () => {
+  for (const status of ['failed', 'unknown']) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('exhausted-source','生成CSV'));
+    await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
+      .bind('delivery-exhausted','file-job','exhausted-source','pending','[{"name":"example.csv","bytes":10}]',0,new Date().toISOString()).run();
+    const receipt={id:'delivery-exhausted',status,sent_count:0,attempts:3,exhausted:true,unconfirmed_files:['example.csv'],retain_until:Date.now()+86400000};
+    for(let i=0;i<2;i++)assert.equal((await req(e,'/api/runner/delivery/report',receipt,'runner-secret')).status,200);
+    const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
+    assert.equal(notices.length,1);
+    const notice=JSON.parse(notices[0].payload);
+    assert.match(notice.status,/停止|不再/);
+    if(status==='unknown') {
+      assert.match(notice.status,/example\.csv/);assert.match(notice.status,/24 小时/);
+      assert.match(notice.status,/20 个/);assert.match(notice.status,/100 MiB/);
+      assert.doesNotMatch(notice.status,/临时文件已清理/);
+    } else assert.match(notice.status,/临时文件已清理/);
+  }
+});
+
+test("unknown receipts with every file confirmed use the complete-send notice", async () => {
+  for (const exhausted of [false, true]) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('confirmed-source','生成CSV'));
+    await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
+      .bind('confirmed-delivery','file-job','confirmed-source','pending',JSON.stringify([{name:'confirmed.csv',bytes:10}]),0,new Date().toISOString()).run();
+    const receipt={id:'confirmed-delivery',status:'unknown',sent_count:1,exhausted};
+    for(let i=0;i<2;i++)assert.equal((await req(e,'/api/runner/delivery/report',receipt,'runner-secret')).status,200);
+    const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
+    assert.equal(notices.length,1);
+    const notice=JSON.parse(notices[0].payload);
+    assert.match(notice.status,/确认成功发送全部附件/);
+    assert.doesNotMatch(notice.status,/未确认送达|保留|重新交办/);
+    const activities=(await e.DB.prepare("SELECT summary FROM activity WHERE id=?").bind('confirmed-delivery-result').all()).results;
+    assert.match(activities[0].summary,/确认发送全部附件/);
+  }
+});
+
+test("partial unknown notices name only unconfirmed files and disclose expired retention", async () => {
+  for(const removed of [false,true]) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('partial-source','生成CSV'));
+    await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
+      .bind('partial-delivery','file-job','partial-source','pending',JSON.stringify([{name:'confirmed.csv',bytes:10},{name:'missing.csv',bytes:10}]),0,new Date().toISOString()).run();
+    await req(e,'/api/runner/delivery/report',{id:'partial-delivery',status:'unknown',sent_count:1,attempts:3,exhausted:true,retain_until:Date.now()+86400000,retention_removed:removed},'runner-secret');
+    const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
+    assert.equal(notices.length,1);
+    const notice=JSON.parse(notices[0].payload);
+    assert.match(notice.status,/missing\.csv/);assert.doesNotMatch(notice.status,/confirmed\.csv/);
+    if(removed) {assert.match(notice.status,/到期或保留上限清理/);assert.doesNotMatch(notice.status,/供人工取回/);}
+    else assert.match(notice.status,/24 小时/);
+  }
 });
 
 test("cancelling a file task prevents a stale runner from publishing its result", async () => {

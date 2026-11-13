@@ -11,7 +11,7 @@ import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { TEAM } from "./config";
-import { parseInbound } from "./inbound";
+import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
 import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
 import {
@@ -121,7 +121,23 @@ async function runner(r: Request, e: Env) {
     )) === (await hash(e.RUNNER_TOKEN))
   );
 }
+function mediaRefOf(payload: any): string | null {
+  const urls = [
+    ...(Array.isArray(payload?.urls) ? payload.urls : []),
+    ...(Array.isArray(payload?.inputs) ? payload.inputs.flatMap((x: any) => Array.isArray(x?.urls) ? x.urls : []) : []),
+  ].filter((x: any) => typeof x === "string");
+  for (const b of extractBili(urls, "")) return b.bvid || b.short || null;
+  return null;
+}
 async function job(e: Env, id: string, kind: string, payload: any, opts?: { delaySeconds?: number }) {
+  if (kind === "media") {
+    const ref = mediaRefOf(payload);
+    if (ref) {
+      const active = await e.DB.prepare("SELECT id FROM jobs WHERE kind='media' AND status IN ('pending','running') AND json_extract(payload,'$.ref')=? LIMIT 1").bind(ref).first();
+      if (active) return;
+      payload = { ...payload, ref };
+    }
+  }
   const delaySeconds = opts?.delaySeconds || 0;
   if (delaySeconds > 0) payload.notBefore = Date.now() + delaySeconds * 1000;
   await e.DB.prepare(
@@ -320,34 +336,8 @@ async function receive(r: Request, e: Env) {
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
       for (const {media, idx} of candidates) await job(e, "sticker-"+m.id+"-"+idx, "sticker", {url:media.url,sender:ib.senderId,message:m.id,idx});
   }
-  // Quoted bot output and old forwarded material are context, never automatic reprocessing triggers.
-  const urls = ib.ownUrls;
-  const videoUrls = urls.filter((u: string) =>
-    /bilibili\.com|b23\.tv|youtube\.com|youtu\.be|vimeo\.com/i.test(u),
-  );
-  if (
-    videoUrls.length ||
-    (m.attachments || []).some((a: any) =>
-      String(a.content_type || "").startsWith("video/"),
-    )
-  )
-    await e.DB.prepare(
-      "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
-    )
-      .bind(
-        "media-" + m.id,
-        "media",
-        JSON.stringify({
-          message: m.id,
-          urls: videoUrls,
-          lane: "heavy",
-          effort: "high",
-          instructions: text || "概括视频内容，与团队项目可能的关联要有依据。",
-          attachments: m.attachments || [],
-        }),
-        Date.now(),
-      )
-      .run();
+  // Video links are read through fetchjobs (subtitles/comments), never as an automatic heavy media job.
+  // Audio transcription is deferred to the local X-ASR path; this version starts no local transcription work.
   if (inserted) await set(e, "last_message", iso());
   if (inserted && p.t === "GROUP_MESSAGE_CREATE")
     await set(e, "full_message_verified", iso());
@@ -1467,6 +1457,12 @@ async function api(r: Request, e: Env) {
       );
       if (b.status === "sent" && count !== JSON.parse(d.files).length)
         return json({ error: "附件数量未匹配" }, 400);
+      const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
+      const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
+      const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
+        (b.retention_removed === true
+          ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
+          : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
       const updated = await e.DB.prepare(
         "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
       )
@@ -1478,10 +1474,12 @@ async function api(r: Request, e: Env) {
           "delivery." + b.status,
           d.job_id,
           "QQ网关",
-          b.status === "sent"
+          allConfirmed
             ? "QQ 已确认发送全部附件"
             : b.status === "unknown"
-              ? "发送结果不明，保留成果供人工核对；不自动重发"
+              ? unknownNotice
+            : b.exhausted === true
+              ? "附件交付已停止，临时文件已清理"
               : "附件发送失败，保留成果供接手",
           b.id + "-result",
         );
@@ -1492,8 +1490,12 @@ async function api(r: Request, e: Env) {
           await job(e, "delivery-notice-" + b.id, "voice_notice", {
             message: message.id,
             status:
-              b.status === "sent"
+              allConfirmed
                 ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
+                : b.exhausted === true
+                  ? b.status === "unknown"
+                    ? unknownNotice
+                    : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
                 : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
             result: {
               files: JSON.parse(d.files),
@@ -1585,7 +1587,7 @@ async function api(r: Request, e: Env) {
         b.id,
         "资料助手",
         b.success === false
-          ? "资料处理未完成，保留输入供接手"
+          ? "资料处理未完成，本机临时输入将自动清理"
           : files.length
             ? "已生成 " + files.length + " 个文件，等待QQ交付"
             : "资料分析已完成",
@@ -1596,15 +1598,22 @@ async function api(r: Request, e: Env) {
         .bind(p.message, body, iso())
         .run();
       if (m) {
-        if (b.success === false)
-          await enqueueVoice(
-            e,
-            "media-result-" + p.message,
-            m.group_id,
-            m.id,
-            JSON.stringify({ mode: "work", text: body }),
-          );
-        else if (!files.length)
+        if (b.success === false) {
+          const ref = mediaRefOf(p);
+          const noticeKey = ref ? "media-notice:" + ref : "utility-notice:" + b.id;
+          const seen = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind(noticeKey).first();
+          // An earlier chat acknowledgement is not this task's terminal outcome.
+          if (!seen) {
+            await enqueueVoice(
+              e,
+              "media-result-" + b.id,
+              m.group_id,
+              m.id,
+              JSON.stringify({ mode: "work", text: body }),
+            );
+            await e.DB.prepare("INSERT OR IGNORE INTO settings VALUES(?,?)").bind(noticeKey, iso()).run();
+          }
+        } else if (!files.length)
           await job(e, "media-result-" + p.message, "voice_notice", {
             message: p.message,
             result: body.slice(0, 8000),
@@ -1982,7 +1991,7 @@ async function api(r: Request, e: Env) {
         "utility.cancelled",
         b.id,
         who.name,
-        "停止资料处理，保留现有输入和成果",
+        "停止资料处理并清理本机临时缓存",
       );
     return json({ ok: !!row }, row ? 200 : 409);
   }

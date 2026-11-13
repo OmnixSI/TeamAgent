@@ -176,13 +176,16 @@ test("B1 quoted video URLs are material and create no automatic media job", asyn
   assert.equal(await e.DB.prepare("SELECT id FROM jobs WHERE id='media-quoted'").first(), null);
   assert.deepEqual((await meta(e, "quoted")).quotedUrls, ["https://b23.tv/old"]);
 });
-test("B2 top-level card triggers only its own new URL", async () => {
+test("B2 top-level card is material but creates no automatic media job", async () => {
   const e = await setup(); await qq(e, { ...quotedEvent(), ark_data: card() });
-  assert.deepEqual(JSON.parse((await e.DB.prepare("SELECT payload FROM jobs WHERE id='media-quoted'").first()).payload).urls, ["https://b23.tv/new"]);
+  assert.equal(await e.DB.prepare("SELECT id FROM jobs WHERE id='media-quoted'").first(), null);
+  assert.deepEqual((await meta(e, "quoted")).quotedUrls, ["https://b23.tv/old"]);
 });
-test("B3 directly pasted video URL still triggers processing", async () => {
+test("B3 directly pasted video URL no longer starts a heavy media task", async () => {
   const e = await setup(); await qq(e, msg("video", "https://www.bilibili.com/video/BV1234567890"));
-  assert.ok(await e.DB.prepare("SELECT id FROM jobs WHERE id='media-video'").first());
+  assert.equal(await e.DB.prepare("SELECT id FROM jobs WHERE id LIKE 'media-%'").first(), null);
+  await qq(e, msg("video2", "https://www.bilibili.com/video/BV1234567890"));
+  assert.equal(await e.DB.prepare("SELECT id FROM jobs WHERE id LIKE 'media-%'").first(), null);
 });
 test("B4 ownUrls equal legacy extraction; Bili parsing is domain bounded", () => {
   for (const d of [quotedEvent(), { ...quotedEvent(), ark_data: card() }, msg("video", "https://b23.tv/a")]) {
@@ -308,7 +311,7 @@ test("F2 manual member names survive QQ refresh while QQ names update", async ()
 test("F3 repeated delivery does not duplicate messages, refs or jobs", async () => {
   const e = await setup(), d = { ...msg("duplicate", "https://b23.tv/a"), message_scene: { ext: ["msg_idx=I1"] } };
   await qq(e, d); await qq(e, d);
-  for (const [table, n] of [["messages", 1], ["message_refs", 1], ["jobs", 2]]) assert.equal((await e.DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first()).n, n);
+  for (const [table, n] of [["messages", 1], ["message_refs", 1], ["jobs", 1]]) assert.equal((await e.DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first()).n, n);
 });
 test("F4 legacy metadata degrades to nickname or member suffix without address/reference", () => {
   for (const [metadata, from] of [[JSON.stringify({ senderName: "旧昵称" }), "旧昵称"], [undefined, "成员U123"]]) {
