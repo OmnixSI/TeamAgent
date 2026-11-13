@@ -820,7 +820,7 @@ export async function agentAnswer(e: any, context: any) {
       },
     },
     ...(isOn(sw, "repo_tools") ? repoTools : []),
-    ...extraToolDefs(),
+    ...(await extraToolDefs(e, context)),
   ];
   const recentBot = (
     await e.DB.prepare(
@@ -1258,7 +1258,7 @@ export async function agentAnswer(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: ["read_web", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames()].includes(call.function.name)
+        content: ["read_web", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames(context)].includes(call.function.name)
           ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });
