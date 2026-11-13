@@ -109,3 +109,50 @@ test('C3 replay msg#436/437 and capability questions carry the card in the syste
     assert.ok(req.tools.some(t=>t.function.name==='repo_changes'),`${body}: repo tools not offered`);
   }
 });
+
+// F8-4: F7/F8 extension tools collapse into one 还能 line so the base rows keep
+// their real wording (C1-3 was red because CARD_MAX clipped every description).
+test('C4-1 extra tools merge into one 还能 line; base rows keep full wording',()=>{
+  const card=api.capabilityCard([
+    tool('prepare_project_task','创建开发任务（复杂的转人工），不是我亲手改代码。第二句不出现。'),
+    tool('repo_changes','云端查 GitHub 仓库最近提交。'),
+    tool('calc','安全计算数学表达式。'),
+    tool('search_kb','在本群知识库检索。'),
+    tool('generate_image','按提示词生成图片。'),
+  ],{switches:{},extraNames:['calc','search_kb','generate_image']});
+  assert.ok(card.includes('- prepare_project_task：创建开发任务（复杂的转人工），不是我亲手改代码 / 需用户明确交办，不自动编码'),card);
+  assert.ok(card.includes('- repo_changes：云端查 GitHub 仓库最近提交 / 只读；私有仓库需 GitHub 只读令牌，本机部分需本机 runner'),card);
+  const line=card.split('\n').find(x=>x.startsWith('还能：'));
+  assert.ok(line,'no merged 还能 line\n'+card);
+  assert.ok(line.startsWith('还能：generate_image（按你给的描述生成一张图并发到群里 / 需成员明确要求，每人每天限 5 张，会被内容安全拒绝）'),line);
+  assert.ok(line.includes('、calc、search_kb'),line);
+  assert.ok(line.endsWith('（各只读/需明确要求）'),line);
+  assert.ok(!card.includes('- calc：'),'extra tools must not get their own row');
+  assert.ok([...card].length<=api.CARD_MAX,`card ${[...card].length} > ${api.CARD_MAX}`);
+});
+
+test('C4-2 real tool table card keeps base rows whole with generate_image squeezed in',async()=>{
+  const req=await request('你都能干啥');
+  const extraNames=['calc','search_emoji','forget_profile','get_profile','news_search','read_document','recall_episode','search_code','search_pr_issue','search_history','search_kb','summarize_chat','generate_image'];
+  const table=[...req.tools,tool('generate_image','按提示词生成图片。')];
+  const card=api.capabilityCard(table,{switches:{},extraNames});
+  assert.ok([...card].length<=api.CARD_MAX,`card ${[...card].length} > ${api.CARD_MAX}`);
+  assert.ok(card.includes('- prepare_project_task：创建开发任务（复杂的转人工），不是我亲手改代码 / 需用户明确交办，不自动编码'),card);
+  for(const name of ['repo_changes','repo_commit','repo_file'])
+    assert.ok(card.includes('- '+name+'：'),name+' row missing');
+  assert.ok(!card.includes('- calc：'),'F7 extras must be merged, not rows');
+  const line=card.split('\n').find(x=>x.startsWith('还能：'));
+  assert.ok(line?.startsWith('还能：generate_image（按你给的描述生成一张图并发到群里'),line);
+  for(const name of ['calc','search_kb','summarize_chat']) assert.ok(line.includes(name),name);
+});
+
+test('C4-3 off:generate_image / off:openai mark the image tool closed',()=>{
+  const table=[tool('generate_image','按提示词生成图片。'),tool('calc','安全计算数学表达式。')];
+  for(const sw of ['off:generate_image','off:openai']){
+    const card=api.capabilityCard(table,{switches:{[sw]:'1'},extraNames:['generate_image','calc']});
+    assert.ok(card.includes('generate_image（按你给的描述生成一张图并发到群里 / 需成员明确要求，每人每天限 5 张，会被内容安全拒绝；当前已关闭）'),sw+'\n'+card);
+  }
+  assert.equal(api.toolDisabled('generate_image',{'off:generate_image':'1'}),true);
+  assert.equal(api.toolDisabled('generate_image',{'off:openai':'1'}),true);
+  assert.equal(api.toolDisabled('generate_image',{}),false);
+});
