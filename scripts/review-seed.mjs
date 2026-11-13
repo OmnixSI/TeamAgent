@@ -19,9 +19,9 @@ const DB_NAME = "inkboard-team";
 // Parent-first order so migrations that read other tables see the data.
 const TABLES = [
   "members",
-  "settings",
   "messages",
   "message_meta",
+  "settings",
   "outbox",
   "outbox_meta",
   "chat_decisions",
@@ -144,6 +144,17 @@ for (const table of TABLES) {
   if (maxRowid && table === "chat_decisions") {
     rows = rows.filter((row) => Number(row.created_at) <= cutoffMs);
   }
+  if (maxRowid && table === "settings") {
+    const cutoffIso = new Date(cutoffMs).toISOString();
+    rows = rows.map((row) => {
+      if (row.key === "chat_cursor" || row.key.startsWith("chat_cursor:")) {
+        const value = Number(row.value);
+        if (Number.isFinite(value) && value > maxRowid) return { ...row, value: String(maxRowid) };
+      }
+      if (row.key === "last_message") return { ...row, value: cutoffIso };
+      return row;
+    });
+  }
   if (!rows.length) {
     console.log(`${table}: 0 rows`);
     report[table] = 0;
@@ -165,6 +176,10 @@ const sqliteFiles = readdirSync(persist, { recursive: true })
 if (sqliteFiles.length !== 1) {
   throw new Error(`expected one local D1 file, found ${sqliteFiles.length}: ${sqliteFiles.join(", ")}`);
 }
+// Wrangler keeps writes in -wal; checkpoint so the seed file is self-contained.
+const writable = new DatabaseSync(sqliteFiles[0]);
+writable.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+writable.close();
 const database = new DatabaseSync(sqliteFiles[0], { readOnly: true });
 const counts = {};
 for (const [table, sql] of Object.entries({
