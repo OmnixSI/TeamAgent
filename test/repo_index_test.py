@@ -430,6 +430,13 @@ class RepoIndexTests(unittest.TestCase):
                     self.assertEqual(index.redact(sample), '[REDACTED]')
             self.assertEqual(index.redact(f'{key}: ' + 'a' * 31), f'{key}: ' + 'a' * 31)
 
+    def test_B3_base64_sid_and_session_redact_the_complete_value(self):
+        for key in ('sid', 'session'):
+            for value in ('Ab+/' * 10, 'Zx/+' * 10 + '=', '+/aB' * 10 + '=='):
+                for sample in (f'{key}={value}', f'{key}: "{value}"', f"'{key}': '{value}'"):
+                    with self.subTest(sample=sample):
+                        self.assertEqual(index.redact(sample + '; keep'), '[REDACTED]; keep')
+
     def test_followup_config_credential_aliases_are_exact(self):
         for key in ('credentials', 'accessKey', 'secretKey', 'passwd'):
             value = 'opaque-' + key + '-synthetic-value'

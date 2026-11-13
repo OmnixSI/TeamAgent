@@ -30,7 +30,20 @@ def expiry_of(path):
     expiry = value.get('expires_at') if isinstance(value, dict) else None
     return expiry if isinstance(expiry, int) else None
 
+def cleanup_unlock_pages(runtime):
+    directory = Path(runtime) / 'tmp'
+    for path in directory.glob('unlock-*.html'):
+        if not re.fullmatch(r'unlock-[a-f0-9]{32}\.html', path.name):
+            continue
+        try:
+            info = path.lstat()
+            if stat.S_ISREG(info.st_mode) and info.st_mtime <= time.time() - 10:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
 def mint_code(runtime):
+    cleanup_unlock_pages(runtime)
     directory = code_directory(runtime)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
@@ -96,13 +109,26 @@ class OwnerSessions:
             return True
 
 def main():
-    code = mint_code(Path.home() / '.inkboard-team')
+    runtime = Path.home() / '.inkboard-team'
+    code = mint_code(runtime)
     url = 'http://127.0.0.1:3391/login#unlock=' + code
-    if Path('/Applications/Microsoft Edge.app').exists():
-        args = ['/usr/bin/open', '-a', 'Microsoft Edge', url]
-    else:
-        args = ['/usr/bin/open', url]
-    subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    directory = runtime / 'tmp'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    page = directory / ('unlock-' + secrets.token_hex(16) + '.html')
+    fd = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write('<!doctype html><meta charset="utf-8"><script>location.replace(' + json.dumps(url) + ')</script>')
+    try:
+        if Path('/Applications/Microsoft Edge.app').exists():
+            args = ['/usr/bin/open', '-a', 'Microsoft Edge', str(page)]
+        else:
+            args = ['/usr/bin/open', str(page)]
+        subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
+        time.sleep(10)
+        page.unlink(missing_ok=True)
 
 if __name__ == '__main__':
     main()

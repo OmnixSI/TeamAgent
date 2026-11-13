@@ -39,7 +39,7 @@ export async function writeBiliCookies(home,cookies){
 }
 export async function loadBiliCookies(home){
  const saved=await readJSON(resolve(home,'secrets/bili-cookie.json')),selected={};
- for(const name of COOKIE_NAMES){const c=saved[name];if(c&&typeof c.value==='string'&&Number.isFinite(c.expires))selected[name]={value:c.value,expires:c.expires};}
+ for(const name of COOKIE_NAMES){const c=saved[name];if(typeof c==='string')selected[name]={value:c,expires:-1};else if(c&&typeof c.value==='string'&&Number.isFinite(c.expires))selected[name]={value:c.value,expires:c.expires};}
  return selected;
 }
 const flatCookies=cookies=>Object.fromEntries(Object.entries(cookies).map(([k,c])=>[k,c.value]));
