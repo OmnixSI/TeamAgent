@@ -11,8 +11,8 @@ const emptyRegistry = {
     builder.onLoad({ filter: /.*/, namespace: "empty" }, () => ({ contents: "export const EXTRA_TOOLS = [];", loader: "js" }));
   },
 };
-async function load() {
-  const out = await build({ entryPoints: ["src/toolkit.ts"], bundle: true, format: "esm", platform: "neutral", write: false, plugins: [emptyRegistry] });
+async function load({ real = false } = {}) {
+  const out = await build({ entryPoints: ["src/toolkit.ts"], bundle: true, format: "esm", platform: "neutral", write: false, plugins: real ? [] : [emptyRegistry] });
   return import("data:text/javascript;base64," + Buffer.from(out.outputFiles[0].text).toString("base64"));
 }
 
@@ -32,7 +32,7 @@ test("registry defs resolve via findExtraTool and unknown tool is an error", asy
 });
 
 test('default async discovery preserves synchronous definitions without touching DB or network', async () => {
-  const k = await load(), context = { latest: { id: 'empty', group_id: 'A' } };
+  const k = await load({ real: true }), context = { latest: { id: 'empty', group_id: 'A' } };
   const e = { DB: { prepare() { throw Error('default discovery must not query DB'); } } };
   assert.deepEqual(await k.extraToolDefs(e, context), k.extraToolDefs());
   assert.deepEqual(k.extraUntrustedNames(context), k.extraUntrustedNames());

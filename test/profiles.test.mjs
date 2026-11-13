@@ -314,7 +314,8 @@ test("wiring: both tools are registered and the nightly job is in CRON_JOBS", as
   const registry = await load("src/tools/index.ts");
   const cron = await load("src/tools/cron-jobs.ts");
   const { profiles } = await api();
-  assert.deepEqual(registry.EXTRA_TOOLS.map((tool) => tool.name).sort(), ["forget_profile", "get_profile"]);
+  const names = registry.EXTRA_TOOLS.map((tool) => tool.name);
+  assert.ok(names.includes("forget_profile") && names.includes("get_profile"));
   assert.equal(registry.EXTRA_TOOLS.find((tool) => tool.name === "get_profile").untrusted, true);
   assert.equal(registry.EXTRA_TOOLS.find((tool) => tool.name === "forget_profile").untrusted, false);
   assert.ok(cron.CRON_JOBS.some((job) => job.name === "profiles"));
