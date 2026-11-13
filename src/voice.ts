@@ -130,7 +130,7 @@ export async function speakBrief(e: any, brief: any, context: any) {
           role: "system",
           content:
             VOICE +
-            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。recentBot是你刚说过的话，别复读相同包袱，尤其别反复季度汇报/PPT示例。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话",voice:"仅当当前用户明确要求语音回复、用语音说或念出来时给布尔true，否则省略",sticker:"可选的2–8字情绪或梗关键词"}。sticker只在banter/care而且真的合适时才给，多数时候不给。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告。',
+            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。recentBot是你刚说过的话，别复读相同包袱，尤其别反复季度汇报/PPT示例。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话",voice:"仅当当前用户明确要求语音回复、用语音说或念出来时给布尔true，否则省略",sticker:"可选的2–8字情绪或梗关键词"}。sticker只在banter/care而且真的合适时才给，多数时候不给。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告；但上游事实里标了【必须保留】的要点一个都不能省，可以压缩措辞，不能删项。',
         },
         {
           role: "user",
@@ -146,8 +146,10 @@ export async function speakBrief(e: any, brief: any, context: any) {
     },
     60000,
   );
-  const text = d.choices?.[0]?.message?.content;
-  if (!text?.trim() || d.choices[0].finish_reason === "length")
+  const raw = d.choices?.[0]?.message?.content;
+  // DeepSeek sometimes leaks its tool-call markup (<｜｜DSML｜｜ ...>) into the text; drop those lines, and treat "nothing left" as incomplete.
+  const text = typeof raw === "string" ? raw.split("\n").filter((l) => !/DSML/.test(l)).join("\n") : raw;
+  if (!text?.trim() || d.choices[0].finish_reason === "length" || (/DSML/.test(String(raw)) && !/"text"\s*:\s*"[^"]{4,}/.test(text)))
     throw Error("voice incomplete");
   if (!brief.acceptedActions?.length) {
     const v = decodeVoice(text);

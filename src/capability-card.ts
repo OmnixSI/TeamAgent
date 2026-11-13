@@ -16,7 +16,7 @@
  */
 import { EXTRA_TOOLS } from "./tools/index";
 
-export const CARD_MAX = 1200;
+export const CARD_MAX = 1800;
 
 /** Required verbatim: the bot must never claim it can write the repo itself. */
 export const CARD_BOUNDARY =
@@ -24,6 +24,9 @@ export const CARD_BOUNDARY =
 
 const CARD_HEADER = "能力卡（当前部署真实存在的工具）：";
 const CARD_TAIL = "没列出的就是不能做，不要声称能做。";
+/** SK-2: how the model finds out about itself instead of guessing. */
+export const SELF_HINT =
+  "被问到你自己的能力怎么实现、用哪家模型/接口、跑在哪、开关、代码在哪、仓库怎么组成时，先调用 describe_self 取事实，需要代码细节再用 repo_file 读 OmnixSI/TeamAgent 并给出文件和大致行号；回答仓库怎么组成时要带上数据表数量和核心表、定时、队列、绑定、顶层目录与入口；查不到就说没查到，不要猜，也不要输出任何密钥、令牌、凭据的值。";
 /** Unknown tools get no invented constraint: their own description is the limit. */
 const DEFAULT_LIMIT = "";
 const EXTRA_LEAD = "还能：";
@@ -119,12 +122,20 @@ function extraLine(extras: Entry[]): string {
   return EXTRA_LEAD + parts.join("、") + EXTRA_SUFFIX;
 }
 
-function compose(rows: Entry[], extras: Entry[], descMax: number, compact = false): string {
+function compose(
+  rows: Entry[],
+  extras: Entry[],
+  descMax: number,
+  compact = false,
+  selfSummary?: string,
+): string {
   return [
     CARD_HEADER,
     ...rows.map((e) => row(e, descMax, compact)),
     ...(extras.length ? [extraLine(extras)] : []),
     CARD_BOUNDARY,
+    ...(selfSummary ? [selfSummary] : []),
+    SELF_HINT,
     CARD_TAIL,
   ].join("\n");
 }
@@ -136,6 +147,8 @@ export function capabilityCard(
     switches?: Record<string, string | undefined>;
     /** Defaults to the F7/F8 registry; pass a set to keep other tools as rows. */
     extraNames?: Iterable<string>;
+    /** SK-2 vendorSummary line; the caller loads it, this module stays D1-free. */
+    selfSummary?: string;
   } = {},
 ): string {
   const switches = opts?.switches || {};
@@ -158,13 +171,13 @@ export function capabilityCard(
   }
   const rows = entries.filter((e) => !extraNames.has(e.name));
   const extras = entries.filter((e) => extraNames.has(e.name));
-  const full = compose(rows, extras, Number.POSITIVE_INFINITY);
+  const full = compose(rows, extras, Number.POSITIVE_INFINITY, false, opts?.selfSummary);
   if ([...full].length <= CARD_MAX) return full;
   // Many tools: drop the generic tail before cutting descriptions to nothing.
   const tiers: Array<[number, boolean]> = [[40, false], [28, false], [20, false], [40, true], [28, true], [20, true], [14, true], [10, true], [6, true], [3, true]];
   for (const [max, compact] of tiers) {
-    const shortened = compose(rows, extras, max, compact);
+    const shortened = compose(rows, extras, max, compact, opts?.selfSummary);
     if ([...shortened].length <= CARD_MAX) return shortened;
   }
-  return [...compose(rows, extras, 1, true)].slice(0, CARD_MAX).join("");
+  return [...compose(rows, extras, 1, true, opts?.selfSummary)].slice(0, CARD_MAX).join("");
 }

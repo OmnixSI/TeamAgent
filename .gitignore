@@ -9,6 +9,7 @@ node_modules/
 
 runner/sdk/node_modules/
 src/ui.generated.ts
+src/self-card.generated.ts
 
 clients/node_modules/
 .venv-runner/

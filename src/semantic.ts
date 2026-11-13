@@ -7,7 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
@@ -34,6 +34,8 @@ import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
 import { capabilityCard } from "./capability-card";
+import { readLive, vendorSummary } from "./self-card";
+import { SELF_CARD } from "./self-card.generated";
 // A question about repository activity must reach the read-only repo tools even
 // in a round whose remaining D1 budget would normally hide every tool.
 const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
@@ -901,6 +903,7 @@ async function answerWithTools(e: any, context: any) {
         },
       },
     },
+    ...(await extraToolDefs(e, context)),
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
@@ -936,10 +939,16 @@ async function answerWithTools(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
+  let selfSummary: string | undefined;
+  try {
+    selfSummary = vendorSummary(SELF_CARD, await readLive(e, e.RELEASE));
+  } catch {
+    // The card summary is an optimisation; never fail a turn because it is unreadable.
+  }
   const systemPrompt =
     (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
     "\n\n" +
-    capabilityCard(allTools, { switches: sw });
+    capabilityCard(allTools, { switches: sw, selfSummary });
   const messages: any[] = context.resume?.messages || participationMessages({
         system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (

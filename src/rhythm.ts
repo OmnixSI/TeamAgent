@@ -62,10 +62,14 @@ export async function recordDecision(e: any, row: any): Promise<void> {
 }
 export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "gate:mode", "gate:config", "vision:provider", "vision:ds_model", "workers_ai:neurons_cap"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
-  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ") OR key IN ('voice:mode','tts:provider') OR key LIKE 'voice:mode:%'").bind(...SWITCH_KEYS).all()).results;
+  // SK-2: off:* is loaded in the same statement so the self card sees every kill
+  // switch without spending another D1 query in the turn budget.
+  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key LIKE 'off:%' OR key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ") OR key IN ('voice:mode','tts:provider') OR key LIKE 'voice:mode:%'").bind(...SWITCH_KEYS).all()).results;
   e.voiceSwitches = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith("voice:mode") || r.key === "tts:provider").map((r:any)=>[r.key,r.value]));
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
   // Vision reads its provider/model from the same switch snapshot to avoid an extra D1 query per image.
-  return (e.switches = Object.fromEntries(rows.map((r: any) => [r.key, r.value])));
+  const switches = Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  e.selfSwitches = switches;
+  return (e.switches = switches);
 }
 export const isOn = (sw: Record<string, string | undefined>, name: string) => sw["off:" + name] !== "1";
