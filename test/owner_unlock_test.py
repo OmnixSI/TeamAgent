@@ -10,7 +10,6 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('owner_unlock_unit', ROOT / 'runner/owner_unlock.py')
@@ -76,16 +75,34 @@ class OwnerUnlockTests(unittest.TestCase):
             unlock.mint_code(self.runtime)
         self.assertFalse(self.code_path(old).exists())
 
-    def test_U9_desktop_open_passes_code_only_in_fragment_and_prints_nothing(self):
+    def test_B1_desktop_open_uses_private_file_and_removes_it_after_ten_seconds(self):
+        code = 'FakeUnlockCodeForArgvCheck' + 'a' * 18
         out, err = io.StringIO(), io.StringIO()
-        with patch.dict(os.environ, {'HOME':self.temp.name}), patch.object(unlock.subprocess, 'run') as run, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        paths = []
+        def opened(args, **kwargs):
+            self.assertEqual(args[0], '/usr/bin/open')
+            self.assertNotIn(code, ' '.join(args))
+            path = Path(args[-1]); paths.append(path)
+            self.assertEqual(path.parent, self.runtime / 'tmp')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+            self.assertIn("location.replace(\"http://127.0.0.1:3391/login#unlock=" + code + "\")", path.read_text())
+            self.assertIsNotNone(kwargs.get('stderr'))
+        with patch.dict(os.environ, {'HOME':self.temp.name}), patch.object(unlock, 'mint_code', return_value=code), patch.object(unlock.subprocess, 'run', side_effect=opened), patch.object(unlock.time, 'sleep') as sleep, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             unlock.main()
-        args = run.call_args.args[0]
-        self.assertEqual(args[0], '/usr/bin/open')
-        url = urlsplit(args[-1])
-        self.assertEqual((url.scheme,url.netloc,url.path,url.query), ('http','127.0.0.1:3391','/login',''))
-        self.assertRegex(url.fragment, r'^unlock=[A-Za-z0-9_-]{43}$')
+        sleep.assert_called_once_with(10)
+        self.assertFalse(paths[0].exists())
         self.assertEqual(out.getvalue()+err.getvalue(), '')
-        self.assertIsNotNone(run.call_args.kwargs.get('stderr'))
+
+    def test_B1_mint_cleans_only_expired_unlock_html(self):
+        directory = self.runtime / 'tmp'; directory.mkdir(parents=True)
+        old = directory / ('unlock-' + 'a'*32 + '.html')
+        fresh = directory / ('unlock-' + 'b'*32 + '.html')
+        other = directory / 'other.html'
+        for path in (old, fresh, other): path.write_text('synthetic')
+        os.utime(old, (0, 0)); os.utime(other, (0, 0))
+        unlock.mint_code(self.runtime)
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists()); self.assertTrue(other.exists())
 
 if __name__ == '__main__': unittest.main()

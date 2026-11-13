@@ -177,13 +177,14 @@ def main():
     if "--apply" not in sys.argv:
         release=subprocess.check_output(["git","rev-parse","HEAD"],cwd=root,text=True).strip()
         stage=home/"runtime-staging"/release
-        for directory in ["runner/sdk","config","scripts"]:(stage/directory).mkdir(parents=True,exist_ok=True)
+        for directory in ["runner/sdk","config","scripts","shared"]:(stage/directory).mkdir(parents=True,exist_ok=True)
         for path in (root/"runner").glob("*"):
             if path.suffix in [".py",".mjs"]:shutil.copy2(path,stage/"runner"/path.name)
         shutil.copy2(root/"runner/requirements-xasr.txt",stage/"runner/requirements-xasr.txt")
         ensure_xasr(root)
         for name in ["package.json","package-lock.json"]:shutil.copy2(root/"runner/sdk"/name,stage/"runner/sdk"/name)
         for path in (root/"config").glob("*.json"):shutil.copy2(path,stage/"config"/path.name)
+        shutil.copy2(root/"shared/deny_globs.json",stage/"shared/deny_globs.json")
         shutil.copy2(__file__,stage/"scripts/install-local.py")
         # This small coordinator never stops a working process before the idle gate.
         shutil.copy2(root/"runner/reload_runtime.py",home/"reload_runtime.py")
@@ -199,6 +200,10 @@ def main():
     for name in ["config.json", "worker-secrets.json"]:
         (home / name).chmod(0o600)
     # Runtime and services keep their existing names so pairing, spool, tasks and credentials survive migration.
+    (home / "shared").mkdir(exist_ok=True)
+    policy_tmp = home / "shared/deny_globs.json.tmp"
+    shutil.copy2(root/"shared/deny_globs.json", policy_tmp)
+    policy_tmp.replace(home/"shared/deny_globs.json")
     for path in (root / "runner").glob("*"):
         if path.suffix in [".py", ".mjs"]:
             tmp=home/(path.name+".tmp");shutil.copy2(path,tmp);tmp.replace(home/path.name)

@@ -596,16 +596,20 @@ async function processJob(e: Env, id: string) {
           batchIds: p.batchIds.slice(0, 60),
         }));
       }
-      const biliMaterials = await biliResearchMaterials(e, p);
+      const {materials: biliMaterials, rules: biliRules} = await biliResearchMaterials(e, p);
       if (biliMaterials.length) {
         // A resumed handoff already saw these notes; append only what its messages lack.
         const fresh = biliMaterials.filter(
           (m: string) => !Array.isArray(p.resume?.messages) || !materialInjected(p.resume.messages, m),
         );
+        const freshRules = biliRules.filter(
+          (r: string) => !Array.isArray(p.resume?.messages) || !materialInjected(p.resume.messages, r),
+        );
         if (fresh.length) {
           p.materials = [...(p.materials || []), ...fresh];
+          p.rules = [...new Set([...(p.rules || []), ...freshRules])];
           if (Array.isArray(p.resume?.messages))
-            p.resume.messages = [...p.resume.messages, { role: "system", content: "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + fresh.join("\n\n") }];
+            p.resume.messages = [...p.resume.messages, { role: "system", content: (freshRules.length ? freshRules.join("\n") + "\n\n" : "") + "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + fresh.join("\n\n") }];
         }
       }
       const answer = await agentAnswer(e, p);
@@ -789,6 +793,7 @@ async function processJob(e: Env, id: string) {
       }
       const decision: any = {};
       const modelStarted = Date.now();
+      const solo = cached && !videoPlan ? videoMaterial(cached, ref || '') : null;
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
@@ -796,7 +801,7 @@ async function processJob(e: Env, id: string) {
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
-        ...(cached ? { materials: videoPlan?.materials ?? [videoMaterial(cached,ref || '')] } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
+        ...(cached ? { materials: videoPlan?.materials ?? [solo!.material], rules: videoPlan?.rules ?? (solo!.rule ? [solo!.rule] : []) } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });

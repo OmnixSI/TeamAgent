@@ -16,7 +16,7 @@ export const MEDIA_TEXT={
 } as const;
 export type MediaReason=keyof typeof MEDIA_TEXT;
 export type AsrNote={bvid:string;text:string;covered:number;duration:number;partial:boolean;chunks:number;created_at?:string};
-export type VideoPlan={materials:string[];media:'none'|'start'|'release';reason?:MediaReason};
+export type VideoPlan={materials:string[];rules:string[];media:'none'|'start'|'release';reason?:MediaReason};
 export const MEDIA_PENDING_MATERIAL='这条视频没有 CC 字幕，音轨本轮没有转写；只依据标题、简介和热评。';
 const cfg=()=>({enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048,...(TEAM.bili as any)?.media});
 export const mediaDeadlineMs=(seconds:number)=>Math.min(cfg().deadline_cap_minutes*60000,(180+seconds*(cfg().rtf+0.05)*2)*1000);
@@ -55,8 +55,8 @@ export function asrMaterial(note:AsrNote,max:number):string{
 }
 export const needsMedia=(light:BiliResult|Record<string,any>,ref:string)=>!('miss' in light)&&!isTitleRef(ref)&&light.subtitle_status!=='ok'&&light.duration>0;
 export async function planVideo(e:any,light:any,ref:string,mode:'light'|'media'|'research',now:number,waitDueAt?:number):Promise<VideoPlan>{
- const base=videoMaterial(light,ref),none=(materials:string[]):VideoPlan=>({materials,media:'none'});
- if(!needsMedia(light,ref))return none([base]);
+ const base=videoMaterial(light,ref),baseRules=base.rule?[base.rule]:[],none=(materials:string[],rules:string[]=baseRules):VideoPlan=>({materials,rules,media:'none'});
+ if(!needsMedia(light,ref))return none([base.material]);
  const bvid=light.bvid;
  const row=await e.DB.prepare(`SELECT
   (SELECT body FROM media_notes WHERE id=?1 AND created_at>=?2) AS asr,
@@ -65,14 +65,14 @@ export async function planVideo(e:any,light:any,ref:string,mode:'light'|'media'|
   (SELECT value FROM settings WHERE key='media:last-seen') AS seen,
   (SELECT status FROM jobs WHERE id=?4) AS status,(SELECT error FROM jobs WHERE id=?4) AS error`)
   .bind('asr:'+bvid,new Date(now-30*86400000).toISOString(),'asrfail:'+bvid,'bmedia-'+bvid).first();
- try{const asr=JSON.parse(row.asr);if(asr&&typeof asr.text==='string')return none([videoMaterial(light,ref,undefined,{asr:true}),asrMaterial({...asr,created_at:row.asr_at},mode==='research'?12000:24000)]);}catch{}
- if(mode==='research')return none([base,MEDIA_PENDING_MATERIAL]);
- const fail=(reason:MediaReason,value:unknown=reason):VideoPlan=>({materials:[base,mediaFailMaterial(value,light)],media:'none',reason});
+ try{const asr=JSON.parse(row.asr);if(asr&&typeof asr.text==='string'){const material=videoMaterial(light,ref,undefined,{asr:true});return none([material.material,asrMaterial({...asr,created_at:row.asr_at},mode==='research'?12000:24000)],material.rule?[material.rule]:[]);}}catch{}
+ if(mode==='research')return none([base.material,MEDIA_PENDING_MATERIAL]);
+ const fail=(reason:MediaReason,value:unknown=reason):VideoPlan=>({materials:[base.material,mediaFailMaterial(value,light)],rules:baseRules,media:'none',reason});
  if(cfg().enabled!==true)return fail('disabled');
  try{const failure=JSON.parse(row.failure);if(failure?.until>now)return fail(reasonOf(failure.reason),failure.chunk?failure.reason+':'+failure.chunk:failure.reason);}catch{}
- if(mode==='light')return row.seen!==null&&Number.isFinite(Number(row.seen))&&now-Number(row.seen)<MEDIA_OFFLINE_MS?{materials:[base],media:'start'}:fail('offline');
+ if(mode==='light')return row.seen!==null&&Number.isFinite(Number(row.seen))&&now-Number(row.seen)<MEDIA_OFFLINE_MS?{materials:[base.material],rules:baseRules,media:'start'}:fail('offline');
  if(row.status==='failed')return fail(reasonOf(row.error),row.error);
- if(['pending','running'].includes(row.status)&&now<(waitDueAt??0))return {materials:[base],media:'release'};
+ if(['pending','running'].includes(row.status)&&now<(waitDueAt??0))return {materials:[base.material],rules:baseRules,media:'release'};
  return fail('media_timeout');
 }
 type Guard={sql:string;args:any[]};
