@@ -719,6 +719,9 @@ def execute(job, work, inputs, outputs, completion):
                             "1",
                             "--format",
                             "bestaudio",
+                            # Bilibili's audio CDN returns 567 unless the whole stream is requested as a range.
+                            "--add-header",
+                            "Range:bytes=0-",
                             "--output",
                             str(inputs / "audio-%(id)s.%(ext)s"),
                             u,

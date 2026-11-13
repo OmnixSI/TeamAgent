@@ -208,6 +208,9 @@ class UtilityTranscribeTests(unittest.TestCase):
 
         def fake_process(args, work):
             self.assertEqual(args[0], "yt-dlp")
+            # Bilibili's audio CDN answers 567 without an explicit whole-file range.
+            self.assertIn("--add-header", args)
+            self.assertIn("Range:bytes=0-", args)
 
         def fake_transcribe(path, work, inputs, media=None, wait_seconds=None):
             seen["audio"] = path
