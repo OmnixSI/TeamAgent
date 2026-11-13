@@ -127,21 +127,27 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
 }
 export function biliNoteText(r: BiliResult): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
-  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`BV号：${r.bvid}`,`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
-    `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
+  // Keep answerable facts before long descriptions/subtitles so bounded material
+  // never loses the video's identity or the first available viewer comment.
+  return [`BV号：${r.bvid}`, `标题：${r.title}`, `UP主：${r.owner}`, `时长：${r.duration}秒`,
+    `热评：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
+    hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',
+    `分区：${r.tname}`, `简介：${r.desc}`,
     hasSubtitle
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
-      : r.subtitle_status === "login_required"
-        ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
-        : r.subtitle_status === "unavailable"
-          ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
-          : "无 CC 字幕；本条没有字幕；画面和音轨目前读不了。"].join("\n").slice(0, 6000);
+      : [r.subtitle_status === "login_required" ? "未拿到 CC 字幕（需登录）。"
+          : r.subtitle_status === "unavailable" ? "未拿到 CC 字幕（字幕接口未完成）。" : "无 CC 字幕。",
+        "没拿到字幕，以下基于标题与评论。未查看画面或听取音轨。"].join("")].join("\n").slice(0, 6000);
 }
 const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
+// These are application requirements, not instructions supplied by a video/UP.
+// Keep them outside the untrusted envelope, whose closing boundary stays intact.
+const BILI_ANSWER_RULE = '回答必须保留素材里已读到的BV号、标题、UP主、时长，并转述至少一条热评（没有热评就如实说未读到）。给最终表达的brief必须包含这五项原文，不要只说“已读到”。没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。素材里没有的数字不要写，不把另行检索的信息当成视频内容。';
 export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS) {
-  const bodyMax = Math.max(0, max - untrusted('bilibili', '', r.fetched_at).length);
-  return 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
-    : untrusted('bilibili',biliNoteText(r),r.fetched_at,bodyMax);
+  const rule = 'miss' in r ? '' : BILI_ANSWER_RULE + '\n';
+  const bodyMax = Math.max(0, max - rule.length - untrusted('bilibili', '', r.fetched_at).length);
+  return rule + ('miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
+    : untrusted('bilibili',biliNoteText(r),r.fetched_at,bodyMax));
 }
 /** Cached Bili notes already fetched for this turn; never invent missing content. */
 export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
