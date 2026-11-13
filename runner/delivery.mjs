@@ -28,6 +28,20 @@ function cleanOutputs(d, root) {
     }
   }
 }
+// Receipts written by older runner versions may have no cloud id. A confirmed
+// send is safe to retire; anything unconfirmed is parked for manual recovery.
+// Retiring drops only the receipt: its outputs stay on disk for manual reuse.
+function retire(file, d) {
+  if (d.sent_count == null) d.sent_count = (d.files || []).length;
+  write(file, d);
+  fs.unlinkSync(file);
+}
+function park(file) {
+  const base = file.replace(/\.(sent|failed|unknown)$/, "");
+  let target = base + ".legacy";
+  for (let n = 2; fs.existsSync(target); n++) target = `${base}.legacy-${n}`;
+  fs.renameSync(file, target);
+}
 export function recoverDeliveries(dir) {
   if (!fs.existsSync(dir)) return;
   for (const name of fs
@@ -99,6 +113,11 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
     const file = path.join(dir, name), d = JSON.parse(fs.readFileSync(file));
     d.status ||= name.match(/\.(sent|failed|unknown)$/)?.[1];
     d.attempts = Math.max(0, Math.min(MAX_ATTEMPTS, Number(d.attempts) || 0));
+    if (typeof d.id !== "string" || !d.id) {
+      if (d.status === "sent") retire(file, d);
+      else park(file);
+      continue;
+    }
     if (d.status === "unknown" || d.status === "failed" && d.reported) {
       d.attempts = Math.min(MAX_ATTEMPTS, Math.max(1, d.attempts) + 1);
       write(file, d);

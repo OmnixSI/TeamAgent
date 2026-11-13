@@ -8,8 +8,9 @@ for (const legacy of [true, false]) test(`video attempt migration preserves rows
   const db = new DatabaseSync(':memory:');
   try {
     let schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
-    if (legacy) schema = schema.replace(',attempts INTEGER NOT NULL DEFAULT 0);\nCREATE INDEX IF NOT EXISTS video_waits_due', ');\nCREATE INDEX IF NOT EXISTS video_waits_due');
+    if (legacy) schema = schema.replace(',attempts INTEGER NOT NULL DEFAULT 0,phase', ',phase');
     db.exec(schema);
+    assert.equal(db.prepare('PRAGMA table_info(video_waits)').all().some(c=>c.name==='attempts'),!legacy);
     db.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)').run('w','g','abcd','m','["m"]',1,100,1);
     const execute = sql => {
       const statement = db.prepare(sql);

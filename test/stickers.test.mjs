@@ -231,6 +231,26 @@ test('sticker failures start a new three-attempt cycle after the daily pause exp
   }
  }finally{Date.now=real;}
 });
+test('sticker 3xx redirect is terminal blocked in the event ledger while 200 still sends',async()=>{
+ const redirect=()=>new Response(null,{status:302,headers:{location:'https://redirected.example/next'}});
+ for(const target of ['upload','message','ok']){
+  const e=await sendingFixture();await mediaRow(e);
+  const old=globalThis.fetch,calls=[];
+  globalThis.fetch=async(url,init={})=>{
+   calls.push({url:String(url),options:init});
+   if(String(url).includes('getAppAccessToken'))return Response.json({access_token:'fake-sticker-token',expires_in:300});
+   if(String(url).endsWith('/files'))return target==='upload'?redirect():Response.json({file_info:'mock-file-info',ttl:7200});
+   return target==='ok'?Response.json({id:'sent-redirect'}):redirect();
+  };
+  try{await queue(e,'no-sticker-job');}finally{globalThis.fetch=old;}
+  const posts=calls.filter(c=>c.url.startsWith('https://api.bot.qq.com/')&&!c.url.includes('getAppAccessToken')),outbox=(await all(e,'outbox'))[0],attempt=(await all(e,'outbox_attempts'))[0];
+  assert.ok(posts.length>=1,target);assert.ok(posts.every(c=>c.options.redirect==='manual'),target);
+  assert.equal(posts.filter(c=>c.url.endsWith('/messages')).length,target==='upload'?0:1,target);
+  if(target==='ok'){assert.equal(outbox.status,'sent');assert.equal(attempt.http_status,200);assert.equal(attempt.code,'');}
+  else{assert.equal(outbox.status,'failed');assert.equal(attempt.http_status,302);assert.equal(attempt.code,'');assert.equal((await all(e,'outbox_send'))[0].reason,'blocked',target);}
+  const sent=calls.length;await queue(e,'no-sticker-job');assert.equal(calls.length,sent,'terminal rows never send again');
+ }
+});
 test('message rejection and network uncertainty never retry rich media',async()=>{
  for(const failure of ['rejected','network']){
   const e=await sendingFixture();await mediaRow(e);const calls=await deliverSticker(e,{send:()=>{if(failure==='network')throw Error('connection lost');return Response.json({code:777},{status:400});}});

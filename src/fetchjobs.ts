@@ -1,4 +1,5 @@
 import {enqueueStatements} from "./send/enqueue";
+import {planVideo,switchToMedia,sweepMedia,dispatchMedia} from "./mediajobs";
 import {FAILURE_PREFIX,OFFLINE_MS,READ_REASONS,fetchFailure,failureTtl,jobReason,biliFailReply,biliFailMaterial,type ReadReason} from './linkfail';
 import { left } from "./d1";
 import { stage, flushTail } from "./timing";
@@ -94,21 +95,21 @@ export async function videoWaitExists(e: any, groupId: string, latestId: string 
   return !!(await e.DB.prepare("SELECT id FROM video_waits WHERE group_id=? AND latest_id IN (" + ids.map(() => "?").join(",") + ") LIMIT 1")
     .bind(groupId, ...ids).first());
 }
-export async function startVideoWait(e: any, x: { groupId: string; ref: string; title?: string; latest: Row; batchIds: string[]; mentioned: boolean }): Promise<boolean> {
+export async function startVideoWait(e: any, x: { groupId: string; ref: string; title?: string; latest: Row; batchIds: string[]; mentioned: boolean; lightReady?: boolean }): Promise<boolean> {
   if (isTitleRef(x.ref) && (!x.title || !titleRef(x.title))) return false;
   if (await videoWaitExists(e, x.groupId, x.latest.id)) return true;
   const active = await e.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')").bind(x.groupId, x.ref).first();
   if (active.n >= 3) return false;
   const now = Date.now(), id = "vw-" + x.latest.id;
   await e.DB.batch([
-    e.DB.prepare(`INSERT OR IGNORE INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,due_at,created_at)
-      SELECT ?,?,?,?,?,?,COALESCE((SELECT MIN(due_at) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')),?),?
+    e.DB.prepare(`INSERT OR IGNORE INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,ready,due_at,created_at)
+      SELECT ?,?,?,?,?,?,?,COALESCE((SELECT MIN(due_at) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')),?),?
       WHERE (SELECT COUNT(*) FROM video_waits WHERE group_id=? AND ref=? AND status IN ('waiting','running')) < 3`)
-      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
-    fetchStatement(e, x.ref, "light", id, now, x.title),
+      .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.lightReady ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
+    ...(x.lightReady ? [] : [fetchStatement(e, x.ref, "light", id, now, x.title)]),
   ]);
   const created = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first();
-  if (created) stage(e, x.latest.id, "bili_wait_start");
+  if (created) { stage(e, x.latest.id, "bili_wait_start"); if(x.lightReady)await wakeVideoWait(e,id); }
   return !!created;
 }
 export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
@@ -126,26 +127,42 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
     stage(e, waitId.slice(3), "wait_woken");
   }
 }
-export function biliNoteText(r: BiliResult): string {
+type BiliMaterialOptions = {asr?:boolean; asrOmitted?:boolean};
+export function biliNoteText(r: BiliResult, opts: BiliMaterialOptions = {}): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
-  return [hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',`BV号：${r.bvid}`,`标题：${r.title}`, `UP 主：${r.owner}；分区：${r.tname}；时长：${r.duration}秒`, `简介：${r.desc}`,
-    `热评（观众意见）：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
+  // Keep answerable facts before long descriptions/subtitles so bounded material
+  // never loses the video's identity or the first available viewer comment.
+  return [`BV号：${r.bvid}`, `标题：${r.title}`, `UP主：${r.owner}`, `时长：${r.duration}秒`,
+    `热评：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "热评未读到"}`,
+    hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',
+    `分区：${r.tname}`, `简介：${r.desc}`,
     hasSubtitle
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
-      : r.subtitle_status === "login_required"
-        ? "未读到 CC 字幕（需登录）；未查看画面或听取音轨。"
-        : r.subtitle_status === "unavailable"
-          ? "未读到 CC 字幕（字幕接口未完成）；未查看画面或听取音轨。"
-          : "无 CC 字幕；本条没有字幕；画面和音轨目前读不了。"].join("\n").slice(0, 6000);
+      : [r.subtitle_status === "login_required" ? "未拿到 CC 字幕（需登录）。"
+          : r.subtitle_status === "unavailable" ? "未拿到 CC 字幕（字幕接口未完成）。" : "无 CC 字幕。",
+        opts.asr ? "没拿到字幕；已用本机语音转写读取音轨，转写见【bilibili-asr】素材。未查看画面。" : opts.asrOmitted ? "没拿到字幕；本轮只附一份转写，此视频仅附标题、简介和热评。未查看画面。" : "没拿到字幕，以下基于标题与评论。未查看画面或听取音轨。"].join("")].join("\n").slice(0, 6000);
 }
 const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
-export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS) {
+// These are application requirements, not instructions supplied by a video/UP.
+// Keep them outside the untrusted envelope, whose closing boundary stays intact.
+const BILI_ANSWER_RULE = '回答必须保留素材里已读到的BV号、标题、UP主、时长，有热评就转述至少一条；没有就如实说热评未读到。给最终表达的brief必须包含这五项原文，不要只说“已读到”。没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。素材里没有的数字不要写，不把另行检索的信息当成视频内容。';
+const BILI_ASR_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '没拿到字幕但有音轨转写时，以转写为主要依据，开头说明“根据音轨转写”，转写可能有错别字和专名误识；转写只覆盖部分时说明覆盖到几分几秒。');
+const BILI_ASR_OMITTED_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '本轮只附一份转写；未附转写的视频只依据各自标题、简介和热评，不推测音轨内容。');
+export type VideoMaterial = {material:string;rule:string};
+/** The application rule is returned beside the envelope, never inside it. */
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS, opts: BiliMaterialOptions = {}): VideoMaterial {
+  let answerRule = BILI_ANSWER_RULE;
+  if (!('miss' in r) && !(r.subtitle_status==='ok' && r.subtitle?.trim()))
+    answerRule = opts.asr ? BILI_ASR_RULE : opts.asrOmitted ? BILI_ASR_OMITTED_RULE : BILI_ANSWER_RULE;
+  const rule = 'miss' in r ? '' : answerRule;
   const bodyMax = Math.max(0, max - untrusted('bilibili', '', r.fetched_at).length);
-  return 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
-    : untrusted('bilibili',biliNoteText(r),r.fetched_at,bodyMax);
+  const material = 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
+    : untrusted('bilibili',biliNoteText(r,opts),r.fetched_at,bodyMax);
+  return {material, rule};
 }
 /** Cached Bili notes already fetched for this turn; never invent missing content. */
-export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
+export type BiliResearchMaterials = {materials:string[];rules:string[]};
+export async function biliResearchMaterials(e: any, context: any): Promise<BiliResearchMaterials> {
   const batch = (context.batch || []).filter(Boolean), latest = context.latest, recent = context.recent || [];
   const refs: string[] = [];
   const add = (value: any) => {
@@ -163,15 +180,22 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
     }
     const quoted = targetOf(meta.quoted || {}); if (quoted) add(quoted.ref);
   }
-  if (!refs.length) return [];
-  const materials: string[] = [];
-  let total = 0, reads = 0;
+  if (!refs.length) return {materials:[],rules:[]};
+  const materials: string[] = [], rules: string[] = [];
+  let total = 0, reads = 0, asrAttached = false;
   const budget = Math.min(RESEARCH_READS, Number.isFinite(left(e)) ? Math.max(0, left(e) - 2) : RESEARCH_READS);
   for (const ref of refs.slice(0, RESEARCH_REFS)) {
     if (reads + 1 > budget) break;
     const cached = await biliCached(e, ref); reads++;
-    let material: string;
-    if (cached) material = videoMaterial(cached, ref, Math.min(MATERIAL_CHARS, MATERIALS_CHARS - total));
+    let material: string, rule = '', extra: string | undefined, isAsr = false;
+    if (cached) {
+      if(reads+1>budget)break;
+      const plan=await planVideo(e,cached,ref,'research',Date.now());reads++;
+      isAsr=plan.materials[1]?.includes('来源:bilibili-asr')??false;
+      extra=isAsr&&asrAttached?undefined:plan.materials[1];
+      const out=videoMaterial(cached,ref,Math.min(MATERIAL_CHARS,MATERIALS_CHARS-total),{asr:isAsr&&!asrAttached,asrOmitted:isAsr&&asrAttached});
+      material=out.material; rule=out.rule;
+    }
     else {
       if (reads + 1 > budget) break;
       const outcome = await fetchOutcome(e, ref); reads++;
@@ -180,8 +204,13 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
     }
     if (materials.includes(material) || total + material.length > MATERIALS_CHARS) continue;
     materials.push(material); total += material.length;
+    if(rule&&!rules.includes(rule))rules.push(rule);
+    if(extra&&!materials.includes(extra)){
+      if(isAsr&&!asrAttached){materials.push(extra);asrAttached=true;}
+      else if(!isAsr&&total+extra.length<=MATERIALS_CHARS){materials.push(extra);total+=extra.length;}
+    }
   }
-  return materials;
+  return {materials,rules};
 }
 /** True when a resume message list already carries this material; a handoff must not append it twice. */
 export function materialInjected(messages: any[], material: string): boolean {
@@ -213,9 +242,17 @@ export async function runVideoWait(e: any, waitId: string): Promise<void> {
       await e.DB.prepare("UPDATE video_waits SET status='done' WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).run();
       return;
     }
+    let materials: string[], rules: string[] = [];
+    if(cached){
+      const plan=await planVideo(e,cached,w.ref,w.phase,now,w.due_at);
+      if(plan.media==='start'){await switchToMedia(e,w,cached as BiliResult);return;}
+      if(plan.media==='release'){
+        await e.DB.prepare("UPDATE video_waits SET status='waiting',ready=0,lease_until=NULL,attempts=MAX(attempts-1,0) WHERE id=? AND status='running' AND lease_until=?").bind(w.id,w.lease_until).run();return;
+      }
+      materials=plan.materials;rules=plan.rules;
+    }else materials=[biliFailMaterial(outcome!,{title:isTitleRef(w.ref),titleFallback:TITLE_FALLBACK})];
     const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
-    const materials = cached ? [videoMaterial(cached,w.ref)] : [biliFailMaterial(outcome!,{title:isTitleRef(w.ref),titleFallback:TITLE_FALLBACK})];
-    const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
+    const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, rules, videoWaited: true });
     // A timed-out old attempt must not finish a newer lease.
     const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
     if (!owns) return;
@@ -236,6 +273,7 @@ async function failVideoWait(e: any, w: Row): Promise<void> {
   e.enqueued=true;
 }
 export async function sweepVideoWaits(e: any): Promise<void> {
+  await sweepMedia(e);
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='timeout' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
   const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
@@ -296,7 +334,7 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   if (result) for (const ref of new Set('miss' in result ? [p.ref] : [p.ref,result.bvid]))
     writes.push(e.DB.prepare("INSERT OR REPLACE INTO media_notes SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE " + guard + ")")
       .bind("bili:" + ref, JSON.stringify(result), new Date(now).toISOString(), ...leaseArgs));
-  writes.push(e.DB.prepare("UPDATE video_waits SET ready=1 WHERE status='waiting' AND id IN (SELECT value FROM jobs,json_each(jobs.payload,'$.waiters') WHERE " + guard.replace("id=?", "jobs.id=?") + ")")
+  writes.push(e.DB.prepare("UPDATE video_waits SET ready=1 WHERE status='waiting' AND phase='light' AND id IN (SELECT value FROM jobs,json_each(jobs.payload,'$.waiters') WHERE " + guard.replace("id=?", "jobs.id=?") + ")")
     .bind(...leaseArgs));
   if (fail && failureTtl(fail) > 0)
     writes.push(e.DB.prepare("INSERT OR REPLACE INTO media_notes SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE " + guard + ")")
@@ -313,6 +351,7 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   return Response.json({ ok: true });
 }
 async function dispatchFetch(e: any, path: string, b: any): Promise<Response> {
+  if(path.startsWith('/api/runner/fetch/media/'))return dispatchMedia(e,path,b);
   await fetcherSeen(e);
   if (path.endsWith('/claim')) {
     const login=await claimLogin(e);

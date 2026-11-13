@@ -519,8 +519,19 @@ test('budget guards leave a low-budget send and sweep durable; v2 reference reco
   await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});
   const {sweepVideoWaits}=await import('../'+out),base=env();
   for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,0,3).run();
-  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,3);
+  // The three media sweep statements run first; one exhausted wait fits this turn.
+  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,46);
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,1);
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,7);
+  for(let i=0;i<7;i++){
+    const retry=metered(base);retry.meter.used=38;await sweepVideoWaits(retry);
+    assert.ok(retry.meter.used<=48);
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,i+2);
+  }
+  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
+  assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,8);
+  const replay=metered(base);replay.meter.used=38;await sweepVideoWaits(replay);assert.ok(replay.meter.used<=48);
+  assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,8);
 });
 
 test('synthetic timing corpus uses production views and hides acceptable actions from model input',async()=>{

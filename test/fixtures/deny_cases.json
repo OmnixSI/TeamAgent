@@ -6,5 +6,20 @@
   ["X/ID_RSA.pub", true], ["src/key.ts", false],
   ["README.md", false], ["dir/CREDENTIALS/data.txt", true], ["a/.npmrc", true],
   ["ssl/cert.pem", true], ["src/private.ts", false], ["cookies.txt", true],
-  ["config/.env.production", true], ["lib/normal.key.ts", false]
+  ["config/.env.production", true], ["lib/normal.key.ts", false],
+  ["nested/.env/config.txt", true],
+  ["nested/.env.production/config.txt", true],
+  ["nested/id_rsa.pub/data.txt", true],
+  ["nested/id_ed25519.pub/data.txt", true],
+  ["nested/.npmrc/data.txt", true],
+  ["nested/.netrc/data.txt", true],
+  ["nested/.pypirc/data.txt", true],
+  ["nested/cert.pem/data.txt", true],
+  ["nested/cert.key/data.txt", true],
+  ["nested/cert.p12/data.txt", true],
+  ["nested/cert.pfx/data.txt", true],
+  ["nested/.dev.vars/data.txt", true],
+  ["nested/wrangler.toml.local/data.txt", true],
+  ["nested/worker-secrets.json/data.txt", true],
+  ["src/public/normal.txt", false]
 ]

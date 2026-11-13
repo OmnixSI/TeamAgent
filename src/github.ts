@@ -2,9 +2,9 @@
 import { REPOS } from "./policy";
 import { cutBytes, redactPatch, toolFailure } from "./repo";
 
-export const DENY_GLOBS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*",
-  ".npmrc", ".netrc", ".pypirc", "*secret*", "*credential*", "*cookie*", "worker-secrets.json",
-  ".git/*", ".dev.vars", "wrangler.toml.local"];
+import denyGlobs from "../shared/deny_globs.json";
+
+export const DENY_GLOBS = denyGlobs;
 const denyPatterns = DENY_GLOBS.map(s => new RegExp("^" + [...s].map(c =>
   c === "*" ? ".*" : c === "?" ? "." : c.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&")).join("") + "$", "s"));
 export function deniedPath(path: string): boolean {

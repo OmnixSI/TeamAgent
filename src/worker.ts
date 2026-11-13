@@ -1,3 +1,4 @@
+import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
@@ -518,7 +519,7 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind!='fetch' AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
     .bind(now + 660000, id, now, now)
     .first();
@@ -586,16 +587,20 @@ async function processJob(e: Env, id: string) {
           batchIds: p.batchIds.slice(0, 60),
         }));
       }
-      const biliMaterials = await biliResearchMaterials(e, p);
+      const {materials: biliMaterials, rules: biliRules} = await biliResearchMaterials(e, p);
       if (biliMaterials.length) {
         // A resumed handoff already saw these notes; append only what its messages lack.
         const fresh = biliMaterials.filter(
           (m: string) => !Array.isArray(p.resume?.messages) || !materialInjected(p.resume.messages, m),
         );
+        const freshRules = biliRules.filter(
+          (r: string) => !Array.isArray(p.resume?.messages) || !materialInjected(p.resume.messages, r),
+        );
         if (fresh.length) {
           p.materials = [...(p.materials || []), ...fresh];
+          p.rules = [...new Set([...(p.rules || []), ...freshRules])];
           if (Array.isArray(p.resume?.messages))
-            p.resume.messages = [...p.resume.messages, { role: "system", content: "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + fresh.join("\n\n") }];
+            p.resume.messages = [...p.resume.messages, { role: "system", content: (freshRules.length ? freshRules.join("\n") + "\n\n" : "") + "后台已取到 B 站视频素材，回答代码/视频问题时必须据此如实说明：\n" + fresh.join("\n\n") }];
         }
       }
       const answer = await agentAnswer(e, p);
@@ -748,6 +753,15 @@ async function processJob(e: Env, id: string) {
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
+      const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;
+      if(videoPlan?.media==='start'){
+        if(await startVideoWait(e,{groupId:m.group_id,ref:ref!,title:target?.title,latest,batchIds:batch.map((r:any)=>r.id),mentioned,lightReady:true})){
+          await recordDecision(e,{...decisionRow,gate:'video',action:'reply',forced:true});
+          await advanceCursor(e,m.group_id,cursor,batch);
+          await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();return;
+        }
+        videoPlan.materials.push(mediaFailMaterial('pending',cached as any));
+      }
       const failure = ref && !cached ? await biliFailure(e, ref) : null;
       if (failure && mentioned) {
         await enqueueVoice(e, id, latest.group_id, latest.id, biliFailReply(failure, {title:isTitleRef(ref!)}));
@@ -770,6 +784,7 @@ async function processJob(e: Env, id: string) {
       }
       const decision: any = {};
       const modelStarted = Date.now();
+      const solo = cached && !videoPlan ? videoMaterial(cached, ref || '') : null;
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
@@ -777,7 +792,7 @@ async function processJob(e: Env, id: string) {
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
-        ...(cached ? { materials: [videoMaterial(cached,ref || '')] } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
+        ...(cached ? { materials: videoPlan?.materials ?? [solo!.material], rules: videoPlan?.rules ?? (solo!.rule ? [solo!.rule] : []) } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
@@ -1112,7 +1127,7 @@ async function scheduled(e: Env) {
   await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1401,69 +1416,77 @@ async function api(r: Request, e: Env) {
       });
     }
     if (path.endsWith("/delivery/report") && method === "POST") {
-      const b: any = await r.json();
+      const b: any = await r.json().catch(() => null);
+      if (!b || typeof b !== "object")
+        return json({ error: "invalid delivery receipt" }, 400);
       if (!["sent", "failed", "unknown"].includes(b.status))
         return json({ error: "invalid status" }, 400);
-      const d = await e.DB.prepare("SELECT * FROM deliveries WHERE id=?")
-        .bind(b.id)
-        .first();
-      if (!d) return json({ error: "unknown delivery" }, 404);
-      if (["sent", "failed", "unknown"].includes(d.status))
-        return json({ ok: true, already: true });
-      const count = Math.min(
-        JSON.parse(d.files).length,
-        Math.max(0, Number(b.sent_count) || 0),
-      );
-      if (b.status === "sent" && count !== JSON.parse(d.files).length)
-        return json({ error: "附件数量未匹配" }, 400);
-      const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
-      const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
-      const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
-        (b.retention_removed === true
-          ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
-          : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
-      const updated = await e.DB.prepare(
-        "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
-      )
-        .bind(b.status, count, iso(), b.id)
-        .first();
-      if (updated) {
-        await activity(
-          e,
-          "delivery." + b.status,
-          d.job_id,
-          "QQ网关",
-          allConfirmed
-            ? "QQ 已确认发送全部附件"
-            : b.status === "unknown"
-              ? unknownNotice
-            : b.exhausted === true
-              ? "附件交付已停止，临时文件已清理"
-              : "附件发送失败，保留成果供接手",
-          b.id + "-result",
-        );
-        const message = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
-          .bind(d.message_id)
+      if (typeof b.id !== "string" || !b.id)
+        return json({ error: "invalid delivery id" }, 400);
+      try {
+        const d = await e.DB.prepare("SELECT * FROM deliveries WHERE id=?")
+          .bind(b.id)
           .first();
-        if (message)
-          await job(e, "delivery-notice-" + b.id, "voice_notice", {
-            message: message.id,
-            status:
-              allConfirmed
-                ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
-                : b.exhausted === true
-                  ? b.status === "unknown"
-                    ? unknownNotice
-                    : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
-                : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
-            result: {
-              files: JSON.parse(d.files),
-              sent_count: count,
-              status: b.status,
-            },
-          });
+        if (!d) return json({ error: "unknown delivery" }, 404);
+        if (["sent", "failed", "unknown"].includes(d.status))
+          return json({ ok: true, already: true });
+        const count = Math.min(
+          JSON.parse(d.files).length,
+          Math.max(0, Number(b.sent_count) || 0),
+        );
+        if (b.status === "sent" && count !== JSON.parse(d.files).length)
+          return json({ error: "附件数量未匹配" }, 400);
+        const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
+        const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
+        const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
+          (b.retention_removed === true
+            ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
+            : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
+        const updated = await e.DB.prepare(
+          "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
+        )
+          .bind(b.status, count, iso(), b.id)
+          .first();
+        if (updated) {
+          await activity(
+            e,
+            "delivery." + b.status,
+            d.job_id,
+            "QQ网关",
+            allConfirmed
+              ? "QQ 已确认发送全部附件"
+              : b.status === "unknown"
+                ? unknownNotice
+              : b.exhausted === true
+                ? "附件交付已停止，临时文件已清理"
+                : "附件发送失败，保留成果供接手",
+            b.id + "-result",
+          );
+          const message = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
+            .bind(d.message_id)
+            .first();
+          if (message)
+            await job(e, "delivery-notice-" + b.id, "voice_notice", {
+              message: message.id,
+              status:
+                allConfirmed
+                  ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
+                  : b.exhausted === true
+                    ? b.status === "unknown"
+                      ? unknownNotice
+                      : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
+                  : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
+              result: {
+                files: JSON.parse(d.files),
+                sent_count: count,
+                status: b.status,
+              },
+            });
+        }
+        return json({ ok: true });
+      } catch {
+        return json({ error: "delivery report failed" }, 500);
       }
-      return json({ ok: true });
     }
     if (path.endsWith("/media/claim") && method === "POST") {
       const b: any = await r.json();
