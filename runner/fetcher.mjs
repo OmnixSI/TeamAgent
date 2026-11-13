@@ -1,6 +1,7 @@
 /** Low-frequency Bilibili fetcher; optional local browser login. */
 import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
 import {runLoginFlow} from './qr-login.mjs';
+import {runReachJob} from './reach-job.mjs';
 import {biliByTitle} from './bili-title.mjs';
 import {createWakePort} from './fetch-wake.mjs';
 import https from 'node:https';
@@ -211,8 +212,9 @@ export function classify(error) {
  if(error?.status===401||[-101,-403].includes(error?.code))return {reason:'login_required'};
  return {reason:'invalid'};
 }
-export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{},proto){
+export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{},proto,reachOptions={}){
  const p=job.payload||{};
+ if(p.source==='reach')return runReachJob(job,cloud,reachOptions);
  let report={id:job.id,lease:p.lease,success:false,...(proto===2?{proto:2}:{})};
  try{
    const titleRef=typeof p.ref==='string'&&/^t-[0-9a-f]{16}$/.test(p.ref),paged=proto===2&&p.v===2;
@@ -286,8 +288,9 @@ async function main(){
    return true;
  };
  const work=async(job,proto)=>{
-   const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).catch(()=>{}),30000);
-   try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client),proto);}finally{clearInterval(heartbeat);}
+   const cancel=job.payload?.source==='reach'?new AbortController():null;
+   const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).then(r=>{if(r.ok===false)cancel?.abort();}).catch(error=>{if(error.status===409)cancel?.abort();}),30000);
+   try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client),proto,{signal:cancel?.signal});}finally{clearInterval(heartbeat);}
  };
  const wake=createWakePort(resolve(home,'fetch-wake'));
  await runFetchLoop({claim:async()=>{await auth.daily();return cloud('claim',{});},work,login:startLogin,wait:ms=>wake.wait(ms),wake,log});
