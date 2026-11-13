@@ -180,8 +180,9 @@ test('R1 project aliases resolve to whitelisted repositories, case and spaces ig
 
 test('R2 ambiguous aliases return every candidate instead of silently picking one',()=>{
  const peiwan='OmnixSI/peiwan-store-platform-blueprint';
- // config/team.json currently registers this alias to exactly one repository.
- assert.equal(api.parseRepo('陪玩店')?.full,peiwan);
+ // config/team.json maps 陪玩店 to the newer peiwan-club-saas; the blueprint needs 陪玩店蓝图.
+ assert.equal(api.parseRepo('陪玩店')?.full,'OmnixSI/peiwan-club-saas');
+ assert.equal(api.parseRepo('陪玩店蓝图')?.full,peiwan);
  // Same alias on two whitelisted repositories must not resolve silently.
  const many=api.parseRepo('陪玩店',{[peiwan]:['陪玩店'],'OmnixSI/TeamAgent':['陪玩店']});
  assert.equal(many?.ambiguous,true);assert.equal(many?.full,'');
