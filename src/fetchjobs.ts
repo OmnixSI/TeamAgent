@@ -87,6 +87,17 @@ export async function requestBili(e: any, ref: string, tier: string, waiter: str
   if (!validRef(ref) || tier !== "light") throw Error("invalid fetch request");
   await fetchStatement(e, ref, tier, waiter).run();
 }
+/** A sender's own plain Bilibili link gets one silent light fetch; never reopen a job. */
+export async function prefetchBili(e: any, latest: Row, cfg: any): Promise<boolean> {
+  if (!cfg?.bili?.enabled || !latest || latest.mentioned) return false;
+  const ref = refIn(metaOf(latest).bili || []);
+  if (!ref || !validRef(ref) || isTitleRef(ref) || left(e) < 2) return false;
+  const note = await e.DB.prepare("SELECT created_at FROM media_notes WHERE id=?").bind("bili:" + ref).first();
+  if (note && Date.parse(note.created_at) >= Date.now() - 86400000) return false;
+  const row = await e.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,'fetch',?,?) ON CONFLICT(id) DO NOTHING RETURNING id")
+    .bind("fetch-bili-" + ref, JSON.stringify({ type: "bili", tier: "light", ref, waiters: [] }), Date.now()).first();
+  return !!row;
+}
 /** A committed handoff remains authoritative even after its reply finishes. */
 export async function videoWaitExists(e: any, groupId: string, latestId: string | string[]): Promise<boolean> {
   const ids = Array.isArray(latestId) ? latestId : [latestId];
