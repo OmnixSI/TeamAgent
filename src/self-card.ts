@@ -262,6 +262,8 @@ function repoMap(card: SelfCard): string {
     .slice(0, MODULE_MAX)
     .map((mod) => `${mod.path}（${text(mod.role, "未登记")}，${Number(mod.lines) || 0} 行）`);
   const lines = [
+    // The model's brief is squeezed into one short group message downstream; name the must-keep facts up front.
+    "【必须保留】回答仓库怎么组成时，群里的话必须同时点到：数据表总数和核心表名、定时、队列、绑定、顶层目录和入口，别只讲目录。",
     `仓库：${text(m.repo, "未登记")}`,
     // Small, high-value facts first: the long directory/entry/module lists may be clipped, these must not be.
     `数据表：${tableSummary(m.tables || [])}`,
