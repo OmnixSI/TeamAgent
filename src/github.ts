@@ -1,5 +1,6 @@
 /** Bounded, read-only GitHub access. Repository contents never authorize work. */
 import { INITIAL_PROJECT_HINTS, REPOS } from "./policy";
+import { isListed, listedRepos, loadRepoRegistry, validRepoName } from "./repo-registry";
 import { cutBytes, redactPatch, toolFailure } from "./repo";
 
 import denyGlobs from "../shared/deny_globs.json";
@@ -14,7 +15,7 @@ export function deniedPath(path: string): boolean {
 }
 export type RepoRef = { owner: string; repo: string; full: string; listed: boolean; ambiguous?: boolean; candidates?: string[] };
 const repoKey = (value: string) => value.replace(/\s+/g, "").toLowerCase();
-export function parseRepo(value: unknown, aliases: Record<string, string[]> = INITIAL_PROJECT_HINTS): RepoRef | null {
+export function parseRepo(value: unknown, aliases: Record<string, string[]> = INITIAL_PROJECT_HINTS, e?: any): RepoRef | null {
   if (typeof value !== "string") return null;
   let name = value.trim();
   if (!name) return null;
@@ -31,16 +32,16 @@ export function parseRepo(value: unknown, aliases: Record<string, string[]> = IN
   // Several hits are reported as ambiguous; never silently pick one.
   const key = repoKey(name), hits = new Set<string>();
   for (const [repo, list] of Object.entries(aliases || {})) {
-    if (!REPOS.includes(repo) || !Array.isArray(list)) continue;
+    if (!isListed(e, repo) || !Array.isArray(list)) continue;
     if (list.some(alias => typeof alias === "string" && repoKey(alias) === key)) hits.add(repo);
   }
-  if (!name.includes("/")) for (const repo of REPOS) if (repo.split("/")[1].toLowerCase() === key) hits.add(repo);
+  if (!name.includes("/")) for (const repo of listedRepos(e)) if (repo.split("/")[1].toLowerCase() === key) hits.add(repo);
   if (hits.size > 1) return { owner: "", repo: "", full: "", listed: false, ambiguous: true, candidates: [...hits].sort() };
   if (hits.size === 1) name = [...hits][0];
   const parts = name.split("/");
-  if (parts.length !== 2 || !/^[A-Za-z0-9-]{1,39}$/.test(parts[0]) ||
-      !/^[A-Za-z0-9._-]{1,100}$/.test(parts[1]) || [".", ".."].includes(parts[1])) return null;
-  const canonical = REPOS.find(r => r.toLowerCase() === name.toLowerCase());
+  if (!validRepoName(name)) return null;
+  const canonical = listedRepos(e).find(r => r.toLowerCase() === name.toLowerCase() &&
+    (REPOS.includes(r) || parts[0] === "OmnixSI"));
   const full = canonical || name, [owner, repo] = full.split("/");
   return { owner, repo, full, listed: !!canonical };
 }
@@ -125,7 +126,7 @@ export async function ghFetch(e: any, segs: string[], query: Record<string, any>
       }
       if (!response.ok) {
         void response.body?.cancel().catch(() => {});
-        const listed = segs[0] === "repos" && parseRepo(segs[1] + "/" + segs[2])?.listed;
+        const listed = segs[0] === "repos" && parseRepo(segs[1] + "/" + segs[2], undefined, e)?.listed;
         throw new GitHubFailure(response.status === 401 && listed ? "needs_token"
           : response.status === 429 || response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0" ? "rate_limited"
           : response.status === 404 ? "not_found" : "upstream");
@@ -257,7 +258,8 @@ async function commits(c: Call, name: string, a: any, since: string | null, path
     message: redactKnown(c.e, String(data.commit?.message || "")).slice(0, 2000), untrusted: true };
 }
 export async function runCloudRepoTool(e: any, name: string, a: any): Promise<any> {
-  const rp = parseRepo(a?.repo), path = validPath(a?.path), mode = a?.mode ?? "read";
+  let rp = parseRepo(a?.repo, undefined, e);
+  const path = validPath(a?.path), mode = a?.mode ?? "read";
   const since = name === "repo_changes" ? sinceISO(a?.since) : null;
   if (!rp || path === null || !validRef(a?.ref) || !["repo_file", "repo_changes", "repo_commit"].includes(name) ||
       name === "repo_commit" && (typeof a.sha !== "string" || !/^[a-f0-9]{7,40}$/i.test(a.sha)) ||
@@ -269,6 +271,10 @@ export async function runCloudRepoTool(e: any, name: string, a: any): Promise<an
         mode === "find" && (typeof a.query !== "string" || !a.query.trim() || a.query.length > 80)))
     return toolFailure(name, null, { kind: "invalid_args" });
   if (path && deniedPath(path)) return toolFailure(name, null, { kind: "denied" });
+  if (!rp.listed && rp.owner === "OmnixSI" && !e.repoRegistry) {
+    await loadRepoRegistry(e);
+    rp = parseRepo(a?.repo, undefined, e)!;
+  }
   const controller = new AbortController(), deadline = Date.now() + 8000, timer = setTimeout(() => controller.abort(), 8000);
   const c: Call = { e, rp, deadline, signal: controller.signal };
   try {

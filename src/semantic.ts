@@ -3,7 +3,8 @@ import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
+import { isListed, listedRepos, loadRepoRegistry, projectHints } from "./repo-registry";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_list", "repo_changes", "repo_commit", "repo_file"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -34,6 +35,8 @@ export function isRepoActivityAsk(body: unknown): boolean {
   return REPO_ACTIVITY_ASK.test(String(body ?? ""));
 }
 const REPO_ASK_HINT = { role: "system", content: "用户在问仓库动态，必须先调用 repo_changes" };
+const REPO_LIST_ASK = /(?:几个|多少|哪些|列出|列一下|列举).{0,10}(?:仓库|repos?(?:itories)?)|(?:仓库|repositories).{0,10}(?:几个|多少|哪些)|(?:how many|list|which).{0,25}repos?(?:itories)?/i;
+const REPO_LIST_HINT = { role: "system", content: "用户在问公司仓库清单，必须先调用 repo_list，按返回清单和刷新时间回答" };
 const REPO_ASK_FLOOR = 16;
 export type Services = {
   llm: (
@@ -649,17 +652,17 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 }
 
 export async function agentAnswer(e: any, context: any) {
+  // Never retain the registry across Worker requests or resumed chat rounds.
+  e = { ...e, repoRegistry: undefined };
+  const registry = await loadRepoRegistry(e, true);
   e.timingTurn = context.latest?.id || e.timingTurn;
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
-  const repoAsk = isRepoActivityAsk(context.latest?.body) &&
-    (!!context.mentioned || context.latest?.meta?.direct === true);
-  const facts = (
-    await e.DB.prepare(
-      "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
-    ).all()
-  ).results;
+  const direct = !!context.mentioned || context.latest?.meta?.direct === true;
+  const repoListAsk = direct && REPO_LIST_ASK.test(String(context.latest?.body ?? ""));
+  const repoAsk = direct && (repoListAsk || isRepoActivityAsk(context.latest?.body));
+  const facts = registry.facts;
   const acceptedActions: any[] = [];
   const tools = [
     {
@@ -813,7 +816,7 @@ export async function agentAnswer(e: any, context: any) {
         description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。",
         parameters: {
           type: "object",
-          properties: { repo: { type: "string", enum: REPOS } },
+          properties: { repo: { type: "string", enum: listedRepos(e) } },
           required: ["repo"],
         },
       },
@@ -860,7 +863,7 @@ export async function agentAnswer(e: any, context: any) {
         )?.value,
         learnedExpressions,
         today: now(),
-        projects: INITIAL_PROJECT_HINTS,
+        projects: projectHints(e),
         facts: promptFacts,
         materials: context.materials,
         reflection: context.switches ? context.switches.team_reflection : (
@@ -890,7 +893,7 @@ export async function agentAnswer(e: any, context: any) {
         "high",
         {
           max_tokens: 8192,
-          messages: offerTools && repoAsk ? [...messages, REPO_ASK_HINT] : messages,
+          messages: offerTools && repoAsk ? [...messages, repoListAsk ? REPO_LIST_HINT : REPO_ASK_HINT] : messages,
           ...(offerTools ? { tools } : {}),
         },
       );
@@ -981,7 +984,9 @@ export async function agentAnswer(e: any, context: any) {
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
       try {
-        if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
+        // repo_list reads the already-loaded snapshot and needs no more SQL.
+        const toolCost = call.function.name === "repo_list" ? 0 : COST.tool;
+        if (left(e) < toolCost + COST.turn + COST.tail) throw new ResourceLimitError();
         if (index >= 3) throw Error("本轮工具额度已用完");
         const a = JSON.parse(call.function.arguments);
         switch (call.function.name) {
@@ -1213,7 +1218,7 @@ export async function agentAnswer(e: any, context: any) {
             break;
           }
           case "get_project":
-            if (!REPOS.includes(a.repo)) throw Error("unknown project");
+            if (!isListed(e, a.repo)) throw Error("unknown project");
             const row = await e.DB.prepare(
               "SELECT json,updated_at FROM repo_cache WHERE repo=?",
             )
@@ -1233,7 +1238,7 @@ export async function agentAnswer(e: any, context: any) {
                 }
               : { unavailable: true };
             break;
-          case "repo_changes": case "repo_commit": case "repo_file":
+          case "repo_list": case "repo_changes": case "repo_commit": case "repo_file":
             result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
@@ -1251,7 +1256,7 @@ export async function agentAnswer(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: ["read_web", "repo_changes", "repo_commit", "repo_file"].includes(call.function.name)
+        content: ["read_web", "repo_list", "repo_changes", "repo_commit", "repo_file"].includes(call.function.name)
           ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });
