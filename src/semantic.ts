@@ -3,7 +3,8 @@ import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
+import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -810,10 +811,15 @@ export async function agentAnswer(e: any, context: any) {
       type: "function",
       function: {
         name: "get_project",
-        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。",
+        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。repo 可填 owner/repo、代称或短名；repo_cache 里新发现的组织仓库也接受。",
         parameters: {
           type: "object",
-          properties: { repo: { type: "string", enum: REPOS } },
+          properties: {
+            repo: {
+              type: "string",
+              description: "owner/repo、项目代称或仓库短名",
+            },
+          },
           required: ["repo"],
         },
       },
@@ -1212,29 +1218,43 @@ export async function agentAnswer(e: any, context: any) {
                   text: untrusted(a.url, JSON.stringify(d)) };
             break;
           }
-          case "get_project":
-            if (!REPOS.includes(a.repo)) throw Error("unknown project");
+          case "get_project": {
+            const resolution = await resolveRepoRef(e, a.repo, { text: context.latest?.body });
+            if (resolution.ambiguous) {
+              result = toolFailure("get_project", null, { kind: "ambiguous", candidates: resolution.candidates });
+              break;
+            }
+            if (!resolution.ref) throw Error("unknown project");
+            const repo = resolution.ref.full;
+            // Snapshot lookup only exists for organisation projects; public
+            // repositories stay readable through the repo_* tools instead.
+            if (!REPOS.includes(repo) && !isOrgRepo(repo)) {
+              result = toolFailure("get_project", null, { kind: "invalid_args" });
+              break;
+            }
             const row = await e.DB.prepare(
               "SELECT json,updated_at FROM repo_cache WHERE repo=?",
             )
-              .bind(a.repo)
+              .bind(repo)
               .first();
             result = row
               ? {
                   ...JSON.parse(row.json),
+                  repo,
                   syncedAt: row.updated_at,
                   facts: (
                     await e.DB.prepare(
                       "SELECT repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL AND repo IN (?, 'team') ORDER BY valid_from DESC LIMIT 30",
                     )
-                      .bind(a.repo)
+                      .bind(repo)
                       .all()
                   ).results,
                 }
-              : { unavailable: true };
+              : { unavailable: true, repo };
             break;
-          case "repo_changes": case "repo_commit": case "repo_file":
-            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
+          }
+          case "repo_changes": case "repo_commit": case "repo_file": case "list_repos":
+            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a, { text: context.latest?.body })
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
           default:

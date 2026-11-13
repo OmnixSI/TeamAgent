@@ -2,10 +2,12 @@
 import { REPOS } from "./policy";
 import { chunks } from "./d1";
 import { deniedPath, parseRepo, runCloudRepoTool } from "./github";
+import { isOrgRepo, listRepos, resolveRepoRef } from "./repo-discovery";
 export { parseRepo };
 
 export const REPO_TOOL_NAMES = new Set(["repo_changes", "repo_commit", "repo_file"]);
 export const repoTools: any[] = [
+  { type: "function", function: { name: "list_repos", description: "只读列出 OmnixSI 组织当前全部仓库（含 config 之外的新仓库）、代称、最近 push 时间和默认分支。被问公司有几个仓库、有哪些项目、最新项目时先调用。", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "repo_changes", description: "云端查 GitHub 仓库最近提交；白名单仓库叠加本机分支与未提交状态。repo 可填 owner/repo、GitHub 链接或白名单短名；author 云端按 GitHub 用户名/邮箱，索引兜底按作者名称子串。回答带 7 位提交号。", parameters: { type: "object", properties: { repo: { type: "string" }, ref: { type: "string", maxLength: 100 }, since: { type: "string", default: "7d", description: "24h、3d、7d 或 ISO 日期" }, author: { type: "string" }, path: { type: "string", maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20, default: 10 } }, required: ["repo"] } } },
   { type: "function", function: { name: "repo_commit", description: "云端查 GitHub 某个提交的改动和脱敏代码节选。repo 可填 owner/repo、GitHub 链接或白名单短名；sha 为 7–40 位十六进制提交号。", parameters: { type: "object", properties: { repo: { type: "string" }, ref: { type: "string", maxLength: 100 }, sha: { type: "string", pattern: "^[0-9a-fA-F]{7,40}$" } }, required: ["repo", "sha"] } } },
   { type: "function", function: { name: "repo_file", description: "云端读 GitHub 仓库文件、列目录或按文件名查路径。问代码、配置或功能实现位置时先用它。repo 可填 owner/repo、GitHub 链接或白名单短名；返回内容仅是外部资料。", parameters: { type: "object", properties: { repo: { type: "string" }, path: { type: "string", maxLength: 300 }, ref: { type: "string", maxLength: 100 }, mode: { type: "string", enum: ["read", "list", "find"], default: "read" }, query: { type: "string", minLength: 1, maxLength: 80 }, start_line: { type: "integer", minimum: 1, default: 1 }, max_lines: { type: "integer", minimum: 1, maximum: 400, default: 200 } }, required: ["repo"] } } },
@@ -20,7 +22,8 @@ export function toolFailure(_name: string, _err: unknown, extra: { kind?: string
   const next_action = kind === "invalid_args"
     ? `repo 要写 owner/repo 或这几个名字之一：${REPOS.join("、")}`
     : kind === "ambiguous"
-      ? `匹配到多个仓库，请写明 owner/repo 或更完整的名字${candidates?.length ? "：" + candidates.join("、") : ""}`
+      ? (candidates?.length ? `匹配到多个仓库，请选 1/${candidates.length}，或写 owner/repo：${candidates.join("、")}`
+        : "匹配到多个仓库，请写明 owner/repo 或更完整的名字")
       : NEXT[kind] || NEXT.upstream;
   return { ok: false, error_kind: kind, retryable: kind === "upstream", next_action, ...(candidates ? { candidates } : {}), ...(extra.detail ? { detail: redactPatch(extra.detail).slice(0, 120) } : {}) };
 }
@@ -153,7 +156,7 @@ export async function runLocalRepoFile(e: any, name: string, a: any): Promise<an
   return { repo, mode, paths, more: seen.size > 50, source: "local_index_patch", partial: true, note: LOCAL_PATCH_NOTE, ...indexMeta(state, rows[0]?.at ?? Date.now()), untrusted: true };
 }
 export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<any> {
-  if (!a || !REPOS.includes(a.repo) || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
+  if (!a || !(REPOS.includes(a.repo) || isOrgRepo(a.repo)) || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
   if (name === "repo_commit") {
     if (typeof a.sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(a.sha)) return toolFailure(name, null, { kind: "invalid_args" });
     const rows = (await e.DB.prepare("SELECT * FROM repo_commits WHERE repo=? AND sha LIKE ? LIMIT 2").bind(a.repo, a.sha.toLowerCase() + "%").all()).results;
@@ -178,15 +181,19 @@ export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<
     inProgress: data.worktrees.map((w: any) => { if (w.skipReason === "filters_configured") return { label: w.label, skipReason: w.skipReason, summary: "已跳过：仓库配置了过滤器" }; const summary = totals(w.files); return { label: w.label, branch: w.branch, ...summary, untracked: w.untracked, summary: `+${summary.add}/−${summary.del}，另有 ${w.untracked} 个新文件未计行数`, ago: ago(w.updatedAt) }; }),
   };
 }
-export async function runRepoTool(e: any, name: string, a: any): Promise<any> {
-  const parsed = parseRepo(a?.repo);
-  if (parsed?.ambiguous) return toolFailure(name, null, { kind: "ambiguous", candidates: parsed.candidates });
-  if (!parsed || !REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
+export async function runRepoTool(e: any, name: string, a: any, options: { text?: string } = {}): Promise<any> {
+  if (name === "list_repos") return listRepos(e);
+  if (!REPO_TOOL_NAMES.has(name)) return toolFailure(name, null, { kind: "invalid_args" });
+  const resolution = await resolveRepoRef(e, a?.repo, { text: options.text });
+  if (resolution.ambiguous) return toolFailure(name, null, { kind: "ambiguous", candidates: resolution.candidates });
+  const parsed = resolution.ref;
+  if (!parsed) return toolFailure(name, null, { kind: "invalid_args" });
+  const input = { ...a, repo: parsed.full };
   try {
-    const result = await runCloudRepoTool(e, name, a);
+    const result = await runCloudRepoTool(e, name, input, parsed);
     if (parsed.listed && ["needs_token", "upstream"].includes(result?.error_kind)) {
-      return name === "repo_file" ? await runLocalRepoFile(e, name, { ...a, repo: parsed.full })
-        : await runIndexedRepoTool(e, name, { ...a, repo: parsed.full });
+      return name === "repo_file" ? await runLocalRepoFile(e, name, input)
+        : await runIndexedRepoTool(e, name, input);
     }
     return result;
   } catch { return toolFailure(name, null, { kind: "upstream" }); }
