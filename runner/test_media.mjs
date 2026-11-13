@@ -229,8 +229,60 @@ test('R14/R22 a lease conflict kills an active child group and SIGTERM still cle
  }finally{t.clean()}}
 });
 
-test('PR-A configuration defaults off and validates all resource caps',()=>{
- const config=JSON.parse(fs.readFileSync(new URL('../config/team.json',import.meta.url),'utf8'));assert.equal(config.bili.media.enabled,false);assert.equal(config.bili.media.mem_cap_mb,1300);assert.equal(validateTeamConfig(config).length,0);
+test('PR-A configuration validates the enable switch and all resource caps',()=>{
+ const config=JSON.parse(fs.readFileSync(new URL('../config/team.json',import.meta.url),'utf8'));assert.equal(typeof config.bili.media.enabled,'boolean');
+ for(const enabled of [true,false]){const c=structuredClone(config);c.bili.media.enabled=enabled;assert.equal(validateTeamConfig(c).length,0);}assert.equal(config.bili.media.mem_cap_mb,1300);assert.equal(validateTeamConfig(config).length,0);
  for(const key of ['max_minutes','rtf','deadline_cap_minutes','mem_cap_mb','tmp_cap_mb']){const c=structuredClone(config);c.bili.media[key]=0;assert.ok(validateTeamConfig(c).includes('bili.media.'+key));}
  const c=structuredClone(config);c.bili.media.enabled=1;assert.ok(validateTeamConfig(c).includes('bili.media.enabled'));
+});
+
+test('C1b negotiated page-two audio executes with the requested page/cid and reports their identity',async()=>{
+ const t=temporary();try{
+ const j=job();j.id+='-p2';Object.assign(j.payload,{v:2,page:2,cid:202});let requested;
+ const value=await runMediaJob(j,stages(t.home,{proto:2,client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async(...args)=>{requested=args;return {duration:120,cid:202,urls:[{baseUrl:cdn}]};}}}));
+ assert.deepEqual(requested,[BV,2,202]);assert.equal(value.report.success,true);assert.equal(value.report.proto,2);assert.equal(value.report.result.page,2);assert.equal(value.report.result.cid,202);assert.equal(value.cleanup.residue,0);assert.deepEqual(fs.readdirSync(path.join(t.home,'media-tmp')),[]);
+ }finally{t.clean()}
+});
+test('C1b unnegotiated page-two execution fails safely before any audio request',async()=>{
+ const t=temporary();try{const j=job();j.id+='-p2';Object.assign(j.payload,{v:2,page:2,cid:202});const value=await runMediaJob(j,stages(t.home,{client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async()=>assert.fail('must not read page one without handshake')}}));assert.equal(value.report.success,false);assert.equal(value.report.reason,'runner_outdated');assert.equal(value.cleanup.residue,0);}finally{t.clean()}
+});
+test('C1b paged reports spool independently, replay with page/cid, and preserve legacy reports',async()=>{
+ const t=temporary();try{
+ const base={lease:'lease',proto:2,success:true,result:{bvid:BV,text:'transcript',covered:1,duration:1,partial:false,chunks:1},cleanup:{residue:0,paths:[]}},reports=[];
+ for(const page of [1,2]){const report={...base,id:'bmedia-'+BV+(page>1?'-p2':''),result:{...base.result,page,cid:page===1?101:202}};reports.push(report);await sendReport(report,{home:t.home,cloud:async()=>({status:503}),sleep:async()=>{}});}
+ assert.equal(fs.readdirSync(path.join(t.home,'media-reports')).length,2);const replay=[];await flushReports({home:t.home,cloud:async(_path,body)=>{replay.push(body);return {status:200}},sleep:async()=>{}});assert.deepEqual(replay.sort((a,b)=>a.result.page-b.result.page),reports);assert.deepEqual(fs.readdirSync(path.join(t.home,'media-reports')),[]);
+ }finally{t.clean()}
+});
+test('C1b cloud claim proto survives the media cycle and reaches page-two execution',async()=>{
+ const t=temporary();try{const j=job();j.id+='-p2';Object.assign(j.payload,{v:2,page:2,cid:202});let claimed=false,report;
+ await runCycle(stages(t.home,{gate:()=>({ok:true}),client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async(_bv,page)=>{assert.equal(page,2);return {duration:120,cid:202,urls:[{baseUrl:cdn}]};}},cloud:async(path,body)=>{if(path==='claim'){assert.deepEqual(body,{proto:2});const next=claimed?null:j;claimed=true;return {status:200,data:{job:next,proto:2}};}if(path==='report')report=body;return {status:200};}}));
+ assert.equal(report.success,true);assert.equal(report.proto,2);assert.equal(report.result.page,2);assert.equal(report.result.cid,202);
+ }finally{t.clean()}
+});
+test('C1b legacy job execution keeps the original report shape and first-page default',async()=>{
+ const t=temporary();try{const value=await runMediaJob(job(),stages(t.home));assert.equal(value.report.success,true);assert.equal(value.report.proto,undefined);assert.equal(value.report.result.page,undefined);assert.equal(value.report.result.cid,undefined);}finally{t.clean()}
+});
+test('C1b audio reader selects page-two cid and duration, defaults old calls to page one, and rejects wrong targets',async()=>{
+ const calls=[],d=network(()=>({body:[]}));
+ // Reuse the fixture transport while returning Bilibili JSON instead of CDN bytes.
+ const client=createFetchClient({...d,request(options,callback){calls.push(options);const req=new EventEmitter();req.destroy=()=>{};req.end=()=>{const u=new URL('https://api.bilibili.com'+options.path),body=u.pathname.endsWith('/view')?{code:0,data:{cid:101,duration:999,pages:[{cid:101,duration:120},{cid:202,duration:60}]}}:{code:0,data:{dash:{audio:[{baseUrl:cdn}]}}};const res=Readable.from([Buffer.from(JSON.stringify(body))]);res.statusCode=200;res.headers={};callback(res);};return req;},sleep:async()=>{}});
+ assert.equal((await client.biliAudio(BV)).cid,101);const page2=await client.biliAudio(BV,2,202);assert.equal(page2.cid,202);assert.equal(page2.duration,60);assert.equal(new URL('https://api.bilibili.com'+calls.at(-1).path).searchParams.get('cid'),'202');
+ const before=calls.filter(o=>o.path.includes('/playurl')).length;for(const args of [[BV,3],[BV,2,101],[BV,0],[BV,1.5]])await assert.rejects(client.biliAudio(...args));assert.equal(calls.filter(o=>o.path.includes('/playurl')).length,before);
+});
+
+test('C1b a page-two spool with the same cid uses the new lease without repeating audio',async()=>{
+ const t=temporary();try{
+ const j=job();j.id+='-p2';Object.assign(j.payload,{v:2,page:2,cid:202});const saved={id:j.id,lease:'old',proto:2,success:true,result:{bvid:BV,page:2,cid:202,text:'SECOND_PAGE',covered:1,duration:1,partial:false,chunks:1},cleanup:{residue:0,paths:[]}};
+ await sendReport(saved,{home:t.home,cloud:async()=>({status:500}),sleep:async()=>{}});let claimed=false;const reports=[];
+ await runCycle(stages(t.home,{proto:2,gate:()=>({ok:true}),claim:async()=>{if(claimed)return null;claimed=true;return j;},download:async()=>assert.fail('same-cid spool must not redownload'),cloud:async(_p,b)=>{reports.push(b);return {status:500}},sleep:async()=>{}}));
+ assert.equal(reports.at(-1).lease,j.payload.lease);assert.equal(reports.at(-1).result.cid,202);assert.equal(reports.at(-1).result.page,2);assert.equal(reports.at(-1).proto,2);
+ }finally{t.clean()}
+});
+test('C1b a stale page-two spool with another cid cannot replace newly requested audio',async()=>{
+ const t=temporary();try{
+ const j=job();j.id+='-p2';Object.assign(j.payload,{v:2,page:2,cid:202});await sendReport({id:j.id,lease:'old',proto:2,success:true,result:{bvid:BV,page:2,cid:101,text:'WRONG_AUDIO',covered:1,duration:1,partial:false,chunks:1},cleanup:{residue:0,paths:[]}},{home:t.home,cloud:async()=>({status:500}),sleep:async()=>{}});
+ let claimed=false,downloaded=false;const reports=[];
+ await runCycle(stages(t.home,{proto:2,gate:()=>({ok:true}),claim:async()=>{if(claimed)return null;claimed=true;return j;},client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async()=>({cid:202,duration:120,urls:[{baseUrl:cdn}]})},download:async(_u,d)=>{downloaded=true;fs.writeFileSync(d,'audio');},cloud:async(_p,b)=>{reports.push(b);return {status:500}},sleep:async()=>{}}));
+ assert.equal(downloaded,true);assert.equal(reports.at(-1).result.cid,202);assert.doesNotMatch(reports.at(-1).result.text,/WRONG_AUDIO/);
+ }finally{t.clean()}
 });

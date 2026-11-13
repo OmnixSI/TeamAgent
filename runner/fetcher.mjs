@@ -172,7 +172,7 @@ export function createFetchClient(options={}){
    }
    let comments=[];
    try{const reply=await biliApi('/x/v2/reply',{type:1,oid:v.aid,sort:1,ps:20});if(reply.code===0){const list=[...(reply.data?.hots||[]),...(reply.data?.replies||[])];const unique=[...new Map(list.map(x=>[x.rpid??(x.member?.uname+'\0'+x.content?.message),x])).values()];comments=unique.sort((a,b)=>(b.like||0)-(a.like||0)).slice(0,8).map(c=>({uname:String(c.member?.uname||'').slice(0,100),message:String(c.content?.message||'').slice(0,120)}));}}catch(error){if(now()<pausedUntil)throw error;}
-   return safe({bvid,page,pages:pages.length,aid:v.aid||0,title:String(v.title||'').slice(0,300),desc:String(v.desc||'').slice(0,1500),owner:String(v.owner?.name||'').slice(0,100),tname:String(v.tname||'').slice(0,100),duration:v.duration||0,pubdate:v.pubdate||0,stat:Object.fromEntries(['view','like','coin','favorite','reply'].map(k=>[k,v.stat?.[k]||0])),subtitle,subtitle_lang,subtitle_status,comments,tier:'light',fetched_at:new Date(now()).toISOString()});
+   return safe({bvid,page,cid,pages:pages.length,aid:v.aid||0,title:String(v.title||'').slice(0,300),desc:String(v.desc||'').slice(0,1500),owner:String(v.owner?.name||'').slice(0,100),tname:String(v.tname||'').slice(0,100),duration:selected.duration??v.duration??0,pubdate:v.pubdate||0,stat:Object.fromEntries(['view','like','coin','favorite','reply'].map(k=>[k,v.stat?.[k]||0])),subtitle,subtitle_lang,subtitle_status,comments,tier:'light',fetched_at:new Date(now()).toISOString()});
  }
  function setSessionCookies(next){
    for(const key of ['SESSDATA','bili_jct','DedeUserID'])delete cookies[key];
@@ -185,18 +185,21 @@ export function createFetchClient(options={}){
  const isSearchPaused=()=>now()<searchPausedUntil;
  const pauseSearch=ms=>{searchPausedUntil=Math.max(searchPausedUntil,now()+ms);};
  // Audio-only reader: no fingerprint/login preparation and no video format access.
- async function biliAudio(bvid){
-   if(!BV.test(bvid))throw Object.assign(Error('not_found'),{reason:'not_found'});
+ async function biliAudio(bvid,page=1,expectedCid){
+   if(!BV.test(bvid)||!Number.isInteger(page)||page<1||page>999)throw Object.assign(Error('not_found'),{reason:'not_found'});
    if(isPaused())throw Object.assign(Error('risk'),{reason:'risk'});
    const view=await biliApi('/x/web-interface/view',{bvid});
    if(view.code!==0)throw Object.assign(Error(classifyMedia(view.code)),{reason:classifyMedia(view.code)});
-   const cid=view.data?.pages?.[0]?.cid||view.data?.cid;
+   const pages=view.data?.pages,selected=Array.isArray(pages)&&pages.length?pages[page-1]:page===1?view.data:null;
+   if(!selected)throw Object.assign(Error('not_found'),{reason:'not_found'});
+   const cid=selected.cid;
+   if(expectedCid!==undefined&&cid!==expectedCid)throw Object.assign(Error('audio_unavailable'),{reason:'audio_unavailable'});
    if(!cid)throw Object.assign(Error('audio_unavailable'),{reason:'audio_unavailable'});
    const play=await biliApi('/x/player/playurl',{bvid,cid,fnval:16,fnver:0,qn:16});
    if(play.code!==0)throw Object.assign(Error(classifyMedia(play.code)),{reason:classifyMedia(play.code)});
    const audio=play.data?.dash?.audio;
    if(!Array.isArray(audio)||!audio.length)throw Object.assign(Error('audio_unavailable'),{reason:'audio_unavailable'});
-   return {cid,duration:view.data.duration||0,pic:view.data.pic||'',urls:audio};
+   return {cid,duration:selected.duration??view.data.duration??0,pic:view.data.pic||'',urls:audio};
  }
  return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,biliAudio,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
 }
