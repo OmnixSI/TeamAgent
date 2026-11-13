@@ -44,6 +44,33 @@ test('IR2 initial localhost, private and public IP literals are blocked without 
   assert.equal(calls.length,0);
  });
 });
+for(const blockedHost of ['127.0.0.1.nip.io','10.0.0.1.nip.io','evilqpic.cn','qpic.cn.evil.com','qpic.cn','example.com','multimedia.nt.qq.com.cn.evil.com'])
+ test('IR7 initial host outside the QQ allowlist never reaches fetch: '+blockedHost,async()=>{
+  await network(()=>image(),async calls=>{
+   const events=[];
+   assert.equal(await api.fetchImage(`https://${blockedHost}/private.png`,new AbortController().signal,5_000_000,e=>events.push(e)),null);
+   assert.equal(calls.length,0);assert.equal(events.at(-1).reason,'blocked');assert.equal(events.at(-1).hop,0);
+   const notes=new Map();api.applyImageOutcomes(notes,[{...events.at(-1),messageId:'image',idx:0}]);
+   assert.match(notes.get('image')[0],/原始地址.*请重发/);
+  });
+ });
+for(const allowedHost of ['gchat.qpic.cn','m.qpic.cn','a.b.qpic.cn'])
+ test('IR8 QQ image subdomain works as initial URL and redirect target: '+allowedHost,async()=>{
+  await network(()=>image(),async calls=>{
+   const result=await api.fetchImage(`https://${allowedHost}/image.png`,new AbortController().signal,5_000_000,()=>{});
+   assert.deepEqual(result.bytes,bytes);assert.equal(calls.length,1);
+  });
+  const redirected=await outcome(url=>url===original?new Response(null,{status:302,headers:{location:`https://${allowedHost}/image.png`}}):image());
+  assert.deepEqual(redirected.result.bytes,bytes);assert.equal(redirected.calls.length,2);assert.equal(redirected.events.at(-1).hop,1);
+ });
+for(const location of ['/cdn/image','cdn/image','//gchat.qpic.cn/image','?image=1','#image'])
+ test('IR9 relative Location is rejected before another fetch: '+location,async()=>{
+  const r=await outcome(()=>new Response(null,{status:302,headers:{location}}));
+  assert.equal(r.result,null);assert.equal(r.calls.length,1);assert.equal(r.events.at(-1).reason,'blocked');
+  assert.equal(r.events.at(-1).detail,'redirect_location');assert.equal(r.events.at(-1).hop,1);
+  const notes=new Map();api.applyImageOutcomes(notes,[{...r.events.at(-1),messageId:'image',idx:0}]);
+  assert.match(notes.get('image')[0],/绝对HTTPS地址/);assert.match(notes.get('image')[0],/请重发/);
+ });
 test('IR3 two redirects succeed but a third is refused and all redirect bodies are cancelled',async()=>{
  let cancelled=0;
  const redirect=target=>new Response(new ReadableStream({cancel(){cancelled++;}}),{status:302,headers:{location:target}});
@@ -66,7 +93,7 @@ for(const [name,response,reason,http,mime] of [
  ['oversize',()=>new Response(null,{headers:{'content-type':'image/png','content-length':'5000001'}}),'oversize',200],
  ['network',()=>{throw Error(original+' never-log');},'network'],
 ])test('IR4 '+name+' retains the real reason and hop after redirect',async()=>{
- const r=await outcome(url=>url===original?new Response(null,{status:302,headers:{location:'/cdn/image'}}):response());
+ const r=await outcome(url=>url===original?new Response(null,{status:302,headers:{location:`https://${host}/cdn/image`}}):response());
  assert.equal(r.result,null);assert.equal(r.events.at(-1).reason,reason);assert.equal(r.events.at(-1).hop,1);
  if(http)assert.equal(r.events.at(-1).http,http);if(mime)assert.equal(r.events.at(-1).mime,mime);
  const notes=new Map();api.applyImageOutcomes(notes,[{...r.events.at(-1),messageId:'image',idx:0}]);
@@ -76,7 +103,7 @@ for(const [name,response,reason,http,mime] of [
 test('IR4 streamed size and timeout limits still apply after redirects',{timeout:1000},async()=>{
  for(const timedOut of [false,true]){
   let cancelled=false;const events=[];
-  await network(url=>url===original?new Response(null,{status:302,headers:{location:'/cdn/image'}})
+  await network(url=>url===original?new Response(null,{status:302,headers:{location:`https://${host}/cdn/image`}})
    :new Response(new ReadableStream({start(c){if(!timedOut)c.enqueue(new Uint8Array(10));},cancel(){cancelled=true;}}),{headers:{'content-type':'image/png'}}),async()=>{
     assert.equal(await api.fetchImage(original,AbortSignal.timeout(30),3,e=>events.push(e)),null);
    });
@@ -90,7 +117,7 @@ for(const mode of ['direct image while replying to bot','quoted member image'])t
   :{id:'ask',body:'图里是什么',meta:{replyTo:{kind:'member',targetId:'source'}}};
  const picks=api.pickImages([source,latest],latest,new Map([['source',source]]));
  assert.equal(picks[0].messageId,mode.startsWith('direct')?'ask':'source');
- await network(url=>url===original?new Response(null,{status:302,headers:{location:'/cdn/image'}})
+ await network(url=>url===original?new Response(null,{status:302,headers:{location:`https://${host}/cdn/image`}})
   :url.includes('api.deepseek.com')?Response.json({choices:[{message:{content:'{"desc":"合成图片","tags":[],"meme":false}'},finish_reason:'stop'}]}):image(),async()=>{
    const outcomes=await api.annotateTurn(e,picks.slice(0,1));assert.equal(outcomes[0].stage,'link');assert.equal(outcomes[0].status,'ok');
   });
@@ -101,7 +128,7 @@ test('IR6 actual chat continuation receives network reason, redirect hop and a r
  await qq(e,{...msg('network-image','这张图是什么'),attachments:[{url:original,content_type:'image/jpeg',width:600,height:800}],mentions:[{member_openid:'bot',is_you:true}]});
  const prompts=[];
  await network((url,init)=>{
-  if(url===original)return new Response(null,{status:302,headers:{location:'/cdn/image'}});
+  if(url===original)return new Response(null,{status:302,headers:{location:`https://${host}/cdn/image`}});
   if(url.startsWith('https://'+host))throw Error('synthetic transport failure');
   prompts.push(JSON.parse(init.body));return Response.json({choices:[{message:{content:'{"action":"stop","kind":"direct","brief":"按已记录的图片下载失败原因说明"}'},finish_reason:'stop'}]});
  },()=>runChat(e,'chat-network-image'));

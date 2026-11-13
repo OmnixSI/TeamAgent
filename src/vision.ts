@@ -84,7 +84,7 @@ export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: Image
     if (list[outcome.idx]) continue; // A real cached note takes priority over a previous failure.
     const download = outcome.stage === "fetch" || outcome.stage === "body";
     const reason = outcome.detail === "redirect_host" ? "跳转目标不在允许的QQ图片域名范围"
-      : outcome.detail === "redirect_location" ? "图片跳转地址缺失或格式不正确" : reasons[outcome.reason];
+      : outcome.detail === "redirect_location" ? "图片跳转地址缺失、格式不正确或不是绝对HTTPS地址" : reasons[outcome.reason];
     const position = Number.isInteger(outcome.hop) && outcome.hop! >= 0 && outcome.hop! <= 3
       ? "；位置：" + (outcome.hop === 0 ? "原始地址" : "第" + outcome.hop + "次跳转") : "";
     list[outcome.idx] = "图片（" + (download ? "未取得：图片下载失败：" : "未分析：") + reason
@@ -130,8 +130,11 @@ function imageUrl(value: string) {
   }
 }
 
-// Keep exact QQ hosts; add other CDN hosts only after a production probe verifies them.
-const QQ_IMAGE_REDIRECT_HOSTS = new Set(["multimedia.nt.qq.com.cn"]);
+// Gate initial and redirected URLs alike; never allow arbitrary DNS names that can resolve to private IPs.
+const QQ_IMAGE_HOSTS = new Set(["multimedia.nt.qq.com.cn", "gchat.qpic.cn"]);
+function qqImageHost(host: string) {
+  return QQ_IMAGE_HOSTS.has(host) || host.endsWith(".qpic.cn") && host !== ".qpic.cn";
+}
 const MAX_IMAGE_REDIRECTS = 2;
 
 async function cancelQuietly(run: () => Promise<unknown>) {
@@ -192,8 +195,8 @@ export async function fetchImage(
         report({ stage, status: "failed", reason: "blocked", detail: "url", hop });
         return null;
       }
-      if (hop > 0 && !QQ_IMAGE_REDIRECT_HOSTS.has(new URL(url).hostname.toLowerCase().replace(/\.$/, ""))) {
-        report({ stage, status: "failed", reason: "blocked", detail: "redirect_host", hop });
+      if (!qqImageHost(new URL(url).hostname.toLowerCase().replace(/\.$/, ""))) {
+        report({ stage, status: "failed", reason: "blocked", detail: hop > 0 ? "redirect_host" : "url", hop });
         return null;
       }
       response = await untilAbort(() => fetch(url, { signal, redirect: "manual" }), signal);
@@ -205,8 +208,8 @@ export async function fetchImage(
       }
       const location = response.headers.get("location");
       try {
-        if (!location) throw new VisionFault("blocked");
-        url = new URL(location, url).href;
+        if (!location || !/^https:\/\//i.test(location)) throw new VisionFault("blocked");
+        url = new URL(location).href;
       } catch {
         report({ stage, status: "failed", reason: "blocked", detail: "redirect_location", hop: hop + 1 });
         return null;
