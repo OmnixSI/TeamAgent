@@ -703,31 +703,31 @@ def execute(job, work, inputs, outputs, completion):
                     audio_count += 1
                     safe(u)
                     # Audio-only format: a muxed/video-only source must fail, never fall back.
-                    audio_process(
-                        [
-                            "yt-dlp",
-                            "--ignore-config",
-                            "--no-playlist",
-                            "--no-cache-dir",
-                            "--max-downloads",
-                            "1",
-                            "--max-filesize",
-                            "50M",
-                            "--socket-timeout",
-                            "15",
-                            "--retries",
-                            "1",
-                            "--format",
-                            "bestaudio",
-                            # Bilibili's audio CDN returns 567 unless the whole stream is requested as a range.
-                            "--add-header",
-                            "Range:bytes=0-",
-                            "--output",
-                            str(inputs / "audio-%(id)s.%(ext)s"),
-                            u,
-                        ],
-                        work,
-                    )
+                    download_args = [
+                        "yt-dlp",
+                        "--ignore-config",
+                        "--no-playlist",
+                        "--no-cache-dir",
+                        "--max-downloads",
+                        "1",
+                        "--max-filesize",
+                        "50M",
+                        "--socket-timeout",
+                        "15",
+                        "--retries",
+                        "1",
+                        "--format",
+                        "bestaudio",
+                    ]
+                    if is_bilibili_url(u):
+                        # Bilibili's audio CDN returns 567 unless the whole stream is a range.
+                        download_args += ["--add-header", "Range:bytes=0-"]
+                    download_args += [
+                        "--output",
+                        str(inputs / "audio-%(id)s.%(ext)s"),
+                        u,
+                    ]
+                    audio_process(download_args, work)
                     if is_bilibili_url(u):
                         downloaded = [
                             item
