@@ -2,8 +2,8 @@ import { UNTRUSTED_MARK } from "./untrusted";
 import { extraUntrustedNames } from "./toolkit";
 import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
-export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction";
-export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction"]);
+export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction" | "request_feature";
+export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction", "request_feature"]);
 export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames()]);
 
 /** Once external material enters a turn, later tool calls cannot shed its taint. */
@@ -22,7 +22,7 @@ export function tainted(context: any, messages: any[]): boolean {
   return false;
 }
 
-export const STRONG: Record<WriteTool, RegExp> = {
+export const STRONG: Record<Exclude<WriteTool, "request_feature">, RegExp> = {
   prepare_project_task: /(建|开|创建|新建|立|加|提)(一?[个条])?(任务|需求|工单|issue)|立项|排进(计划|任务)|交给(本地|AI|你)(去)?(做|干|实现|处理)/i,
   create_file_task: /(做|写|生成|整理|导出|出|弄)(一?[个份])?(成)?(文档|文件|表格|报告|总结|PPT|CSV|XLSX|PDF|DOCX|幻灯片|方案|清单|纪要)/i,
   remember_correction: /记住|记一下|记下来|以后(要|别|不要)|不是.{1,20}是|纠正(一下)?|说错了|搞错了/,
@@ -84,6 +84,7 @@ export function cleanWorkRequest(text: string): boolean {
 
 /** Clean work, explicit correction, and strict tainted authorization are separate intents. */
 function explicitCommand(tool: WriteTool, text: string, dirty: boolean): boolean {
+  if (tool === "request_feature") return false; // Feature intent belongs to the model, never these regexes.
   text = neutralFaces(text);
   if (tool !== "remember_correction" && !dirty) return cleanWorkRequest(text);
   if (tool !== "remember_correction" && COMPLETED_WORK.test(text)) return false;
@@ -112,6 +113,7 @@ export function explicitWriteRequest(tool: WriteTool, source: any, names = new M
 
 type Authorization = { ok: true; tainted: boolean } | { ok: false; reason: string };
 export function authorize(tool: WriteTool, quote: unknown, source: any, context: any, messages: any[]): Authorization {
+  if (tool === "request_feature") return authorizeFeature(quote, source, context, messages);
   const dirty = tainted(context, messages);
   if (typeof quote !== "string" || !source?.id || !(context.batch?.some((r: any) => r.id === source.id) || source.id === context.latest?.id))
     return { ok: false, reason: "外部资料不能作为交办依据" };
@@ -125,3 +127,15 @@ export function authorize(tool: WriteTool, quote: unknown, source: any, context:
 
 /** Only these application-generated reasons may cross the generic tool error filter. */
 export class AuthorizationError extends Error {}
+
+/** Feature intent is semantic; only provenance, direct addressing and evidence are checked here. */
+export function authorizeFeature(quote: unknown, source: any, context: any, messages: any[]): Authorization {
+  if (!source?.id || !(context.batch?.some((row: any) => row.id === source.id) || context.latest?.id === source.id))
+    return { ok: false, reason: "外部资料不能作为交办依据" };
+  if (source.meta?.direct !== true) return { ok: false, reason: "需要直接@机器人提需求" };
+  if (typeof quote !== "string" || !quoteIn(source, quote, context.names))
+    return { ok: false, reason: "原话不在成员发言里" };
+  if ([...quoteEvidence(String(source.body || ""), quote).replace(/[\s\p{P}]/gu, "")].length < 6)
+    return { ok: false, reason: "原话太短" };
+  return { ok: true, tainted: tainted(context, messages) };
+}
