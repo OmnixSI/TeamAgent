@@ -70,3 +70,12 @@ CREATE INDEX IF NOT EXISTS repo_commits_at ON repo_commits(repo, at DESC);
 CREATE TABLE IF NOT EXISTS repo_state(
   repo TEXT PRIMARY KEY, json TEXT NOT NULL, fingerprint TEXT NOT NULL,
   updated_at INTEGER NOT NULL, checked_at INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS profiles(
+  group_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  source_ids TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY(group_id, user_id));
+CREATE INDEX IF NOT EXISTS profiles_group ON profiles(group_id, updated_at DESC);
