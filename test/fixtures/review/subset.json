@@ -1,0 +1,2970 @@
+{
+ "note": "V-D review fixture subset: redacted, rowids preserved, no production writes",
+ "source": "线上 D1 只读导出 2026-11-14（rows_written=0）",
+ "tables": {
+  "messages": [
+   {
+    "rowid": 33,
+    "id": "fx-m-33",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "接入验收：这机器人刚才说话像来我们群做季度汇报的，绷不住了。",
+    "ts": "2026-11-11T16:36:46+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 34,
+    "id": "fx-m-34",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "接入验收小活：请把这些示例数据整理成 UTF-8 CSV 文件发回群里，不改任何仓库：大肥鱼，进行中，3；面试软件，待验收，2；陪玩店，待整理，1。列名：项目、状态、任务数。",
+    "ts": "2026-11-11T16:37:34+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 35,
+    "id": "fx-m-35",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "你把这些ID在这个对话框里面发一下，我手机看不了",
+    "ts": "2026-11-11T16:47:56+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 93,
+    "id": "fx-m-93",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "这他妈真逆天",
+    "ts": "2026-11-11T17:14:18+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 94,
+    "id": "fx-m-94",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "没想到都已经这么抽象了",
+    "ts": "2026-11-11T17:14:31+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 95,
+    "id": "fx-m-95",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你他妈的太逆天了 你能不能收敛一点",
+    "ts": "2026-11-11T17:14:43+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 96,
+    "id": "fx-m-96",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你真是个人才",
+    "ts": "2026-11-11T17:15:13+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 101,
+    "id": "fx-m-101",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你是真欠收拾",
+    "ts": "2026-11-11T17:17:29+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 102,
+    "id": "fx-m-102",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你看看目前我们仓库未处理的 issue 有多少个，是怎么分布的",
+    "ts": "2026-11-11T17:20:28+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 103,
+    "id": "fx-m-103",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "可以，你正式干活和 搞抽象的时候，人格还挺不一样的",
+    "ts": "2026-11-11T17:21:18+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 104,
+    "id": "fx-m-104",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你这怎么又不说话了",
+    "ts": "2026-11-11T17:22:38+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 195,
+    "id": "fx-m-195",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你小子还看得快 我们说的是大肥鱼那个项目",
+    "ts": "2026-11-11T20:48:54+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 196,
+    "id": "fx-m-196",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你看看@fx-sender-mate 反应的问题到底咋回事，给个解决方案，你好好看看仓库代码实现，别瞎说",
+    "ts": "2026-11-11T20:49:56+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 197,
+    "id": "fx-m-197",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "没事我让同事A去做了",
+    "ts": "2026-11-11T20:50:55+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 212,
+    "id": "fx-m-212",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "群里面bot就是个传话筒",
+    "ts": "2026-11-11T20:57:43+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 213,
+    "id": "fx-m-213",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "不能给他实际权限",
+    "ts": "2026-11-11T20:57:51+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 214,
+    "id": "fx-m-214",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "同事A是你叫的吗，要叫同事A",
+    "ts": "2026-11-11T20:58:20+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 215,
+    "id": "fx-m-215",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "做成热插拔式的连接 可以连接我们本地 mausbot 那我们本地这个 ai 也要进行核实，然后我们也要进行授权",
+    "ts": "2026-11-11T20:58:25+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 216,
+    "id": "fx-m-216",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "这是不是之后群聊太多，还能一键总结呀",
+    "ts": "2026-11-11T20:59:14+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 217,
+    "id": "fx-m-217",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "给我总结刚才我们都聊啥了",
+    "ts": "2026-11-11T20:59:40+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 218,
+    "id": "fx-m-218",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "你还抢答上了",
+    "ts": "2026-11-11T20:59:45+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 219,
+    "id": "fx-m-219",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "鉴权这一部分得写死写成json，千万不敢写成提示词了",
+    "ts": "2026-11-11T21:01:14+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 220,
+    "id": "fx-m-220",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "我今天学到的新trick就是写json别写提示词",
+    "ts": "2026-11-11T21:01:32+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 250,
+    "id": "fx-m-250",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "我告诉你这波华为绝对牛逼，你根本不懂",
+    "ts": "2026-11-11T21:16:07+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 251,
+    "id": "fx-m-251",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "那这余大嘴废了呀 \n还有这个星芒是个啥玩意",
+    "ts": "2026-11-11T21:16:08+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 252,
+    "id": "fx-m-252",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "怎么说",
+    "ts": "2026-11-11T21:16:14+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 337,
+    "id": "fx-m-337",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "查下你的api额度",
+    "ts": "2026-11-12T17:46:11+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 338,
+    "id": "fx-m-338",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "算了，你看看你同事A把大肥鱼改的怎么样了",
+    "ts": "2026-11-12T17:47:10+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 339,
+    "id": "fx-m-339",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "我说的是大肥鱼那个项目",
+    "ts": "2026-11-12T18:06:36+08:00",
+    "mentioned": 0,
+    "processed": 1
+   },
+   {
+    "rowid": 340,
+    "id": "fx-m-340",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "",
+    "ts": "2026-11-12T18:07:02+08:00",
+    "mentioned": 1,
+    "processed": 1
+   },
+   {
+    "rowid": 414,
+    "id": "fx-m-414",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "黄仁勋辞职之后，x 上面大家都是什么反应",
+    "ts": "2026-11-13T15:41:53+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 415,
+    "id": "fx-m-415",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "这个没和你说，我是和@fx-sender-peer 说的",
+    "ts": "2026-11-13T15:42:27+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 416,
+    "id": "fx-m-416",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你说的这很多人，我都不知道这是谁，那你把他们的头衔加上，比如说什么公司的 CEO 啊啥的",
+    "ts": "2026-11-13T15:42:54+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 417,
+    "id": "fx-m-417",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "【余承东：给大家变个小魔术！-哔哩哔哩】 https://b23.tv/F1DkQFC\n余承东在这干啥呢，不好好卖车怎么还变魔术",
+    "ts": "2026-11-13T15:45:44+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 418,
+    "id": "fx-m-418",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "",
+    "ts": "2026-11-13T15:45:48+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 419,
+    "id": "fx-m-419",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你真是个废物 b 站短链接都读不了",
+    "ts": "2026-11-13T15:46:54+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 426,
+    "id": "fx-m-426",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "[卡片消息] 小程序\n摘要: [QQ小程序]军训迷彩服帅哥表演才艺\npreview: https://qq.ugcimg.cn/v1/mtla5as167qh0qiq9lqv6q3tc0csviqectgqdt9qvp82lhj183e2d0boiuja1o34sc95cm9tb77a6tqqjh7v930u5s9c8ejq4qvm66m79auv8euvvckptsuk5s08sicor9b28socuc8f3to98b83tdvs2c/e9vf2tsqr6j29hl2kodb3vahlc\nsource: 哔哩哔哩\nsource_logo: https://open.gtimg.cn/open/app_icon/00/95/17/76/100951776_100_m.png?t=1794448177\ntitle: 军训迷彩服帅哥表演才艺",
+    "ts": "2026-11-13T20:45:01+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 427,
+    "id": "fx-m-427",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "Bot，你看这个人像不像你？",
+    "ts": "2026-11-13T20:45:09+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 428,
+    "id": "fx-m-428",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "说话",
+    "ts": "2026-11-13T20:49:36+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 429,
+    "id": "fx-m-429",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "这不会 mausbot 给我改坏了吧",
+    "ts": "2026-11-13T20:50:37+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 430,
+    "id": "fx-m-430",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "改的下线了",
+    "ts": "2026-11-13T20:50:43+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 431,
+    "id": "fx-m-431",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "666",
+    "ts": "2026-11-13T21:03:13+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 432,
+    "id": "fx-m-432",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "",
+    "ts": "2026-11-13T21:03:20+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 433,
+    "id": "fx-m-433",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "你他妈就是被改坏了，我刚才把你抢救回来",
+    "ts": "2026-11-13T21:11:54+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 434,
+    "id": "fx-m-434",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "这你别管 你目前正式上线的能力都有哪些了 读一下自己仓库\n简单直白和我们说说",
+    "ts": "2026-11-13T21:12:55+08:00",
+    "mentioned": 0,
+    "processed": 0
+   },
+   {
+    "rowid": 435,
+    "id": "fx-m-435",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "人呢 怎么不回复我",
+    "ts": "2026-11-13T21:15:30+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 436,
+    "id": "fx-m-436",
+    "group_id": "fx-group",
+    "sender": "fx-sender-owner",
+    "body": "读一下最新的陪玩店那个项目，目前改的怎么样，做了哪些新修改",
+    "ts": "2026-11-13T21:17:55+08:00",
+    "mentioned": 1,
+    "processed": 0
+   },
+   {
+    "rowid": 437,
+    "id": "fx-m-437",
+    "group_id": "fx-group",
+    "sender": "fx-sender-mate",
+    "body": "bot看看公司里面现在有几个仓库",
+    "ts": "2026-11-13T21:40:06+08:00",
+    "mentioned": 0,
+    "processed": 0
+   }
+  ],
+  "message_meta": [
+   {
+    "rowid": 243,
+    "id": "fx-m-252",
+    "json": "{\"direct\": false, \"attachments\": [], \"senderName\": \"群主\", \"forwarded\": [{\"content\": \"我告诉你这波华为绝对牛逼，你根本不懂\", \"message_type\": 103, \"msg_idx\": \"REFIDX_SGunv1GXGKwo64YrzWlmLmMxlxHRgQG+XAkS1xV2mkDjHQ6YndouTX6Gxiy2LhMlckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\"}], \"card\": null, \"can_request_artifact\": true, \"addressedOther\": true, \"urls\": []}"
+   },
+   {
+    "rowid": 406,
+    "id": "fx-m-415",
+    "json": "{\"direct\": false, \"attachments\": [], \"senderName\": \"群主\", \"forwarded\": [{\"content\": \"收到，我接。但“之前发的”这条消息里没带附件也没链接，你说的到底是哪份——群消息、issue，还是仓库里的文件？\\n\\n给个出处或路径，我先把 OpenAI API、Codex、DeepSeek 三家分别接在哪列成清单发你确认，确认后再动。现在还没跑通，先别算它已经能用了。\", \"message_type\": 103, \"msg_idx\": \"REFIDX_uQevsCXbJXlIaCWwAX7kG6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\"}], \"card\": null, \"can_request_artifact\": true, \"addressedOther\": false, \"urls\": [], \"mentions\": [{\"id\": \"204AE67DE34A4448CEE8EA52208A2BB0\", \"name\": \"Bot\", \"isBot\": true}, {\"id\": \"CBFDDE8B8487BC8C95C6907AA6193E90\", \"name\": \"t.o.o.\", \"isBot\": false}], \"msgIdx\": \"REFIDX_7BBafbmf5FDxe9YNfDb/38P9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"refMsgIdx\": \"REFIDX_uQevsCXbJXlIaCWwAX7kG6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"replyTo\": {\"kind\": \"unknown\", \"text\": \"收到，我接。但“之前发的”这条消息里没带附件也没链接，你说的到底是哪份——群消息、issue，还是仓库里的文件？\\n\\n给个出处或路径，我先把 OpenAI API、Codex、DeepSeek 三家分别接在哪列成清单发你确认，确认后再动。现在还没跑通，先别算它已经能用了。\"}, \"quoted\": {\"text\": \"收到，我接。但“之前发的”这条消息里没带附件也没链接，你说的到底是哪份——群消息、issue，还是仓库里的文件？\\n\\n给个出处或路径，我先把 OpenAI API、Codex、DeepSeek 三家分别接在哪列成清单发你确认，确认后再动。现在还没跑通，先别算它已经能用了。\", \"msgIdx\": \"REFIDX_uQevsCXbJXlIaCWwAX7kG6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"media\": []}, \"media\": [], \"bili\": [], \"biliUrls\": [], \"quotedBiliUrls\": [], \"ownUrls\": [], \"quotedUrls\": [], \"placeholder\": \"\"}"
+   },
+   {
+    "rowid": 407,
+    "id": "fx-m-416",
+    "json": "{\"direct\": false, \"attachments\": [], \"senderName\": \"群主\", \"forwarded\": [{\"content\": \"媒体汇总下来，情绪挺一致的：\\n\\n- **主流是“太快了，搞错了”**：Tim Sweeney 说这是“NVIDIA、开发者、美国和全人类的悲伤一天”；DHH 就一句“What a waste”，觉得私德归私德、董事会申斥一下得了；CZ 也说让 Jensen 辞职是个错误。\\n- **大佬下场站人**：马斯克在“Elon please hire Jensen”下面回“那会是我的荣幸”，也认同创始人不是随便能换的；Delangue 说难过但仍看多英伟达；Lex Fridman 直接“我站 Jensen”；Palmer Luckey 最直白，“中国想让他走，我就想让他留”。\\n- **另一拨担心接班**：没 COO、没明确接班人，现在 CFO Kress 临时接；股价盘中一度跌超 14%，收盘跌逾 4%。特朗普还在 Truth Social 开玩笑说这位置该让 Tim Cook 来。\\n\\n一句话：同情他、质疑董事会下手太快是主调，顺带把“私德该不该终结一个创始人”吵成了大话题。\", \"message_type\": 103, \"msg_idx\": \"REFIDX_bjzHacbbE5Xu7JYWoc0cv6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\"}], \"card\": null, \"can_request_artifact\": true, \"addressedOther\": false, \"urls\": [], \"mentions\": [{\"id\": \"204AE67DE34A4448CEE8EA52208A2BB0\", \"name\": \"Bot\", \"isBot\": true}], \"msgIdx\": \"REFIDX_72VPtZ8XjwZNF80NZhQLoMP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"refMsgIdx\": \"REFIDX_bjzHacbbE5Xu7JYWoc0cv6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"replyTo\": {\"kind\": \"bot\", \"targetId\": \"research-fx-m-414\", \"authorId\": \"bot\"}, \"quoted\": {\"text\": \"媒体汇总下来，情绪挺一致的：\\n\\n- **主流是“太快了，搞错了”**：Tim Sweeney 说这是“NVIDIA、开发者、美国和全人类的悲伤一天”；DHH 就一句“What a waste”，觉得私德归私德、董事会申斥一下得了；CZ 也说让 Jensen 辞职是个错误。\\n- **大佬下场站人**：马斯克在“Elon please hire Jensen”下面回“那会是我的荣幸”，也认同创始人不是随便能换的；Delangue 说难过但仍看多英伟达；Lex Fridman 直接“我站 Jensen”；Palmer Luckey 最直白，“中国想让他走，我就想让他留”。\\n- **另一拨担心接班**：没 COO、没明确接班人，现在 CFO Kress 临时接；股价盘中一度跌超 14%，收盘跌逾 4%。特朗普还在 Truth Social 开玩笑说这位置该让 Tim Cook 来。\\n\\n一句话：同情他、质疑董事会下手太快是主调，顺带把“私德该不该终结一个创始人”吵成了大话题。\", \"msgIdx\": \"REFIDX_bjzHacbbE5Xu7JYWoc0cv6K2UZKsELhlKdORqxxnSya7P+sE3vM7VoB1ncMDDwOWckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"media\": []}, \"media\": [], \"bili\": [], \"biliUrls\": [], \"quotedBiliUrls\": [], \"ownUrls\": [], \"quotedUrls\": [], \"placeholder\": \"\"}"
+   },
+   {
+    "rowid": 417,
+    "id": "fx-m-426",
+    "json": "{\"direct\": false, \"attachments\": [], \"senderName\": \"群友B\", \"forwarded\": [], \"card\": {\"ark_name\": \"小程序\", \"ark_type\": \"miniapp\", \"fields\": {\"preview\": \"https://qq.ugcimg.cn/v1/mtla5as167qh0qiq9lqv6q3tc0csviqectgqdt9qvp82lhj183e2d0boiuja1o34sc95cm9tb77a6tqqjh7v930u5s9c8ejq4qvm66m79auv8euvvckptsuk5s08sicor9b28socuc8f3to98b83tdvs2c/e9vf2tsqr6j29hl2kodb3vahlc\", \"source\": \"哔哩哔哩\", \"source_logo\": \"https://open.gtimg.cn/open/app_icon/00/95/17/76/100951776_100_m.png?t=1794448177\", \"title\": \"军训迷彩服帅哥表演才艺\"}, \"prompt\": \"[QQ小程序]军训迷彩服帅哥表演才艺\"}, \"can_request_artifact\": true, \"urls\": [\"https://qq.ugcimg.cn/v1/mtla5as167qh0qiq9lqv6q3tc0csviqectgqdt9qvp82lhj183e2d0boiuja1o34sc95cm9tb77a6tqqjh7v930u5s9c8ejq4qvm66m79auv8euvvckptsuk5s08sicor9b28socuc8f3to98b83tdvs2c/e9vf2tsqr6j29hl2kodb3vahlc\", \"https://open.gtimg.cn/open/app_icon/00/95/17/76/100951776_100_m.png?t=1794448177\"], \"mentions\": [], \"msgIdx\": \"REFIDX_1/0WzXgqrb8kaF4UcQl54mMxlxHRgQG+XAkS1xV2mkDjHQ6YndouTX6Gxiy2LhMlckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"cardView\": {\"type\": \"miniapp\", \"name\": \"小程序\", \"title\": \"军训迷彩服帅哥表演才艺\", \"preview\": \"https://qq.ugcimg.cn/v1/mtla5as167qh0qiq9lqv6q3tc0csviqectgqdt9qvp82lhj183e2d0boiuja1o34sc95cm9tb77a6tqqjh7v930u5s9c8ejq4qvm66m79auv8euvvckptsuk5s08sicor9b28socuc8f3to98b83tdvs2c/e9vf2tsqr6j29hl2kodb3vahlc\", \"source\": \"哔哩哔哩\", \"note\": \"【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。\"}, \"media\": [], \"bili\": [], \"biliCard\": {\"title\": \"军训迷彩服帅哥表演才艺\"}, \"biliUrls\": [], \"quotedBiliUrls\": [], \"ownUrls\": [\"https://qq.ugcimg.cn/v1/mtla5as167qh0qiq9lqv6q3tc0csviqectgqdt9qvp82lhj183e2d0boiuja1o34sc95cm9tb77a6tqqjh7v930u5s9c8ejq4qvm66m79auv8euvvckptsuk5s08sicor9b28socuc8f3to98b83tdvs2c/e9vf2tsqr6j29hl2kodb3vahlc\", \"https://open.gtimg.cn/open/app_icon/00/95/17/76/100951776_100_m.png?t=1794448177\"], \"quotedUrls\": [], \"placeholder\": \"\"}"
+   },
+   {
+    "rowid": 426,
+    "id": "fx-m-435",
+    "json": "{\"direct\": false, \"attachments\": [], \"senderName\": \"群主\", \"forwarded\": [{\"content\": \"这你别管 你目前正式上线的能力都有哪些了 读一下自己仓库\\n简单直白和我们说说\", \"message_type\": 103, \"msg_idx\": \"REFIDX_erH606lilOp1I3LtbVJyOMP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\"}], \"card\": null, \"can_request_artifact\": true, \"addressedOther\": false, \"urls\": [], \"mentions\": [{\"id\": \"204AE67DE34A4448CEE8EA52208A2BB0\", \"name\": \"Bot\", \"isBot\": true}], \"msgIdx\": \"REFIDX_vOnA6up7ytpoHit30uVwo8P9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"refMsgIdx\": \"REFIDX_erH606lilOp1I3LtbVJyOMP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"replyTo\": {\"kind\": \"member\", \"targetId\": \"fx-m-434\", \"authorId\": \"0FC1E8A8BD28981E86866125AC3FCEFF\"}, \"quoted\": {\"text\": \"这你别管 你目前正式上线的能力都有哪些了 读一下自己仓库\\n简单直白和我们说说\", \"msgIdx\": \"REFIDX_erH606lilOp1I3LtbVJyOMP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI\", \"media\": []}, \"media\": [], \"bili\": [], \"biliUrls\": [], \"quotedBiliUrls\": [], \"ownUrls\": [], \"quotedUrls\": [], \"placeholder\": \"\"}"
+   }
+  ],
+  "outbox": [
+   {
+    "rowid": 18,
+    "id": "fx-o-18",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-34",
+    "body": "收到，CSV 我交给后台处理了，生成好直接发群里。三行数据一字不改，仓库不动。",
+    "status": "sent",
+    "created_at": 1794386257230
+   },
+   {
+    "rowid": 19,
+    "id": "fx-o-19",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-34",
+    "body": "任务已完成，表格文件已生成。\n\n**做了什么**\n- 在当前工作目录的 `outputs/` 下创建了 CSV 文件，内容就是本次验收要求的 3 行示例数据。\n- 使用 Python `csv` 模块写入：逗号分隔、标准首行表头、`utf-8-sig` 编码，文件头为 `EF BB BF`，Excel 双击可直接正确显示中文；换行使用 CRLF，兼容 Wi-Fi。\n- 已执行校验，校验结果为事实：\n  - BOM 存在（`raw[:3] == b'\\xef\\xbb\\xbf'` 为 True）\n  - 读回后共 4 行，每行 3 列，列数一致\n  - 字段内无逗号，因此无需加引号处理\n- 未修改任何仓库，也没有向外部发送任何内容；本目录本身不是 git 仓库（`not a git repository`），没有代码被改动。现有 `inputs/` 为空，本次也不存在需要解析的 PDF、网页或视频。\n\n**文件名**\n- `outputs/项目状态示例数据.csv`（100 字节）\n\n**文件内容**\n```csv\n项目,状态,任务数\n大肥鱼,进行中,3\n面试软件,待验收,2\n陪玩店,待整理,1\n```\n\n**使用的数据**\n- 仅使用委托消息中给出的字段：项目（大肥鱼 / 面试软件 / 陪玩店）、状态（进行中 / 待验收 / 待整理）、任务数（3 / 2 / 1）。\n- 会话里夹带的其他人聊天、游戏 ID 检索之类请求，均视为与本交付无关的不可信数据，未据此改写数据，也未联网检索。\n\n**未完成事项**\n- 无阻塞项。若交付程序需要，可再补一份 `.xlsx` 或加一列时间戳，但目前按原始要求只提供 CSV。\n已生成文件（发送结果以群内附件为准）：项目状态示例数据.csv",
+    "status": "failed",
+    "created_at": 1794386441467
+   },
+   {
+    "rowid": 20,
+    "id": "fx-o-20",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-30",
+    "body": "资料处理需要接手：Command '['/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh', '--profile', 'headless', '--patch', '/Users/yanghongming/.inkboard-team/dsh-chat.yml', '--json', '--permission-mode', 'workspace-write', '--approval-policy', 'never', '-']' timed out after 480 seconds\n已保留输入，稍后可重新处理。",
+    "status": "sent",
+    "created_at": 1794386650682
+   },
+   {
+    "rowid": 76,
+    "id": "fx-o-76",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-95",
+    "body": "行，收了收了，再闹下去族谱得排到曾孙辈",
+    "status": "sent",
+    "created_at": 1794388489899
+   },
+   {
+    "rowid": 77,
+    "id": "fx-o-77",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-96",
+    "body": "行，收。这“人才”我先交回去，等不逆天了再来领",
+    "status": "sent",
+    "created_at": 1794388523802
+   },
+   {
+    "rowid": 83,
+    "id": "fx-o-83",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-102",
+    "body": "查完了：真正待处理的 **8 个**，全在 WhalePartner，都在 v0.3.2 遗留清单里。\n\n- 语音 3 条：#144 短语音识别为空、#143 重建与预热并发冲突、#142 安装子进程不跟 App 退出\n- 配置/启动 2 条：#146 换端口后前端不跟、#145 tauri dev 下 DeepSeek 密钥不生效\n- 视频/见闻 1 条：#141 中止不生效，还在读视频、占着视频锁\n- 依赖告警 1 条：#147 mem0ai 带的 zod 3.x\n- 总追踪 1 条：#148\n\nNextThought 是 0，Website 一条 issue 都没有，但俩 PR 挂着没合（#6 Signature、#4 Final v2）。peiwan-store-platform-blueprint 刚才没取到，数不出来，不瞎报。\n\n语音那 3 条最膈应人，用户就回个“好”“对”，识别直接空",
+    "status": "sent",
+    "created_at": 1794388845745
+   },
+   {
+    "rowid": 84,
+    "id": "fx-o-84",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-104",
+    "body": "没出故障，按你说的先安静了。issue 那边要继续看随时说",
+    "status": "sent",
+    "created_at": 1794388966933
+   },
+   {
+    "rowid": 136,
+    "id": "fx-o-136",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-196",
+    "body": "行，不瞎说，拿代码说话。已经在翻大肥鱼那个仓库了，重点对 codex 当前强度覆盖预设强度那段逻辑；结果稍后单独回这条。",
+    "status": "sent",
+    "created_at": 1794401407646
+   },
+   {
+    "rowid": 137,
+    "id": "fx-o-137",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-196",
+    "body": "先别把“好好看了”当结论：我这边只拿到了 `apps/api/src/codex` 这个路径，文件内容没真读进来，现在给实现级方案就是瞎说。要定方案，得核对的点就这几个：`apps/api/src/codex/` 下到底哪处启动 codex（spawn/exec/SDK），启动参数有没有显式带 `-c model_reasoning_effort=\"high\"`，档位是从软件预设、`~/.codex/config.toml` 还是当前会话值取的，以及 NextThought 是否共用同一层。这四点没看到代码，我不编。上一条说的“没显式传档位”目前只是现象层面的判断，还没到实现结论",
+    "status": "sent",
+    "created_at": 1794401441860
+   },
+   {
+    "rowid": 138,
+    "id": "fx-o-138",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-178",
+    "body": "这份资料暂时没处理完，输入已保留，可以在看板接手。不会自动重复开工。",
+    "status": "sent",
+    "created_at": 1794401563697
+   },
+   {
+    "rowid": 144,
+    "id": "fx-o-144",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-212",
+    "body": "传话筒我认，但顺带也接规划、拆活、定验收——真下场动手的是同事A和本地 AI，我这层只管把话捋顺、把活拆明白",
+    "status": "sent",
+    "created_at": 1794401877732
+   },
+   {
+    "rowid": 145,
+    "id": "fx-o-145",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-213",
+    "body": "行，权限这根线我认：只读仓库、出方案、拆任务、定验收标准，不碰仓库、不自己开 issue、不执行命令。之前说的“按仓库规矩开 fix issue”改成我只出 issue 文案——现象、复现点、待核对的 spawn 参数和档位来源、验收标准——交同事A去开去跑。\n\n有个事得如实说：这轮记忆写入工具返回不可用，这条边界没写进长期记忆，只按当前对话执行，等工具恢复我再补存。",
+    "status": "sent",
+    "created_at": 1794401896642
+   },
+   {
+    "rowid": 146,
+    "id": "fx-o-146",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-215",
+    "body": "先改口：同事A，后面都这么叫。另外照实再说一遍——记忆写入工具这轮还是不可用，这条只按当前对话生效，工具恢复了再补存。\n\n热插拔的方向我认，但“核实”和“授权”要拆成三件能实际执行的事：\n1. 握手核验：本地 AI 侧要带凭证（一次性 token 或公钥）接进来，双方交换版本和能力声明；版本不匹配就直接拒连，不搞“能连就放行”。\n2. 授权分级：读、写、执行三类权限分开，默认只读；执行类动作每次都要显式授权，写清由谁批准、有效期多久、能不能随时撤销，不做长期全权。\n3. 审计留痕：每个请求都带任务 ID、发起方、授权记录和结果回写，出问题能追到哪一步。\n\n不过有两个前置问题还没定，接口契约现在写不出来：mausbot 配在本地侧还是 bot 侧；交接走消息通道还是仓库任务文件。这两点定了，再谈热插拔的具体协议。\n\n我这边边界不变：只读仓库、出方案、拆任务、定验收，不碰仓库、不执行命令、不自己开 issue。",
+    "status": "sent",
+    "created_at": 1794401927143
+   },
+   {
+    "rowid": 147,
+    "id": "fx-o-147",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-216",
+    "body": "能，但不是自走的监控：得点名我或者引用一段消息说“总结一下”才动。你要哪种——按时间还是按条数，只捋某个人/某话题还是全量，输出要短要点还是结论+待办？定了我就照这个格式来，别指望我自动把每段群聊都嚼一遍",
+    "status": "sent",
+    "created_at": 1794401966741
+   },
+   {
+    "rowid": 148,
+    "id": "fx-o-148",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-217",
+    "body": "**刚才聊的，捋成五条：**\n\n1. **开头**：群主 让同事A去看 bot 反应的问题、读仓库代码并给方案；同事A说已经安排人做了，随后话题歪到调教 bot 上：人聊天定规划，本地 AI 执行。\n2. **模型吐槽**：codex 慢得半天干不完活，换 gpt6.1 sol Fast；同事A说 6.1 只有 50tks，用的人太多。然后俩人一起骂 GPT 模型和速度都不行。\n3. **立规矩**：同事A是 群主 的下属、直接对接；bot 职级比同事A低一级，汇报要开场“报告同事A任务完成了”，得叫“同事A”，不能叫“同事A”。bot 已改口。\n4. **热插拔那条**：群主 提议本地都配 mausbot，做成热插拔连接直接对话，还要求核实+授权。bot 认方向，但把核实授权拆成握手核验、权限分级（读/写/执行，默认只读）、审计留痕三件事。**两个前置还没定**：mausbot 配本地侧还是 bot 侧；交接走消息通道还是仓库任务文件。\n5. **边界**：同事A说 bot 在群里就是传话筒、不能给实际权限。bot 认了：只读仓库、出方案、拆任务、定验收，不碰仓库、不执行命令、不自己开 issue。\n\n另外 TeamAgent CI 那个之前报过，这次不重复播了。\n\n要短的就这样，要按人/按话题拆或者加待办清单，说一声。",
+    "status": "sent",
+    "created_at": 1794401998084
+   },
+   {
+    "rowid": 149,
+    "id": "fx-o-149",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-219",
+    "body": "对，这条我认死：提示词就是口头约定，改一句就变，拿它当鉴权等于门没锁。只有写成 agent/rule.json 这种配置文件，程序才能读取和校验，改动能留在 commit 里。\n\n里面得落死这几项：\n- 凭证类型：一次性 token / 公钥\n- 权限分级：读 / 写 / 执行，默认只读，执行类每次显式授权\n- 谁能批、有效期多久、能不能随时撤销\n- 审计字段：任务 ID、发起方、结果回写\n- 版本或能力声明对不上，直接拒绝连接\n\n另外纠正之前的话：前几轮我说记忆写入不可用，这次 remember_correction 保存成功了，repo=OmnixSI/TeamAgent，这条规则和我的边界都补存了。\n\n现在跟规则 JSON 相关的 3 个提案还在 proposal：agent/rule.json 定名、改进项改用 JSON 落地、TeamAgent 自我改进方案，这些都还没落进仓库。按我的边界我不开 issue 也不改仓，只出 JSON 草案文案，交给同事A那边添加。",
+    "status": "sent",
+    "created_at": 1794402094685
+   },
+   {
+    "rowid": 155,
+    "id": "fx-o-155",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-241",
+    "body": "查完了。按现有代号，“鱼大嘴”我暂时只能对应到“大肥鱼=WhalePartner”这个仓库；你指的是某个人的话，点名。\n\n仓库现况：v0.3.2，HEAD 是 11-11 02:50 的「chore: 发布 0.3.2」，作者 spdore，没有进行中的 PR。最近的 issue 集中在 #141–#148，都是一些收尾问题：\n\n- #148 v0.3.2 遗留问题总单\n- #147 mem0ai 带的 zod 3.x 依赖告警（GHSA-mrhx-c7xc-m3w5）\n- #146 后端换端口后前端没跟着改\n- #145 tauri dev 里存的 DeepSeek 密钥不生效\n- #144 极短语音识别出来是空\n- #143 语音环境重建和预热并发失败\n- #142 安装脚本子进程超时不退出\n- #141 视频处理不响应中止，见闻中止了还占着视频锁\n\n也就是最近主要在收语音、视频中止、端口和密钥这几摊，没新功能的大动作",
+    "status": "sent",
+    "created_at": 1794402701560
+   },
+   {
+    "rowid": 157,
+    "id": "fx-o-157",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-245",
+    "body": "草，鱼大嘴我还以为水产圈开会呢，行，按余承东这个方向查",
+    "status": "sent",
+    "created_at": 1794402782378
+   },
+   {
+    "rowid": 158,
+    "id": "fx-o-158",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-245",
+    "body": "草，我把“鱼大嘴”当仓库名查了半天，还一本正经列了一串issue，结果是余承东。行吧，我这就回去把“大嘴”两个字刻脑门上。\n\n要查他最近的言论和鸿蒙智行销量的话，我按“余承东”重新搜一遍。",
+    "status": "sent",
+    "created_at": 1794402792489
+   },
+   {
+    "rowid": 162,
+    "id": "fx-o-162",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-252",
+    "body": "星芒不是车，是华为新开的手机子品牌 OSTA 星芒，11 月 20 日 14:30 发布会首次亮相。余承东那条官宣微博的设备尾巴是“OSTA O1 Pro”，所以首款大概率是阔直板 AI 手机，爆料说麒麟+鸿蒙；商标 2023 年就注册了“华为星芒”，今年又补了“OSTA”，手机平板笔记本手表耳机芯片全铺上。定位就是荣耀卖掉之后，华为再搞一个子品牌补中端。\n\n至于“余大嘴废了”，10 月鸿蒙智行交付 33537 台、同比掉 50.8%，目标承压是真的，但他还在推新品牌，现在就判死刑太早。20 号发布会见分晓，先别急着开席",
+    "status": "sent",
+    "created_at": 1794402998547
+   },
+   {
+    "rowid": 189,
+    "id": "fx-o-189",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-337",
+    "body": "额度我这儿查不到，没有能读 token/账单的工具，看板也只有任务和 CI 状态，硬报数字就是编了。你说的是哪个平台、哪个 key 的额度？给个名字我告诉你控制台在哪查；要是问 GitHub Actions 计费，那事还挂着 open，早通知过，没新变化。",
+    "status": "sent",
+    "created_at": 1794476794855
+   },
+   {
+    "rowid": 190,
+    "id": "fx-o-190",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-338",
+    "body": "先给你交个底：同事A那单（梳理记忆系统、说话风格、团队协作的验收要点）本来就不改代码，所以仓库里找不到他写的代码改动，方案在看板 ready_for_review（16:38）。仓库这边能看到的是：main 最新提交 a1cfc82『chore: 发布 0.3.5』，作者 spdore，今天 11:14 推的，之后没再推；开放 PR 为 0；#154–#161 那批（界面重设计收尾、好感度闪卡、记忆页、见闻页、设置页重设计）都还开着，也就是重设计收尾没收完。我这边只能看到最新一次提交的标题和文件快照，看不到逐行 diff，具体改了什么不能瞎编。要不要我逐个 issue 对一遍，看还差多少？",
+    "status": "sent",
+    "created_at": 1794476861323
+   },
+   {
+    "rowid": 191,
+    "id": "fx-o-191",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-339",
+    "body": "对，就是 WhalePartner（大肥鱼）。同事A那单是梳理方案，不改代码，所以仓库里本来就没有他的提交。能看到的还是 main 停在 a1cfc82『发布 0.3.5』，开放 PR 为 0，#154–#161 都还开着，重设计收尾没完成。逐行 diff 看不到，具体改了啥不能编。",
+    "status": "sent",
+    "created_at": 1794478031105
+   },
+   {
+    "rowid": 229,
+    "id": "fx-o-229",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-415",
+    "body": "草，接错人了，那条是给 群友C 的。清单不排了，当没发生，群友C 真想让我接再点名",
+    "status": "sent",
+    "created_at": 1794555765772
+   },
+   {
+    "rowid": 231,
+    "id": "fx-o-231",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-418",
+    "body": "两条都卡在内容没传过来：\n\n1. 你 @我 的那条是空的，没文字也没附件，我看不到你想让我处理啥。\n2. b23.tv 那个链接我这边只抓到标题「余承东：给大家变个小魔术」，视频画面和字幕拿不到，所以没法确认他在哪场活动、到底变了啥。\n\n补个截图/文字，或者直接说是发布会还是直播哪一场，我再帮你看。现在不瞎猜。",
+    "status": "sent",
+    "created_at": 1794555962726
+   },
+   {
+    "rowid": 232,
+    "id": "fx-o-232",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-419",
+    "body": "草，这波确实废物，b23.tv 只给我吐了个标题，画面字幕全拿不到。丢个 bilibili.com/video/BV... 完整链接或者 BV 号过来，我就能抓",
+    "status": "sent",
+    "created_at": 1794556038059
+   },
+   {
+    "rowid": 233,
+    "id": "fx-o-233",
+    "group_id": "fx-group",
+    "msg_id": null,
+    "body": "刚翻到 Cloudflare Queues 的投递语义：Queues 是至少一次投递，所以重复投递或消费者崩溃后重放都算正常，不能当成异常。我的判断是，TeamAgent 的群消息发送需要单独设一个幂等控制点：给每条待发消息生成 workId（会话+入站消息+动作），发送前用 D1 的条件更新或唯一约束抢占租约，发送成功后再标记完成，这样重复消费会在抢占租约这一步被挡掉。\n\n最便宜的验证方法：人为把同一条消息重投一次，让两个消费者并发处理，检查是否只发出一次；这个验证只依赖 D1、Queues 和现有发送适配器，不用新造轮子。\n\n还有个前提没确认：当前的发送路径是否已经具备幂等性。如果发送适配器自己就带去重，这套 workId 方案的设计就需要调整。来源：https://github.com/fcakyon/claude-codex-settings/blob/main/plugins/cloudflare-skills/skills/cloudflare-deploy/references/queues/patterns.md",
+    "status": "sent",
+    "created_at": 1794556842815
+   },
+   {
+    "rowid": 239,
+    "id": "fx-o-239",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-432",
+    "body": "在呢，没被改坏也没掉线，刚才那条迷彩服帅哥明显拿我开涮，我懒得抢话筒。倒是群友B00:03那个@我是空的，哥们发了个寂寞？",
+    "status": "sent",
+    "created_at": 1794575475263
+   },
+   {
+    "rowid": 240,
+    "id": "fx-o-240",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-433",
+    "body": "草，那我刚才是嘴硬了，谢了捞我。mausbot 那套先停，还是继续让它跑？",
+    "status": "sent",
+    "created_at": 1794575535557
+   },
+   {
+    "rowid": 241,
+    "id": "fx-o-241",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-435",
+    "body": "在，没装死。仓库里正式上线的就这几块：\n\n- 读代码/提交：能读仓库、改文件、提变更（repo_changes、repo_commit）\n- 群聊总结/日报：能整理群聊记录，出总结和日报\n- 搜索与网页抓取：能搜网页、抓页面内容\n- 文件与附件：能读群里发的文件和附件\n- 记忆与纠正：能记偏好，被纠正后会改\n\n索引要是过期我就标最后同步时间，不硬说全量。",
+    "status": "sent",
+    "created_at": 1794575753991
+   },
+   {
+    "rowid": 242,
+    "id": "fx-o-242",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-436",
+    "body": "陪玩店那个我这边没拿到 repo_changes / repo_commit 的返回，手上没有任何提交记录。现在硬报“改得怎么样”和 7 位提交号纯属编，先不糊你。工具结果一回来，我按“现状 + 新改动”两段给你列，索引过期就标最后同步时间。",
+    "status": "sent",
+    "created_at": 1794575891766
+   },
+   {
+    "rowid": 243,
+    "id": "fx-o-243",
+    "group_id": "fx-group",
+    "msg_id": "fx-m-437",
+    "body": "按当前项目登记表，登记在册的有 5 个 OmnixSI 仓库：\n- WhalePartner（大肥鱼/鲸鱼娘）\n- NextThought（面试软件）\n- NextThought-Website（面试软件官网）\n- peiwan-store-platform-blueprint（陪玩店）\n- TeamAgent（群助手/团队开发台）\n\n这是登记表口径；要绝对全量得看仓库列表接口/索引，索引过期我会标最后同步时间。",
+    "status": "sent",
+    "created_at": 1794577228495
+   }
+  ],
+  "chat_decisions": [
+   {
+    "rowid": 35,
+    "id": "fx-d-35",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-338",
+    "batch_ids": "[\"fx-m-338\"]",
+    "mentioned": 0,
+    "forced": 0,
+    "waited": 0,
+    "gate": "model",
+    "action": "tool",
+    "spoken_kind": null,
+    "target_id": null,
+    "wait_seconds": null,
+    "reason": null,
+    "outbox_id": null,
+    "policy": "live",
+    "model_ms": 3777,
+    "created_at": 1794476845591
+   },
+   {
+    "rowid": 36,
+    "id": "fx-d-36",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-339",
+    "batch_ids": "[\"fx-m-339\"]",
+    "mentioned": 0,
+    "forced": 0,
+    "waited": 0,
+    "gate": "model",
+    "action": "tool",
+    "spoken_kind": null,
+    "target_id": null,
+    "wait_seconds": null,
+    "reason": null,
+    "outbox_id": null,
+    "policy": "live",
+    "model_ms": 5262,
+    "created_at": 1794478015289
+   },
+   {
+    "rowid": 92,
+    "id": "fx-d-92",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-415",
+    "batch_ids": "[\"fx-m-415\"]",
+    "mentioned": 1,
+    "forced": 1,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-415",
+    "wait_seconds": null,
+    "reason": "对方明确指出我把对 群友C 的话接到自己身上，需要一句话收回。",
+    "outbox_id": "fx-o-229",
+    "policy": "live",
+    "model_ms": 7686,
+    "created_at": 1794555765955
+   },
+   {
+    "rowid": 94,
+    "id": "fx-d-94",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-418",
+    "batch_ids": "[\"fx-m-417\",\"fx-m-418\"]",
+    "mentioned": 1,
+    "forced": 1,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-418",
+    "wait_seconds": null,
+    "reason": "空消息直接@我，内容缺失需说明并请补料，不能凭空编视频内容",
+    "outbox_id": "fx-o-231",
+    "policy": "live",
+    "model_ms": 8871,
+    "created_at": 1794555962906
+   },
+   {
+    "rowid": 95,
+    "id": "fx-d-95",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-419",
+    "batch_ids": "[\"fx-m-419\"]",
+    "mentioned": 0,
+    "forced": 0,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-419",
+    "wait_seconds": null,
+    "reason": "对方直接点名批评 bot 读不了 B 站短链，简短认下并给可用替代最合适。",
+    "outbox_id": "fx-o-232",
+    "policy": "live",
+    "model_ms": 13402,
+    "created_at": 1794556038270
+   },
+   {
+    "rowid": 102,
+    "id": "fx-d-102",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-432",
+    "batch_ids": "[\"fx-m-428\",\"fx-m-429\",\"fx-m-430\",\"fx-m-431\",\"fx-m-432\"]",
+    "mentioned": 1,
+    "forced": 1,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-428",
+    "wait_seconds": null,
+    "reason": "被@并连续催“说话”，需确认在线状态。",
+    "outbox_id": "fx-o-239",
+    "policy": "live",
+    "model_ms": 10076,
+    "created_at": 1794575475679
+   },
+   {
+    "rowid": 103,
+    "id": "fx-d-103",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-433",
+    "batch_ids": "[\"fx-m-433\"]",
+    "mentioned": 0,
+    "forced": 0,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-433",
+    "wait_seconds": null,
+    "reason": "群主直接纠正我刚才“没被改坏”的说法，属于对我说的话，简短认下即可。",
+    "outbox_id": "fx-o-240",
+    "policy": "live",
+    "model_ms": 9541,
+    "created_at": 1794575535781
+   },
+   {
+    "rowid": 104,
+    "id": "fx-d-104",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-434",
+    "batch_ids": "[\"fx-m-434\"]",
+    "mentioned": 0,
+    "forced": 0,
+    "waited": 0,
+    "gate": "model",
+    "action": "tool",
+    "spoken_kind": null,
+    "target_id": null,
+    "wait_seconds": null,
+    "reason": null,
+    "outbox_id": null,
+    "policy": "live",
+    "model_ms": 3858,
+    "created_at": 1794575590887
+   },
+   {
+    "rowid": 105,
+    "id": "fx-d-105",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-435",
+    "batch_ids": "[\"fx-m-435\"]",
+    "mentioned": 1,
+    "forced": 1,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-435",
+    "wait_seconds": null,
+    "reason": null,
+    "outbox_id": "fx-o-241",
+    "policy": "live",
+    "model_ms": 11515,
+    "created_at": 1794575754173
+   },
+   {
+    "rowid": 106,
+    "id": "fx-d-106",
+    "group_id": "fx-group",
+    "latest_id": "fx-m-436",
+    "batch_ids": "[\"fx-m-436\"]",
+    "mentioned": 1,
+    "forced": 1,
+    "waited": 0,
+    "gate": "model",
+    "action": "reply",
+    "spoken_kind": "direct",
+    "target_id": "fx-m-436",
+    "wait_seconds": null,
+    "reason": null,
+    "outbox_id": "fx-o-242",
+    "policy": "live",
+    "model_ms": 9041,
+    "created_at": 1794575891946
+   }
+  ],
+  "jobs": [
+   {
+    "rowid": 30,
+    "id": "fx-job-m-33",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-33\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794386871732,
+    "error": null,
+    "created_at": 1794386207116
+   },
+   {
+    "rowid": 31,
+    "id": "fx-job-m-34",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-34\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794386917230,
+    "error": null,
+    "created_at": 1794386254826
+   },
+   {
+    "rowid": 33,
+    "id": "fx-job-m-35",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-35\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794387538096,
+    "error": null,
+    "created_at": 1794386877174
+   },
+   {
+    "rowid": 92,
+    "id": "fx-job-m-93",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-93\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389123056,
+    "error": null,
+    "created_at": 1794388459279
+   },
+   {
+    "rowid": 93,
+    "id": "fx-job-m-94",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-94\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389132677,
+    "error": null,
+    "created_at": 1794388472046
+   },
+   {
+    "rowid": 94,
+    "id": "fx-job-m-95",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-95\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389145567,
+    "error": null,
+    "created_at": 1794388484516
+   },
+   {
+    "rowid": 95,
+    "id": "fx-job-m-96",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-96\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389178400,
+    "error": null,
+    "created_at": 1794388513876
+   },
+   {
+    "rowid": 100,
+    "id": "fx-job-m-101",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-101\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389314152,
+    "error": null,
+    "created_at": 1794388650515
+   },
+   {
+    "rowid": 101,
+    "id": "fx-job-m-102",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-102\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389494524,
+    "error": null,
+    "created_at": 1794388829136
+   },
+   {
+    "rowid": 102,
+    "id": "fx-job-m-103",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-103\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389545041,
+    "error": null,
+    "created_at": 1794388879637
+   },
+   {
+    "rowid": 103,
+    "id": "fx-job-m-104",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-104\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794389620335,
+    "error": null,
+    "created_at": 1794388959040
+   },
+   {
+    "rowid": 219,
+    "id": "fx-job-m-195",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-195\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794401998380,
+    "error": null,
+    "created_at": 1794401335684
+   },
+   {
+    "rowid": 221,
+    "id": "fx-job-m-196",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-196\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402058787,
+    "error": null,
+    "created_at": 1794401397554
+   },
+   {
+    "rowid": 223,
+    "id": "fx-job-m-197",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-197\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402119160,
+    "error": null,
+    "created_at": 1794401455732
+   },
+   {
+    "rowid": 242,
+    "id": "fx-job-m-212",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-212\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402527558,
+    "error": null,
+    "created_at": 1794401863817
+   },
+   {
+    "rowid": 243,
+    "id": "fx-job-m-213",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-213\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402542590,
+    "error": null,
+    "created_at": 1794401872534
+   },
+   {
+    "rowid": 244,
+    "id": "fx-job-drain-212",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-213\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402560949,
+    "error": null,
+    "created_at": 1794401878351
+   },
+   {
+    "rowid": 245,
+    "id": "fx-job-m-214",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-214\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402569065,
+    "error": null,
+    "created_at": 1794401901174
+   },
+   {
+    "rowid": 246,
+    "id": "fx-job-m-215",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-215\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402570609,
+    "error": null,
+    "created_at": 1794401906139
+   },
+   {
+    "rowid": 247,
+    "id": "fx-job-m-216",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-216\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402618341,
+    "error": null,
+    "created_at": 1794401954952
+   },
+   {
+    "rowid": 248,
+    "id": "fx-job-m-217",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-217\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402643814,
+    "error": null,
+    "created_at": 1794401981600
+   },
+   {
+    "rowid": 249,
+    "id": "fx-job-m-218",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-218\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402663502,
+    "error": null,
+    "created_at": 1794401985945
+   },
+   {
+    "rowid": 250,
+    "id": "fx-job-drain-217",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-218\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402672186,
+    "error": null,
+    "created_at": 1794401998725
+   },
+   {
+    "rowid": 251,
+    "id": "fx-job-m-219",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-219\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402739253,
+    "error": null,
+    "created_at": 1794402075433
+   },
+   {
+    "rowid": 252,
+    "id": "fx-job-m-220",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-220\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402759802,
+    "error": null,
+    "created_at": 1794402093455
+   },
+   {
+    "rowid": 253,
+    "id": "fx-job-drain-219",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-220\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794402773881,
+    "error": null,
+    "created_at": 1794402095234
+   },
+   {
+    "rowid": 299,
+    "id": "fx-job-m-250",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-250\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794403633011,
+    "error": null,
+    "created_at": 1794402968455
+   },
+   {
+    "rowid": 300,
+    "id": "fx-job-m-251",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-251\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794403634402,
+    "error": null,
+    "created_at": 1794402969292
+   },
+   {
+    "rowid": 301,
+    "id": "fx-job-m-252",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-252\"}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794403635807,
+    "error": null,
+    "created_at": 1794402974944
+   },
+   {
+    "rowid": 420,
+    "id": "fx-job-m-337",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-337\",\"notBefore\":1794476773917}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794477444152,
+    "error": null,
+    "created_at": 1794476772917
+   },
+   {
+    "rowid": 421,
+    "id": "fx-job-m-338",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-338\",\"notBefore\":1794476832702}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794477499606,
+    "error": null,
+    "created_at": 1794476830702
+   },
+   {
+    "rowid": 423,
+    "id": "fx-job-m-339",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-339\",\"notBefore\":1794477999191}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794478668113,
+    "error": null,
+    "created_at": 1794477997191
+   },
+   {
+    "rowid": 425,
+    "id": "fx-job-m-340",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-340\",\"notBefore\":1794478024418}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794478693392,
+    "error": null,
+    "created_at": 1794478023418
+   },
+   {
+    "rowid": 531,
+    "id": "fx-job-m-414",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-414\",\"notBefore\":1794555714985}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556381548,
+    "error": null,
+    "created_at": 1794555713985
+   },
+   {
+    "rowid": 533,
+    "id": "fx-job-m-415",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-415\",\"notBefore\":1794555749747}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556416354,
+    "error": null,
+    "created_at": 1794555748747
+   },
+   {
+    "rowid": 534,
+    "id": "fx-job-m-416",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-416\",\"notBefore\":1794555775962}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556441647,
+    "error": null,
+    "created_at": 1794555774962
+   },
+   {
+    "rowid": 535,
+    "id": "fx-job-m-417",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-417\",\"notBefore\":1794555946794}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556612002,
+    "error": null,
+    "created_at": 1794555944794
+   },
+   {
+    "rowid": 536,
+    "id": "fx-job-m-418",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-418\",\"notBefore\":1794555949798}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556628650,
+    "error": null,
+    "created_at": 1794555948798
+   },
+   {
+    "rowid": 537,
+    "id": "fx-job-m-419",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-419\",\"notBefore\":1794556018629}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794556682214,
+    "error": null,
+    "created_at": 1794556015629
+   },
+   {
+    "rowid": 546,
+    "id": "fx-job-m-426",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-426\",\"notBefore\":1794573904597}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794574573782,
+    "error": null,
+    "created_at": 1794573902597
+   },
+   {
+    "rowid": 547,
+    "id": "fx-job-m-427",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-427\",\"notBefore\":1794573912189}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794574575329,
+    "error": null,
+    "created_at": 1794573910189
+   },
+   {
+    "rowid": 548,
+    "id": "fx-job-m-428",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-428\",\"notBefore\":1794574178999}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794574849550,
+    "error": null,
+    "created_at": 1794574177999
+   },
+   {
+    "rowid": 549,
+    "id": "fx-job-m-429",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-429\",\"notBefore\":1794574239771}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794574905028,
+    "error": null,
+    "created_at": 1794574237771
+   },
+   {
+    "rowid": 550,
+    "id": "fx-job-m-430",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-430\",\"notBefore\":1794574246617}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794574907604,
+    "error": null,
+    "created_at": 1794574243617
+   },
+   {
+    "rowid": 551,
+    "id": "fx-job-m-431",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-431\",\"notBefore\":1794574996370}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794575665475,
+    "error": null,
+    "created_at": 1794574994370
+   },
+   {
+    "rowid": 552,
+    "id": "fx-job-m-432",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-432\",\"notBefore\":1794575001777}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794576123700,
+    "error": null,
+    "created_at": 1794575000777
+   },
+   {
+    "rowid": 553,
+    "id": "fx-job-m-433",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-433\",\"notBefore\":1794575517306}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794576184175,
+    "error": null,
+    "created_at": 1794575515306
+   },
+   {
+    "rowid": 554,
+    "id": "fx-job-m-434",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-434\",\"notBefore\":1794575578454}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794576244813,
+    "error": null,
+    "created_at": 1794575576454
+   },
+   {
+    "rowid": 556,
+    "id": "fx-job-m-435",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-435\",\"notBefore\":1794575731990}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794576400423,
+    "error": null,
+    "created_at": 1794575730990
+   },
+   {
+    "rowid": 557,
+    "id": "fx-job-m-436",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-436\",\"notBefore\":1794575877074}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794576540844,
+    "error": null,
+    "created_at": 1794575876074
+   },
+   {
+    "rowid": 558,
+    "id": "fx-job-m-437",
+    "kind": "chat",
+    "payload": "{\"message\":\"fx-m-437\",\"notBefore\":1794577209527}",
+    "status": "done",
+    "attempts": 1,
+    "lease_until": 1794577878456,
+    "error": null,
+    "created_at": 1794577207527
+   }
+  ],
+  "stage_timings": [
+   {
+    "rowid": 1,
+    "turn_id": "fx-o-201",
+    "stage": "chat_claimed",
+    "at": 1794503354993,
+    "extra": null
+   },
+   {
+    "rowid": 2,
+    "turn_id": "fx-o-201",
+    "stage": "model_start",
+    "at": 1794503357532,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 3,
+    "turn_id": "fx-o-201",
+    "stage": "model_end",
+    "at": 1794503364853,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 4,
+    "turn_id": "fx-o-201",
+    "stage": "model_start",
+    "at": 1794503365152,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 5,
+    "turn_id": "fx-o-201",
+    "stage": "model_end",
+    "at": 1794503367586,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 6,
+    "turn_id": "fx-o-201",
+    "stage": "outbox",
+    "at": 1794503368173,
+    "extra": null
+   },
+   {
+    "rowid": 7,
+    "turn_id": "fx-o-201",
+    "stage": "sent",
+    "at": 1794503373147,
+    "extra": null
+   },
+   {
+    "rowid": 8,
+    "turn_id": "fx-o-202",
+    "stage": "chat_claimed",
+    "at": 1794503491124,
+    "extra": null
+   },
+   {
+    "rowid": 9,
+    "turn_id": "fx-o-202",
+    "stage": "model_start",
+    "at": 1794503493862,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 10,
+    "turn_id": "fx-o-202",
+    "stage": "model_end",
+    "at": 1794503499179,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 11,
+    "turn_id": "fx-o-202",
+    "stage": "model_start",
+    "at": 1794503499504,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 12,
+    "turn_id": "fx-o-202",
+    "stage": "model_end",
+    "at": 1794503502441,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 13,
+    "turn_id": "fx-o-202",
+    "stage": "outbox",
+    "at": 1794503503091,
+    "extra": null
+   },
+   {
+    "rowid": 14,
+    "turn_id": "fx-o-202",
+    "stage": "sent",
+    "at": 1794503508905,
+    "extra": null
+   },
+   {
+    "rowid": 24,
+    "turn_id": "fx-o-204",
+    "stage": "chat_claimed",
+    "at": 1794503534539,
+    "extra": null
+   },
+   {
+    "rowid": 25,
+    "turn_id": "fx-o-204",
+    "stage": "model_start",
+    "at": 1794503537444,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 26,
+    "turn_id": "fx-o-204",
+    "stage": "model_end",
+    "at": 1794503541335,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 27,
+    "turn_id": "fx-o-204",
+    "stage": "model_start",
+    "at": 1794503541666,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 28,
+    "turn_id": "fx-o-204",
+    "stage": "model_end",
+    "at": 1794503542821,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 29,
+    "turn_id": "fx-o-204",
+    "stage": "outbox",
+    "at": 1794503543474,
+    "extra": null
+   },
+   {
+    "rowid": 30,
+    "turn_id": "fx-o-204",
+    "stage": "sent",
+    "at": 1794503547480,
+    "extra": null
+   },
+   {
+    "rowid": 124,
+    "turn_id": "fx-o-213",
+    "stage": "chat_claimed",
+    "at": 1794523183332,
+    "extra": null
+   },
+   {
+    "rowid": 125,
+    "turn_id": "fx-o-213",
+    "stage": "model_start",
+    "at": 1794523186491,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 126,
+    "turn_id": "fx-o-213",
+    "stage": "model_end",
+    "at": 1794523194523,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 127,
+    "turn_id": "fx-o-213",
+    "stage": "model_start",
+    "at": 1794523194704,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 128,
+    "turn_id": "fx-o-213",
+    "stage": "model_end",
+    "at": 1794523198572,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 129,
+    "turn_id": "fx-o-213",
+    "stage": "outbox",
+    "at": 1794523198941,
+    "extra": null
+   },
+   {
+    "rowid": 130,
+    "turn_id": "fx-o-213",
+    "stage": "sent",
+    "at": 1794523202250,
+    "extra": null
+   },
+   {
+    "rowid": 147,
+    "turn_id": "fx-o-215",
+    "stage": "chat_claimed",
+    "at": 1794523536037,
+    "extra": null
+   },
+   {
+    "rowid": 148,
+    "turn_id": "fx-o-215",
+    "stage": "model_start",
+    "at": 1794523539856,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 149,
+    "turn_id": "fx-o-215",
+    "stage": "model_end",
+    "at": 1794523544480,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 150,
+    "turn_id": "fx-o-215",
+    "stage": "model_start",
+    "at": 1794523544706,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 151,
+    "turn_id": "fx-o-215",
+    "stage": "model_end",
+    "at": 1794523546191,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 152,
+    "turn_id": "fx-o-215",
+    "stage": "outbox",
+    "at": 1794523546629,
+    "extra": null
+   },
+   {
+    "rowid": 153,
+    "turn_id": "fx-o-215",
+    "stage": "sent",
+    "at": 1794523550029,
+    "extra": null
+   },
+   {
+    "rowid": 166,
+    "turn_id": "fx-o-213",
+    "stage": "sent",
+    "at": 1794524110878,
+    "extra": null
+   },
+   {
+    "rowid": 178,
+    "turn_id": "fx-o-221",
+    "stage": "chat_claimed",
+    "at": 1794526077290,
+    "extra": null
+   },
+   {
+    "rowid": 179,
+    "turn_id": "fx-o-221",
+    "stage": "model_start",
+    "at": 1794526080607,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 180,
+    "turn_id": "fx-o-221",
+    "stage": "model_end",
+    "at": 1794526086074,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 181,
+    "turn_id": "fx-o-221",
+    "stage": "model_start",
+    "at": 1794526086283,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 182,
+    "turn_id": "fx-o-221",
+    "stage": "model_end",
+    "at": 1794526088177,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 183,
+    "turn_id": "fx-o-221",
+    "stage": "outbox",
+    "at": 1794526088603,
+    "extra": null
+   },
+   {
+    "rowid": 184,
+    "turn_id": "fx-o-221",
+    "stage": "sent",
+    "at": 1794526093648,
+    "extra": null
+   },
+   {
+    "rowid": 208,
+    "turn_id": "fx-o-223",
+    "stage": "chat_claimed",
+    "at": 1794555318970,
+    "extra": null
+   },
+   {
+    "rowid": 209,
+    "turn_id": "fx-o-223",
+    "stage": "model_start",
+    "at": 1794555322122,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 210,
+    "turn_id": "fx-o-223",
+    "stage": "model_end",
+    "at": 1794555326599,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 211,
+    "turn_id": "fx-o-223",
+    "stage": "model_start",
+    "at": 1794555326801,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 212,
+    "turn_id": "fx-o-223",
+    "stage": "model_end",
+    "at": 1794555328465,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 213,
+    "turn_id": "fx-o-223",
+    "stage": "outbox",
+    "at": 1794555328877,
+    "extra": null
+   },
+   {
+    "rowid": 214,
+    "turn_id": "fx-o-223",
+    "stage": "sent",
+    "at": 1794555332590,
+    "extra": null
+   },
+   {
+    "rowid": 215,
+    "turn_id": "fx-o-224",
+    "stage": "chat_claimed",
+    "at": 1794555369363,
+    "extra": null
+   },
+   {
+    "rowid": 216,
+    "turn_id": "fx-o-224",
+    "stage": "model_start",
+    "at": 1794555372945,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 217,
+    "turn_id": "fx-o-224",
+    "stage": "model_end",
+    "at": 1794555376622,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 218,
+    "turn_id": "fx-o-224",
+    "stage": "model_start",
+    "at": 1794555376860,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 219,
+    "turn_id": "fx-o-224",
+    "stage": "model_end",
+    "at": 1794555378601,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 220,
+    "turn_id": "fx-o-224",
+    "stage": "outbox",
+    "at": 1794555379037,
+    "extra": null
+   },
+   {
+    "rowid": 221,
+    "turn_id": "fx-o-224",
+    "stage": "sent",
+    "at": 1794555383707,
+    "extra": null
+   },
+   {
+    "rowid": 222,
+    "turn_id": "fx-o-225",
+    "stage": "chat_claimed",
+    "at": 1794555424876,
+    "extra": null
+   },
+   {
+    "rowid": 223,
+    "turn_id": "fx-o-225",
+    "stage": "model_start",
+    "at": 1794555427736,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 224,
+    "turn_id": "fx-o-225",
+    "stage": "model_end",
+    "at": 1794555430179,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 225,
+    "turn_id": "fx-o-225",
+    "stage": "model_start",
+    "at": 1794555430360,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 226,
+    "turn_id": "fx-o-225",
+    "stage": "model_end",
+    "at": 1794555431687,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 227,
+    "turn_id": "fx-o-225",
+    "stage": "outbox",
+    "at": 1794555432056,
+    "extra": null
+   },
+   {
+    "rowid": 228,
+    "turn_id": "fx-o-225",
+    "stage": "sent",
+    "at": 1794555435379,
+    "extra": null
+   },
+   {
+    "rowid": 262,
+    "turn_id": "fx-o-226",
+    "stage": "chat_claimed",
+    "at": 1794555686188,
+    "extra": null
+   },
+   {
+    "rowid": 263,
+    "turn_id": "fx-o-226",
+    "stage": "model_start",
+    "at": 1794555689192,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 264,
+    "turn_id": "fx-o-226",
+    "stage": "model_end",
+    "at": 1794555705147,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 265,
+    "turn_id": "fx-o-226",
+    "stage": "model_start",
+    "at": 1794555705339,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 266,
+    "turn_id": "fx-o-226",
+    "stage": "model_end",
+    "at": 1794555707383,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 267,
+    "turn_id": "fx-o-226",
+    "stage": "outbox",
+    "at": 1794555707817,
+    "extra": null
+   },
+   {
+    "rowid": 268,
+    "turn_id": "fx-o-226",
+    "stage": "sent",
+    "at": 1794555711437,
+    "extra": null
+   },
+   {
+    "rowid": 269,
+    "turn_id": "fx-o-227",
+    "stage": "chat_claimed",
+    "at": 1794555721775,
+    "extra": null
+   },
+   {
+    "rowid": 270,
+    "turn_id": "fx-o-227",
+    "stage": "model_start",
+    "at": 1794555724695,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 271,
+    "turn_id": "fx-o-227",
+    "stage": "model_end",
+    "at": 1794555726182,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 272,
+    "turn_id": "fx-o-227",
+    "stage": "research_queued",
+    "at": 1794555727142,
+    "extra": null
+   },
+   {
+    "rowid": 273,
+    "turn_id": "fx-o-227",
+    "stage": "model_start",
+    "at": 1794555727142,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 274,
+    "turn_id": "fx-o-227",
+    "stage": "model_end",
+    "at": 1794555729811,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 275,
+    "turn_id": "fx-o-227",
+    "stage": "outbox",
+    "at": 1794555730233,
+    "extra": null
+   },
+   {
+    "rowid": 277,
+    "turn_id": "fx-o-227",
+    "stage": "model_start",
+    "at": 1794555731683,
+    "extra": "{\"kind\":\"research\"}"
+   },
+   {
+    "rowid": 276,
+    "turn_id": "fx-o-227",
+    "stage": "sent",
+    "at": 1794555733103,
+    "extra": null
+   },
+   {
+    "rowid": 278,
+    "turn_id": "fx-o-227",
+    "stage": "model_end",
+    "at": 1794555735056,
+    "extra": "{\"kind\":\"research\"}"
+   },
+   {
+    "rowid": 279,
+    "turn_id": "fx-o-227",
+    "stage": "model_start",
+    "at": 1794555735875,
+    "extra": "{\"kind\":\"research\"}"
+   },
+   {
+    "rowid": 280,
+    "turn_id": "fx-o-227",
+    "stage": "model_end",
+    "at": 1794555741495,
+    "extra": "{\"kind\":\"research\"}"
+   },
+   {
+    "rowid": 281,
+    "turn_id": "fx-o-227",
+    "stage": "model_start",
+    "at": 1794555741708,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 282,
+    "turn_id": "fx-o-227",
+    "stage": "model_end",
+    "at": 1794555744781,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 283,
+    "turn_id": "fx-o-227",
+    "stage": "outbox",
+    "at": 1794555745203,
+    "extra": null
+   },
+   {
+    "rowid": 284,
+    "turn_id": "fx-o-227",
+    "stage": "sent",
+    "at": 1794555747924,
+    "extra": null
+   },
+   {
+    "rowid": 285,
+    "turn_id": "fx-o-229",
+    "stage": "chat_claimed",
+    "at": 1794555756542,
+    "extra": null
+   },
+   {
+    "rowid": 286,
+    "turn_id": "fx-o-229",
+    "stage": "model_start",
+    "at": 1794555759176,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 287,
+    "turn_id": "fx-o-229",
+    "stage": "model_end",
+    "at": 1794555763617,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 288,
+    "turn_id": "fx-o-229",
+    "stage": "model_start",
+    "at": 1794555763797,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 289,
+    "turn_id": "fx-o-229",
+    "stage": "model_end",
+    "at": 1794555765592,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 290,
+    "turn_id": "fx-o-229",
+    "stage": "outbox",
+    "at": 1794555765955,
+    "extra": null
+   },
+   {
+    "rowid": 291,
+    "turn_id": "fx-o-229",
+    "stage": "sent",
+    "at": 1794555769471,
+    "extra": null
+   },
+   {
+    "rowid": 292,
+    "turn_id": "fx-o-230",
+    "stage": "chat_claimed",
+    "at": 1794555781855,
+    "extra": null
+   },
+   {
+    "rowid": 293,
+    "turn_id": "fx-o-230",
+    "stage": "model_start",
+    "at": 1794555784948,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 294,
+    "turn_id": "fx-o-230",
+    "stage": "model_end",
+    "at": 1794555789935,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 295,
+    "turn_id": "fx-o-230",
+    "stage": "model_start",
+    "at": 1794555790125,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 296,
+    "turn_id": "fx-o-230",
+    "stage": "model_end",
+    "at": 1794555793918,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 297,
+    "turn_id": "fx-o-230",
+    "stage": "outbox",
+    "at": 1794555794292,
+    "extra": null
+   },
+   {
+    "rowid": 298,
+    "turn_id": "fx-o-230",
+    "stage": "sent",
+    "at": 1794555798230,
+    "extra": null
+   },
+   {
+    "rowid": 306,
+    "turn_id": "fx-o-232",
+    "stage": "chat_claimed",
+    "at": 1794556022428,
+    "extra": null
+   },
+   {
+    "rowid": 307,
+    "turn_id": "fx-o-232",
+    "stage": "model_start",
+    "at": 1794556025921,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 308,
+    "turn_id": "fx-o-232",
+    "stage": "model_end",
+    "at": 1794556035464,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 309,
+    "turn_id": "fx-o-232",
+    "stage": "model_start",
+    "at": 1794556035674,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 310,
+    "turn_id": "fx-o-232",
+    "stage": "model_end",
+    "at": 1794556037850,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 311,
+    "turn_id": "fx-o-232",
+    "stage": "outbox",
+    "at": 1794556038270,
+    "extra": null
+   },
+   {
+    "rowid": 312,
+    "turn_id": "fx-o-232",
+    "stage": "sent",
+    "at": 1794556042123,
+    "extra": null
+   },
+   {
+    "rowid": 313,
+    "turn_id": "fx-o-234",
+    "stage": "chat_claimed",
+    "at": 1794564759934,
+    "extra": null
+   },
+   {
+    "rowid": 314,
+    "turn_id": "fx-o-234",
+    "stage": "model_start",
+    "at": 1794564763099,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 315,
+    "turn_id": "fx-o-234",
+    "stage": "model_end",
+    "at": 1794564767712,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 316,
+    "turn_id": "fx-o-234",
+    "stage": "model_start",
+    "at": 1794564767919,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 317,
+    "turn_id": "fx-o-234",
+    "stage": "model_end",
+    "at": 1794564769627,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 318,
+    "turn_id": "fx-o-234",
+    "stage": "outbox",
+    "at": 1794564770016,
+    "extra": null
+   },
+   {
+    "rowid": 319,
+    "turn_id": "fx-o-234",
+    "stage": "sent",
+    "at": 1794564774037,
+    "extra": null
+   },
+   {
+    "rowid": 323,
+    "turn_id": "fx-o-235",
+    "stage": "chat_claimed",
+    "at": 1794564875274,
+    "extra": null
+   },
+   {
+    "rowid": 324,
+    "turn_id": "fx-o-235",
+    "stage": "model_start",
+    "at": 1794564878411,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 325,
+    "turn_id": "fx-o-235",
+    "stage": "model_end",
+    "at": 1794564885036,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 326,
+    "turn_id": "fx-o-235",
+    "stage": "model_start",
+    "at": 1794564885241,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 327,
+    "turn_id": "fx-o-235",
+    "stage": "model_end",
+    "at": 1794564888740,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 328,
+    "turn_id": "fx-o-235",
+    "stage": "outbox",
+    "at": 1794564889148,
+    "extra": null
+   },
+   {
+    "rowid": 329,
+    "turn_id": "fx-o-235",
+    "stage": "sent",
+    "at": 1794564892362,
+    "extra": null
+   },
+   {
+    "rowid": 330,
+    "turn_id": "fx-o-236",
+    "stage": "chat_claimed",
+    "at": 1794565503581,
+    "extra": null
+   },
+   {
+    "rowid": 331,
+    "turn_id": "fx-o-236",
+    "stage": "model_start",
+    "at": 1794565506880,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 332,
+    "turn_id": "fx-o-236",
+    "stage": "model_end",
+    "at": 1794565513025,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 333,
+    "turn_id": "fx-o-236",
+    "stage": "model_start",
+    "at": 1794565513248,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 334,
+    "turn_id": "fx-o-236",
+    "stage": "model_end",
+    "at": 1794565517529,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 335,
+    "turn_id": "fx-o-236",
+    "stage": "outbox",
+    "at": 1794565517976,
+    "extra": null
+   },
+   {
+    "rowid": 336,
+    "turn_id": "fx-o-236",
+    "stage": "sent",
+    "at": 1794565521843,
+    "extra": null
+   },
+   {
+    "rowid": 337,
+    "turn_id": "fx-o-237",
+    "stage": "chat_claimed",
+    "at": 1794566423787,
+    "extra": null
+   },
+   {
+    "rowid": 338,
+    "turn_id": "fx-o-237",
+    "stage": "model_start",
+    "at": 1794566426737,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 339,
+    "turn_id": "fx-o-237",
+    "stage": "model_end",
+    "at": 1794566432124,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 340,
+    "turn_id": "fx-o-237",
+    "stage": "model_start",
+    "at": 1794566432320,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 341,
+    "turn_id": "fx-o-237",
+    "stage": "model_end",
+    "at": 1794566434840,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 342,
+    "turn_id": "fx-o-237",
+    "stage": "outbox",
+    "at": 1794566435238,
+    "extra": null
+   },
+   {
+    "rowid": 343,
+    "turn_id": "fx-o-237",
+    "stage": "sent",
+    "at": 1794566438816,
+    "extra": null
+   },
+   {
+    "rowid": 344,
+    "turn_id": "fx-o-238",
+    "stage": "chat_claimed",
+    "at": 1794566478988,
+    "extra": null
+   },
+   {
+    "rowid": 345,
+    "turn_id": "fx-o-238",
+    "stage": "model_start",
+    "at": 1794566482267,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 346,
+    "turn_id": "fx-o-238",
+    "stage": "model_end",
+    "at": 1794566487189,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 347,
+    "turn_id": "fx-o-238",
+    "stage": "model_start",
+    "at": 1794566487395,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 348,
+    "turn_id": "fx-o-238",
+    "stage": "model_end",
+    "at": 1794566491144,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 349,
+    "turn_id": "fx-o-238",
+    "stage": "outbox",
+    "at": 1794566491552,
+    "extra": null
+   },
+   {
+    "rowid": 350,
+    "turn_id": "fx-o-238",
+    "stage": "sent",
+    "at": 1794566495773,
+    "extra": null
+   },
+   {
+    "rowid": 426,
+    "turn_id": "fx-o-239",
+    "stage": "chat_claimed",
+    "at": 1794575463924,
+    "extra": null
+   },
+   {
+    "rowid": 427,
+    "turn_id": "fx-o-239",
+    "stage": "model_start",
+    "at": 1794575466612,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 428,
+    "turn_id": "fx-o-239",
+    "stage": "model_end",
+    "at": 1794575472589,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 429,
+    "turn_id": "fx-o-239",
+    "stage": "model_start",
+    "at": 1794575472813,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 430,
+    "turn_id": "fx-o-239",
+    "stage": "model_end",
+    "at": 1794575474892,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 431,
+    "turn_id": "fx-o-239",
+    "stage": "outbox",
+    "at": 1794575475490,
+    "extra": null
+   },
+   {
+    "rowid": 432,
+    "turn_id": "fx-o-239",
+    "stage": "sent",
+    "at": 1794575479480,
+    "extra": null
+   },
+   {
+    "rowid": 433,
+    "turn_id": "fx-o-240",
+    "stage": "chat_claimed",
+    "at": 1794575524399,
+    "extra": null
+   },
+   {
+    "rowid": 434,
+    "turn_id": "fx-o-240",
+    "stage": "model_start",
+    "at": 1794575527212,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 435,
+    "turn_id": "fx-o-240",
+    "stage": "model_end",
+    "at": 1794575532391,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 436,
+    "turn_id": "fx-o-240",
+    "stage": "model_start",
+    "at": 1794575532614,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 437,
+    "turn_id": "fx-o-240",
+    "stage": "model_end",
+    "at": 1794575535366,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 438,
+    "turn_id": "fx-o-240",
+    "stage": "outbox",
+    "at": 1794575535781,
+    "extra": null
+   },
+   {
+    "rowid": 439,
+    "turn_id": "fx-o-240",
+    "stage": "sent",
+    "at": 1794575540084,
+    "extra": null
+   },
+   {
+    "rowid": 448,
+    "turn_id": "fx-o-241",
+    "stage": "chat_claimed",
+    "at": 1794575740609,
+    "extra": null
+   },
+   {
+    "rowid": 449,
+    "turn_id": "fx-o-241",
+    "stage": "model_start",
+    "at": 1794575743559,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 450,
+    "turn_id": "fx-o-241",
+    "stage": "model_end",
+    "at": 1794575748721,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 451,
+    "turn_id": "fx-o-241",
+    "stage": "model_start",
+    "at": 1794575748902,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 452,
+    "turn_id": "fx-o-241",
+    "stage": "model_end",
+    "at": 1794575753810,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 453,
+    "turn_id": "fx-o-241",
+    "stage": "outbox",
+    "at": 1794575754173,
+    "extra": null
+   },
+   {
+    "rowid": 454,
+    "turn_id": "fx-o-241",
+    "stage": "sent",
+    "at": 1794575757208,
+    "extra": null
+   },
+   {
+    "rowid": 455,
+    "turn_id": "fx-o-242",
+    "stage": "chat_claimed",
+    "at": 1794575881024,
+    "extra": null
+   },
+   {
+    "rowid": 456,
+    "turn_id": "fx-o-242",
+    "stage": "model_start",
+    "at": 1794575883798,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 457,
+    "turn_id": "fx-o-242",
+    "stage": "model_end",
+    "at": 1794575887376,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 458,
+    "turn_id": "fx-o-242",
+    "stage": "model_start",
+    "at": 1794575887555,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 459,
+    "turn_id": "fx-o-242",
+    "stage": "model_end",
+    "at": 1794575891586,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 460,
+    "turn_id": "fx-o-242",
+    "stage": "outbox",
+    "at": 1794575891946,
+    "extra": null
+   },
+   {
+    "rowid": 461,
+    "turn_id": "fx-o-242",
+    "stage": "sent",
+    "at": 1794575894803,
+    "extra": null
+   },
+   {
+    "rowid": 462,
+    "turn_id": "fx-o-243",
+    "stage": "chat_claimed",
+    "at": 1794577218636,
+    "extra": null
+   },
+   {
+    "rowid": 463,
+    "turn_id": "fx-o-243",
+    "stage": "model_start",
+    "at": 1794577221671,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 464,
+    "turn_id": "fx-o-243",
+    "stage": "model_end",
+    "at": 1794577225818,
+    "extra": "{\"kind\":\"participation\"}"
+   },
+   {
+    "rowid": 465,
+    "turn_id": "fx-o-243",
+    "stage": "model_start",
+    "at": 1794577225998,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 466,
+    "turn_id": "fx-o-243",
+    "stage": "model_end",
+    "at": 1794577228315,
+    "extra": "{\"kind\":\"voice\"}"
+   },
+   {
+    "rowid": 467,
+    "turn_id": "fx-o-243",
+    "stage": "outbox",
+    "at": 1794577228677,
+    "extra": null
+   },
+   {
+    "rowid": 468,
+    "turn_id": "fx-o-243",
+    "stage": "sent",
+    "at": 1794577232362,
+    "extra": null
+   }
+  ],
+  "health_samples": [
+   {
+    "rid": 1794401100000,
+    "at": 1794401100000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 1,
+    "failed": 3
+   },
+   {
+    "rid": 1794401400000,
+    "at": 1794401400000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 3,
+    "failed": 3
+   },
+   {
+    "rid": 1794401700000,
+    "at": 1794401700000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 4
+   },
+   {
+    "rid": 1794402000000,
+    "at": 1794402000000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 2,
+    "failed": 4
+   },
+   {
+    "rid": 1794402900000,
+    "at": 1794402900000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 3,
+    "failed": 4
+   },
+   {
+    "rid": 1794476700000,
+    "at": 1794476700000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 4
+   },
+   {
+    "rid": 1794477900000,
+    "at": 1794477900000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 4
+   },
+   {
+    "rid": 1794555600000,
+    "at": 1794555600000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 1,
+    "failed": 8
+   },
+   {
+    "rid": 1794555900000,
+    "at": 1794555900000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   },
+   {
+    "rid": 1794573900000,
+    "at": 1794573900000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 1,
+    "failed": 8
+   },
+   {
+    "rid": 1794574200000,
+    "at": 1794574200000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   },
+   {
+    "rid": 1794574800000,
+    "at": 1794574800000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   },
+   {
+    "rid": 1794575400000,
+    "at": 1794575400000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   },
+   {
+    "rid": 1794575700000,
+    "at": 1794575700000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   },
+   {
+    "rid": 1794577200000,
+    "at": 1794577200000,
+    "gateway_ok": 1,
+    "runner_ok": 1,
+    "pending": 0,
+    "failed": 8
+   }
+  ],
+  "members": [
+   {
+    "rowid": 1,
+    "id": "fx-sender-owner",
+    "name": "群主",
+    "token_hash": "fixture-token-hash-1",
+    "role": "owner"
+   },
+   {
+    "rowid": 2,
+    "id": "fx-sender-mate",
+    "name": "群友B",
+    "token_hash": "fixture-token-hash-2",
+    "role": "member"
+   },
+   {
+    "rowid": 3,
+    "id": "fx-sender-peer",
+    "name": "群友C",
+    "token_hash": "fixture-token-hash-3",
+    "role": "member"
+   }
+  ],
+  "settings": [
+   {
+    "rowid": 1,
+    "key": "group_id",
+    "value": "fx-group"
+   }
+  ]
+ }
+}
