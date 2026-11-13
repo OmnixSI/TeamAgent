@@ -1,6 +1,7 @@
 import { addressedMessages, sweepMentions } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
+import { isOrgRepo } from "./repo-discovery";
 import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
 import { looksLikeSticker } from "./vision";
@@ -437,10 +438,11 @@ async function receive(r: Request, e: Env) {
   return json({ op: 12, d: 0 });
 }
 async function repoContext(e: Env, repo: string) {
-  if (!REPOS.includes(repo)) throw Error("repository not allowed");
   const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
     .bind(repo)
     .first();
+  if (!REPOS.includes(repo) && !(cached && isOrgRepo(repo)))
+    throw Error("repository not allowed");
   if (cached && Date.now() - cached.updated_at < 300000)
     return JSON.parse(cached.json);
   if (!e.GITHUB_TOKEN)
