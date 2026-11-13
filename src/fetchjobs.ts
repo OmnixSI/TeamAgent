@@ -11,6 +11,7 @@ import { loadChatContext } from "./context";
 import { agentAnswer } from "./semantic";
 import { enqueueVoice, decodeVoice } from "./voice";
 import { queueFor } from "./lanes";
+import { budget } from "./budget";
 import { untrusted } from "./untrusted";
 import { redact } from "./runtime";
 import {recordAuthStatus} from './auth-status';
@@ -183,12 +184,19 @@ export async function startVideoWait(e: any, x: { groupId: string; ref: string; 
   return !!created;
 }
 /** One delayed message per wait; the shared due_at decides when the wake lands. */
-async function scheduleVideoDeadline(e: any, waitId: string, dueAt: number): Promise<void> {
+export async function scheduleVideoDeadline(e: any, waitId: string, dueAt: number): Promise<void> {
   const id = "vdl-" + waitId, start = Date.now();
-  const delaySeconds = Math.max(1, Math.ceil((dueAt - start) / 1000));
+  const delay = Math.ceil((dueAt - start) / 1000);
+  // Queue delaySeconds still tops out at 24h; longer waits stay with the cron sweep.
+  if (delay > 86400) return;
+  const delaySeconds = Math.min(86400, Math.max(1, delay));
   const payload = { wait: waitId, notBefore: start + delaySeconds * 1000 };
-  await e.DB.prepare("INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)")
-    .bind(id, "video_deadline", JSON.stringify(payload), start).run();
+  // Only a newly created deadline is a state change worth a Queue operation.
+  const created = await e.DB.prepare("INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?) RETURNING id")
+    .bind(id, "video_deadline", JSON.stringify(payload), start).first();
+  if (!created) return;
+  // Cap precision sends; beyond it the minute cron picks the pending row up at due.
+  if (!(await budget(e, "video_deadline_queue", 5000, start))) return;
   await queueFor(e, "video_deadline", payload)?.send({ id }, { delaySeconds });
 }
 export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
