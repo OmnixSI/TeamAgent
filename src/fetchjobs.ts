@@ -1,3 +1,4 @@
+import { AUTO_REPLY_MAX_AGE_MS } from './recovery-policy';
 import {planVideo,switchToMedia,sweepMedia,dispatchMedia} from "./mediajobs";
 import {FAILURE_PREFIX,OFFLINE_MS,READ_REASONS,fetchFailure,failureTtl,jobReason,biliFailReply,biliFailMaterial,type ReadReason} from './linkfail';
 import { left } from "./d1";
@@ -116,11 +117,11 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
   // video_waits is authoritative. A no-op delivery can have completed the wake job
   // while its video lease was still held; reopen it when the video becomes due.
   const row = await e.DB.prepare(`INSERT INTO jobs(id,kind,payload,created_at)
-    SELECT ?,'video_reply',?,? WHERE EXISTS(SELECT 1 FROM video_waits WHERE id=? AND
+    SELECT ?,'video_reply',?,? WHERE EXISTS(SELECT 1 FROM video_waits WHERE id=? AND created_at>=? AND
       ((status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?)))
     ON CONFLICT(id) DO UPDATE SET status='pending',attempts=0,lease_until=0,error=NULL
     RETURNING id`)
-    .bind(id, JSON.stringify({ wait: waitId }), now, waitId, now, now).first();
+    .bind(id, JSON.stringify({ wait: waitId }), now, waitId, now - AUTO_REPLY_MAX_AGE_MS, now, now).first();
   if (row) {
     await queueFor(e, "video_reply")?.send({ id });
     stage(e, waitId.slice(3), "wait_woken");
@@ -227,10 +228,14 @@ export function materialInjected(messages: any[], material: string): boolean {
 export async function runVideoWait(e: any, waitId: string): Promise<void> {
   e.timingTurn = waitId.slice(3);
   const now = Date.now();
-  const w = await e.DB.prepare(`UPDATE video_waits SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND attempts<3 AND
-    ((status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?)) RETURNING *`)
-    .bind(now + 120000, waitId, now, now).first();
-  if (!w) return;
+  const w = await e.DB.prepare(`UPDATE video_waits SET
+    status=CASE WHEN created_at<?5 THEN 'skipped' ELSE 'running' END,
+    lease_until=CASE WHEN created_at<?5 THEN lease_until ELSE ?1 END,
+    attempts=CASE WHEN created_at<?5 THEN attempts ELSE attempts+1 END WHERE id=?2
+    AND (created_at<?5 OR attempts<3) AND
+    ((status='waiting' AND (ready=1 OR due_at<=?3)) OR (status='running' AND lease_until<?4)) RETURNING *`)
+    .bind(now + 120000, waitId, now, now, now - AUTO_REPLY_MAX_AGE_MS).first();
+  if (!w || w.status !== 'running') return;
   try {
     const cached = await biliCached(e, w.ref);
     const outcome = cached ? null : await fetchOutcome(e, w.ref);
@@ -277,7 +282,7 @@ export async function sweepVideoWaits(e: any): Promise<void> {
   await e.DB.prepare("UPDATE jobs SET status='failed',error='timeout' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
   // Keep retry/fallback scans from resurrecting waits from an earlier deployment.
   await e.DB.prepare("UPDATE video_waits SET status='skipped' WHERE created_at<? AND (status='waiting' OR (status='running' AND lease_until<?))")
-    .bind(now - 24 * 3600000, now).run();
+    .bind(now - AUTO_REPLY_MAX_AGE_MS, now).run();
   const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
   for (const w of exhausted) {
     if (left(e) < 4) break;
