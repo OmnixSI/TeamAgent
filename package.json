@@ -11,9 +11,10 @@
     "check:ui": "node scripts/check-ui.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "build:web": "node scripts/build-ui.mjs",
-    "precheck": "node scripts/check-config.mjs && node scripts/build-ui.mjs",
-    "pretest": "node scripts/check-config.mjs && node scripts/build-ui.mjs",
-    "postinstall": "node scripts/check-config.mjs && node scripts/build-ui.mjs",
+    "build:selfcard": "node scripts/gen-self-card.mjs",
+    "precheck": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
+    "pretest": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
+    "postinstall": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
     "config:check": "node scripts/check-config.mjs",
     "verify:release": "node scripts/verify-release.mjs"
   },

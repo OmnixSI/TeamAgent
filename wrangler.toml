@@ -29,7 +29,7 @@ max_concurrency = 1
 max_retries = 2
 
 [build]
-command = "npm run build:web"
+command = "npm run build:web && npm run build:selfcard"
 
 [[queues.producers]]
 binding = "TOOLS"
