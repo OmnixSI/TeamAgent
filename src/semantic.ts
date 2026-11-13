@@ -7,6 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
+import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -883,6 +884,7 @@ async function answerWithTools(e: any, context: any) {
         },
       },
     },
+    ...extraToolDefs(),
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
@@ -1383,7 +1385,12 @@ async function answerWithTools(e: any, context: any) {
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
           default:
-            result = { error: "unknown tool" };
+            result = await runExtraTool(e, call.function.name, a, {
+              context,
+              source: context.batch?.find((m: any) => m.id === a.source_id) || context.latest,
+              messages,
+              isTainted: () => tainted(context, messages),
+            });
         }
         return result;
       });
@@ -1392,7 +1399,7 @@ async function answerWithTools(e: any, context: any) {
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: ["read_web", "repo_changes", "repo_commit", "repo_file"].includes(call.function.name)
+        content: ["read_web", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames(context)].includes(call.function.name)
           ? untrusted(call.function.name, JSON.stringify(result), undefined, 40000)
           : JSON.stringify(result).slice(0, 40000),
       });
