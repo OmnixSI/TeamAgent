@@ -7,7 +7,7 @@ import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
-import { stage, flushTail } from "./timing";
+import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -29,6 +29,7 @@ import { runSchedules } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
+import { notifyJobFailure, flushAuditedTail as flushTail } from "./tool-audit";
 import {
   enqueueVoice,
   messageSequence,
@@ -932,6 +933,7 @@ async function processJob(e: Env, id: string) {
       .bind(id)
       .run();
   } catch (err) {
+    await notifyJobFailure(e, claim, err);
     if (claim.kind === "dream" && claim.attempts >= 3) {
       const payload = JSON.parse(claim.payload);
       const ids =
