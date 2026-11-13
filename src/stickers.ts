@@ -109,9 +109,9 @@ export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<
     if(!row)throw Error('sticker unavailable');
     let fileInfo=row.file_info_expires>Date.now()+60000?row.file_info:null;
     const post=async(path:string,body:any)=>{
-      const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'error'});
+      const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'manual'});
       http=r.status;let d:any;try{d=await r.json();}catch{}
-      code=String(d?.code||'');return {r,d};
+      code=r.status>=300&&r.status<400?'redirect':String(d?.code||'');return {r,d};
     };
     if(!fileInfo){
       const {r,d}=await post('/files',{file_type:1,file_data:b64(new Uint8Array(row.data)),srv_send_msg:false});

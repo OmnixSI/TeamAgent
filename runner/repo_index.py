@@ -20,9 +20,12 @@ except ModuleNotFoundError:
 H = Path.home() / '.inkboard-team'
 MAX_PATCH_BYTES = 1_048_576
 MAX_BODY = 900_000  # Paired with worker.ts /api/runner/repo_index's 1 MiB limit.
-DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed25519*',
-        '.npmrc', '.netrc', '.pypirc', '*secret*', '*credential*', '*cookie*',
-        'worker-secrets.json', '.git/*', '.dev.vars', 'wrangler.toml.local')
+# Source tree: ../shared; installed flat runtime: ./shared.
+_policy_root = Path(__file__).resolve().parent
+_policy = _policy_root / 'shared/deny_globs.json'
+if not _policy.is_file():
+    _policy = _policy_root.parent / 'shared/deny_globs.json'
+DENY = tuple(json.loads(_policy.read_text()))
 PATTERN = re.compile(r'gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|(?:SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0)=[^;\s]+')
 TOKEN_PATTERN = re.compile(
     r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b'
@@ -32,7 +35,7 @@ TOKEN_PATTERN = re.compile(
     r'cookie|SESSDATA|bili_jct|DedeUserID__ckMd5|auth_token|ct0|session(?:id|_id))\b[\"\']?\s*[:=]\s*'
     r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,\'"}]+)'
     r'|[\"\']?\b(?:sid|session)\b[\"\']?\s*[:=]\s*'
-    r'(?:"[A-Za-z0-9_-]{32,}"|\'[A-Za-z0-9_-]{32,}\'|[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-]))', re.I)
+    r'(?:"[A-Za-z0-9_+/-]{32,}={0,2}"|\'[A-Za-z0-9_+/-]{32,}={0,2}\'|[A-Za-z0-9_+/-]{32,}={0,2}(?![A-Za-z0-9_+/=-]))', re.I)
 _fetch_at = {}
 _offset = 0
 _backlog = False
@@ -61,7 +64,9 @@ def repo_root(repo):
 
 def denied(path):
     path = path.lower()
-    return '.git' in path.split('/') or any(fnmatch.fnmatchcase(path, rule) or fnmatch.fnmatchcase(path.rsplit('/', 1)[-1], rule) for rule in DENY)
+    parts = path.split('/')
+    return '.git' in parts or any(fnmatch.fnmatchcase(path, rule) or
+                                 any(fnmatch.fnmatchcase(part, rule) for part in parts) for rule in DENY)
 
 
 def redact(text, known_values=()):

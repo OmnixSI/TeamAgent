@@ -42,7 +42,7 @@ const result={bvid:BV,title:'视频标题',desc:'简介',owner:'UP',tname:'科�
 async function videoRound(e,body,cached) {
   await req(e,'/api/admin/bind',{groupId:group});
   await qq(e,msg('video-source','https://www.bilibili.com/video/'+BV));
-  await e.DB.prepare("INSERT INTO settings VALUES('chat_cursor','1')").run();
+  await e.DB.prepare("INSERT INTO settings VALUES(?,'1')").bind('chat_cursor:'+group).run();
   if(cached)await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:'+BV,JSON.stringify(result),new Date().toISOString()).run();
   await qq(e,msg('current',body),'GROUP_AT_MESSAGE_CREATE');
   await queue(e,'chat-current');

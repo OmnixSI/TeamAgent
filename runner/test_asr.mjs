@@ -36,6 +36,21 @@ test('R13 script path survives flat installation and home expansion is explicit'
  assert.ok(isAbsolute(SCRIPT));assert.ok(SCRIPT.endsWith('/runner/xasr_transcribe.py'));assert.equal(expandHome('~/x','/temporary-home'),'/temporary-home/x');assert.equal(expandHome('/x','/temporary-home'),'/x');
  assert.deepEqual(Object.keys(childEnv({PATH:'p',HOME:'h',LANG:'l',SECRET:'never'})).sort(),['HOME','LANG','PATH']);
 });
+const speech=(text,audio_s)=>({...good,segments:[{start:0,end:audio_s,text}],audio_s});
+test('V3 filler-only pure music is no_speech even when raw characters exceed ten',async()=>{
+ const fixture=speech('嗯 嗯 嗯 嗯 嗯 嗯 嗯 嗯 嗯 嗯 嗯 嗯',10),data=JSON.stringify(fixture);
+ assert.ok(fixture.segments[0].text.trim().length>=10);
+ await assert.rejects(runAsr('a',{timeoutMs:100},fake(0,{data})),e=>e.reason==='no_speech');
+});
+test('V3 sparse lyrics below eight effective characters per minute are no_speech',async()=>{
+ const data=JSON.stringify(speech('月光，洒在河面上。风吹过山岗……',120));
+ await assert.rejects(runAsr('a',{timeoutMs:100},fake(0,{data})),e=>e.reason==='no_speech');
+});
+test('V3 normal speech over ten characters and eight per minute is transcribed',async()=>{
+ const data=JSON.stringify(speech('今天我们聊聊这个项目的背景、目标和接下来的计划。',30));
+ const r=await runAsr('a',{timeoutMs:100},fake(0,{data}));
+ assert.equal(r.segments[0].text,'今天我们聊聊这个项目的背景、目标和接下来的计划。');
+});
 test('R20 ASR RSS watchdog kills the entire group and reports mem_limit',async()=>{
  const d=fake(0,{hold:true});d.rss=async()=>1400;const promise=runAsr('a',{memCapMb:1300,timeoutMs:500},d);await Promise.resolve();await d.intervals[0]();await assert.rejects(promise,e=>e.reason==='mem_limit');assert.deepEqual(d.kills,[[-43210,'SIGKILL']]);
 });

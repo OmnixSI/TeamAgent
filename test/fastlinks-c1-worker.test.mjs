@@ -52,7 +52,7 @@ test('C1-L8 actual old runner BV/title success is accepted; title miss is a fail
     if(searchMiss){
       assert.equal(await jobError(e,job.id),'not_found');assert.equal((await note(e,'failure:v1:bili:'+base)).miss,'none');
       const cached=await api.biliCached(e,base);assert.equal(cached.miss,'none');
-      assert.equal(api.videoMaterial(cached,base),api.titleMissMaterial(cached,4000));
+      assert.equal(api.videoMaterial(cached,base).material,api.titleMissMaterial(cached,4000));
     }else {assert.equal(await jobError(e,job.id),null);assert.equal((await note(e,resource())).page,1);assert.deepEqual(await note(e,'alias:v1:bili:'+base),{bvid:BV,page:1});}
     assert.equal((await allNotes(e)).some(n=>n.id.startsWith('bili:')),false);
   }

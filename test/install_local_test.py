@@ -38,6 +38,14 @@ class FetchInstallTests(unittest.TestCase):
         with patch('shutil.which', return_value='/opt/homebrew/bin/node'), patch('subprocess.run', side_effect=self.run_command), patch('sys.argv', ['install-local.py', '--apply'] + (['--remove-fetch'] if remove else [])):
             runpy.run_path(str(ROOT / 'scripts/install-local.py'), run_name='__main__')
 
+    def test_B4_apply_installs_shared_deny_policy_and_flat_runner_loads_it(self):
+        self.apply()
+        policy = self.runtime / 'shared/deny_globs.json'
+        self.assertTrue(policy.exists(), 'shared deny policy must survive runtime installation')
+        self.assertEqual(policy.read_bytes(), (ROOT / 'shared/deny_globs.json').read_bytes())
+        result = subprocess.run([__import__('sys').executable, '-c', 'import repo_index; assert repo_index.denied("nested/.env/config.txt"); assert not repo_index.denied("src/main.py")'], cwd=self.runtime, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_L2_first_apply_generates_and_bootstraps(self):
         self.apply()
         plist = plistlib.loads((self.home / 'Library/LaunchAgents/com.inkboard.team-fetch.plist').read_bytes())
@@ -145,6 +153,7 @@ class MediaInstallTests(unittest.TestCase):
             with self.assertRaises(SystemExit)as r:m.main()
         self.assertEqual(r.exception.code,0)
         stage=self.runtime/'runtime-staging/fake-release/runner'
+        self.assertTrue((stage.parent/'shared/deny_globs.json').exists(), 'staging must include shared deny policy')
         for name in ['media.mjs','asr.mjs','xasr_transcribe.py','requirements-xasr.txt']:self.assertTrue((stage/name).exists(),name)
     def test_I2_apply_flattens_files_and_writes_absolute_asr_paths(self):
         self.apply()
