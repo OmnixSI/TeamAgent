@@ -1,0 +1,728 @@
+[
+ {
+  "id": "EV04-1",
+  "group": "G4",
+  "source": "d1",
+  "note": "引用图归属原作者",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0017",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "这是什么",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": false
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "这是什么",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/jpeg",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV04-2",
+  "group": "G4",
+  "source": "synth",
+  "note": "引用动图标 animated",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0018",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "这是什么",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/gif",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": true
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "这是什么",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/gif",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV04-3",
+  "group": "G4",
+  "source": "synth",
+  "note": "自己的图和引用图分别归属",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0019",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "看图",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "fixture-10.jpg",
+      "height": 3200,
+      "size": 679176,
+      "url": "https://multimedia.nt.qq.com.cn/own",
+      "width": 1440
+     }
+    ],
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "看图",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/jpeg",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/own",
+      "contentType": "image/jpeg",
+      "width": 1440,
+      "height": 3200,
+      "size": 679176,
+      "filename": "fixture-10.jpg"
+     }
+    ],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV04-4",
+  "group": "G4",
+  "source": "d1",
+  "note": "引用图保留尺寸与大小",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0020",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "这是什么",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 720,
+        "size": 123456,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1280
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": false
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "这是什么",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/jpeg",
+       "width": 1280,
+       "height": 720,
+       "size": 123456,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV04-5",
+  "group": "G4",
+  "source": "d1",
+  "note": "引用图 + 命中 member ref 时作者一致",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0021",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "这是什么",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "replyTo": {
+     "kind": "member",
+     "targetId": "m-quoted",
+     "authorId": null,
+     "authorName": "成员B"
+    },
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": false
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "这是什么",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/jpeg",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  },
+  "setup": [
+   {
+    "sql": "INSERT INTO message_refs VALUES(?,?,?,?,?)",
+    "args": [
+     "REFIDX_SYNTH_0001",
+     "member",
+     "m-quoted",
+     "GROUP000001",
+     0
+    ]
+   }
+  ]
+ },
+ {
+  "id": "EV04-6",
+  "group": "G4",
+  "source": "synth",
+  "note": "引用两张图都算引用素材",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0022",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "这是什么",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+        "width": 1440
+       },
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/second",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": false
+     },
+     {
+      "url": "https://multimedia.nt.qq.com.cn/second",
+      "owner": "u2",
+      "origin": "quote",
+      "animated": false
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "这是什么",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+       "contentType": "image/jpeg",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      },
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/second",
+       "contentType": "image/jpeg",
+       "width": 1440,
+       "height": 3200,
+       "size": 679176,
+       "filename": "fixture-10.jpg"
+      }
+     ],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=synth-17&rkey=synthetic",
+     "https://multimedia.nt.qq.com.cn/second"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ }
+]

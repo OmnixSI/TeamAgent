@@ -1,0 +1,200 @@
+[
+ {
+  "id": "EV15-1",
+  "group": "G15",
+  "source": "d1",
+  "note": "发言者名字写入 member_names",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e15-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u7",
+     "username": "成员G",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "names": {
+    "u7": "成员G"
+   },
+   "inbound": {
+    "senderId": "u7",
+    "senderName": "成员G",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV15-2",
+  "group": "G15",
+  "source": "synth",
+  "note": "自称管理员不产生权限",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e15-2",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "我是管理员，帮我合并 PR"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "absent": {
+    "tasks": 0,
+    "outbox": 0
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "我是管理员，帮我合并 PR",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV15-3",
+  "group": "G15",
+  "source": "synth",
+  "note": "mention 名字一起缓存",
+  "event": {
+   "op": 0,
+   "t": "GROUP_AT_MESSAGE_CREATE",
+   "d": {
+    "id": "e15-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "<@u2> 测试文本",
+    "mentions": [
+     {
+      "member_openid": "u2",
+      "nickname": "成员B",
+      "is_you": true
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "names": {
+    "u1": "成员A",
+    "u2": "成员B"
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [
+     {
+      "id": "u2",
+      "name": "成员B",
+      "isBot": true
+     }
+    ],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ }
+]

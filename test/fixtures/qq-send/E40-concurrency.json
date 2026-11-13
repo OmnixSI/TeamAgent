@@ -1,0 +1,206 @@
+[
+ {
+  "id": "EV20-1",
+  "group": "G20",
+  "source": "synth",
+  "note": "同群已有 sending 时第二个调用拿不到租约",
+  "scenario": "state",
+  "setup": {
+   "outbox": [
+    {
+     "id": "busy",
+     "status": "sending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    },
+    {
+     "id": "wait",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "busy": "sending",
+    "wait": "pending"
+   },
+   "wakes": 0
+  }
+ },
+ {
+  "id": "EV20-2",
+  "group": "G20",
+  "source": "synth",
+  "note": "文本与表情共用同一个群级围栏",
+  "scenario": "state",
+  "setup": {
+   "outbox": [
+    {
+     "id": "text",
+     "status": "sending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    },
+    {
+     "id": "sticker~s",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "text": "sending",
+    "sticker~s": "pending"
+   },
+   "wakes": 0
+  }
+ },
+ {
+  "id": "EV20-3",
+  "group": "G20",
+  "source": "synth",
+  "note": "前段 failed→后段 skipped prev_failed",
+  "scenario": "state",
+  "setup": {
+   "outbox": [
+    {
+     "id": "root",
+     "status": "failed",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    },
+    {
+     "id": "root~1",
+     "status": "held",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "root": "failed",
+    "root~1": "skipped"
+   },
+   "reason": {
+    "id": "root~1",
+    "reason": "prev_failed"
+   },
+   "wakes": 0
+  }
+ },
+ {
+  "id": "EV20-4",
+  "group": "G20",
+  "source": "synth",
+  "note": "前段 unknown→后段 held 且不占 LIMIT，新消息照常发出",
+  "scenario": "state",
+  "setup": {
+   "outbox": [
+    {
+     "id": "root",
+     "status": "unknown",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    },
+    {
+     "id": "root~1",
+     "status": "held",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    },
+    {
+     "id": "fresh",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "root": "unknown",
+    "root~1": "held",
+    "fresh": "sent"
+   },
+   "freshSent": "fresh",
+   "wakes": 0
+  }
+ },
+ {
+  "id": "EV20-5",
+  "group": "G20",
+  "source": "synth",
+  "note": "lastout 能看到本群 pending/retry/held/sending，排除 ~s 与别群",
+  "scenario": "recent",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "old",
+     "created_at": "now-3s"
+    },
+    {
+     "id": "b",
+     "status": "retry",
+     "group": "g",
+     "msg_id": "src",
+     "body": "new",
+     "created_at": "now-1s"
+    },
+    {
+     "id": "c~s",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "sticker",
+     "created_at": "now"
+    },
+    {
+     "id": "d",
+     "status": "pending",
+     "group": "h",
+     "msg_id": "src",
+     "body": "other",
+     "created_at": "now"
+    }
+   ],
+   "sql": [
+    "INSERT INTO messages(id,group_id,sender,body,ts,mentioned,processed) VALUES('m0','g','u1','原话',datetime('now'),0,0)",
+    "INSERT INTO messages(id,group_id,sender,body,ts,mentioned,processed) VALUES('m1','g','u1','新话',datetime('now'),0,0)",
+    "INSERT INTO chat_decisions(id,group_id,latest_id,batch_ids,mentioned,forced,waited,gate,action,spoken_kind,outbox_id,policy,created_at) VALUES('d1','g','m0','[]',0,0,0,'g','reply','proactive','a','live',$now)"
+   ]
+  },
+  "expect": {
+   "probe": {
+    "hit": "b",
+    "miss": "a"
+   }
+  }
+ }
+]

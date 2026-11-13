@@ -1,0 +1,183 @@
+[
+ {
+  "id": "EV23-1",
+  "group": "G12",
+  "source": "doc",
+  "note": "内容被拦的业务码→failed，不重试、不计引用失败",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV23-1",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ],
+   "meta": [
+    {
+     "id": "EV23-1",
+     "json": {
+      "reference": "REFIDX_SYNTH_0001"
+     }
+    }
+   ]
+  },
+  "expect": {
+   "status": "failed",
+   "reason": "blocked",
+   "sends": 1,
+   "pairs": [
+    [
+     "src",
+     1
+    ]
+   ],
+   "quoteFail": 0
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 40034006
+    }
+   }
+  ]
+ },
+ {
+  "id": "EV23-2",
+  "group": "G12",
+  "source": "doc",
+  "note": "禁言业务码→failed 并写 qq:muted_until；下一次入口直接返回",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV23-2",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ]
+  },
+  "expect": {
+   "status": "failed",
+   "reason": "muted",
+   "sends": 1,
+   "muted": true,
+   "afterMutedCalls": true
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 40054002
+    }
+   }
+  ]
+ },
+ {
+  "id": "EV23-3",
+  "group": "G12",
+  "source": "doc",
+  "note": "不在群/无权限→failed 并暂停该群 10 分钟",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV23-3",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ]
+  },
+  "expect": {
+   "status": "failed",
+   "reason": "muted",
+   "sends": 1,
+   "muted": true
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 40034101
+    }
+   }
+  ]
+ },
+ {
+  "id": "EV23-4",
+  "group": "G12",
+  "source": "doc",
+  "note": "另一类内容拦截码同样只失败一次",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV23-4",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ],
+   "meta": [
+    {
+     "id": "EV23-4",
+     "json": {
+      "reference": "REFIDX_SYNTH_0002"
+     }
+    }
+   ]
+  },
+  "expect": {
+   "status": "failed",
+   "reason": "blocked",
+   "sends": 1,
+   "pairs": [
+    [
+     "src",
+     1
+    ]
+   ],
+   "quoteFail": 0
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 304004
+    }
+   }
+  ]
+ }
+]

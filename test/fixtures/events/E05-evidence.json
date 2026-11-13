@@ -1,0 +1,77 @@
+[
+ {
+  "id": "EV05-1",
+  "group": "G5",
+  "source": "synth",
+  "note": "图片证据失败：下载超时",
+  "kind": "evidence",
+  "evidence": {
+   "status": "failed",
+   "reason": "下载超时",
+   "source": "引用预览",
+   "owner": "u2"
+  },
+  "evidenceText": "[图片：读取失败（下载超时）]",
+  "noGuess": true
+ },
+ {
+  "id": "EV05-2",
+  "group": "G5",
+  "source": "synth",
+  "note": "图片证据失败：HTTP 403",
+  "kind": "evidence",
+  "evidence": {
+   "status": "failed",
+   "reason": "HTTP 403",
+   "source": "引用预览",
+   "owner": "u2"
+  },
+  "evidenceText": "[图片：读取失败（HTTP 403）]",
+  "noGuess": true
+ },
+ {
+  "id": "EV05-3",
+  "group": "G5",
+  "source": "synth",
+  "note": "图片证据失败：跳转被拒",
+  "kind": "evidence",
+  "evidence": {
+   "status": "failed",
+   "reason": "跳转被拒",
+   "source": "引用预览",
+   "owner": "u2"
+  },
+  "evidenceText": "[图片：读取失败（跳转被拒）]",
+  "noGuess": true
+ },
+ {
+  "id": "EV05-4",
+  "group": "G5",
+  "source": "synth",
+  "note": "图片证据失败：连接重置",
+  "kind": "evidence",
+  "evidence": {
+   "status": "failed",
+   "reason": "连接重置",
+   "source": "引用预览",
+   "owner": "u2"
+  },
+  "evidenceText": "[图片：读取失败（连接重置）]",
+  "noGuess": true
+ },
+ {
+  "id": "EV05-5",
+  "group": "G5",
+  "source": "synth",
+  "note": "图片证据失败：通道不支持",
+  "kind": "evidence",
+  "evidence": {
+   "status": "unsupported",
+   "reason": "引用预览",
+   "source": "引用预览",
+   "owner": "u2"
+  },
+  "evidenceText": "[图片：通道不支持（引用预览）]",
+  "noGuess": true
+ }
+]

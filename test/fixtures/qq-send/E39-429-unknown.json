@@ -1,0 +1,265 @@
+[
+ {
+  "id": "EV19-1",
+  "group": "G19",
+  "source": "doc",
+  "note": "429 退避 30/60/120s，3 次后 failed，seq 不变",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV19-1",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ]
+  },
+  "expect": {
+   "status": "failed",
+   "reason": "rate_limited",
+   "sends": 3,
+   "pairs": [
+    [
+     "src",
+     1
+    ],
+    [
+     "src",
+     1
+    ],
+    [
+     "src",
+     1
+    ]
+   ],
+   "passiveUsed": 1
+  },
+  "responses": [
+   {
+    "status": 429,
+    "body": {
+     "code": 9
+    }
+   },
+   {
+    "status": 429,
+    "body": {
+     "code": 9
+    }
+   },
+   {
+    "status": 429,
+    "body": {
+     "code": 9
+    }
+   }
+  ],
+  "calls": 3
+ },
+ {
+  "id": "EV19-2",
+  "group": "G19",
+  "source": "synth",
+  "note": "5xx 且未开 unknown 重发→unknown，不重发",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV19-2",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ]
+  },
+  "expect": {
+   "status": "unknown",
+   "reason": "unknown",
+   "sends": 1
+  },
+  "responses": [
+   {
+    "status": 503,
+    "body": {
+     "code": 9
+    }
+   }
+  ]
+ },
+ {
+  "id": "EV19-3",
+  "group": "G19",
+  "source": "synth",
+  "note": "off:unknown_resend=0 时同一组 pair 最多重发 1 次",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV19-3",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ],
+   "settings": {
+    "off:unknown_resend": "0"
+   }
+  },
+  "expect": {
+   "status": "sent",
+   "reason": null,
+   "sends": 2,
+   "pairs": [
+    [
+     "src",
+     1
+    ],
+    [
+     "src",
+     1
+    ]
+   ]
+  },
+  "responses": [
+   {
+    "status": 503,
+    "body": {
+     "code": 9
+    }
+   },
+   {
+    "status": 200,
+    "body": {
+     "id": "sent"
+    }
+   }
+  ],
+  "calls": 2
+ },
+ {
+  "id": "EV19-4",
+  "group": "G19",
+  "source": "doc",
+  "note": "平台去重码 40054005 记为 sent",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV19-4",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src"
+    }
+   ]
+  },
+  "expect": {
+   "status": "sent",
+   "reason": null,
+   "sends": 1,
+   "pairs": [
+    [
+     "src",
+     1
+    ]
+   ]
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 40054005
+    }
+   }
+  ]
+ },
+ {
+  "id": "EV19-5",
+  "group": "G19",
+  "source": "doc",
+  "note": "被动额度失效→换最近 msg 重发一次；首次不计 failed",
+  "scenario": "receipt",
+  "setup": {
+   "outbox": [
+    {
+     "id": "EV19-5",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": "now"
+    }
+   ],
+   "passive": [
+    {
+     "msg_id": "src",
+     "used": 0
+    },
+    {
+     "msg_id": "other",
+     "used": 0,
+     "at": "now-30s"
+    }
+   ]
+  },
+  "expect": {
+   "status": "sent",
+   "reason": null,
+   "sends": 2,
+   "pairs": [
+    [
+     "src",
+     1
+    ],
+    [
+     "other",
+     1
+    ]
+   ],
+   "passiveUsed": 5,
+   "passiveUsedOf": "src"
+  },
+  "responses": [
+   {
+    "status": 400,
+    "body": {
+     "code": 40034128
+    }
+   },
+   {
+    "status": 200,
+    "body": {
+     "id": "sent"
+    }
+   }
+  ]
+ }
+]

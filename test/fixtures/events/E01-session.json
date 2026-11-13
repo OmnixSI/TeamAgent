@@ -1,0 +1,179 @@
+[
+ {
+  "id": "EV01-1",
+  "group": "G1",
+  "source": "d1",
+  "note": "绑定群普通消息入库并排队",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e01-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 0,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV01-2",
+  "group": "G1",
+  "source": "d1",
+  "note": "非绑定群回 op12，不落库",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e01-2",
+    "group_openid": "GROUP999999",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "op": 12,
+   "bind": false,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 2
+  }
+ },
+ {
+  "id": "EV01-3",
+  "group": "G1",
+  "source": "doc",
+  "note": "私聊事件不在放行列表，回 op12",
+  "event": {
+   "op": 0,
+   "t": "C2C_MESSAGE_CREATE",
+   "d": {
+    "id": "e01-3",
+    "content": "测试文本",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "op": 12,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 0
+  }
+ }
+]

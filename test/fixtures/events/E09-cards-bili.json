@@ -1,0 +1,807 @@
+[
+ {
+  "id": "EV09-1",
+  "group": "G9",
+  "source": "d1",
+  "note": "B站小程序卡片字段完整",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_name": "小程序",
+     "ark_type": "miniapp",
+     "fields": {
+      "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+      "source": "哔哩哔哩",
+      "source_logo": "https://multimedia.nt.qq.com.cn/card/synth-3.png",
+      "title": "测试文本测试文本测试文本测试文本测试文"
+     },
+     "prompt": "测试文本测试文本测试文本测试文本测试文本测试文本测试"
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "miniapp",
+     "name": "小程序",
+     "title": "测试文本测试文本测试文本测试文本测试文",
+     "desc": {
+      "$undefined": true
+     },
+     "url": {
+      "$undefined": true
+     },
+     "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+     "source": "哔哩哔哩",
+     "note": "【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。"
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "title": "测试文本测试文本测试文本测试文本测试文"
+    },
+    "ownUrls": [
+     "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+     "https://multimedia.nt.qq.com.cn/card/synth-3.png"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] 哔哩哔哩：测试文本测试文本测试文本测试文本测试文"
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-2",
+  "group": "G9",
+  "source": "doc",
+  "note": "ark 的 jump_url 带 BV 号",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-2",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "link",
+     "fields": {
+      "title": "测试视频",
+      "jump_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+     }
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "link",
+     "name": {
+      "$undefined": true
+     },
+     "title": "测试视频",
+     "desc": {
+      "$undefined": true
+     },
+     "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+     "preview": {
+      "$undefined": true
+     },
+     "source": {
+      "$undefined": true
+     }
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "bvid": "BV1xx411c7mD"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] ：测试视频"
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-3",
+  "group": "G9",
+  "source": "d1",
+  "note": "b23.tv 短链解析出 short",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本 https://b23.tv/F1DkQFC测试文本测试文本测试文本测试文本测试文本测"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本 https://b23.tv/F1DkQFC测试文本测试文本测试文本测试文本测试文本测",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://b23.tv/F1DkQFC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B",
+      "short": "F1DkQFC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://b23.tv/F1DkQFC测试文本测试文本测试文本测试文本测试文本测"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://b23.tv/F1DkQFC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B%E8%AF%95%E6%96%87%E6%9C%AC%E6%B5%8B"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-4",
+  "group": "G9",
+  "source": "doc",
+  "note": "BV 链接解析出 bvid",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-4",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "看这个 https://www.bilibili.com/video/BV1xx411c7mD"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "看这个 https://www.bilibili.com/video/BV1xx411c7mD",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "bvid": "BV1xx411c7mD"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-5",
+  "group": "G9",
+  "source": "doc",
+  "note": "av 链接解析出 aid",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-5",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "看这个 https://www.bilibili.com/video/av170001"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "看这个 https://www.bilibili.com/video/av170001",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://www.bilibili.com/video/av170001",
+      "aid": "av170001"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://www.bilibili.com/video/av170001"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://www.bilibili.com/video/av170001"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-6",
+  "group": "G9",
+  "source": "d1",
+  "note": "引用 B站卡片保留 quoted.card",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0048",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "ark_data": {
+       "ark_name": "小程序",
+       "ark_type": "miniapp",
+       "fields": {
+        "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+        "source": "哔哩哔哩",
+        "source_logo": "https://multimedia.nt.qq.com.cn/card/synth-3.png",
+        "title": "测试文本测试文本测试文本测试文本测试文"
+       },
+       "prompt": "测试文本测试文本测试文本测试文本测试文本测试文本测试"
+      }
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [],
+     "card": {
+      "type": "miniapp",
+      "name": "小程序",
+      "title": "测试文本测试文本测试文本测试文本测试文",
+      "desc": {
+       "$undefined": true
+      },
+      "url": {
+       "$undefined": true
+      },
+      "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+      "source": "哔哩哔哩",
+      "note": "【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。"
+     },
+     "biliCard": {
+      "title": "测试文本测试文本测试文本测试文本测试文"
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+     "https://multimedia.nt.qq.com.cn/card/synth-3.png"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV09-7",
+  "group": "G9",
+  "source": "doc",
+  "note": "只有 prompt 的 B站卡片也能出 card",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-7",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "miniapp",
+     "ark_name": "小程序",
+     "prompt": "[QQ小程序]测试视频",
+     "fields": {
+      "source": "哔哩哔哩"
+     }
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "miniapp",
+     "name": "小程序",
+     "title": {
+      "$undefined": true
+     },
+     "desc": {
+      "$undefined": true
+     },
+     "url": {
+      "$undefined": true
+     },
+     "preview": {
+      "$undefined": true
+     },
+     "source": "哔哩哔哩"
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] 哔哩哔哩"
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-8",
+  "group": "G9",
+  "source": "synth",
+  "note": "B站链接与卡片同时出现",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e09-8",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "https://b23.tv/F1DkQFC",
+    "ark_data": {
+     "ark_name": "小程序",
+     "ark_type": "miniapp",
+     "fields": {
+      "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+      "source": "哔哩哔哩",
+      "source_logo": "https://multimedia.nt.qq.com.cn/card/synth-3.png",
+      "title": "测试文本测试文本测试文本测试文本测试文"
+     },
+     "prompt": "测试文本测试文本测试文本测试文本测试文本测试文本测试"
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "https://b23.tv/F1DkQFC",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "miniapp",
+     "name": "小程序",
+     "title": "测试文本测试文本测试文本测试文本测试文",
+     "desc": {
+      "$undefined": true
+     },
+     "url": {
+      "$undefined": true
+     },
+     "preview": "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+     "source": "哔哩哔哩"
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://b23.tv/F1DkQFC",
+      "short": "F1DkQFC"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://b23.tv/F1DkQFC",
+     "https://multimedia.nt.qq.com.cn/card/synth-4.png",
+     "https://multimedia.nt.qq.com.cn/card/synth-3.png"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://b23.tv/F1DkQFC"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-9",
+  "group": "G9",
+  "source": "synth",
+  "note": "101 并列元素里的 B站链接",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0051",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "message_type": 101,
+    "msg_elements": [
+     {
+      "message_type": 101,
+      "content": "https://www.bilibili.com/video/BV1xx411c7mD"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "https://www.bilibili.com/video/BV1xx411c7mD",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [
+     {
+      "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "bvid": "BV1xx411c7mD"
+     }
+    ],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [
+     "https://www.bilibili.com/video/BV1xx411c7mD"
+    ],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "101 并列元素文本在 content 空白时回退为正文；legacy 不读元素",
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV09-10",
+  "group": "G9",
+  "source": "synth",
+  "note": "引用里的短链单独记 quotedBiliUrls",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0053",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "看 https://b23.tv/F1DkQFC",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      }
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "看 https://b23.tv/F1DkQFC",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://b23.tv/F1DkQFC"
+    ],
+    "biliUrls": [],
+    "quotedBiliUrls": [
+     "https://b23.tv/F1DkQFC"
+    ],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ }
+]
