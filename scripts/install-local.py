@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install reviewed source into the existing private runtime. No secrets are created or printed."""
 from pathlib import Path
-import shutil, subprocess, json, sys, os, plistlib, re, shlex
+import shutil, subprocess, json, sys, os, plistlib, re, shlex, hashlib
 
 root = Path(__file__).resolve().parents[1]
 FETCH_LABEL = "com.inkboard.team-fetch"
@@ -40,20 +40,21 @@ def remove_fetch_service():
     path = Path.home() / "Library/LaunchAgents" / (FETCH_LABEL + ".plist")
     path.unlink(missing_ok=True)
 
-def install_fetch_service():
+def install_node_service(label, script, extra_keys):
     node = find_node()
     if not node:
-        print("未安装 team-fetch：缺 Node ≥22")
+        print("未安装 " + label.rsplit('.',1)[-1] + "：缺 Node ≥22")
         return
     runtime = Path.home() / ".inkboard-team"
-    path = Path.home() / "Library/LaunchAgents" / (FETCH_LABEL + ".plist")
+    path = Path.home() / "Library/LaunchAgents" / (label + ".plist")
+    log_name = label.removeprefix("com.inkboard.team-")
     data = plistlib.dumps({
-        "Label": FETCH_LABEL,
-        "ProgramArguments": [node, str(runtime / "fetcher.mjs")],
+        "Label": label,
+        "ProgramArguments": [node, str(runtime / script)],
         "EnvironmentVariables": {"PATH": str(Path(node).parent) + ":/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"},
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
-        "StandardOutPath": str(runtime / "fetch.log"),
-        "StandardErrorPath": str(runtime / "fetch-error.log"),
+        "StandardOutPath": str(runtime / (log_name + ".log")),
+        "StandardErrorPath": str(runtime / (log_name + "-error.log")),
+        **extra_keys,
     })
     changed = not path.exists() or path.read_bytes() != data
     if changed:
@@ -62,14 +63,60 @@ def install_fetch_service():
         tmp.write_bytes(data)
         tmp.replace(path)
     target = "gui/" + str(os.getuid())
-    loaded = launchctl("print", target + "/" + FETCH_LABEL)
+    loaded = launchctl("print", target + "/" + label)
     if loaded and changed:
-        if not launchctl("bootout", target + "/" + FETCH_LABEL):
-            print("警告：team-fetch 停止失败")
+        if not launchctl("bootout", target + "/" + label):
+            print("警告：" + label + " 停止失败")
             return
     if not loaded or changed:
         if not launchctl("bootstrap", target, str(path)):
-            print("警告：team-fetch 加载失败")
+            print("警告：" + label + " 加载失败")
+
+def install_fetch_service():
+    install_node_service(FETCH_LABEL, "fetcher.mjs", {"RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30})
+
+MEDIA_LABEL = "com.inkboard.team-media"
+def install_media_service():
+    install_node_service(MEDIA_LABEL, "media.mjs", {"WorkingDirectory": str(Path.home()/".inkboard-team"), "StartInterval": 60, "ProcessType": "Background", "Nice": 10, "LowPriorityIO": True})
+
+def remove_media_service():
+    path = Path.home()/"Library/LaunchAgents"/(MEDIA_LABEL+".plist")
+    if not path.exists():
+        return True
+    target = "gui/"+str(os.getuid())+"/"+MEDIA_LABEL
+    if not launchctl("bootout", target) and launchctl("print", target):
+        print("警告：team-media 停止失败，保留运行文件。")
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+def asr_config():
+    return {"python": str(Path.home()/".inkboard-team/xasr-venv/bin/python"), "model_dir": str(Path.home()/"Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03")}
+
+def ensure_xasr(source_root):
+    venv = Path.home()/".inkboard-team/xasr-venv"
+    requirements = source_root/"runner/requirements-xasr.txt"
+    stamp = venv/".req.sha256"
+    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    try:
+        if not (venv/"bin/python").exists():
+            subprocess.run([sys.executable,"-m","venv",str(venv)],check=True,timeout=120)
+        if not stamp.exists() or stamp.read_text().strip()!=digest:
+            subprocess.run([str(venv/"bin/python"),"-m","pip","install","--no-cache-dir","-r",str(requirements)],check=True,timeout=600)
+            stamp.write_text(digest)
+        child_env = {key: os.environ.get(key, str(Path.home()) if key=="HOME" else "") for key in ["PATH","HOME","LANG"]}
+        subprocess.run([str(venv/"bin/python"),str(source_root/"runner/xasr_transcribe.py"),"--check","--model-dir",asr_config()["model_dir"]],check=True,timeout=120,env=child_env)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        print("本机 X-ASR 运行库或已有模型检查失败；未下载模型。")
+        return False
+
+def write_asr_config(home):
+    path=home/"config.json"
+    config=json.loads(path.read_text()) if path.exists() else {}
+    config["asr"]=asr_config()
+    tmp=home/"config.asr.tmp"
+    tmp.write_text(json.dumps(config,ensure_ascii=False,indent=2));tmp.chmod(0o600);tmp.replace(path)
 
 def install_login_launcher():
     node = find_node()
@@ -106,6 +153,19 @@ def remove_login_launcher():
     # Login profiles and cookies are user data and survive launcher rollback.
 
 def main():
+    home = Path.home() / ".inkboard-team"
+    if "--remove-media" in sys.argv:
+        if remove_media_service():
+            for name in ["xasr-venv","media-tmp","media-reports","media.lock","media-child.pid"]:
+                path=home/name
+                if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+                else: path.unlink(missing_ok=True)
+        return
+    if "--xasr-only" in sys.argv:
+        home.mkdir(parents=True,exist_ok=True,mode=0o700)
+        if not ensure_xasr(root): raise SystemExit(1)
+        write_asr_config(home)
+        return
     if "--remove" in sys.argv:
         remove_login_launcher()
         print("已移除 TeamAgent 桌面登录入口；保留本机登录数据。")
@@ -120,6 +180,8 @@ def main():
         for directory in ["runner/sdk","config","scripts"]:(stage/directory).mkdir(parents=True,exist_ok=True)
         for path in (root/"runner").glob("*"):
             if path.suffix in [".py",".mjs"]:shutil.copy2(path,stage/"runner"/path.name)
+        shutil.copy2(root/"runner/requirements-xasr.txt",stage/"runner/requirements-xasr.txt")
+        ensure_xasr(root)
         for name in ["package.json","package-lock.json"]:shutil.copy2(root/"runner/sdk"/name,stage/"runner/sdk"/name)
         for path in (root/"config").glob("*.json"):shutil.copy2(path,stage/"config"/path.name)
         shutil.copy2(__file__,stage/"scripts/install-local.py")
@@ -140,6 +202,7 @@ def main():
     for path in (root / "runner").glob("*"):
         if path.suffix in [".py", ".mjs"]:
             tmp=home/(path.name+".tmp");shutil.copy2(path,tmp);tmp.replace(home/path.name)
+    shutil.copy2(root/"runner/requirements-xasr.txt",home/"requirements-xasr.txt")
     (home / "sdk").mkdir(exist_ok=True)
     sdk_changed=not (home/"sdk/package-lock.json").exists() or (home/"sdk/package-lock.json").read_bytes()!=(root/"runner/sdk/package-lock.json").read_bytes() or not (home/"sdk/node_modules").exists()
     for name in ["package.json", "package-lock.json"]:
@@ -149,6 +212,7 @@ def main():
     )
     config = json.loads((home / "config.json").read_text())
     config["repos"] = parameters["repositories"]
+    config["asr"] = asr_config()
     tmp = home / "config.tmp"
     tmp.write_text(json.dumps(config, ensure_ascii=False, indent=2))
     tmp.chmod(0o600)
@@ -157,6 +221,10 @@ def main():
         remove_fetch_service()
     else:
         install_fetch_service()
+    if parameters.get("bili",{}).get("media",{}).get("enabled") is True:
+        install_media_service()
+    else:
+        remove_media_service()
     install_login_launcher()
     print("已安装本机执行文件与独立 QQ SDK；确认没有运行中任务后重启相应 launchd 服务。")
 

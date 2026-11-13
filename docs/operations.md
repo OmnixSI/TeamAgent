@@ -102,3 +102,15 @@ fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天�
 云端 `settings` 仅使用固定键 `login-flow:bili`、`login-flow:x`、`fetcher:last-seen`，只保存请求 ID、服务、进度和时间，不加表。owner 的 `/api/team/service-login` 支持 GET 状态、POST 请求、DELETE 取消；runner 使用现有 fetch/claim 和 fetch/login-state 回报，暂停领取闸照常生效。状态回报只接受固定进度字段；拒绝二维码及其他额外字段，状态读取时清除旧版本残留的二维码字段。前端活动登录每两秒更新、空闲时每三十秒检查；只在运行状态页可见且 owner 登录时运行。密码、验证码和会话 Cookie 不进入网页；二维码仅在本机 owner 网页短暂显示。
 
 接口字段核对依据：[B 站 web 扫码接口资料](https://github.com/bilibili-plugins/bilibili-api-collect/blob/master/docs/login/login_action/QR.md)（2026-11-12，社区整理；真实扫码仍需发布后在 Mac 验收）。
+
+## 本机音频转写（默认关闭）
+
+`bili.media.enabled=false` 时不安装转写定时项，不影响元数据抓取。启用后 `com.inkboard.team-media` 每60秒短命启动一次，单实例、最多连续3个任务、后台低优先级；空闲即退出。
+运行库由暂存时安装，或单独执行 `python3 scripts/install-local.py --xasr-only`；仅按固定 requirements 安装运行库，模型只读引用 NextThought 已有目录。`--apply` 不安装依赖、不加载模型。
+本机验收：`node runner/media.mjs once <BV>`；只取一条 DASH 音频、转成16kHz单声道PCM后分块转写。stdout仅输出一次统计，不连云、不报群；音频和每任务目录在 finally 删除。
+1300MB内存看门狗、30秒心跳、最多90分钟、磁盘/内存启动闸共同限制负载；下载不含Cookie，API仅只读复用已有登录，日志不留签名链接。
+日志为 `~/.inkboard-team/media.log` 和 `media-error.log`。启动时仅按目录项/时间清过期报告，超限日志直接截空，不读取旧日志内容、不留清扫标记。
+暂停：关闭配置并按正常暂存/apply流程移除定时项；彻底回滚运行库和临时文件用 `python3 scripts/install-local.py --remove-media`，其他运行时文件和登录数据不动。
+
+2026-11-13 CDN 验收：下载请求必须同时保留浏览器 User-Agent 和完整 `Range: bytes=0-`；只改其中一项不等于验证完整下载。保留每跳主机/DNS/端口检查、完整 Content-Range 与字节数校验，不向 CDN 发送 Cookie。
+匿名隔离 HOME 实跑 `node runner/media.mjs once BV1MEW46JEYB`：无 CC，951 秒，覆盖950.60秒、32段、6205字，耗时27秒；只出现 a.m4a/a.wav，ASR峰值789.23MB（进程树838.84MB），nice=15，cleanup.residue=0。临时/报告目录均为空、无残留子进程；只读原模型的临时符号链接已移除，没有新增音视频或模型文件。尚未启用定时项或验证云端收发。

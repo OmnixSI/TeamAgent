@@ -2,7 +2,7 @@
 import pathlib,json,urllib.request,ssl,os,subprocess,time,sys,shutil
 
 H=pathlib.Path.home()/".inkboard-team"
-SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick","com.inkboard.team-fetch"]
+SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick","com.inkboard.team-fetch","com.inkboard.team-media"]
 def live_markers():
     live=[]
     for path in (H/"sub").glob("*.running"):
@@ -12,7 +12,7 @@ def live_markers():
     return live
 def restart_services():
     for name in SERVICES:
-        subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/"+name],check=name!="com.inkboard.team-fetch",capture_output=True)
+        subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/"+name],check=name not in ("com.inkboard.team-fetch","com.inkboard.team-media"),capture_output=True)
 
 def main():
     marker=H/"pending-restart.json"

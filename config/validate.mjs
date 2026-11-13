@@ -109,6 +109,9 @@ export function validateTeamConfig(c) {
   );
   check(typeof c?.bili?.enabled === "boolean", "bili.enabled");
   check(integer(c?.bili?.wait_seconds, 1, 90), "bili.wait_seconds");
+  check(typeof c?.bili?.media?.enabled === 'boolean', 'bili.media.enabled');
+  for (const key of ['max_minutes','rtf','deadline_cap_minutes','mem_cap_mb','tmp_cap_mb'])
+    check(Number.isFinite(c?.bili?.media?.[key]) && c.bili.media[key] > 0, 'bili.media.'+key);
   for (const key of ["mention", "image", "busy", "idle"])
     check(integer(c?.rhythm?.[key], 0, 10), "rhythm." + key);
   for (const [key, max] of Object.entries({cap_ms:60000, wait_min:45, wait_max:45, wait_horizon_ms:600000, hard_window_ms:86400000, hard_humans:100}))
