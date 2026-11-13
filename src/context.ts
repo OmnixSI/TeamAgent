@@ -1,6 +1,7 @@
 import { chunks } from "./d1";
 import { botView, buildConversation, mediaViews, metaOf, refIdsOf, viewMessage, type RefTarget } from "./view";
 import { imageNotesFor } from "./vision";
+import { quotedImagesFromMeta } from "./media/quoted";
 
 type Row = Record<string, any>;
 type ChatContext = {
@@ -113,7 +114,8 @@ export async function loadChatContext(
   }
   const withImages = [...recent, ...batch, ...(latest ? [latest] : [])]
     .filter((r) =>
-      (r.meta?.media || []).some((m: any) => m.kind === "image"),
+      (r.meta?.media || []).some((m: any) => m.kind === "image") ||
+      quotedImagesFromMeta(r.meta).length>0,
     )
     .map((r) => r.id);
   const imagePicks = new Set(x.imagePicks || []);
@@ -121,7 +123,7 @@ export async function loadChatContext(
     ...new Set([...withImages, ...ids.member]),
   ]);
   for (const [id, meta] of targetMeta) {
-    const media = mediaViews(meta, id, imageNotes, imagePicks);
+    const media = mediaViews(meta, id, imageNotes, imagePicks,names);
     if (media?.length) refs.get(id)!.media = media;
   }
   return {

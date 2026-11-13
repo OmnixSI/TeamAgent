@@ -6,6 +6,7 @@ import { renderMentions } from "./inbound";
 import { model } from "./runtime";
 import { metaOf } from "./view";
 import { untrusted } from "./untrusted";
+import { quotedImagesFromMeta } from "./media/quoted";
 
 export const VISION_VERSION = "v1";
 export const SELFTEST_PNG =
@@ -31,6 +32,8 @@ export type ImagePick = {
   idx: number;
   media: Media;
   hint: string;
+  quoted?: boolean;
+  owner?: string;
 };
 
 type VisionStage = "fetch" | "body" | "cache" | "budget" | "describe" | "store" | "link";
@@ -273,12 +276,12 @@ export function pickImages(
   const picks: ImagePick[] = [];
   const seen = new Set<string>();
   const meta = metaOf(latest);
-  const take = (row: any, media: Media, idx: number, hint: string) => {
+  const take = (row: any, media: Media, idx: number, hint: string, quoted=false,owner?:string) => {
     if (picks.length >= max || media.kind !== "image") return;
     const key = row.id + ":" + idx;
     if (seen.has(key)) return;
     seen.add(key);
-    picks.push({ messageId: row.id, idx, media, hint });
+    picks.push({ messageId: row.id, idx, media, hint,...(quoted?{quoted:true,owner}: {}) });
   };
   const images = (row: any) => {
     let imageIdx = -1;
@@ -312,7 +315,13 @@ export function pickImages(
   const target = reply?.targetId ? refRows.get(reply.targetId) : undefined;
   if (target)
     for (const { media, idx } of images(target))
-      take(target, media, idx, hintOf(target));
+      take(target, media, idx, hintOf(target),true,target.sender);
+  // A missing original can only use supplied preview media, never a guessed message ID.
+  if(!target || !images(target).length){
+    const holder=target || latest,offset=target?0:images(latest).length;
+    quotedImagesFromMeta(meta,max).forEach((image,idx)=>take(holder,image.media,offset+idx,
+      String(meta.quoted?.text || ''),true,image.owner || target?.sender));
+  }
   if (mentioned || asksImage)
     for (const row of [...batch].reverse()) {
       if (row.id === latest.id) continue;
@@ -513,6 +522,14 @@ export async function annotateTurn(
             reportVision({ ...event, elapsedMs: Date.now() - started, traceId });
             if (event.status === "failed") outcome = { ...event, messageId: p.messageId, idx: p.idx, traceId };
           };
+          if(p.quoted){
+            try {
+              report({stage:'cache',status:'attempt'});
+              const cached=await e.DB.prepare('SELECT n.sha FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id=? AND mi.idx=?').bind(p.messageId,p.idx).first();
+              aborted(controller.signal);
+              if(cached){report({stage:'cache',status:'ok'});return {messageId:p.messageId,idx:p.idx,stage:'link',status:'ok',traceId};}
+            } catch(error){failed(report,'cache',error,controller.signal,'database');return outcome;}
+          }
           const note = await describeImage(
             e,
             p.media,

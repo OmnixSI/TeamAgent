@@ -1,12 +1,22 @@
+import { FACE, faceName } from "./event/face";
+export { withoutFaces, hasFace } from "./event/face";
+import { renderForward } from "./event/forward";
+import { quotedImagesFromMeta } from "./media/quoted";
+import type { EvidenceResult } from "./event/types";
 import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
 
 export type ViewMsg = {
   id: string; sortAt: number; ord: number; at: string; from: string; fromId: string;
   to?: string; re?: string; th?: number; text: string;
-  material?: { card?: Card; quote?: { from: string; text: string; media?: string[] }; media?: string[]; links?: string[]; analysed?: string };
+  material?: { forward?: string; card?: Card; quote?: { from: string; text: string; media?: string[] }; media?: string[]; links?: string[]; analysed?: string };
   flags?: ("mentionsYou" | "quotesYou" | "addressedOther")[];
 };
 export type RefTarget = { id: string; from: string; fromId: string; text: string; media?: string[] };
+export function renderEvidence(label:string,result:EvidenceResult):string {
+  if(result.status==='ok')return result.text || label;
+  const status={partial:'部分读取',failed:'读取失败',unsupported:'通道不支持'}[result.status];
+  return '['+label+'：'+status+'（'+(result.reason || '原因未记录')+'）]'+(result.text || '');
+}
 const mentionsOf = new WeakMap<ViewMsg, Mention[]>();
 export function withLegacy(meta: any): any {
   if (meta.media !== undefined) return meta;
@@ -21,26 +31,6 @@ export function withLegacy(meta: any): any {
 export function metaOf(row: any): any {
   if (row.meta) return withLegacy(row.meta);
   try { return withLegacy(JSON.parse(row.metadata || "{}")); } catch { return {}; }
-}
-// ext may contain raw JSON or escaped JSON; a > inside its text is not a tag end.
-const FACE = /\[<face,id=\d+\/>\]|<faceType=(?:ext="\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\}"|"(?:\\.|[^"\\])*"|[^">])*>/g;
-export function withoutFaces(body: string): string {
-  return body.replace(FACE, "");
-}
-export function hasFace(body: string): boolean {
-  return withoutFaces(body) !== body;
-}
-function faceName(tag: string): string {
-  // QQ supplies URI-encoded JSON or a JSON string escaped inside ext="…".
-  const match = tag.match(/\bext="(.*)"\s*>$/);
-  if (!match) return "[表情（名称未知）]";
-  try {
-    let raw = match[1].startsWith("{") ? match[1] : decodeURIComponent(match[1]);
-    if (raw.startsWith("{\\\"")) raw = JSON.parse('"' + raw + '"');
-    const text = JSON.parse(raw)?.text;
-    const name = typeof text === "string" ? text.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
-    return name ? "[表情：" + name + "]" : "[表情（名称未知）]";
-  } catch { return "[表情（名称未知）]"; }
 }
 export function displayText(body: string, mentions: Mention[]): string {
   return renderMentions(body, mentions).replace(FACE, faceName);
@@ -83,6 +73,7 @@ export function mediaViews(
   messageId: string,
   imageNotes?: Map<string, string[]>,
   imagePicks?: Set<string>,
+  names = new Map<string,string>(),
 ): string[] | undefined {
   if (!meta?.media?.length) return undefined;
   let imageIdx = -1;
@@ -96,10 +87,26 @@ export function mediaViews(
           ? "视频"
           : "文件" + (m.filename ? " " + m.filename : "");
     imageIdx++;
+    const info = meta.images?.find((image:any) => image.url === m.url);
+    const label = info ? (info.owner ? memberName(info.owner,names.get(info.owner))+"发的" : "")+(info.animated ? "动图" : "图片") : "";
+    const describe = (value:string) => label ? label+"："+value : value;
     const note = imageNotes?.get(messageId)?.[imageIdx];
-    if (note) return note;
-    if (imagePicks?.has(messageId + ":" + imageIdx)) return "图片（未分析：没有可用结果，原因未记录）";
-    return "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
+    if (note) return describe(note);
+    if (imagePicks?.has(messageId + ":" + imageIdx)) return describe("图片（未分析：没有可用结果，原因未记录）");
+    return (label || "图片") + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
+  });
+}
+function previewImageViews(meta:any,id:string,offset:number,names:Map<string,string>,notes?:Map<string,string[]>,picks?:Set<string>):string[]|undefined {
+  const images=quotedImagesFromMeta(meta);
+  if(!images.length)return undefined;
+  const localNotes=notes?.has(id)?new Map([[id,notes.get(id)!.slice(offset)]]):undefined;
+  const localPicks=new Set(images.flatMap((_,idx)=>picks?.has(id+':'+(idx+offset))?[id+':'+idx]:[]));
+  const values=mediaViews({media:images.map(image=>image.media),images:images.map(image=>({url:image.media.url,owner:image.owner,animated:image.animated}))},id,localNotes,localPicks,names)!;
+  return values.map((value,idx)=>{
+    const note=localNotes?.get(id)?.[idx];
+    if(note && /未取得|未分析/.test(note))return (images[idx].owner?named(images[idx].owner,undefined,names)+'发的图：':'')+
+      renderEvidence('图片',{status:'failed',reason:note.replace(/^图片（未取得：图片下载失败：/,'').replace(/）$/,''),source:'引用预览',owner:images[idx].owner});
+    return value;
   });
 }
 export function viewMessage(row: any, names: Map<string, string>, refs: Map<string, RefTarget>, imageNotes?: Map<string, string[]>, imagePicks?: Set<string>): ViewMsg {
@@ -110,19 +117,24 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
   const sortAt = Date.parse(row.ts) || 0;
   const material: ViewMsg["material"] = {};
   if (meta.cardView) material.card = meta.cardView;
+  if (meta.forward) material.forward = renderForward(meta.forward,String(row.ts || "原始转发"));
   if (target) {
     let imageIdx = -1;
     const media = target.media?.map(item => item.startsWith("图片")
       ? imageNotes?.get(target.id)?.[++imageIdx] || item
-      : item);
+      : item) || previewImageViews(meta,target.id,0,names,imageNotes,imagePicks);
     material.quote = {
       from: target.from,
       text: target.text.slice(0, 200),
       ...(media?.length ? { media } : {}),
     };
   }
-  else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
-  const media = mediaViews(meta, row.id, imageNotes, imagePicks);
+  else if (meta.quoted) {
+    const offset=(meta.media || []).filter((m:any)=>m.kind==='image').length;
+    const media=previewImageViews(meta,row.id,offset,names,imageNotes,imagePicks);
+    material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200),...(media?.length?{media}: {}) };
+  }
+  const media = mediaViews(meta, row.id, imageNotes, imagePicks,names);
   if (media) material.media = media;
   const links = [...new Set<string>([...(meta.ownUrls || []), ...(meta.quotedUrls || [])])].slice(0, 5);
   if (links.length) material.links = links;
