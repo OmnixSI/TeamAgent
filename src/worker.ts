@@ -10,7 +10,7 @@ import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
-import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
+import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
@@ -32,7 +32,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
-import { runSchedules } from "./schedules";
+import { runSchedules, planSchedule, createSchedule, publicSchedule, sydneyText } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -1220,6 +1220,7 @@ async function scheduled(e: Env) {
   // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
   await runSchedules(e);
   await sweepMentions(e);
+  await optionalCron(e, () => sweepStuckDeliveries(e, Date.now(), 1), 12);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",
@@ -1596,6 +1597,28 @@ async function api(r: Request, e: Env) {
         if (!d) return json({ error: "unknown delivery" }, 404);
         if (["sent", "failed", "unknown", "needs_attention"].includes(d.status))
           return json({ ok: true, already: true });
+        if (b.status === "failed" && b.exhausted !== true) {
+          const now = Date.now();
+          const retry = await recordDeliveryRetry(e, b, { now });
+          if (!retry.expired)
+            return json({ ok: true, retry: true, attempts: retry.attempts });
+          const attempts = Math.max(1, Math.min(MAX_DELIVERY_ATTEMPTS, Number(b.attempts) || 1));
+          const attention = await recordDeliveryFailure(
+            e,
+            { ...b, attempts, error: attempts >= MAX_DELIVERY_ATTEMPTS ? b.error : "expired" },
+            { now },
+          );
+          if (attention.recorded)
+            await activity(
+              e,
+              "delivery.needs_attention",
+              d.job_id,
+              "QQ网关",
+              "附件重试超出时限，已停止自动重发并在群里说明",
+              b.id + "-result",
+            );
+          return json({ ok: true, needs_attention: true });
+        }
         if (b.status === "failed" && b.exhausted === true) {
           const attention = await recordDeliveryFailure(e, b, { now: Date.now() });
           if (attention.recorded)
@@ -1627,6 +1650,10 @@ async function api(r: Request, e: Env) {
           .bind(b.status, count, iso(), b.id)
           .first();
         if (updated) {
+          if (b.status === "sent")
+            await e.DB.prepare(
+              "UPDATE delivery_retries SET needs_attention=0,updated_at=? WHERE delivery_id=?",
+            ).bind(iso(), b.id).run();
           await activity(
             e,
             "delivery." + b.status,
@@ -1915,6 +1942,37 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (path === "/api/team/outbox/resend" && method === "POST") {
+    if (who.role !== "owner") return json({ error: "owner only" }, 403);
+    const b: any = await r.json().catch(() => null);
+    const id = typeof b?.id === "string" ? b.id : "";
+    if (!id || id.length > 300) return json({ error: "无效的 outbox id" }, 400);
+    const row = await e.DB.prepare("SELECT * FROM outbox WHERE id=?").bind(id).first();
+    if (!row) return json({ error: "群消息不存在" }, 404);
+    const now = Date.now();
+    const age = Math.max(0, now - Number(row.created_at || 0));
+    const plan = {
+      id: row.id,
+      status: row.status,
+      created_at: row.created_at,
+      age_ms: age,
+      stale: age > 15 * 60_000,
+      group_id: row.group_id,
+      msg_id: row.msg_id,
+      body: row.body,
+      body_bytes: new TextEncoder().encode(String(row.body || "")).length,
+      expected: "1 条群文本消息；无附件",
+      eligible: ["failed", "unknown", "skipped"].includes(String(row.status)),
+    };
+    if (b.confirm !== true) return json({ dry_run: true, ...plan });
+    if (!plan.eligible) return json({ error: "这条消息已发送、正在发送或已在待发队列" }, 409);
+    const updated = await e.DB.prepare(
+      "UPDATE outbox SET status='pending' WHERE id=? AND status IN ('failed','unknown','skipped') RETURNING id",
+    ).bind(id).first();
+    if (!updated) return json({ error: "这条消息当前不能重发" }, 409);
+    await activity(e, "outbox.manual_resend", id, who.name, "人工把失败群消息重新入队：" + id.slice(0, 120));
+    return json({ ok: true, queued: true, ...plan, status: "pending" });
+  }
   if(path==='/api/team/service-login'){
     if(who.role!=='owner')return json({error:'owner only'},403);
     if(method==='GET')return loginState(e);
@@ -2313,6 +2371,53 @@ async function api(r: Request, e: Env) {
   if (path.startsWith("/api/admin/")) {
     if (who.role !== "owner") return json({ error: "owner only" }, 403);
     const b: any = await r.json();
+    if (path === "/api/admin/daily-push" && method === "POST") {
+      // 只为 owner 创建；群和 owner 从原始请求消息取，不接受调用方另填。
+      const sourceId = String(b.source_msg_id || "").trim();
+      if (!sourceId) return json({ error: "source_msg_id required" }, 400);
+      const source = await e.DB.prepare(
+        "SELECT id,group_id,sender,ts,body FROM messages WHERE id=?",
+      )
+        .bind(sourceId)
+        .first();
+      if (!source) return json({ error: "source message not found" }, 404);
+      const input = {
+        group_id: source.group_id,
+        owner: source.sender,
+        kind: "digest_daily" as const,
+        spec: { time: String(b.time || "08:00") },
+        source_msg_id: source.id,
+      };
+      try {
+        if (b.dry_run) {
+          const plan = planSchedule(input);
+          return json({
+            ok: true,
+            dry_run: true,
+            would_write: true,
+            schedule: {
+              ...plan,
+              spec: JSON.stringify(plan.spec),
+              next_run_text: sydneyText(plan.next_run_at, plan.tz),
+            },
+            source: {
+              id: source.id,
+              ts: source.ts,
+              body: String(source.body || "").slice(0, 160),
+            },
+          });
+        }
+        const row = await createSchedule(e, input);
+        return json({
+          ok: true,
+          dry_run: false,
+          would_write: false,
+          schedule: publicSchedule(row),
+        });
+      } catch (error: any) {
+        return json({ ok: false, error: String(error?.message || error) }, 400);
+      }
+    }
     if (path.endsWith("/name-members") && method === "POST")
       return provisionNames(e, b);
     if (path.endsWith("/retry-job")) {
