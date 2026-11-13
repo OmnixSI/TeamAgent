@@ -14,7 +14,10 @@ import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { TEAM } from "./config";
-import { parseInbound, extractBili } from "./inbound";
+import { toInbound, extractBili } from "./inbound";
+import { normalize } from "./event/normalize";
+import { forwardMeta } from "./event/forward";
+import { forceReply } from "./event/wake";
 import { loadBatch, loadChatContext } from "./context";
 import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
 import {
@@ -217,10 +220,13 @@ async function receive(r: Request, e: Env) {
     ))
   )
     return json({ error: "invalid signature" }, 401);
-  if (!["GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE"].includes(p.t))
+  if (!["GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE", "GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_MSG_REJECT", "GROUP_MSG_RECEIVE"].includes(p.t))
     return json({ op: 12, d: 0 });
   const m = p.d;
-  let group = await setting(e, "group_id");
+  const ne = normalize(p.t, m);
+  // Read the expansion switch with the existing binding lookup: no extra meta query.
+  const binding = await e.DB.prepare("SELECT value,(SELECT value FROM settings WHERE key='off:forward_expand') AS forward_off FROM settings WHERE key='group_id'").first();
+  let group = binding?.value;
   if (!group) {
     const pair = JSON.parse((await setting(e, "pair")) || "null");
     if (
@@ -245,7 +251,16 @@ async function receive(r: Request, e: Env) {
     }
   }
   if (!group || m.group_openid !== group) return json({ op: 12, d: 0 });
-  if (m.author?.bot) return json({ op: 12, d: 0 });
+  if (ne.kind === "notice") {
+    if (ne.notice === "active_rejected" || ne.notice === "active_allowed")
+      await set(e, "qq:active_rejected", ne.notice === "active_rejected" ? "1" : "0");
+    else
+      await activity(e, "qq." + ne.notice, group, ne.actor.id || "QQ",
+        ne.notice === "bot_added" ? "机器人已加入群聊" : "机器人已离开群聊",
+        p.t + ":" + group + ":" + (m.timestamp || m.id));
+    return json({ op: 12, d: 0 });
+  }
+  if (ne.actor.bot || e.QQ_APP_ID && ne.actor.id === e.QQ_APP_ID) return json({ op: 12, d: 0 });
   const login = String(m.content || "")
     .replace(/^\s*<@!?[^>]+>\s*/, "")
     .trim()
@@ -269,8 +284,8 @@ async function receive(r: Request, e: Env) {
     return json({ op: 12, d: 0 });
   }
 
-  const ib = parseInbound(p.t, m);
-  const mentioned = p.t === "GROUP_AT_MESSAGE_CREATE" || ib.mentionsBot;
+  const ib = toInbound(ne, m);
+  let mentioned = p.t === "GROUP_AT_MESSAGE_CREATE" || ib.mentionsBot;
   const text = ib.body;
   const direct =
     !m.msg_elements?.length && (!m.message_type || m.message_type === 0);
@@ -283,6 +298,15 @@ async function receive(r: Request, e: Env) {
   const replyTo = ref
     ? { kind: ref.kind, targetId: ref.target_id, authorId: ref.kind === "bot" ? "bot" : ref.author_id, ...(ref.kind === "member" && ib.quoted?.authorName ? { authorName: ib.quoted.authorName } : {}) }
     : ib.refMsgIdx && ib.quoted ? { kind: "unknown", authorId: ib.quoted.authorId, authorName: ib.quoted.authorName, text: ib.quoted.text.slice(0, 200) } : undefined;
+  // Bot is the confirmed group name in config/voice.json. Persist the wake result
+  // so debounce, hard participation gates and the later LLM decision all honor it.
+  mentioned = forceReply(ne, { selfId: e.QQ_APP_ID || "", nicknames: ["Bot"], replyToBot: ref?.kind === "bot" }) || mentioned;
+  const forwards = ne.segments.filter(s => s.type === "forward");
+  const forward = forwards.length && binding?.forward_off !== "1"
+    ? forwardMeta({nodes: forwards.flatMap(s => s.nodes), truncated: forwards.some(s => s.truncated)}) : undefined;
+  const images = ne.segments.flatMap(s => s.type === "reply" ? s.preview.segments : [s])
+    .filter(s => s.type === "image")
+    .map(s => ({url:s.url, owner:s.owner, origin:s.origin, animated:s.animated}));
   const inserted = await e.DB.prepare(
     "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,0) RETURNING id",
   )
@@ -304,6 +328,8 @@ async function receive(r: Request, e: Env) {
           attachments: m.attachments || [],
           senderName: m.author.username || "",
           forwarded: m.msg_elements || [],
+          forward,
+          images,
           card: m.ark_data || null,
           can_request_artifact: !!text,
           addressedOther:
@@ -324,12 +350,13 @@ async function receive(r: Request, e: Env) {
           quotedBiliUrls: ib.quotedBiliUrls,
           ownUrls: ib.ownUrls,
           quotedUrls: ib.quotedUrls,
-          placeholder: ib.placeholder,
+          placeholder: ib.placeholder || (forwards.length && !forward ? "[转发消息：展开已关闭]" : ""),
         }),
       ),
     );
   await e.DB.batch([
     metadata,
+    ...(Number.isFinite(ne.ts) ? [e.DB.prepare("INSERT OR IGNORE INTO passive_claims VALUES(?,?,?,0)").bind(m.id, m.group_openid, ne.ts)] : []),
     ...(ib.msgIdx ? [e.DB.prepare("INSERT OR IGNORE INTO message_refs VALUES(?,'member',?,?,?)").bind(ib.msgIdx, m.id, m.group_openid, Date.now())] : []),
     ...[{ id: ib.senderId, name: ib.senderName }, ...ib.mentions.filter(v => v.name).slice(0, 5)]
       .filter(v => v.name)

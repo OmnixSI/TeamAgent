@@ -546,7 +546,7 @@ test("V9 a mentioned image is described before the participation prompt", async 
   );
   const user = JSON.parse(state.participation.messages[1].content);
   const view = user.context.batch.find((x) => x.id === "img1");
-  assert.match(view.material.media[0], /^图片：/);
+  assert.equal(view.material.media[0], "小明发的图片：一张图");
 });
 
 test("V10 eight images in a mentioned batch stop at three vision calls", async () => {
@@ -569,7 +569,7 @@ test("V10 eight images in a mentioned batch stop at three vision calls", async (
   );
   const user = JSON.parse(state.participation.messages[1].content);
   const media = user.context.batch.flatMap((x) => x.material?.media || []);
-  assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 3);
+  assert.equal(media.filter((x) => x === "小明发的图片：一张图").length, 3);
   assert.ok(media.some((x) => /图片（未查看）|图片 64×64/.test(String(x))));
 });
 
@@ -629,7 +629,7 @@ test("V12 daily budget allows only one of three parallel images", async () => {
   );
   const user = JSON.parse(state.participation.messages[1].content);
   const media = user.context.batch.flatMap((x) => x.material?.media || []);
-  assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 1);
+  assert.equal(media.filter((x) => x === "小明发的图片：一张图").length, 1);
   assert.ok(media.some((x) => /图片（未分析：今日看图预算已用完/.test(String(x))));
 });
 
@@ -678,7 +678,7 @@ test("V13 research reuses cached image notes without fetching or describing", as
   assert.equal(state.visionCalls, before.visionCalls);
   const user = JSON.parse(state.participation.messages[1].content);
   const view = user.context.batch.find((x) => x.id === "research-img");
-  assert.match(view.material.media[0], /^图片：/);
+  assert.equal(view.material.media[0], "小明发的图片：一张图");
 });
 
 
