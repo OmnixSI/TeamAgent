@@ -119,8 +119,85 @@
   "id": "EV06-3",
   "group": "G6",
   "source": "d1",
-  "note": "线上 base64 ext 解不出名字（已知缺口）",
-  "skip": "face.ts 只解 URL 编码/裸 JSON，线上 ext 是 base64；见 .agent/event-v2-g4-report.md"
+  "note": "线上 base64 ext 解出表情名（两个连续表情）",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e06-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T06:44:46+08:00",
+    "author": {
+     "id": "u1",
+     "username": "成员A"
+    },
+    "content": "<faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\"><faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\">"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "<faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\"><faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\">",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "e06-3",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794523486000,
+    "segments": [
+     {
+      "type": "face",
+      "id": "21",
+      "name": "可爱",
+      "kind": "face"
+     },
+     {
+      "type": "face",
+      "id": "21",
+      "name": "可爱",
+      "kind": "face"
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
  },
  {
   "id": "EV06-4",
@@ -268,7 +345,78 @@
   "id": "EV06-6",
   "group": "G6",
   "source": "d1",
-  "note": "线上 faceId 带引号时 id 为空（已知缺口）",
-  "skip": "face.ts 的 id 正则不匹配 faceId=\"182\" 的引号；见报告"
+  "note": "线上 faceId 带引号时 id 与 base64 名字都能解出",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e06-6",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-11T21:02:02+08:00",
+    "author": {
+     "id": "u1",
+     "username": "成员A"
+    },
+    "content": "<faceType=1,faceId=\"182\",ext=\"eyJ0ZXh0Ijoi56yR5ZOtIn0=\">"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "<faceType=1,faceId=\"182\",ext=\"eyJ0ZXh0Ijoi56yR5ZOtIn0=\">",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "e06-6",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794402122000,
+    "segments": [
+     {
+      "type": "face",
+      "id": "182",
+      "name": "笑哭",
+      "kind": "face"
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
  }
 ]

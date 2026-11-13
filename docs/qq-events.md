@@ -32,8 +32,8 @@
 | 无类型 | 旧版合并转发文本 | 走 legacy 分支，当作引用（已知差异，夹具 `E15-legacy-*` 锁定） |
 
 `<@!openid>` → `mention` 段，`is_you` 决定 `self`。`<faceType=…,faceId=…,ext=…>` →
-`face` 段；`ext` 支持裸 JSON 和 URL 编码 JSON，**线上 base64 形式目前解不出名字**。
-`[<face,id=n/>]` 旧标签也保留。`mface` 附件同时产出 `image` 和 `face(kind='mface')`。
+`face` 段；`ext` 支持裸 JSON、URL 编码 JSON 和 base64 JSON；都解不出时保留原始 `ext` 并标
+`face_unparsed:true`，不报错。`[<face,id=n/>]` 旧标签也保留。`mface` 附件同时产出 `image` 和 `face(kind='mface')`。
 
 图片 `content_type=image/gif` 记 `animated=true`；归属 `owner` + `origin`（`own`/`quote`/`forward`）。
 图片 URL 只允许 `multimedia.nt.qq.com.cn` 与 `*.qpic.cn`（取图白名单）；夹具同此规则。
