@@ -47,13 +47,15 @@ test('P3 modern image metadata labels owner and animation while old metadata ret
  assert.match(api.viewMessage(row,names,new Map()).material.media[0],/成员甲.*动图/);
  const old={...row,meta:{media:row.meta.media}};assert.equal(api.viewMessage(old,names,new Map()).material.media[0],'图片 10×20');
 });
-test('P2 image notes remove the leading image label only when an author prefix is rendered',()=>{
+test('P2 image notes remove the leading image label whenever metadata supplies a display label',()=>{
  const names=new Map([['a','小明']]);
  for(const [info,note,expected] of [
   [undefined,'图片：一张图','图片：一张图'],
   [{owner:'a',animated:false},'图片：一张图','小明发的图片：一张图'],
   [{owner:'a',animated:true},'图片：一张图','小明发的动图：一张图'],
-  [{owner:'',animated:false},'图片：一张图','图片：图片：一张图'],
+  [{owner:'',animated:false},'图片：一张图','图片：一张图'],
+  [{animated:false},'图片：一张图','图片：一张图'],
+  [{owner:'',animated:true},'图片：一张图','动图：一张图'],
   [{owner:'a',animated:false},'直接描述','小明发的图片：直接描述'],
   [{owner:'a',animated:false},'图片：屏幕上写着图片：说明','小明发的图片：屏幕上写着图片：说明'],
  ]){
