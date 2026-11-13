@@ -68,8 +68,8 @@ const SUMMARY_SYSTEM =
 async function loadRowids(e: any, groupId: string, ids: string[]): Promise<Map<string, number>> {
   const unique = [...new Set(ids.filter(Boolean))];
   const out = new Map<string, number>();
-  for (let i = 0; i < unique.length; i += 50) {
-    const part = unique.slice(i, i + 50);
+  for (let i = 0; i < unique.length; i += 90) {
+    const part = unique.slice(i, i + 90);
     const rows = (
       await e.DB.prepare(
         "SELECT rowid,id FROM messages WHERE group_id=? AND id IN (" + part.map(() => "?").join(",") + ")",
@@ -85,8 +85,8 @@ async function loadRowids(e: any, groupId: string, ids: string[]): Promise<Map<s
 async function loadByRowids(e: any, groupId: string, rowids: number[]): Promise<Map<string, HistoryRow>> {
   const unique = [...new Set(rowids.filter((value) => Number.isInteger(value) && value > 0))];
   const out = new Map<string, HistoryRow>();
-  for (let i = 0; i < unique.length; i += 50) {
-    const part = unique.slice(i, i + 50);
+  for (let i = 0; i < unique.length; i += 90) {
+    const part = unique.slice(i, i + 90);
     const rows = (
       await e.DB.prepare(
         "SELECT rowid,id,sender,body,ts,mentioned FROM messages WHERE group_id=? AND rowid IN (" +
