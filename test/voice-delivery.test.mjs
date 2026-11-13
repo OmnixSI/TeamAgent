@@ -21,7 +21,7 @@ test('real outbox -> runner -> mock QQ SILK upload/send -> report; replay sends 
    await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,0)').bind('m',group,'u','语音',new Date().toISOString(),1).run();
    await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('v',group,'m','测试通过了。','voice',Date.now()).run();
    await e.DB.prepare('INSERT INTO outbox_meta VALUES(?,?)').bind('v',JSON.stringify({sender:'u',cfg:{enabled:true}})).run();
-   const cloud=async(path,b)=>{if(mode==='report-lost'&&path==='voice/report')throw Error('lost report');const r=await req(e,'/api/runner/'+path,b,'runner-secret');assert.equal(r.status,200);return r.json();};
+   const cloud=async(path,b)=>{if(mode==='report-lost'&&path==='voice-outbox/report')throw Error('lost report');const r=await req(e,'/api/runner/'+path,b,'runner-secret');assert.equal(r.status,200);return r.json();};
    const {voiceReply}=await import('../runner/tts.mjs');
    let clock=Date.now();
    const deps={voiceReply,now:()=>clock,fetch:async(url,options)=>{const response=await fetch(url,options);if(mode==='expires-during-upload'&&url.endsWith('/files'))clock+=300000;return response;},token:'mock-token',qqBaseUrl:f.url,synthesize:async()=>mode==='tts-fail'?null:{path:'/fake.wav',provider:'edge'},wavToSilk:async()=>({ok:true,data:Buffer.from('\x02#!SILK_V3\0test'),duration_ms:1000})};

@@ -41,7 +41,7 @@ export async function processVoiceOutbox({cloud,bot,deps={}}) {
       else result=await (deps.voiceReply||voiceReply)({bot:textBot,group:item.group_id,text:item.text,cfg:item.cfg,deps:{...deps,token,msgId:item.msg_id,msgSeq:item.msg_seq,sendVoice,synthesize:async(...args)=>{audio=await (deps.synthesize||synthesize)(...args);return audio;}}});
     }catch{uncertain=true;result={via:'none',reason:'unconfirmed'};}
     const status=uncertain?'unknown':expired?'failed':result.via==='voice'||result.via==='text'?'sent':'failed';
-    try{await cloud('voice/report',{id:item.id,status,via:uncertain?'none':result.via,reason:uncertain?'unconfirmed':expired?'expired':result.reason,latency_ms:Date.now()-start,provider:audio?.provider||result.provider,cached:audio?.cached===true});}
+    try{await cloud('voice-outbox/report',{id:item.id,status,via:uncertain?'none':result.via,reason:uncertain?'unconfirmed':expired?'expired':result.reason,latency_ms:Date.now()-start,provider:audio?.provider||result.provider,cached:audio?.cached===true});}
     catch{deps.log?.('voice report unconfirmed; row will not be resent');}
   }
 }

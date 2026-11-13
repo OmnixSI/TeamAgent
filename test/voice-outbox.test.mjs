@@ -29,8 +29,8 @@ test('enqueue preserves text/reference, honors group override, claims once and r
  assert.equal(meta.reference,'ref');assert.equal(meta.voice_text,'今天测试通过了。');
  const a=await pull(e),b=await pull(e);assert.equal(a.items.length,1);assert.equal(b.items.length,0);
  assert.equal(a.items[0].msg_id,'m1');assert.equal(a.items[0].cfg.enabled,true);
- let r=await req(e,'/api/runner/voice/report',{id:'v1',status:'sent',via:'voice'},'runner-secret');assert.equal(r.status,200);
- await req(e,'/api/runner/voice/report',{id:'v1',status:'failed'},'runner-secret');assert.equal((await row(e,'v1')).status,'sent');
+ let r=await req(e,'/api/runner/voice-outbox/report',{id:'v1',status:'sent',via:'voice'},'runner-secret');assert.equal(r.status,200);
+ await req(e,'/api/runner/voice-outbox/report',{id:'v1',status:'failed'},'runner-secret');assert.equal((await row(e,'v1')).status,'sent');
  await seed(e,'off',{switches:{'voice:mode':'always',['voice:mode:'+group]:'off'}});assert.equal((await row(e,'off')).status,'pending');
 });
 test('ordinary text stays text, model voice flag enables explicit request without keywords',async()=>{
@@ -43,7 +43,7 @@ test('voice routes require runner auth, reject invalid reports, skip expired and
  assert.equal((await pull(e)).items.length,0);assert.equal((await row(e,'v1')).status,'skipped');
  await e.DB.prepare('UPDATE messages SET ts=?').bind(new Date().toISOString()).run();await seed(e,'cap');await put(e,'ds:tts:user_daily','0');
  assert.equal((await pull(e)).items.length,0);assert.equal((await row(e,'cap')).status,'pending');
- assert.equal((await req(e,'/api/runner/voice/report',{id:'cap',status:'pending'},'runner-secret')).status,400);
+ assert.equal((await req(e,'/api/runner/voice-outbox/report',{id:'cap',status:'pending'},'runner-secret')).status,400);
 });
 test('/voice permissions are based on stored member role, never message claims; query and help are public',async()=>{
  const e=await voiceEnv();await req(e,'/api/admin/bind',{groupId:group});
@@ -68,7 +68,7 @@ test('voice reports account billed characters once and audit delivery without re
  const e=await voiceEnv();
  await seed(e);await pull(e);
  const payload={id:'v1',status:'sent',via:'voice',provider:'deepseek',latency_ms:120};
- await Promise.all([req(e,'/api/runner/voice/report',payload,'runner-secret'),req(e,'/api/runner/voice/report',payload,'runner-secret')]);
+ await Promise.all([req(e,'/api/runner/voice-outbox/report',payload,'runner-secret'),req(e,'/api/runner/voice-outbox/report',payload,'runner-secret')]);
  const usage=(await e.DB.prepare('SELECT * FROM ds_usage').all()).results;
  assert.equal(usage.length,1);assert.equal(usage[0].units,15);assert.equal(usage[0].est_cost_micro_usd,338);
  assert.equal((await e.DB.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE name='tts_reply'").first()).n,1);

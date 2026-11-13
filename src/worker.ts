@@ -1478,7 +1478,7 @@ async function api(r: Request, e: Env) {
       return voiceRoute(e, path, await r.json());
 
     if (path === "/api/runner/voice-outbox" && method === "POST") return json(await pullVoiceOutbox(e));
-    if (path === "/api/runner/voice/report" && method === "POST") return reportVoice(e, await r.json());
+    if (path === "/api/runner/voice-outbox/report" && method === "POST") return reportVoice(e, await r.json());
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
       await set(
