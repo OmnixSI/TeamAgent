@@ -25,11 +25,11 @@ export function metered<E extends { DB: any }>(e: E, limit = 48): E & { meter: M
   };
   return { ...e, DB: database, meter, tail: { timing: [], cache: [] } };
 }
-// B3–B7: image=6, model usage=2; correction with 8 superseded facts=12.
+// B3–B7: image=8 (cache, vision cap, Workers AI neuron hold + correction, note write); model usage=2; correction with 8 superseded facts=12.
 // send_row=10 includes lazy switches, reference recovery and the third-failure fuse.
 // sticker=6 covers switch, selection, daily budget, and three atomic reservation writes.
 // Prefetch reserves only its SELECT; cache and timing writes are sent in the tail.
-export const COST = { image: 6, turn: 2, tool: 12, send_row: 10, sticker: 6, tail: 16, prefetch: 1 };
+export const COST = { image: 8, turn: 2, tool: 12, send_row: 10, sticker: 6, tail: 16, prefetch: 1 };
 export const left = (e: any) => e.meter ? e.meter.left() : Infinity;
 
 /** Fixed application reason; never forward an arbitrary tool exception. */
