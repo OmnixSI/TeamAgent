@@ -36,6 +36,18 @@ function targetOf(meta: any): VideoTarget | null {
   const title = meta.biliCard?.title, ref = typeof title === 'string' ? titleRef(title) : null;
   return ref ? {ref,title} : null;
 }
+/** A bare @ carries no content of its own; it may inherit the closest recent video. */
+function bareMention(latest: Row, meta = metaOf(latest)): boolean {
+  if (!latest?.mentioned) return false;
+  if (String(latest.body ?? "").replace(/<@!?[^>]+>/g, "").trim()) return false;
+  return !meta.placeholder && !(meta.media || []).length;
+}
+function recentLink(recent: Row[], latest: Row): VideoTarget | null {
+  const same = (recent || []).filter(r => r && (!latest.group_id || !r.group_id || r.group_id === latest.group_id));
+  const candidates = same.some(r => r.id === latest.id) ? same : [...same, latest];
+  for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
+  return null;
+}
 export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any): VideoTarget | null {
   if (!cfg.bili?.enabled) return null;
   const meta = metaOf(latest);
@@ -46,6 +58,7 @@ export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any)
   const ref = refIn(extractBili(meta.quotedBiliUrls ?? meta.quotedUrls ?? [], ""));
   if (ref) return {ref};
   const embedded = targetOf(meta.quoted || {}); if (embedded) return embedded;
+  if (bareMention(latest, meta)) { const inherited = recentLink(recent, latest); if (inherited) return inherited; }
   if (/视频|讲了?啥|讲的什么|说了什么|总结|值得看|up主/i.test(latest.body || "")) {
     const candidates = recent.some(r => r.id === latest.id) ? recent : [...recent, latest];
     for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r)); if (target) return target; }
