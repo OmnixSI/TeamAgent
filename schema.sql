@@ -162,3 +162,39 @@ CREATE TABLE IF NOT EXISTS quota_reservations(
   key TEXT NOT NULL,
   created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS quota_reservations_bucket ON quota_reservations(kind, key, created_at);
+
+CREATE TABLE IF NOT EXISTS ds_usage(
+  id TEXT PRIMARY KEY,
+  purpose TEXT NOT NULL,
+  group_id TEXT,
+  sender_id TEXT,
+  status TEXT NOT NULL,
+  error_kind TEXT,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  units INTEGER NOT NULL DEFAULT 0,
+  est_cost_micro_usd INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ds_usage_created ON ds_usage(created_at);
+CREATE INDEX IF NOT EXISTS ds_usage_purpose ON ds_usage(purpose, created_at);
+CREATE INDEX IF NOT EXISTS ds_usage_group ON ds_usage(group_id, created_at);
+CREATE TABLE IF NOT EXISTS generated_images(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,sender_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mime TEXT NOT NULL,bytes INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,data BLOB NOT NULL,file_info TEXT,file_info_expires INTEGER,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS generated_images_expires ON generated_images(expires_at);
+CREATE TABLE IF NOT EXISTS image_gen_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  size TEXT NOT NULL,
+  quality TEXT,
+  model TEXT,
+  status TEXT NOT NULL,
+  error_kind TEXT,
+  bytes INTEGER,
+  latency_ms INTEGER,
+  est_cost_micro_usd INTEGER,
+  outbox_id TEXT,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS image_gen_log_group_turn ON image_gen_log(group_id, turn_id);
+CREATE INDEX IF NOT EXISTS image_gen_log_group_time ON image_gen_log(group_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS image_gen_log_turn_live ON image_gen_log(group_id, turn_id) WHERE status IN ('pending', 'ok');
