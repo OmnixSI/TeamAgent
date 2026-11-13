@@ -194,7 +194,7 @@ test("a safe failure stops retrying once it is older than fifteen minutes", asyn
     assert.equal(reports.length, 2);
     assert.equal(reports[1].status, "failed");
     assert.equal(reports[1].exhausted, true);
-    assert.equal(reports[1].error, "expired");
+    assert.equal(reports[1].error, "retry_expired");
     assert.deepEqual(fs.readdirSync(f.queue), []);
   } finally {
     f.clean();

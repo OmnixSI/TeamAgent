@@ -167,7 +167,7 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
       (now > d.created_at + RETRY_WINDOW_MS || now > d.created_at + RETRY_DEADLINE_MS);
     if (retryExpired) {
       d.status = "failed";
-      d.error = "expired";
+      d.error = "retry_expired";
       d.next_attempt = 0;
       d.attempts = Math.max(1, d.attempts);
       const base = file.replace(/\.(sent|failed|unknown)$/, ""), terminal = base + ".failed";
@@ -217,7 +217,7 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
       d.error = errorCode(error, attempted);
       if (d.status === "failed") {
         const next = nextRetryAt(d.created_at, d.attempts, now);
-        if (!next && d.attempts < MAX_ATTEMPTS) d.error = "expired";
+        if (!next && d.attempts < MAX_ATTEMPTS) d.error = "retry_expired";
         d.next_attempt = next || 0;
       } else d.next_attempt = 0;
     }

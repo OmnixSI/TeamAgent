@@ -1220,7 +1220,6 @@ async function scheduled(e: Env) {
   // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
   await runSchedules(e);
   await sweepMentions(e);
-  await optionalCron(e, () => sweepStuckDeliveries(e, Date.now(), 1), 12);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",
@@ -1360,6 +1359,8 @@ async function scheduled(e: Env) {
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
   await retryStickerTags(e);
   await optionalCron(e, () => runCronExtras(e), 2);
+  // Optional delivery sweep runs last: the daily repo prune and cron extras must not be starved by its 12-query reserve.
+  await optionalCron(e, () => sweepStuckDeliveries(e, Date.now(), 1), 12);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Finish mandatory maintenance before the sender spends its remaining budget.
@@ -1605,7 +1606,7 @@ async function api(r: Request, e: Env) {
           const attempts = Math.max(1, Math.min(MAX_DELIVERY_ATTEMPTS, Number(b.attempts) || 1));
           const attention = await recordDeliveryFailure(
             e,
-            { ...b, attempts, error: attempts >= MAX_DELIVERY_ATTEMPTS ? b.error : "expired" },
+            { ...b, attempts, error: attempts >= MAX_DELIVERY_ATTEMPTS ? b.error : "retry_expired" },
             { now },
           );
           if (attention.recorded)

@@ -8,12 +8,12 @@ export const DELIVERY_RETRY_WINDOW_MS = 15 * 60 * 1000;
 export const DELIVERY_RETRY_DEADLINE_MS = 60 * 60 * 1000;
 
 const FAILURE_REASONS: Record<string, string> = {
-  expired: "交付已超过 24 小时有效期",
   target_unavailable: "没拿到交付目标（QQ 网关或云端不可用）",
   file_denied: "本机文件校验没过（不在允许目录或超过 50 MiB）",
   invalid_files: "文件数量或格式不合规",
   send_failed: "QQ 附件发送失败（网关或网络异常）",
-  expired: "交付等待超过 15 分钟（累计上限 1 小时），已停止自动重试",
+  expired: "交付已超过 24 小时有效期",
+  retry_expired: "交付超过有效期（重试窗口 15 分钟、累计上限 1 小时），已停止自动重试",
   no_progress: "交付执行端没有回传结果（可能离线或重启）",
 };
 
@@ -37,7 +37,7 @@ export function deliveryAttentionText(input: {
     Math.min(MAX_DELIVERY_ATTEMPTS, Number(input.attempts) || MAX_DELIVERY_ATTEMPTS),
   );
   const name = input.title ? `「${String(input.title).slice(0, 80)}」的` : "";
-  if (safeCode(input.error) === "expired")
+  if (safeCode(input.error) === "retry_expired")
     return (
       `${name}附件超时没有送达：已停止自动重试（单次交付最多等 15 分钟，累计不超过 1 小时）。\n` +
       "文件已不再自动重发；需要这份文件请根据原消息重新交办，或在开发台「需要核对的工作」里查看。"
@@ -167,8 +167,10 @@ export async function recordDeliveryFailure(
     .bind(id)
     .first();
 
+  // A 24h-old or runner-expired receipt is history: mark it for the operator, never explain it to the group.
+  const historical = error === "expired" || now - Date.parse(delivery.updated_at) > 24 * 3600000;
   let notice: { group: string; body: string } | null = null;
-  if ((!existing || Number(existing.needs_attention) !== 1) && error !== "expired" && now - Date.parse(delivery.updated_at) <= 24 * 3600000) {
+  if ((!existing || Number(existing.needs_attention) !== 1) && !historical) {
     const job = await e.DB.prepare("SELECT payload FROM jobs WHERE id=?")
       .bind(delivery.job_id)
       .first();
@@ -188,8 +190,8 @@ export async function recordDeliveryFailure(
         "last_error=excluded.last_error,needs_attention=1,updated_at=excluded.updated_at",
     ).bind(id, attempts, error, at),
     e.DB.prepare(
-      "UPDATE deliveries SET status='failed',updated_at=? WHERE id=? AND status!='sent'",
-    ).bind(at, id),
+      "UPDATE deliveries SET status=?,updated_at=? WHERE id=? AND status!='sent'",
+    ).bind(historical ? "needs_attention" : "failed", at, id),
     e.DB.prepare(
       "UPDATE jobs SET payload=json_set(payload,'$.needs_attention',json('true')) WHERE id=? AND kind='media' AND json_valid(payload)",
     ).bind(delivery.job_id),
@@ -207,7 +209,7 @@ export async function recordDeliveryFailure(
         ]
       : []),
   ]);
-  return { recorded: !existing || Number(existing.needs_attention) !== 1, status: "failed", attempts };
+  return { recorded: !existing || Number(existing.needs_attention) !== 1, status: historical ? "needs_attention" : "failed", attempts };
 }
 
 /**
