@@ -126,7 +126,8 @@ export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
     stage(e, waitId.slice(3), "wait_woken");
   }
 }
-export function biliNoteText(r: BiliResult, opts: {asr?:boolean} = {}): string {
+type BiliMaterialOptions = {asr?:boolean; asrOmitted?:boolean};
+export function biliNoteText(r: BiliResult, opts: BiliMaterialOptions = {}): string {
   const hasSubtitle = r.subtitle_status === 'ok' && !!r.subtitle?.trim();
   // Keep answerable facts before long descriptions/subtitles so bounded material
   // never loses the video's identity or the first available viewer comment.
@@ -138,15 +139,19 @@ export function biliNoteText(r: BiliResult, opts: {asr?:boolean} = {}): string {
       ? `字幕（${r.subtitle_lang || "未知语言"}）：${r.subtitle}`
       : [r.subtitle_status === "login_required" ? "未拿到 CC 字幕（需登录）。"
           : r.subtitle_status === "unavailable" ? "未拿到 CC 字幕（字幕接口未完成）。" : "无 CC 字幕。",
-        opts.asr ? "没拿到字幕；已用本机语音转写读取音轨，转写见【bilibili-asr】素材。未查看画面。" : "没拿到字幕，以下基于标题与评论。未查看画面或听取音轨。"].join("")].join("\n").slice(0, 6000);
+        opts.asr ? "没拿到字幕；已用本机语音转写读取音轨，转写见【bilibili-asr】素材。未查看画面。" : opts.asrOmitted ? "没拿到字幕；本轮只附一份转写，此视频仅附标题、简介和热评。未查看画面。" : "没拿到字幕，以下基于标题与评论。未查看画面或听取音轨。"].join("")].join("\n").slice(0, 6000);
 }
 const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
 // These are application requirements, not instructions supplied by a video/UP.
 // Keep them outside the untrusted envelope, whose closing boundary stays intact.
 const BILI_ANSWER_RULE = '回答必须保留素材里已读到的BV号、标题、UP主、时长，并转述至少一条热评（没有热评就如实说未读到）。给最终表达的brief必须包含这五项原文，不要只说“已读到”。没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。素材里没有的数字不要写，不把另行检索的信息当成视频内容。';
 const BILI_ASR_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '没拿到字幕但有音轨转写时，以转写为主要依据，开头说明“根据音轨转写”，转写可能有错别字和专名误识；转写只覆盖部分时说明覆盖到几分几秒。');
-export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS, opts: {asr?:boolean} = {}) {
-  const rule = 'miss' in r ? '' : (opts.asr && !(r.subtitle_status==='ok' && r.subtitle?.trim()) ? BILI_ASR_RULE : BILI_ANSWER_RULE) + '\n';
+const BILI_ASR_OMITTED_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '本轮只附一份转写；未附转写的视频只依据各自标题、简介和热评，不推测音轨内容。');
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS, opts: BiliMaterialOptions = {}) {
+  let answerRule = BILI_ANSWER_RULE;
+  if (!('miss' in r) && !(r.subtitle_status==='ok' && r.subtitle?.trim()))
+    answerRule = opts.asr ? BILI_ASR_RULE : opts.asrOmitted ? BILI_ASR_OMITTED_RULE : BILI_ANSWER_RULE;
+  const rule = 'miss' in r ? '' : answerRule + '\n';
   const bodyMax = Math.max(0, max - rule.length - untrusted('bilibili', '', r.fetched_at).length);
   return rule + ('miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
     : untrusted('bilibili',biliNoteText(r,opts),r.fetched_at,bodyMax));
@@ -183,7 +188,7 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
       const plan=await planVideo(e,cached,ref,'research',Date.now());reads++;
       isAsr=plan.materials[1]?.includes('来源:bilibili-asr')??false;
       extra=isAsr&&asrAttached?undefined:plan.materials[1];
-      material=videoMaterial(cached,ref,Math.min(MATERIAL_CHARS,MATERIALS_CHARS-total),{asr:isAsr&&!asrAttached});
+      material=videoMaterial(cached,ref,Math.min(MATERIAL_CHARS,MATERIALS_CHARS-total),{asr:isAsr&&!asrAttached,asrOmitted:isAsr&&asrAttached});
     }
     else {
       if (reads + 1 > budget) break;

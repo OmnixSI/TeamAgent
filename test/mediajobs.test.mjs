@@ -54,7 +54,32 @@ test('W21 report marks ten ready but wakes only three inline; sweep picks up the
 test('W22 research attaches at most one ASR envelope without opening a media job or duplicate resume injection',async()=>{const e=await setup(),batch=[];for(const bvid of [BV,'BV1aa411c7m0']){await cache(e,'bili:'+bvid,{...light,bvid});await cache(e,'asr:'+bvid,{...transcript(bvid),text:'[00:00] '+'转写'.repeat(10000)});batch.push({id:bvid,body:'总结视频',meta:{bili:[{bvid}]}});}const notes=await f.biliResearchMaterials(e,{latest:batch[0],batch,recent:[]});const asr=notes.filter(x=>x.includes('来源:bilibili-asr'));assert.equal(asr.length,1);assert.ok(asr[0].length<=12000);assert.equal((await rows(e,'jobs')).length,0);assert.equal(f.materialInjected([{role:'system',content:notes.join('\n\n')}],asr[0]),true);await e.DB.prepare("DELETE FROM media_notes WHERE id LIKE 'asr:%'").run();const pending=await f.biliResearchMaterials(e,{latest:batch[0],batch,recent:[]});assert.ok(pending.some(x=>x.includes('音轨本轮没有转写')));assert.equal((await rows(e,'jobs')).length,0);});
 test('W23 sweepMedia expires exhausted leases and only its own old caches and terminal jobs',async()=>{const e=await setup();await mediaJob(e,[],'running',{attempts:2});await e.DB.prepare("UPDATE jobs SET lease_until=0 WHERE kind='bili_media'").run();for(const [id,days] of [['asr:old',31],['asrfail:old',31],['asr:new',29],['bili:old',31]])await cache(e,id,{},Date.now()-days*86400000);await e.DB.prepare('INSERT INTO jobs(id,kind,payload,status,created_at) VALUES(?,?,?,?,?)').bind('old-terminal','bili_media','{}','cancelled',Date.now()-8*86400000).run();const x=m.metered(e);await m.sweepMedia(x);assert.equal(x.meter.used,3);assert.equal((await rows(e,'jobs')).find(j=>j.id==='bmedia-'+BV).status,'failed');assert.deepEqual((await rows(e,'media_notes')).map(x=>x.id).sort(),['asr:new','bili:old']);assert.equal((await rows(e,'jobs')).some(j=>j.id==='old-terminal'),false);});
 test('W24 failure reports validate reason/bvid, retain chunk detail and suppress paid retries for one day',async()=>{for(const reason of ['paid','asr_failed','mem_limit','local_busy']){const e=await setup(),j=await mediaJob(e);assert.equal((await runner(e,'report',{...j,success:false,reason:'made_up',cleanup})).status,400);assert.equal((await runner(e,'report',{...j,success:true,result:transcript('BV1aa411c7m0'),cleanup})).status,400);assert.equal((await runner(e,'report',{...j,success:false,reason,chunk:3,cleanup})).status,200);assert.equal((await rows(e,'jobs'))[0].error,reason==='asr_failed'?'asr_failed:3':reason);if(reason==='paid'){const p=await m.planVideo(e,light,BV,'light',Date.now());assert.equal(p.reason,'paid');}}});
-test('W25 PR-B is disabled without PR-A config; PR-A media schema validation is checked when present',async()=>{const raw=JSON.parse(readFileSync('config/team.json','utf8'));const {validateTeamConfig}=await import('../config/validate.mjs');if(!raw.bili.media){const saved=m.TEAM.bili.media;delete m.TEAM.bili.media;try{assert.equal((await m.planVideo(await setup(),light,BV,'light',Date.now())).reason,'disabled');}finally{m.TEAM.bili.media=saved;}return;}for(const key of ['enabled','max_minutes','rtf','deadline_cap_minutes','mem_cap_mb','tmp_cap_mb']){assert.ok(Object.hasOwn(raw.bili.media,key));const bad=structuredClone(raw);bad.bili.media[key]=key==='enabled'?'true':-1;assert.ok(validateTeamConfig(bad).some(x=>x.includes('bili.media')));}});
+test('W25 media configuration validates all six fields without PR-A files',async()=>{
+  const raw=JSON.parse(readFileSync('config/team.json','utf8'));
+  raw.bili.media={enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048};
+  const {validateTeamConfig}=await import('../config/validate.mjs');
+  assert.deepEqual(validateTeamConfig(raw),[]);
+  for(const key of Object.keys(raw.bili.media)){
+    for(const value of key==='enabled'?['true',1,null]:[-1,0,'90',null]){
+      const bad=structuredClone(raw);bad.bili.media[key]=value;
+      assert.ok(validateTeamConfig(bad).includes('bili.media.'+key),key+' rejects '+JSON.stringify(value));
+    }
+    const missing=structuredClone(raw);delete missing.bili.media[key];
+    assert.ok(validateTeamConfig(missing).includes('bili.media.'+key),key+' is required');
+  }
+  const schema=JSON.parse(readFileSync('config/team.schema.json','utf8')).properties.bili.properties.media;
+  assert.deepEqual([...schema.required].sort(),Object.keys(raw.bili.media).sort());
+  for(const key of Object.keys(raw.bili.media)){
+    assert.equal(schema.properties[key].type,key==='enabled'?'boolean':'number');
+    if(key!=='enabled')assert.equal(schema.properties[key].exclusiveMinimum,0);
+  }
+});
+test('W25 absent media configuration still disables PR-B',async()=>{
+  const saved=m.TEAM.bili.media;delete m.TEAM.bili.media;
+  try{assert.equal((await m.planVideo(await setup(),light,BV,'light',Date.now())).reason,'disabled');}
+  finally{m.TEAM.bili.media=saved;}
+});
+
 test('W26 media routes track independent presence, pause claims, and accept a 150-second-old reader',async()=>{const e=await setup();await setting(e,'media:last-seen',Date.now()-150000);assert.equal((await m.planVideo(e,light,BV,'light',Date.now())).media,'start');await mediaJob(e,[],'pending',{lease:null,attempts:0});await setting(e,'runner_pause_until',Date.now()+60000);assert.equal((await (await runner(e,'claim')).json()).job,null);await setting(e,'runner_pause_until',0);assert.ok((await (await runner(e,'claim')).json()).job);const s=Object.fromEntries((await rows(e,'settings')).map(x=>[x.key,x.value]));assert.ok(s['media:last-seen']);assert.equal(s['fetcher:last-seen'],undefined);});
 test('W27 no-ASR text is byte-identical to #30 snapshots while ASR and subtitle wording remain honest',()=>{for(const c of snapshots.cases){assert.equal(f.biliNoteText(c.result),c.note);assert.equal(f.biliNoteText(c.result,{asr:false}),c.note);assert.equal(f.videoMaterial(c.result),c.material);assert.equal(f.videoMaterial(c.result,'',4000,{asr:false}),c.material4000);if(c.id==='ok'){assert.equal(f.videoMaterial(c.result,'',4000,{asr:true}),c.material4000);}else{const material=f.videoMaterial(c.result,'',4000,{asr:true});assert.doesNotMatch(material,/以下基于标题与评论|未查看画面或听取音轨/);assert.match(material,/根据音轨转写/);assert.match(material,/转写见【bilibili-asr】素材/);}}});
 
@@ -152,4 +177,21 @@ test('rollback cancellation is replay-safe and preserves legacy media and phase 
       {id:'new-running',status:'cancelled',error:'rollback'},{id:'old-fetch',status:'pending',error:null},{id:'old-media',status:'running',error:null}]);
     assert.ok(d.prepare('PRAGMA table_info(video_waits)').all().some(x=>x.name==='phase'));
   }finally{d.close();}
+});
+
+
+test('W22 second cached ASR video uses neutral wording when only one transcript is attached',async()=>{
+  for(const subtitle_status of ['none','login_required','unavailable']){
+    const e=await setup(),batch=[],second='BV1aa411c7m0';
+    for(const bvid of [BV,second]){
+      await cache(e,'bili:'+bvid,{...light,bvid,subtitle_status});await cache(e,'asr:'+bvid,transcript(bvid));
+      batch.push({id:bvid,body:'总结视频',meta:{bili:[{bvid}]}});
+    }
+    const notes=await f.biliResearchMaterials(e,{latest:batch[0],batch,recent:[]});
+    assert.equal(notes.filter(x=>x.includes('来源:bilibili-asr')).length,1);
+    const omitted=notes.find(x=>x.includes('BV号：'+second));assert.ok(omitted);
+    assert.match(omitted,/本轮只附一份转写/);
+    assert.doesNotMatch(omitted,/未查看画面或听取音轨|以下基于标题与评论|转写见【bilibili-asr】/);
+    assert.equal((await rows(e,'jobs')).length,0);
+  }
 });
