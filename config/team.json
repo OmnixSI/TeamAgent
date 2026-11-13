@@ -51,6 +51,7 @@
     "OmnixSI/NextThought-Website",
     "OmnixSI/WhalePartner",
     "OmnixSI/peiwan-store-platform-blueprint",
+    "OmnixSI/peiwan-club-saas",
     "OmnixSI/TeamAgent"
   ],
   "project_aliases": {
@@ -71,6 +72,11 @@
     "OmnixSI/peiwan-store-platform-blueprint": [
       "陪玩店",
       "陪玩店那个项目"
+    ],
+    "OmnixSI/peiwan-club-saas": [
+      "陪玩俱乐部",
+      "陪玩店SaaS",
+      "陪玩店新仓库"
     ],
     "OmnixSI/TeamAgent": [
       "群助手",

@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -36,6 +37,7 @@ class RepoIndexTests(unittest.TestCase):
         for p in self.patches: p.start(); self.addCleanup(p.stop)
         (self.h / 'config.json').write_text(json.dumps({'url':'https://cloud.invalid','runnerToken':'synthetic-runner'}))
         index._fetch_at = {}; index._offset = 0; index._backlog = False
+        index._clone_at = {}; index._cloned_round = False
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Index Test'); self.git('config', 'user.email', 'index@example.invalid')
         self.git('remote', 'add', 'origin', 'https://github.com/' + REPO + '.git')
@@ -403,7 +405,13 @@ class RepoIndexTests(unittest.TestCase):
         def guarded(path, *args, **kwargs):
             self.assertNotIn(path.name, ('worker-secrets.json','bili-cookie.json','.env'))
             return read(path, *args, **kwargs)
-        with patch.object(Path, 'read_text', guarded), patch.object(index.os.environ, 'get', side_effect=AssertionError('index must not inspect credential environment values')):
+        environ_get = os.environ.get
+        def guarded_get(key, default=None):
+            # Only the documented worktree-root path override may be read; never a credential.
+            if key == 'TEAM_INDEX_WORKTREE_ROOTS':
+                return environ_get(key, default)
+            raise AssertionError('index must not inspect credential environment values')
+        with patch.object(Path, 'read_text', guarded), patch.object(index.os.environ, 'get', side_effect=guarded_get):
             index.sync_once(1000)
         payload = json.dumps(self.batches[-1])
         self.assertNotIn('q'*25, payload); self.assertNotIn('SESSDATA=synthetic', payload)
@@ -504,3 +512,63 @@ class RepoIndexTests(unittest.TestCase):
             self.assertNotIn(value, payload)
         for record in self.commits():
             self.assertIn('[REDACTED]', record['patch'])
+
+    def test_tracked_refs_includes_pkg_and_release(self):
+        base = self.commit()
+        for name in ('agent/x', 'pkg/v-a', 'release/v'):
+            self.git('update-ref', 'refs/remotes/origin/' + name, base)
+        refs = index.tracked_refs(self.root)
+        self.assertEqual(set(refs), {'refs/remotes/origin/main', 'refs/remotes/origin/agent/x',
+                                     'refs/remotes/origin/pkg/v-a', 'refs/remotes/origin/release/v'})
+        self.assertNotIn('refs/remotes/origin/HEAD', refs)
+        self.assertEqual({b['name'] for b in index.branches(self.root)}, {'main', 'agent/x', 'pkg/v-a', 'release/v'})
+
+    def test_tracked_refs_caps_at_60(self):
+        base = self.commit()
+        for i in range(65):
+            date = f'{1710000000 + i} +0000'
+            sha = subprocess.run(['git', 'commit-tree', 'HEAD^{tree}', '-p', base, '-m', 'c' + str(i)],
+                                 cwd=self.root, capture_output=True, text=True, check=True,
+                                 env=dict(os.environ, GIT_COMMITTER_DATE=date, GIT_AUTHOR_DATE=date)).stdout.strip()
+            self.git('update-ref', 'refs/remotes/origin/b/' + str(i).zfill(2), sha)
+        refs = index.tracked_refs(self.root)
+        self.assertEqual(len(refs), 60)
+        self.assertEqual(list(refs), ['refs/remotes/origin/main']
+                         + ['refs/remotes/origin/b/' + str(i).zfill(2) for i in range(64, 5, -1)])
+
+    def test_default_worktree_root_included(self):
+        self.commit('base\n')
+        parent = Path(self.temp.name) / 'projects' / '.worktrees'
+        work = parent / 'pkg-a'
+        work.parent.mkdir(parents=True)
+        self.git('worktree', 'add', '--detach', str(work), 'HEAD')
+        (work / 'code.txt').write_text('base\nchanged\n')
+        with patch.dict(os.environ, {'TEAM_INDEX_WORKTREE_ROOTS':str(parent)}):
+            data = index.build(REPO, {}, 30)
+        self.assertEqual([w['label'] for w in data['worktrees']], ['pkg-a'])
+        self.assertEqual([f['path'] for f in data['worktrees'][0]['files']], ['code.txt'])
+
+    def test_clone_missing_attempts_once_and_backs_off(self):
+        other = 'OmnixSI/NextThought'
+        with patch.object(index, 'settings', return_value={'repositories':[REPO, other]}), \
+             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0)) as run, \
+             patch('builtins.print'):
+            self.assertIsNone(index.build(other, {}, 30))
+            self.assertIsNone(index.build(other, {}, 30))
+            self.assertEqual(run.call_count, 1)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:3], ['gh', 'repo', 'clone'])
+            self.assertEqual(command[3], other)
+            self.assertEqual(Path(command[4]), self.h / 'repos' / 'NextThought')
+            self.assertLessEqual(run.call_args.kwargs['timeout'], 120)
+            index._cloned_round = False
+            index._clone_at[other] = time.monotonic() - 1800
+            index.build(other, {}, 30)
+            self.assertEqual(run.call_count, 2)
+        with patch.object(index, 'settings', return_value={'repositories':[REPO, other]}), \
+             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1)) as run, \
+             patch('builtins.print') as log:
+            index._cloned_round = False; index._clone_at.pop(other, None)
+            index.build(other, {}, 30)
+        self.assertEqual(run.call_count, 1)
+        self.assertIn('repo index: clone failed ' + other, str(log.call_args_list))
