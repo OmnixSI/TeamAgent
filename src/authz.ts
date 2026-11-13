@@ -31,7 +31,7 @@ export const STRONG: Record<WriteTool, RegExp> = {
 // Both work tools use this language contract on clean turns. No artifact nouns.
 const REQUEST_TONE = /^(?:请问(?:你)?)?(?:(?:请|麻烦)(?:你)?|帮我|帮忙|给我|你来|你把|去|劳驾|能不能(?:帮我|帮忙|帮|请你)?|可以(?:帮我|帮忙|帮|请你)|能帮我)/;
 const STRICT_REQUEST_TONE = /^(?:(?:请|麻烦)(?:你)?|帮我|帮忙|劳驾|能不能(?:帮我|帮忙|请你)?|(?:可以|能)帮我)/;
-const WORK_ACTION = /修复|修|实现|开发|写|做|出|整理|改|加|排查|重构|测试|部署|规划|设计|方案|文档|总结|看看|查一下|检查|看下/;
+const WORK_ACTION = /修复|修|实现|开发|写|做|出|整理|改|加|排查|重构|测试|部署|规划|设计|方案|文档|看看|查一下|检查|看下/;
 const TASK_REQUEST = new RegExp(STRONG.prepare_project_task.source + "|记(一?[个条])?任务", "i");
 const CORRECTION = /^(?:(?:请|麻烦)(?:你)?(?:帮我)?|帮我)?(?:纠正(?:一下)?|不是.{1,80}是|应该叫|名字改成|其实是)/;
 // Reject completion/aspect markers across the whole work request. 了/过 cover

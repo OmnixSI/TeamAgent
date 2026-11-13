@@ -281,7 +281,7 @@ test('label colon splits a work request without opening reported, quoted or nega
   const source=body=>({id:'current',body,meta:{direct:true}});
   const accept=[
     '接入验收小活：请把这些示例数据整理成 UTF-8 CSV 文件发回群里，不改任何仓库：大肥鱼，进行中，3；面试软件，待验收，2；陪玩店，待整理，1。列名：项目、状态、任务数。',
-    '小任务：帮我把 README 总结一下发回群里',
+    '小任务：帮我把 README 整理一下发回群里',
     '任务：请整理成 CSV 并发回',
     '小任务: 请整理成 CSV 并发回',
     '任务：请把 A：B 整理成 CSV 发回群里',
