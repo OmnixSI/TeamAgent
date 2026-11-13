@@ -1,5 +1,6 @@
 {
   "$schema": "./team.schema.json",
+  "mcp_servers": [],
   "model": {
     "name": "deepseek-flash",
     "quick_effort": "high",

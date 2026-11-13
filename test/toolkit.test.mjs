@@ -7,10 +7,18 @@ async function load() {
   return import("data:text/javascript;base64," + Buffer.from(out.outputFiles[0].text).toString("base64"));
 }
 
-test("empty registry: no extra defs, unknown tool is an error", async () => {
+test("builtin registry: calc is available and unknown tool is an error", async () => {
   const k = await load();
-  assert.deepEqual(k.extraToolDefs(), []);
+  assert.deepEqual(k.extraToolDefs().map(d => d.function.name), ["calc"]);
   assert.equal(k.findExtraTool("nope"), undefined);
   assert.deepEqual(k.extraUntrustedNames(), []);
   assert.deepEqual(await k.runExtraTool({ DB: {} }, "nope", {}, { context: {}, messages: [], isTainted: () => false }), { error: "unknown tool" });
+});
+
+test('default async discovery preserves synchronous definitions without touching DB or network', async () => {
+  const k = await load(), context = { latest: { id: 'empty', group_id: 'A' } };
+  const e = { DB: { prepare() { throw Error('default discovery must not query DB'); } } };
+  assert.deepEqual(await k.extraToolDefs(e, context), k.extraToolDefs());
+  assert.deepEqual(k.extraUntrustedNames(context), []);
+  assert.equal(k.findExtraTool('calc', context).untrusted, false);
 });
