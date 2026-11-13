@@ -49,6 +49,7 @@ import {
   visionErrorFailure,
   SELFTEST_PNG,
 } from "./vision";
+import { imagegenSelftest } from "./imagegen-selftest";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { handleCommand } from "./commands";
@@ -1890,6 +1891,8 @@ async function api(r: Request, e: Env) {
       );
     }
   }
+  if (path === "/api/team/imagegen/selftest" && method === "GET")
+    return imagegenSelftest(e, who);
   if (who.via === "ai" && !aiRouteAllowed(path, method))
     return json(
       { error: "本机AI仅可查询项目、创建与领取任务、回填自己的进展" },
