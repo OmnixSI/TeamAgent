@@ -10,7 +10,7 @@ import { stage, flushTail } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -660,6 +660,7 @@ async function processJob(e: Env, id: string) {
     }
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
+    if (claim.kind === "video_deadline") await wakeVideoWait(e, p.wait);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
       const claimedAt = Date.now();

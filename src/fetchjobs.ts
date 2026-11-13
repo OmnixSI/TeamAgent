@@ -107,9 +107,18 @@ export async function startVideoWait(e: any, x: { groupId: string; ref: string; 
       .bind(id, x.groupId, x.ref, x.latest.id, JSON.stringify(x.batchIds.slice(0, 60)), x.mentioned ? 1 : 0, x.lightReady ? 1 : 0, x.groupId, x.ref, now + TEAM.bili.wait_seconds * 1000, now, x.groupId, x.ref),
     ...(x.lightReady ? [] : [fetchStatement(e, x.ref, "light", id, now, x.title)]),
   ]);
-  const created = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first();
-  if (created) { stage(e, x.latest.id, "bili_wait_start"); if(x.lightReady)await wakeVideoWait(e,id); }
+  const created = await e.DB.prepare("SELECT id,due_at FROM video_waits WHERE id=? AND created_at=? AND status='waiting'").bind(id, now).first();
+  if (created) { stage(e, x.latest.id, "bili_wait_start"); if(x.lightReady)await wakeVideoWait(e,id); await scheduleVideoDeadline(e,id,created.due_at); }
   return !!created;
+}
+/** One delayed message per wait; the shared due_at decides when the wake lands. */
+async function scheduleVideoDeadline(e: any, waitId: string, dueAt: number): Promise<void> {
+  const id = "vdl-" + waitId, start = Date.now();
+  const delaySeconds = Math.max(1, Math.ceil((dueAt - start) / 1000));
+  const payload = { wait: waitId, notBefore: start + delaySeconds * 1000 };
+  await e.DB.prepare("INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)")
+    .bind(id, "video_deadline", JSON.stringify(payload), start).run();
+  await queueFor(e, "video_deadline", payload)?.send({ id }, { delaySeconds });
 }
 export async function wakeVideoWait(e: any, waitId: string): Promise<void> {
   const now = Date.now(), id = "video-" + waitId;
