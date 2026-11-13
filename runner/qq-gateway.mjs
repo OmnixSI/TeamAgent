@@ -115,6 +115,22 @@ bot.on("message", async (ctx) => {
   fs.renameSync(target + ".tmp", target);
   await flush();
 });
+const noticeTypes = new Set([
+  "GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_MSG_REJECT", "GROUP_MSG_RECEIVE",
+]);
+bot.on("rawEvent", async ({ eventType, data }) => {
+  if (!noticeTypes.has(eventType) || !data?.group_openid) return;
+  const stamp = data.timestamp || data.id;
+  if (!stamp) return;
+  // Worker receive must check its authoritative D1 group_id before any notice
+  // activity or active-rejected update. The gateway does not cache/guess binding.
+  const spoolKey = eventType + ":" + data.group_openid + ":" + stamp;
+  const name = crypto.createHash("sha256").update(spoolKey).digest("hex") + ".json";
+  const target = path.join(spool, name);
+  fs.writeFileSync(target + ".tmp", JSON.stringify({ op: 0, t: eventType, d: data }), { mode: 0o600 });
+  fs.renameSync(target + ".tmp", target);
+  await flush();
+});
 bot.on("ready", () => {
   connected = true;
   console.log("QQ official gateway connected");

@@ -1,0 +1,1807 @@
+[
+  {
+    "raw": {},
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": null
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": ""
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": " "
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<@BOT> 你好"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "你好",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": " <@!BOT> 你好 "
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "你好",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<@U2> 帮忙"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "帮忙",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "前面 <@U2> 后面"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "前面 <@U2> 后面",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "sk-abcdefghijklmnopqr"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "[密钥已隐藏]",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "[<face,id=1/>]"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "[<face,id=1/>]",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<faceType=1,faceId=2,ext=\"x\">"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "<faceType=1,faceId=2,ext=\"x\">",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "\n多行\n消息\n"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "多行\n消息",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<@BOT><@U2> 你好"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "<@U2> 你好",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "@小王"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "@小王",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<> 文字"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "<> 文字",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "<@x>\n"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "https://b23.tv/abc"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "https://b23.tv/abc",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://b23.tv/abc",
+          "short": "abc"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://b23.tv/abc"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/abc"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "中文😀"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "中文😀",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "密码=abcdef"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "密码=[已隐藏]",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": 123
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "123",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "author": {
+        "member_openid": "u",
+        "username": "成员"
+      },
+      "mentions": [
+        {
+          "member_openid": "BOT",
+          "nickname": "机器人",
+          "is_you": true
+        }
+      ],
+      "content": "<@BOT> 看看 <@u>",
+      "message_scene": {
+        "ext": [
+          "msg_idx=I==",
+          "ref_msg_idx=R=="
+        ]
+      }
+    },
+    "expected": {
+      "senderId": "u",
+      "senderName": "成员",
+      "body": "看看 <@u>",
+      "mentions": [
+        {
+          "id": "BOT",
+          "name": "机器人",
+          "isBot": true
+        }
+      ],
+      "mentionsBot": true,
+      "msgIdx": "I==",
+      "refMsgIdx": "R==",
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "ark_type": "miniapp",
+        "ark_name": "哔哩哔哩",
+        "fields": {
+          "title": "合成标题",
+          "jump_url": "https://b23.tv/AbCd12"
+        }
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "miniapp",
+        "name": "哔哩哔哩",
+        "title": "合成标题",
+        "desc": {
+          "$undefined": true
+        },
+        "url": "https://b23.tv/AbCd12",
+        "preview": {
+          "$undefined": true
+        },
+        "source": {
+          "$undefined": true
+        }
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://b23.tv/AbCd12",
+          "short": "AbCd12"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] 哔哩哔哩：合成标题"
+    }
+  },
+  {
+    "raw": {
+      "ark_data": "{\"ark_type\":\"miniapp\",\"ark_name\":\"哔哩哔哩\",\"fields\":{\"title\":\"合成标题\",\"jump_url\":\"https://b23.tv/AbCd12\"}}"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "miniapp",
+        "name": "哔哩哔哩",
+        "title": "合成标题",
+        "desc": {
+          "$undefined": true
+        },
+        "url": "https://b23.tv/AbCd12",
+        "preview": {
+          "$undefined": true
+        },
+        "source": {
+          "$undefined": true
+        }
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://b23.tv/AbCd12",
+          "short": "AbCd12"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] 哔哩哔哩：合成标题"
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "ark_type": "miniapp",
+        "ark_name": "哔哩哔哩",
+        "fields": {
+          "source": "B站",
+          "title": "合成标题"
+        }
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "miniapp",
+        "name": "哔哩哔哩",
+        "title": "合成标题",
+        "desc": {
+          "$undefined": true
+        },
+        "url": {
+          "$undefined": true
+        },
+        "preview": {
+          "$undefined": true
+        },
+        "source": "B站",
+        "note": "【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。"
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "title": "合成标题"
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] B站：合成标题"
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "fields": {
+          "nested": "{\"unknown\":{\"value\":\"BV1xx411c7mD\"}}"
+        }
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "card",
+        "name": {
+          "$undefined": true
+        },
+        "title": {
+          "$undefined": true
+        },
+        "desc": {
+          "$undefined": true
+        },
+        "url": {
+          "$undefined": true
+        },
+        "preview": {
+          "$undefined": true
+        },
+        "source": {
+          "$undefined": true
+        }
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+          "bvid": "BV1xx411c7mD"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://www.bilibili.com/video/BV1xx411c7mD"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] "
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "fields": {
+          "unexpected": {
+            "url": "b23.tv/AbCd12"
+          }
+        }
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "card",
+        "name": {
+          "$undefined": true
+        },
+        "title": {
+          "$undefined": true
+        },
+        "desc": {
+          "$undefined": true
+        },
+        "url": {
+          "$undefined": true
+        },
+        "preview": {
+          "$undefined": true
+        },
+        "source": {
+          "$undefined": true
+        }
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://b23.tv/AbCd12",
+          "short": "AbCd12"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] "
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "wrapper": "{\"ark_data\":{\"ark_type\":\"miniapp\",\"ark_name\":\"哔哩哔哩\",\"fields\":{\"title\":\"合成标题\",\"jump_url\":\"https://b23.tv/AbCd12\"}}}"
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "miniapp",
+        "name": "哔哩哔哩",
+        "title": "合成标题",
+        "desc": {
+          "$undefined": true
+        },
+        "url": "https://b23.tv/AbCd12",
+        "preview": {
+          "$undefined": true
+        },
+        "source": {
+          "$undefined": true
+        }
+      },
+      "media": [],
+      "bili": [
+        {
+          "url": "https://b23.tv/AbCd12",
+          "short": "AbCd12"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] 哔哩哔哩：合成标题"
+    }
+  },
+  {
+    "raw": {
+      "ark_data": {
+        "fields": [
+          {
+            "key": "title",
+            "value": "标题"
+          },
+          {
+            "key": "source",
+            "value": "B站"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "type": "card",
+        "name": {
+          "$undefined": true
+        },
+        "title": "标题",
+        "desc": {
+          "$undefined": true
+        },
+        "url": {
+          "$undefined": true
+        },
+        "preview": {
+          "$undefined": true
+        },
+        "source": "B站",
+        "note": "【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。"
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "title": "标题"
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[卡片] B站：标题"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "image/png",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "width": 640,
+          "height": 480,
+          "size": 123,
+          "filename": "a.png"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "image",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "contentType": "image/png",
+          "width": 640,
+          "height": 480,
+          "size": 123,
+          "filename": "a.png"
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[图片]"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "image/gif",
+          "url": "https://multimedia.nt.qq.com.cn/image"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "image",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "contentType": "image/gif",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": {
+            "$undefined": true
+          },
+          "filename": {
+            "$undefined": true
+          }
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[图片]"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "audio/ogg",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "asr_refer_text": "合成语音",
+          "size": 123,
+          "filename": "a.ogg"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "voice",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "contentType": "audio/ogg",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": 123,
+          "filename": "a.ogg",
+          "asr": "合成语音"
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[语音]"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "video/mp4",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "size": 123,
+          "filename": "a.mp4"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "video",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "contentType": "video/mp4",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": 123,
+          "filename": "a.mp4"
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[视频]"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "application/pdf",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "size": 123,
+          "filename": "a.pdf"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "file",
+          "url": "https://multimedia.nt.qq.com.cn/image",
+          "contentType": "application/pdf",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": 123,
+          "filename": "a.pdf"
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[文件] a.pdf"
+    }
+  },
+  {
+    "raw": {
+      "attachments": [
+        {
+          "content_type": "image/png"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "image",
+          "url": {
+            "$undefined": true
+          },
+          "contentType": "image/png",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": {
+            "$undefined": true
+          },
+          "filename": {
+            "$undefined": true
+          }
+        }
+      ],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": "[图片]"
+    }
+  },
+  {
+    "raw": {
+      "msg_elements": [
+        {
+          "content": "旧预览",
+          "author": {
+            "member_openid": "old",
+            "username": "原作者"
+          },
+          "attachments": [
+            {
+              "content_type": "image/png",
+              "url": "https://multimedia.nt.qq.com.cn/image"
+            }
+          ],
+          "ark_data": {
+            "ark_type": "miniapp",
+            "ark_name": "哔哩哔哩",
+            "fields": {
+              "title": "合成标题",
+              "jump_url": "https://b23.tv/AbCd12"
+            }
+          }
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "authorId": "old",
+        "authorName": "原作者",
+        "text": "旧预览",
+        "msgIdx": {
+          "$undefined": true
+        },
+        "media": [
+          {
+            "kind": "image",
+            "url": "https://multimedia.nt.qq.com.cn/image",
+            "contentType": "image/png",
+            "width": {
+              "$undefined": true
+            },
+            "height": {
+              "$undefined": true
+            },
+            "size": {
+              "$undefined": true
+            },
+            "filename": {
+              "$undefined": true
+            }
+          }
+        ],
+        "card": {
+          "type": "miniapp",
+          "name": "哔哩哔哩",
+          "title": "合成标题",
+          "desc": {
+            "$undefined": true
+          },
+          "url": "https://b23.tv/AbCd12",
+          "preview": {
+            "$undefined": true
+          },
+          "source": {
+            "$undefined": true
+          }
+        },
+        "biliCard": {
+          "$undefined": true
+        }
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [
+        "https://multimedia.nt.qq.com.cn/image",
+        "https://b23.tv/AbCd12"
+      ],
+      "biliUrls": [],
+      "quotedBiliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "message_type": 103,
+      "content": "当前原话",
+      "message_scene": {
+        "ext": [
+          "ref_msg_idx=old"
+        ]
+      },
+      "msg_elements": [
+        {
+          "msg_idx": "new==",
+          "content": "引用原话",
+          "author": {
+            "id": "old",
+            "username": "原作者"
+          },
+          "attachments": [
+            {
+              "content_type": "audio/ogg",
+              "url": "https://multimedia.nt.qq.com.cn/image",
+              "asr_refer_text": "引用语音",
+              "filename": "voice.ogg",
+              "size": 321
+            }
+          ]
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "当前原话",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": "new==",
+      "quoted": {
+        "authorId": "old",
+        "authorName": "原作者",
+        "text": "引用原话",
+        "msgIdx": "new==",
+        "media": [
+          {
+            "kind": "voice",
+            "url": "https://multimedia.nt.qq.com.cn/image",
+            "contentType": "audio/ogg",
+            "width": {
+              "$undefined": true
+            },
+            "height": {
+              "$undefined": true
+            },
+            "size": 321,
+            "filename": "voice.ogg",
+            "asr": "引用语音"
+          }
+        ],
+        "card": {
+          "$undefined": true
+        },
+        "biliCard": {
+          "$undefined": true
+        }
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [],
+      "quotedUrls": [
+        "https://multimedia.nt.qq.com.cn/image"
+      ],
+      "biliUrls": [],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "{\"msg_elements\":[{\"ark_data\":{\"ark_type\":\"miniapp\",\"ark_name\":\"哔哩哔哩\",\"fields\":{\"title\":\"合成标题\",\"jump_url\":\"https://b23.tv/AbCd12\"}}}]}"
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "{\"msg_elements\":[{\"ark_data\":{\"ark_type\":\"miniapp\",\"ark_name\":\"哔哩哔哩\",\"fields\":{\"title\":\"合成标题\",\"jump_url\":\"https://b23.tv/AbCd12\"}}}]}",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "text": "",
+        "media": [],
+        "card": {
+          "type": "miniapp",
+          "name": "哔哩哔哩",
+          "title": "合成标题",
+          "desc": {
+            "$undefined": true
+          },
+          "url": "https://b23.tv/AbCd12",
+          "preview": {
+            "$undefined": true
+          },
+          "source": {
+            "$undefined": true
+          }
+        },
+        "biliCard": {
+          "$undefined": true
+        }
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [],
+      "bili": [],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [],
+      "quotedBiliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "placeholder": ""
+    }
+  },
+  {
+    "raw": {
+      "content": "公开链接 https://example.com/doc",
+      "extra": {
+        "nested": "{\"link\":\"https:\\\\/\\\\/b23.tv\\\\/AbCd12\"}"
+      },
+      "attachments": [
+        {
+          "content_type": "image/png",
+          "url": "https://multimedia.nt.qq.com.cn/image?rkey=synthetic"
+        }
+      ]
+    },
+    "expected": {
+      "senderId": "",
+      "senderName": "",
+      "body": "公开链接 https://example.com/doc",
+      "mentions": [],
+      "mentionsBot": false,
+      "msgIdx": {
+        "$undefined": true
+      },
+      "refMsgIdx": {
+        "$undefined": true
+      },
+      "quoted": {
+        "$undefined": true
+      },
+      "card": {
+        "$undefined": true
+      },
+      "media": [
+        {
+          "kind": "image",
+          "url": "https://multimedia.nt.qq.com.cn/image?rkey=synthetic",
+          "contentType": "image/png",
+          "width": {
+            "$undefined": true
+          },
+          "height": {
+            "$undefined": true
+          },
+          "size": {
+            "$undefined": true
+          },
+          "filename": {
+            "$undefined": true
+          }
+        }
+      ],
+      "bili": [
+        {
+          "url": "https://b23.tv/AbCd12",
+          "short": "AbCd12"
+        }
+      ],
+      "biliCard": {
+        "$undefined": true
+      },
+      "ownUrls": [
+        "https://example.com/doc"
+      ],
+      "quotedUrls": [],
+      "biliUrls": [
+        "https://b23.tv/AbCd12"
+      ],
+      "quotedBiliUrls": [],
+      "placeholder": ""
+    }
+  }
+]

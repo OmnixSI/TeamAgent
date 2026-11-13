@@ -11,8 +11,8 @@ export async function quoteRef(e: any, decision: any, context: any, switches: Re
   if (!isOn(switches, "quote")) return undefined;
   const target = decideQuote({ target: decision.target, latestId: context.latest.id, batch: context.batch, mentioned: !!context.mentioned, groupNewestId: context.groupNewestId });
   if (!target) return undefined;
-  const row = await e.DB.prepare("SELECT ref_idx FROM message_refs WHERE kind='member' AND target_id=? AND group_id=? LIMIT 1")
-    .bind(target, context.latest.group_id).first();
+  const row = await e.DB.prepare("SELECT ref_idx FROM message_refs WHERE kind='member' AND target_id=? AND group_id=? AND created_at>? ORDER BY created_at DESC LIMIT 1")
+    .bind(target, context.latest.group_id,Date.now()-24*60*60*1000).first();
   return row?.ref_idx;
 }
 export function quoteOutcome(httpStatus: number, result: any): "ok" | "maybe_ref" | "other" {
