@@ -282,8 +282,7 @@ test('T10 selecting middle lines cannot bypass a multi-line key or known-value r
  },url=>url.includes('/git/blobs/')?Response.json(blob(text)):undefined);
 });
 test('T11 TS DENY matches the Python list and shared differential cases exactly',()=>{
- const source=readFileSync('runner/repo_index.py','utf8'),body=source.match(/DENY = \(([\s\S]*?)\)\n/)[1];
- const expected=[...body.matchAll(/'([^']+)'/g)].map(m=>m[1]);assert.deepEqual(api.DENY_GLOBS,expected);
+ const expected=JSON.parse(readFileSync('shared/deny_globs.json','utf8'));assert.deepEqual(api.DENY_GLOBS,expected);
  for(const [path,denied] of JSON.parse(readFileSync('test/fixtures/deny_cases.json','utf8')))assert.equal(api.deniedPath(path),denied,path);
 });
 test('T14/T15 since, author and schema preserve cloud and indexed contracts',async()=>{
