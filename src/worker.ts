@@ -27,7 +27,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
-import { runSchedules } from "./schedules";
+import { runSchedules, planSchedule, createSchedule, publicSchedule, sydneyText } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -2237,6 +2237,53 @@ async function api(r: Request, e: Env) {
   if (path.startsWith("/api/admin/")) {
     if (who.role !== "owner") return json({ error: "owner only" }, 403);
     const b: any = await r.json();
+    if (path === "/api/admin/daily-push" && method === "POST") {
+      // 只为 owner 创建；群和 owner 从原始请求消息取，不接受调用方另填。
+      const sourceId = String(b.source_msg_id || "").trim();
+      if (!sourceId) return json({ error: "source_msg_id required" }, 400);
+      const source = await e.DB.prepare(
+        "SELECT id,group_id,sender,ts,body FROM messages WHERE id=?",
+      )
+        .bind(sourceId)
+        .first();
+      if (!source) return json({ error: "source message not found" }, 404);
+      const input = {
+        group_id: source.group_id,
+        owner: source.sender,
+        kind: "digest_daily" as const,
+        spec: { time: String(b.time || "08:00") },
+        source_msg_id: source.id,
+      };
+      try {
+        if (b.dry_run) {
+          const plan = planSchedule(input);
+          return json({
+            ok: true,
+            dry_run: true,
+            would_write: true,
+            schedule: {
+              ...plan,
+              spec: JSON.stringify(plan.spec),
+              next_run_text: sydneyText(plan.next_run_at, plan.tz),
+            },
+            source: {
+              id: source.id,
+              ts: source.ts,
+              body: String(source.body || "").slice(0, 160),
+            },
+          });
+        }
+        const row = await createSchedule(e, input);
+        return json({
+          ok: true,
+          dry_run: false,
+          would_write: false,
+          schedule: publicSchedule(row),
+        });
+      } catch (error: any) {
+        return json({ ok: false, error: String(error?.message || error) }, 400);
+      }
+    }
     if (path.endsWith("/name-members") && method === "POST")
       return provisionNames(e, b);
     if (path.endsWith("/retry-job")) {
