@@ -643,6 +643,8 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 export async function agentAnswer(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
+  // Application rules travel beside the untrusted material envelopes, in the system section.
+  const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
   const facts = (
     await e.DB.prepare(
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
@@ -840,6 +842,7 @@ export async function agentAnswer(e: any, context: any) {
     intent: context.intent,
   };
   const messages: any[] = context.resume?.messages || participationMessages({
+        system: rules.length ? PARTICIPATION + "\n" + rules.join("\n") : undefined,
         selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
