@@ -155,6 +155,7 @@ export async function makeEnv(opts = {}) {
   e.RELEASE = e.RELEASE || RELEASE;
   e.ADMIN_TOKEN = e.ADMIN_TOKEN || ADMIN;
   e.migrations = await applyMigrations(e);
+  e.__configPatch = opts.configPatch || null;
   if (opts.owner !== false) await seedMember(e, { id: OWNER, name: "Souvereign", role: "owner" });
   for (const m of opts.members || []) await seedMember(e, m);
   return e;
@@ -182,13 +183,26 @@ export async function tableExists(e, name) {
 
 const moduleCache = new Map();
 
-export async function loadModule(rel) {
-  if (moduleCache.has(rel)) return moduleCache.get(rel);
+/** 直接调 src 里的函数时不经过 setupWith 的 worker bundle，必须自己带同一份 config patch。 */
+function patchedTeamConfig(patch) {
+  const base = JSON.parse(readFileSync(join(ROOT, "config/team.json"), "utf8"));
+  for (const [key, value] of Object.entries(patch || {}))
+    base[key] =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? { ...(base[key] || {}), ...value }
+        : value;
+  return base;
+}
+
+export async function loadModule(rel, configPatch) {
+  const tag = configPatch ? createHash("sha1").update(JSON.stringify(configPatch)).digest("hex").slice(0, 8) : "";
+  const cacheKey = rel + "|" + tag;
+  if (moduleCache.has(cacheKey)) return moduleCache.get(cacheKey);
   const abs = join(ROOT, rel);
   if (!existsSync(abs)) throw pending(`${rel} 不存在（所属工作包未合入）`);
   const dir = join(ROOT, ".wrangler");
   mkdirSync(dir, { recursive: true });
-  const outfile = join(dir, `fr-accept-${process.pid}-${rel.replace(/[^\w]+/g, "_")}.mjs`);
+  const outfile = join(dir, `fr-accept-${process.pid}-${rel.replace(/[^\w]+/g, "_")}${tag ? "-" + tag : ""}.mjs`);
   try {
     await build({
       entryPoints: [abs],
@@ -197,12 +211,27 @@ export async function loadModule(rel) {
       platform: "browser",
       outfile,
       logLevel: "silent",
+      ...(configPatch
+        ? {
+            plugins: [
+              {
+                name: "fr-accept-config-patch",
+                setup(builder) {
+                  builder.onLoad({ filter: /config\/team\.json$/ }, () => ({
+                    contents: JSON.stringify(patchedTeamConfig(configPatch)),
+                    loader: "json",
+                  }));
+                },
+              },
+            ],
+          }
+        : {}),
     });
   } catch (err) {
     throw pending(`${rel} 还不能单独打包（模块未就绪）：${String(err?.message || err).split("\n")[0]}`);
   }
   const mod = await import(pathToFileURL(outfile).href + `?v=${Date.now()}`);
-  moduleCache.set(rel, mod);
+  moduleCache.set(cacheKey, mod);
   return mod;
 }
 
@@ -230,78 +259,68 @@ export async function coreCall(name, ...args) {
   return invoke(name, () => core[name](...args));
 }
 
-async function featureModule() {
-  const mod = await loadModule("src/feature-request.ts");
+async function featureModule(e) {
+  const mod = await loadModule("src/feature-request.ts", e?.__configPatch);
   if (typeof mod.createRequest !== "function")
     throw pending("src/feature-request.ts 未导出 createRequest（FR-2 未合入）");
   return mod;
 }
 
-/** 调 FR-2 的 createRequest；两种常见的原话字段名都带上，多余键会被忽略。 */
-export async function createRequest(e, input) {
-  const mod = await featureModule();
-  const payload = { ...input };
-  if (payload.request_quote != null && payload.quote == null) payload.quote = payload.request_quote;
-  return invoke("createRequest", () => mod.createRequest(e, payload));
+/** FR-2 真实签名：createRequest(e, {source, sender_name, quote, title, detail, tainted}, {now?})。 */
+export async function createRequest(e, input, options = {}) {
+  const mod = await featureModule(e);
+  return invoke("createRequest", () => mod.createRequest(e, input, options));
 }
 
-/** 调 FR-2 的 authorizeFeature，归一成 {ok:boolean}。签名未定，这里两种都试。 */
-export async function authorizeFeature(e, msg, quote) {
-  const mod = await loadModule("src/feature-request.ts");
-  const fn = mod.authorizeFeature;
-  if (typeof fn !== "function")
-    throw pending("src/feature-request.ts 未导出 authorizeFeature（FR-2 未合入）");
-  const meta = (() => {
-    try {
-      return typeof msg.meta === "string" ? JSON.parse(msg.meta) : msg.meta || {};
-    } catch {
-      return {};
-    }
-  })();
-  const input = {
-    source_id: msg.id,
-    msg_id: msg.id,
+/** 夹具/合成消息 → createRequest 需要的 source。 */
+export function sourceOf(msg) {
+  let meta = {};
+  try {
+    meta = typeof msg.meta === "string" ? JSON.parse(msg.meta) : msg.meta || {};
+  } catch {
+    meta = {};
+  }
+  return {
+    id: msg.id,
     group_id: msg.group_id,
     sender: msg.sender,
-    quote,
-    request_quote: quote,
-    text: quote,
-    source: {
-      id: msg.id,
-      group_id: msg.group_id,
-      sender: msg.sender,
-      body: quote,
-      meta,
-    },
+    body: msg.body,
+    meta,
   };
-  const raw = await invoke("authorizeFeature", () =>
-    fn.length >= 3 ? fn(e, msg.id, quote) : fn(e, input),
-  );
-  if (raw === false) return { ok: false };
-  if (raw && typeof raw === "object" && typeof raw.ok === "boolean") return raw;
-  if (raw && typeof raw === "object" && typeof raw.allowed === "boolean")
-    return { ...raw, ok: raw.allowed };
-  throw pending("authorizeFeature 返回形状不认识：" + JSON.stringify(raw).slice(0, 120));
 }
 
-/** FR-3 的超时扫描；返回 undefined 表示没找到导出。 */
-export async function sweepStale(e, now = Date.now()) {
-  for (const rel of ["src/feature-request-api.ts", "src/feature-request.ts"]) {
-    let mod;
-    try {
-      mod = await loadModule(rel);
-    } catch (err) {
-      if (err instanceof Pending) continue;
-      throw err;
-    }
-    for (const name of ["sweepStale", "sweepFeatureRequests", "sweep"]) {
-      if (typeof mod[name] === "function") {
-        await invoke(name, () => mod[name](e, now));
-        return name;
-      }
-    }
+export function senderNameOf(msg) {
+  try {
+    const meta = typeof msg.meta === "string" ? JSON.parse(msg.meta) : msg.meta || {};
+    return meta.senderName || "Souvereign";
+  } catch {
+    return "Souvereign";
   }
-  throw pending("找不到 sweepStale（FR-3 未合入或未导出）");
+}
+
+/** FR-2 真实签名：authorizeFeature(quote, source, context, messages) → {ok, tainted, reason}。 */
+export async function authorizeFeature(quote, msg, messages = [], extra = {}) {
+  const mod = await loadModule("src/authz.ts");
+  const fn = mod.authorizeFeature;
+  if (typeof fn !== "function")
+    throw pending("src/authz.ts 未导出 authorizeFeature（FR-2 未合入）");
+  const source = sourceOf(msg);
+  const context = {
+    batch: [source],
+    latest: source,
+    names: new Map([[msg.sender, senderNameOf(msg)]]),
+    ...extra,
+  };
+  return invoke("authorizeFeature", () => fn(quote, source, context, messages));
+}
+
+/** FR-3 的超时扫描：sweepFeatureRequests(e, now)。 */
+export async function sweepStale(e, now = Date.now()) {
+  const mod = await loadModule("src/feature-request-api.ts", e?.__configPatch);
+  if (typeof mod.sweepFeatureRequests !== "function")
+    throw pending("src/feature-request-api.ts 未导出 sweepFeatureRequests（FR-3 未合入）");
+  await invoke("sweepFeatureRequests", () => mod.sweepFeatureRequests(e, now));
+  return "sweepFeatureRequests";
 }
 
 /* ------------------------------------------------------------------ HTTP / 出站 */
@@ -327,6 +346,11 @@ export async function api(e, method, path, body, token = undefined) {
 
 export const frApi = (e, path, body, token) =>
   api(e, body === undefined ? "GET" : "POST", "/api/team/feature-requests" + path, body, token);
+
+/** 给工作室脚本用的 fetch：把 URL/init 直接交给本地 worker。 */
+export async function fetchWorker(e, url, init) {
+  return (e.testWorker || worker).fetch(new Request(url, init), e);
+}
 
 /** 触发一次 tick 末尾的 sendOutbox（空 batch 只做出站与 tail 落库）。 */
 export async function flushOutbox(e) {

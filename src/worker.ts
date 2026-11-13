@@ -1398,7 +1398,7 @@ async function scheduled(e: Env, cron = "") {
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Feature maintenance shares the background budget with existing delivery work.
-  await sweepFeatureRequests(e);
+  if (left(e) >= 3) await sweepFeatureRequests(e);
   // Guarantee cheap discovery before the sender and optional extras spend the
   // remaining budget. Schedules and daily repo pruning have already run.
   const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
