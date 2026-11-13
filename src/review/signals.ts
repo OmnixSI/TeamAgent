@@ -1,6 +1,7 @@
-// D-3 deterministic signals. No model, no I/O. Thresholds/lexicons live here until
-// D-2's constants.ts lands; every value can be overridden by config.review.signals.
+// D-3 deterministic signals. No model, no I/O. Defaults come from D-2's
+// constants.ts; config.review.signals may override the same sections.
 import TEAM from "../../config/team.json";
+import { SIGNAL_DEFAULTS as CONSTANTS } from "./constants";
 import { CAPABILITIES, type SignalKey, type Trace } from "./types";
 
 export type NeighborMessage = { id?: string; body: string; ts?: string; at?: number };
@@ -21,6 +22,7 @@ type SignalConfig = {
   bot_names: string[];
   s2_phrases: string[];
   s3_phrases: string[];
+  s3_window_messages: number;
   s4_file_phrases: string[];
   s5_model_ms: number;
   s6_phrases: string[];
@@ -28,6 +30,7 @@ type SignalConfig = {
   s7_window_ms: number;
   s8_phrases: string[];
   s9_window_ms: number;
+  s9_kinds: string[];
   s10_window_ms: number;
   s10_similarity: number;
   capability_aliases: Record<string, string[]>;
@@ -35,21 +38,25 @@ type SignalConfig = {
   capability_negative: string[];
 };
 
+const TUNED = ((TEAM as any).review?.signals || {}) as any;
+
 export const SIGNAL_DEFAULTS: SignalConfig = {
-  s1_window_ms: 15 * 60_000,
+  s1_window_ms: (TUNED.s1?.no_outbox_minutes ?? CONSTANTS.s1.no_outbox_minutes) * 60_000,
   s1_follow_ms: 10 * 60_000,
-  bot_names: ["小助手", "群助手", "机器人"],
-  s2_phrases: ["做不了", "不知道", "无法", "拿不到", "看不到", "没拿到", "读不了", "不能", "输入已保留", "暂时"],
-  s3_phrases: ["不对", "错了", "别瞎说", "怎么又", "人呢", "怎么不回", "拉了", "服", "没跟你说", "收敛"],
+  bot_names: ["小助手", "群助手", "机器人", "bot"],
+  s2_phrases: [...(TUNED.s2?.words ?? CONSTANTS.s2.words)],
+  s3_phrases: [...(TUNED.s3?.words ?? CONSTANTS.s3.words)],
+  s3_window_messages: TUNED.s3?.window_messages ?? CONSTANTS.s3.window_messages,
   s4_file_phrases: ["发你了", "发给你", "已发送", "已经发", "文件已发", "附件已发", "传给你", "传到", "下载链接"],
-  s5_model_ms: 60_000,
-  s6_phrases: ["明天", "每天", "每周", "几点", "以后", "稍后", "回头", "等…再", "等...再", "我会"],
-  s7_count: 4,
-  s7_window_ms: 3 * 60_000,
-  s8_phrases: ["我能", "可以帮你", "支持", "能力", "上线了"],
-  s9_window_ms: 15 * 60_000,
-  s10_window_ms: 30 * 60_000,
-  s10_similarity: 0.8,
+  s5_model_ms: TUNED.s5?.model_ms ?? CONSTANTS.s5.model_ms,
+  s6_phrases: [...(TUNED.s6?.words ?? CONSTANTS.s6.words)],
+  s7_count: TUNED.s7?.min_messages ?? CONSTANTS.s7.min_messages,
+  s7_window_ms: (TUNED.s7?.window_minutes ?? CONSTANTS.s7.window_minutes) * 60_000,
+  s8_phrases: [...(TUNED.s8?.words ?? CONSTANTS.s8.words)],
+  s9_window_ms: (TUNED.s9?.lookback_minutes ?? CONSTANTS.s9.lookback_minutes) * 60_000,
+  s9_kinds: [...(TUNED.s9?.kinds ?? CONSTANTS.s9.kinds)],
+  s10_window_ms: (TUNED.s10?.window_minutes ?? CONSTANTS.s10.window_minutes) * 60_000,
+  s10_similarity: TUNED.s10?.jaccard ?? CONSTANTS.s10.jaccard,
   capability_aliases: {
     repo_read: ["仓库", "提交", "分支", "repo_changes", "repo_commit"],
     bili_video: ["b 站", "b站", "bili", "视频"],
@@ -64,7 +71,6 @@ export const SIGNAL_DEFAULTS: SignalConfig = {
   capability_negative: ["不能用", "用不了", "不可用", "看不到", "没权限", "没有权限", "不支持", "查不到", "没同步", "离线", "拿不到", "保存失败", "没保存"],
 };
 
-const CONFIGURED = ((TEAM as any).review?.signals || {}) as Partial<SignalConfig>;
 const POSITIVE = new Set(CAPABILITIES as readonly string[]);
 
 const cut = (s: unknown) => String(s ?? "");
@@ -92,9 +98,37 @@ const firstSentence = (text: string) => cut(text).split(/[。！？!?\n]/)[0];
 
 function polarity(text: string, c: SignalConfig): "positive" | "negative" | null {
   const t = normalize(text);
-  if (c.capability_negative.some((p) => t.includes(normalize(p)))) return "negative";
-  if (c.capability_positive.some((p) => t.includes(normalize(p)))) return "positive";
-  return null;
+  const occurrences = (phrase: string) => {
+    const needle = normalize(phrase), out: number[] = [];
+    if (!needle) return out;
+    let from = 0;
+    while (from <= t.length - needle.length) {
+      const at = t.indexOf(needle, from);
+      if (at < 0) break;
+      out.push(at);
+      from = at + needle.length;
+    }
+    return out;
+  };
+  // A negative phrase contains its positive counterpart ("不可用" vs "可用").
+  // Mask the negative spans so the positive match inside it is not counted.
+  const negatives: { start: number; end: number }[] = [];
+  let best: { at: number; polarity: "positive" | "negative" } | null = null;
+  for (const phrase of c.capability_negative) {
+    const len = normalize(phrase).length;
+    for (const at of occurrences(phrase)) {
+      negatives.push({ start: at, end: at + len });
+      if (!best || at > best.at) best = { at, polarity: "negative" };
+    }
+  }
+  for (const phrase of c.capability_positive) {
+    const len = normalize(phrase).length;
+    for (const at of occurrences(phrase)) {
+      if (negatives.some((span) => at >= span.start && at < span.end)) continue;
+      if (!best || at > best.at) best = { at, polarity: "positive" };
+    }
+  }
+  return best?.polarity || null;
 }
 
 function contradiction(a: string, b: string, c: SignalConfig): boolean {
@@ -111,26 +145,29 @@ function contradiction(a: string, b: string, c: SignalConfig): boolean {
 
 /** S1-S10 in table order. Inputs are already redacted by the trace builder. */
 export function signalsOf(trace: Trace, neighbors: Neighbors = {}, config: Partial<SignalConfig> = {}): SignalKey[] {
-  const c = { ...SIGNAL_DEFAULTS, ...CONFIGURED, ...config };
-  const inboundAt = Date.parse(trace.inbound.ts);
+  const c = { ...SIGNAL_DEFAULTS, ...config };
+  const inbound = trace.inbound;
+  const inboundAt = inbound ? Date.parse(inbound.ts) : (trace.replies[0]?.at ?? 0);
   const replies = trace.replies || [];
   const replyText = replies.map((r) => cut(r.body)).join("\n");
   const found: SignalKey[] = [];
 
-  const startedAt = neighbors.batch_started_at ?? inboundAt;
-  const trigger = neighbors.batch_trigger === true || trace.inbound.mentioned === 1 ||
-    matches(firstSentence(trace.inbound.body), c.bot_names) ||
-    Boolean(neighbors.follows_bot) ||
-    (neighbors.bot_before || []).some((r) => inboundAt - r.at >= 0 && inboundAt - r.at <= c.s1_follow_ms);
-  const ownReply = replies.find((r) => r.at >= startedAt - 5_000);
-  const repliedAt = neighbors.batch_replied_at ?? ownReply?.at;
-  const repliedSoon = typeof repliedAt === "number" && repliedAt >= startedAt && repliedAt - startedAt <= c.s1_window_ms;
-  const reasonedStop = trace.decision?.action === "stop" && Boolean(cut(trace.decision.reason).trim());
-  if (trigger && !repliedSoon && !reasonedStop) found.push("S1");
+  if (inbound) {
+    const startedAt = neighbors.batch_started_at ?? inboundAt;
+    const trigger = neighbors.batch_trigger === true || inbound.mentioned === 1 ||
+      matches(firstSentence(inbound.body), c.bot_names) ||
+      Boolean(neighbors.follows_bot) ||
+      (neighbors.bot_before || []).some((r) => inboundAt - r.at >= 0 && inboundAt - r.at <= c.s1_follow_ms);
+    const ownReply = replies.find((r) => r.at >= startedAt - 5_000);
+    const repliedAt = neighbors.batch_replied_at ?? ownReply?.at;
+    const repliedSoon = typeof repliedAt === "number" && repliedAt >= startedAt && repliedAt - startedAt <= c.s1_window_ms;
+    const reasonedStop = trace.decision?.action === "stop" && Boolean(cut(trace.decision.reason).trim());
+    if (trigger && !repliedSoon && !reasonedStop) found.push("S1");
+  }
 
   if (matches(replyText, c.s2_phrases)) found.push("S2");
 
-  if ((neighbors.after || []).slice(0, 3).some((m) => matches(m.body, c.s3_phrases))) found.push("S3");
+  if ((neighbors.after || []).slice(0, c.s3_window_messages).some((m) => matches(m.body, c.s3_phrases))) found.push("S3");
 
   const failedSend = replies.some((r) => r.status === "failed" || r.status === "unknown");
   const claimsFile = replies.some((r) => matches(r.body, c.s4_file_phrases));
@@ -155,7 +192,7 @@ export function signalsOf(trace: Trace, neighbors: Neighbors = {}, config: Parti
 
   if (matches(replyText, c.s8_phrases)) found.push("S8");
 
-  const proactive = trace.decision?.spoken_kind === "proactive" || trace.decision?.spoken_kind === "research";
+  const proactive = Boolean(trace.decision?.spoken_kind && c.s9_kinds.includes(trace.decision.spoken_kind));
   const priorS3 = (neighbors.user_before || []).some((m) => {
     const at = ms(m);
     return at >= inboundAt - c.s9_window_ms && at <= inboundAt && matches(m.body, c.s3_phrases);
@@ -173,9 +210,7 @@ export function signalsOf(trace: Trace, neighbors: Neighbors = {}, config: Parti
   return found;
 }
 
-const PRIORITY: Record<SignalKey, number> = {
-  S1: 3, S2: 2, S3: 3, S4: 3, S5: 2, S6: 1, S7: 1, S8: 2, S9: 2, S10: 3,
-};
+const PRIORITY = CONSTANTS.priority as Record<SignalKey, number>;
 
 export function priorityOf(signals: Iterable<SignalKey>): number {
   let total = 0;

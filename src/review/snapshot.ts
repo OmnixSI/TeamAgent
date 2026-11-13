@@ -2,28 +2,8 @@
 // auth:* is probed for key existence only; its value is never selected.
 import TEAM from "../../config/team.json";
 import { SWITCH_KEYS } from "../rhythm";
+import { CATALOG_VERSION, TOOLS_CATALOG, type CatalogTool } from "./catalog";
 import type { Snapshot } from "./types";
-
-export type ToolCatalogEntry = {
-  name: string;
-  readonly: boolean;
-  needs: ("runner" | "github_token" | "switch")[];
-};
-
-// D-2's catalog.ts replaces this table after rebase; signature stays the same.
-export const PLACEHOLDER_CATALOG: ToolCatalogEntry[] = [
-  { name: "repo_changes", readonly: true, needs: ["github_token"] },
-  { name: "repo_commit", readonly: true, needs: ["github_token"] },
-  { name: "repo_file", readonly: true, needs: ["github_token"] },
-  { name: "get_project", readonly: true, needs: ["github_token"] },
-  { name: "recall_memory", readonly: true, needs: [] },
-  { name: "search_web", readonly: true, needs: [] },
-  { name: "read_web", readonly: true, needs: [] },
-  { name: "get_work_status", readonly: true, needs: [] },
-  { name: "create_file_task", readonly: false, needs: ["runner"] },
-  { name: "prepare_project_task", readonly: false, needs: ["runner"] },
-  { name: "remember_correction", readonly: false, needs: ["switch"] },
-];
 
 export type HealthPoint = { health_at: number; gateway_ok: 0 | 1; runner_ok: 0 | 1 };
 
@@ -32,13 +12,13 @@ export async function healthAt(e: any, ts: number): Promise<HealthPoint | null> 
     "SELECT at,gateway_ok,runner_ok FROM health_samples WHERE at <= ? ORDER BY at DESC LIMIT 1",
   ).bind(ts).first();
   return row
-    ? { health_at: row.at, gateway_ok: row.gateway_ok ? 1 : 0, runner_ok: row.runner_ok ? 1 : 0 }
+    ? { health_at: row.at, gateway_ok: (row.gateway_ok ? 1 : 0) as 0 | 1, runner_ok: (row.runner_ok ? 1 : 0) as 0 | 1 }
     : null;
 }
 
 export async function capabilitySnapshot(
   e: any,
-  catalog: ToolCatalogEntry[] = PLACEHOLDER_CATALOG,
+  catalog: CatalogTool[] = TOOLS_CATALOG,
 ): Promise<Snapshot> {
   const now = Date.now();
   const offKeys = SWITCH_KEYS.filter((key) => key.startsWith("off:"));
@@ -103,6 +83,7 @@ export async function capabilitySnapshot(
     }),
     jobs_24h: jobs.map((row) => ({ kind: row.kind, failed: Number(row.failed || 0), done: Number(row.done || 0) })),
     tools_catalog: catalog.map((entry) => ({ ...entry, needs: [...entry.needs] })),
+    catalog_version: CATALOG_VERSION,
     release: e.RELEASE || "development",
   };
 }
