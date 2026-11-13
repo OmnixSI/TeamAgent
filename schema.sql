@@ -142,3 +142,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
   doc_id UNINDEXED,
   group_id UNINDEXED,
   tokenize='trigram');
+
+CREATE TABLE IF NOT EXISTS image_gen_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  size TEXT NOT NULL,
+  quality TEXT,
+  model TEXT,
+  status TEXT NOT NULL,
+  error_kind TEXT,
+  bytes INTEGER,
+  latency_ms INTEGER,
+  est_cost_micro_usd INTEGER,
+  outbox_id TEXT,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS image_gen_log_group_turn ON image_gen_log(group_id, turn_id);
+CREATE INDEX IF NOT EXISTS image_gen_log_group_time ON image_gen_log(group_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS image_gen_log_turn_live ON image_gen_log(group_id, turn_id) WHERE status IN ('pending', 'ok');
