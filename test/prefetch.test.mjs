@@ -105,3 +105,21 @@ test('P5 replay: a prefetched short link feeds the next plain question', async (
   assert.ok(seen.some(b => JSON.stringify(b).includes('鸿蒙智行销量复盘')), 'the model must receive the prefetched video material');
   assert.equal((await rows(e, 'video_waits')).length, 0);
 });
+
+test('P6 replay: a bare @ five seconds after the short link inherits that link', async () => {
+  const e = env(); await bind(e);
+  const link = '【【听懂杰克逊】首次揭秘全球最屌的专辑，BAD磁带中隐藏的秘密——MichaelJackson专家级听法系列3-哔哩哔哩】 https://b23.tv/Oto4dmi\n总结这个视频讲了什么';
+  await silentModel(async () => {
+    await qq(e, msg('link-real', link));
+    await qq(e, msg('at-real', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), 'GROUP_AT_MESSAGE_CREATE');
+    await queue(e, 'chat-at-real');
+  });
+  const waits = await rows(e, 'video_waits');
+  assert.equal(waits.length, 1);
+  assert.equal(waits[0].ref, 'Oto4dmi');
+  assert.equal(waits[0].latest_id, 'at-real');
+  const job = (await rows(e, 'jobs')).find(j => j.kind === 'fetch');
+  assert.equal(job.id, 'fetch-bili-Oto4dmi');
+  assert.deepEqual(JSON.parse(job.payload).waiters, [waits[0].id]);
+  assert.equal((await rows(e, 'outbox')).length, 0);
+});
