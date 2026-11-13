@@ -4,6 +4,7 @@ import { calcTool } from "./calc";
 import { recallEpisodeTool } from "./episodes";
 import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
+import { newsSearchTool } from "./news-search";
 import { readDocumentTool } from "./read-document";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
@@ -13,6 +14,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   calcTool,
   forgetProfileTool,
   getProfileTool,
+  newsSearchTool,
   readDocumentTool,
   recallEpisodeTool,
   ...repoSearchTools,

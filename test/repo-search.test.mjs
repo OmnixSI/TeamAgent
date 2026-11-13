@@ -46,8 +46,9 @@ const issue = (number, extra = {}) => ({
 });
 
 test("T1 both tools register as untrusted read-only definitions", () => {
-  assert.deepEqual(api.EXTRA_TOOLS.map((t) => t.name).sort(), ["search_code", "search_pr_issue"]);
-  for (const t of api.EXTRA_TOOLS) {
+  const mine = api.EXTRA_TOOLS.filter((t) => ["search_code", "search_pr_issue"].includes(t.name));
+  assert.deepEqual(mine.map((t) => t.name).sort(), ["search_code", "search_pr_issue"]);
+  for (const t of mine) {
     assert.equal(t.untrusted, true);
     assert.equal(t.def.function.name, t.name);
     assert.equal(t.def.function.parameters.type, "object");
