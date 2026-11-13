@@ -363,19 +363,19 @@ async function failVideoWait(e: any, w: Row): Promise<void> {
     e.DB.prepare("UPDATE video_waits SET status='failed' WHERE " + guard).bind(w.id, w.lease_until),
   ]);
 }
-export async function sweepVideoWaits(e: any): Promise<void> {
+export async function sweepVideoWaits(e: any, limit = 5): Promise<void> {
   await sweepMedia(e);
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='timeout' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
   // Keep retry/fallback scans from resurrecting waits from an earlier deployment.
   await e.DB.prepare("UPDATE video_waits SET status='skipped' WHERE created_at<? AND (status='waiting' OR (status='running' AND lease_until<?))")
     .bind(now - AUTO_REPLY_MAX_AGE_MS, now).run();
-  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
+  const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT ?").bind(now, limit).all()).results;
   for (const w of exhausted) {
     if (left(e) < 4) break;
     await failVideoWait(e, w);
   }
-  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT 5").bind(now, now).all()).results;
+  const rows = (await e.DB.prepare("SELECT id FROM video_waits WHERE (status='waiting' AND (ready=1 OR due_at<=?)) OR (status='running' AND lease_until<?) ORDER BY due_at LIMIT ?").bind(now, now, limit).all()).results;
   for (const w of rows) {
     if (left(e) < 4) break;
     await wakeVideoWait(e, w.id);

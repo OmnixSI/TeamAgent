@@ -6,8 +6,18 @@ export function chunks<T>(xs: T[], n = 90): T[][] {
 }
 
 export type Meter = { used: number; limit: number; left(): number };
+
+/** Per-invocation statement budgets after the Workers Paid upgrade (D1 allows 1,000).
+ *  Chat/HTTP stays at 48 to protect reply latency; cron and background queues get 200. */
+export const D1_BUDGET: { chat: number; background: number } = { chat: 48, background: 200 };
+/** Queue name decides the budget without an extra D1 query. Only the two background
+ *  lanes get 200; the chat lane and any unknown name stay at the conservative 48. */
+export function queueLimit(queue: string | undefined): number {
+  return queue === "inkboard-team" || queue === "team-agent-tools" ? D1_BUDGET.background : D1_BUDGET.chat;
+}
+
 /** Count actual D1 executions; optional work decides how to use the remaining budget. */
-export function metered<E extends { DB: any }>(e: E, limit = 48): E & { meter: Meter; tail: import("./timing").Tail } {
+export function metered<E extends { DB: any }>(e: E, limit = D1_BUDGET.chat): E & { meter: Meter; tail: import("./timing").Tail } {
   if ((e as any).meter) return e as E & { meter: Meter; tail: import("./timing").Tail };
   const meter: Meter = { used: 0, limit, left() { return this.limit - this.used; } };
   const wrap = (statement: any): any => ({

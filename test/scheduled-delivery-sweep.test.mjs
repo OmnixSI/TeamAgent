@@ -29,13 +29,13 @@ async function tick(e, at, fakeQQ) {
     await worker.scheduled({}, e, { waitUntil(p) { task = p; } });
     await task;
     const used = e.DB.executed - before;
-    assert.ok(used <= 48, `cron used ${used} SQL statements`);
+    assert.ok(used <= 200, `cron used ${used} SQL statements`);
     return used;
   } finally { globalThis.Date = NativeDate; globalThis.fetch = nativeFetch; }
 }
 
 for (const utc of ['2026-11-13T15:55:00Z', '2026-11-14T00:00:00Z', '2026-11-13T17:10:00Z']) {
-  test(`scheduled closes stuck deliveries within 48 queries at ${utc}`, async (t) => {
+  test(`scheduled closes stuck deliveries within 200 queries at ${utc}`, async (t) => {
     const e = env(), at = Date.parse(utc);
     await seed(e, at);
     await e.DB.prepare("INSERT INTO settings VALUES('group_id','GROUP000001')").run();
@@ -45,7 +45,7 @@ for (const utc of ['2026-11-13T15:55:00Z', '2026-11-14T00:00:00Z', '2026-11-13T1
     if (utc.includes('T00:00:')) {
       await e.DB.prepare("INSERT INTO repo_commits VALUES('owner/repo',?,?,'author','old','','[]','',0)").bind('a'.repeat(40), at - 91 * 86400000).run();
     }
-    t.diagnostic(`cron SQL: ${await tick(e, at)}/48`);
+    t.diagnostic(`cron SQL: ${await tick(e, at)}/200`);
     assert.equal(scans, 1, 'the scheduled entry must execute the candidate SELECT');
     assert.equal((await e.DB.prepare("SELECT status FROM deliveries WHERE id='stuck'").first()).status, 'failed');
     assert.equal((await e.DB.prepare("SELECT needs_attention FROM delivery_retries WHERE delivery_id='stuck'").first()).needs_attention, 1);
@@ -88,7 +88,7 @@ test('sweep can record a retry using four remaining statements', async () => {
   assert.equal(base.DB.executed, used, 'zero remaining budget must issue no SQL');
 });
 
-test('scheduled daily digest keeps its sending budget while delivery closure waits for the next tick', async (t) => {
+test('scheduled sends a due digest and closes a stuck delivery in one background tick', async (t) => {
   const e = env(), at = Date.parse('2026-11-13T15:55:00Z');
   await e.DB.prepare("INSERT INTO settings VALUES('budget_cleanup_day','2026-11-14')").run();
   e.QQ_APP_ID = 'test-app';
@@ -107,12 +107,13 @@ test('scheduled daily digest keeps its sending budget while delivery closure wai
     sends++;
     return Response.json({ id: 'fake-sent' });
   };
-  t.diagnostic(`digest cron SQL: ${await tick(e, at, fakeQQ)}/48`);
+  t.diagnostic(`digest cron SQL: ${await tick(e, at, fakeQQ)}/200`);
   assert.equal(scans, 1, 'delivery discovery must run even during a due digest');
   assert.equal(sends, 1, 'the digest must be sent in its due tick');
-  assert.equal((await e.DB.prepare("SELECT status FROM deliveries WHERE id='stuck'").first()).status, 'pending', 'defer terminal work instead of overrunning the budget');
+  assert.equal((await e.DB.prepare("SELECT status FROM deliveries WHERE id='stuck'").first()).status, 'failed', 'the background budget closes the delivery in the same tick');
   assert.equal((await e.DB.prepare("SELECT status FROM schedule_runs WHERE schedule_id='daily'").first()).status, 'ok');
   await tick(e, at + 60000, fakeQQ);
   assert.equal((await e.DB.prepare("SELECT status FROM deliveries WHERE id='stuck'").first()).status, 'failed');
   assert.equal(sends, 1, 'the completed digest must not be sent again');
+  assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id='delivery-attention-stuck'").first()).n, 1);
 });
