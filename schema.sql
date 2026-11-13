@@ -198,3 +198,20 @@ CREATE TABLE IF NOT EXISTS image_gen_log(
 CREATE INDEX IF NOT EXISTS image_gen_log_group_turn ON image_gen_log(group_id, turn_id);
 CREATE INDEX IF NOT EXISTS image_gen_log_group_time ON image_gen_log(group_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS image_gen_log_turn_live ON image_gen_log(group_id, turn_id) WHERE status IN ('pending', 'ok');
+CREATE TABLE IF NOT EXISTS image_cache(
+  sha TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  mime TEXT,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  width INTEGER,
+  height INTEGER,
+  data BLOB,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  source_msg TEXT,
+  source_idx INTEGER,
+  skipped_reason TEXT,
+  error_kind TEXT,
+  error_stage TEXT);
+CREATE INDEX IF NOT EXISTS image_cache_expires ON image_cache(expires_at);
+CREATE INDEX IF NOT EXISTS image_cache_group ON image_cache(group_id, created_at);

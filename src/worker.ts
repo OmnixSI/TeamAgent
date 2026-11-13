@@ -56,6 +56,7 @@ import {
   SELFTEST_PNG,
 } from "./vision";
 import { imagegenSelftest } from "./imagegen-selftest";
+import { cacheMessageImages, imageCacheEntries } from "./imagecache";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
@@ -400,6 +401,11 @@ async function receive(r: Request, e: Env) {
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
       for (const {media, idx} of candidates) await job(e, "sticker-"+m.id+"-"+idx, "sticker", {url:media.url,sender:ib.senderId,message:m.id,idx});
   }
+  // F8-V2: cache inbound images right away; the download runs in the queue, never on this request.
+  if (inserted && ib.media.some((x: any) => x.kind === "image")) {
+    const images = imageCacheEntries(ib.media);
+    if (images.length) await job(e, "image-cache-" + m.id, "image_cache", { group: m.group_openid, message: m.id, images });
+  }
   // Video links are read through fetchjobs (subtitles/comments), never as an automatic heavy media job.
   // Audio transcription is deferred to the local X-ASR path; this version starts no local transcription work.
   if (inserted) await set(e, "last_message", iso());
@@ -577,6 +583,7 @@ async function processJob(e: Env, id: string) {
   try {
     const p = JSON.parse(claim.payload);
     (e as any).timingTurn = p.latestId || p.message || (claim.kind === "video_reply" ? p.wait?.slice(3) : undefined);
+    if (claim.kind === "image_cache") await cacheMessageImages(e, p);
     if (claim.kind === "discussion") {
       for (const m of p.messages || [])
         await e.DB.prepare("UPDATE messages SET processed=0 WHERE id=?")
