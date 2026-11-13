@@ -1,3 +1,4 @@
+import { addressedMessages, sweepMentions } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import {biliFailReply,biliFailMaterial} from './linkfail';
@@ -709,11 +710,11 @@ async function processJob(e: Env, id: string) {
       ).bind(m.group_id, cursor).first();
       const newest = head.newest_id ? { id: head.newest_id } : null;
       const oldestAt = Date.parse(head.oldest_ts) || 0;
-      if (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() })) {
+      if (!p.mentionRecovery && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
         await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
-      const preloaded = await loadBatch(e, m.group_id, cursor);
+      const preloaded = p.mentionRecovery ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
       if (!preloaded.length) return;
       const latestPre = preloaded[preloaded.length - 1];
       (e as any).timingTurn = latestPre.id;
@@ -729,7 +730,7 @@ async function processJob(e: Env, id: string) {
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
       }
       const sw = await loadSwitches(e);
-      const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
+      const hardStop = !addressedMessages({batch:preloaded}).length && !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
         && !preloaded.some((row: any) => isDirectRequest(row, { batch: preloaded }))
         && await unansweredProactive(e, m.group_id);
       const picks = !hardStop && visionProvider(e)
@@ -1133,6 +1134,7 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   await fn();
 }
 async function scheduled(e: Env) {
+  await sweepMentions(e);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",

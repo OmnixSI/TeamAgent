@@ -1,3 +1,4 @@
+import { addressedMessages, guardMentionDecision, withMentionReceipt } from './mention-guard';
 import {webFailText,LINK_FAIL_RULE} from './linkfail';
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
@@ -649,6 +650,13 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 }
 
 export async function agentAnswer(e: any, context: any) {
+  return withMentionReceipt(e, context, async () => {
+    const answer = await answerWithTools(e, context), text = decodeVoice(answer).text;
+    return (context.mentioned || addressedMessages(context).length) && (!text.trim() || text.trim() === '[[SILENT]]')
+      ? JSON.stringify({mode:'work',text:'我在，正在看这条消息。'}) : answer;
+  });
+}
+async function answerWithTools(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
@@ -933,7 +941,7 @@ export async function agentAnswer(e: any, context: any) {
         id,
       );
       stage(e, context.latest.id, "research_queued");
-      if (!context.mentioned)
+      if (!context.mentioned && !addressedMessages(context).length)
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       return speakBrief(
         e,
@@ -947,7 +955,7 @@ export async function agentAnswer(e: any, context: any) {
     if (!m.tool_calls?.length) {
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
-        !!context.mentioned ||
+        !!context.mentioned || addressedMessages(context).length > 0 ||
         !!context.videoWaited ||
         context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
@@ -955,7 +963,7 @@ export async function agentAnswer(e: any, context: any) {
             (r: any) => r.body.trim() === String(q.content || "").trim(),
           ),
         );
-      const decision = parseDecision(m.content, { forced, allowWait: !!context.allowWait });
+      const decision = guardMentionDecision(parseDecision(m.content, { forced, allowWait: !!context.allowWait }), context);
       Object.assign(context.decisionOut ?? {}, decision, { forced });
       if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
