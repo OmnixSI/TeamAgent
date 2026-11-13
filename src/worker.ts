@@ -1308,7 +1308,8 @@ async function scheduled(e: Env) {
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Finish mandatory maintenance before the sender spends its remaining budget.
-  await sweepFeatureRequests(e);
+  // FR-3's sweep costs two D1 statements before it can bail; keep the cron tick ≤48.
+  if (left(e) >= 3) await sweepFeatureRequests(e);
   await sendOutbox(e);
   await flushTail(e);
 }

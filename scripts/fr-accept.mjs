@@ -81,7 +81,7 @@ function updateAcceptance(results, zeros) {
     const item = byId.get(r.id);
     if (!item) continue; // FR5-ENV / N462 不是验收条目
     item.passes = true;
-    item.evidence = `node scripts/fr-accept.mjs --only ${r.id} → PASS（${r.checks.length} 项检查）；零计数 qq_real_sends=${zeros.qq_real_sends} / online_d1_rows_written=${zeros.online_d1_rows_written} / replay_network_calls=${zeros.replay_network_calls}；${stamp} Sydney`;
+    item.evidence = `node scripts/fr-accept.mjs --only ${r.id} → PASS（${r.checks.length} 项检查）；零计数 qq_real_sends=${zeros.qq_real_sends} / online_d1_rows_written=${zeros.online_d1_rows_written} / replay_network_calls=${zeros.replay_network_calls}；owner 回放假设 0FC1E8A8…，待 BINI 只读确认；${stamp} Sydney`;
     updated++;
   }
   if (updated) writeJson(ACCEPTANCE_PATH, items);
