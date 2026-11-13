@@ -246,6 +246,15 @@ function vendors(card: SelfCard, live: SelfLive): string {
   return ["底层服务清单：", ...rows].join("\n");
 }
 
+const CORE_TABLES = ["members", "settings", "messages", "tasks", "facts", "jobs", "outbox"];
+/** Core tables by name plus a count, so 50+ tables never crowd out cron/queue/binding lines. */
+function tableSummary(tables: { name: string }[]): string {
+  const names = [...new Set(tables.map((t) => t.name))];
+  if (!names.length) return "未登记";
+  const core = CORE_TABLES.filter((n) => names.includes(n));
+  const rest = names.filter((n) => !core.includes(n));
+  return `共 ${names.length} 张；核心：${core.join("、") || "（无）"}${rest.length ? `；另有 ${rest.length} 张（如 ${rest.slice(0, 6).join("、")} 等）` : ""}`;
+}
 function repoMap(card: SelfCard): string {
   const m = card.repo_map || ({} as SelfCard["repo_map"]);
   const modules = [...(m.modules || [])]
@@ -254,12 +263,13 @@ function repoMap(card: SelfCard): string {
     .map((mod) => `${mod.path}（${text(mod.role, "未登记")}，${Number(mod.lines) || 0} 行）`);
   const lines = [
     `仓库：${text(m.repo, "未登记")}`,
-    `顶层目录：${(m.top_dirs || []).map((d) => `${d.path}（${text(d.role, "未登记")}）`).join("、") || "未登记"}`,
-    `入口：${(m.entrypoints || []).map((p) => `${p.kind} ${p.path}${p.line ? ":" + p.line : ""}${text(p.symbol) && text(p.symbol) !== p.kind ? " " + text(p.symbol) : ""}`).join("、") || "未登记"}`,
-    `数据表：${(m.tables || []).map((t) => t.name).join("、") || "未登记"}`,
+    // Small, high-value facts first: the long directory/entry/module lists may be clipped, these must not be.
+    `数据表：${tableSummary(m.tables || [])}`,
     `定时：${(m.crons || []).join("、") || "无"}`,
     `队列：${(m.queues || []).join("、") || "无"}`,
     `绑定：${(m.bindings || []).join("、") || "无"}`,
+    `顶层目录：${(m.top_dirs || []).map((d) => `${d.path}（${text(d.role, "未登记")}）`).join("、") || "未登记"}`,
+    `入口：${(m.entrypoints || []).map((p) => `${p.kind} ${p.path}${p.line ? ":" + p.line : ""}${text(p.symbol) && text(p.symbol) !== p.kind ? " " + text(p.symbol) : ""}`).join("、") || "未登记"}`,
     `具体代码用 repo_file 读 ${text(m.repo, "OmnixSI/TeamAgent")}，给文件和大致行号。`,
     // Last on purpose: when the segment is clipped only the long module list is lost.
     `关键模块（按行数前 ${MODULE_MAX}）：${modules.join("、") || "未登记"}`,
