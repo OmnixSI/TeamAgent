@@ -152,7 +152,7 @@ export async function reportMedia(e:any,b:any):Promise<Response>{
  const committed=await e.DB.prepare("SELECT payload FROM jobs WHERE id=? AND kind='bili_media' AND json_extract(payload,'$.lease')=? AND status=?").bind(b.id,b.lease,status).first();
  if(!committed)return Response.json({error:'lease conflict'},{status:409});
  const waiters=[...new Set<string>((JSON.parse(committed.payload).waiters||[]).filter((s:any)=>typeof s==='string'))];
- for(const waiter of waiters.slice(0,3)){if(left(e)<4)break;await wakeVideoWait(e,waiter);}
+ for(const waiter of waiters.slice(0,10)){if(left(e)<4)break;await wakeVideoWait(e,waiter);}
  return Response.json({ok:true});
 }
 export async function dispatchMedia(e:any,path:string,b:any):Promise<Response>{

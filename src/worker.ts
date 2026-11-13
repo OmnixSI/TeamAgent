@@ -13,7 +13,7 @@ import { isDirectRequest } from "./engagement";
 import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
-import { metered, COST, left } from "./d1";
+import { metered, COST, left, D1_BUDGET, queueLimit } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
@@ -1052,12 +1052,12 @@ async function processJob(e: Env, id: string) {
   }
 }
 let qqToken: { app: string; value: string; expires: number } | undefined;
-async function sendOutbox(e: Env) {
+async function sendOutbox(e: Env, limit = 5) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   let rows = (
     await e.DB.prepare(
-      `SELECT o.*,om.json AS meta,${outboxExpirySql("o")} AS expires_at FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5`,
-    ).bind(Date.now()).all()
+      `SELECT o.*,om.json AS meta,${outboxExpirySql("o")} AS expires_at FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT ?2`,
+    ).bind(Date.now(), limit).all()
   ).results;
   if (!rows.length) return;
   const expired = rows.filter((o: any) => o.expires_at !== null && o.expires_at < Date.now());
@@ -1237,7 +1237,7 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   await fn();
 }
 async function scheduled(e: Env) {
-  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 200 次 D1 预算，
   // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
   await runSchedules(e);
   await sweepMentions(e);
@@ -1305,13 +1305,13 @@ async function scheduled(e: Env) {
       await set(e, "dream_batches_" + date, String(batches + 1));
     }
   }
-  await sweepVideoWaits(e);
+  await sweepVideoWaits(e, 15);
   // Old reply-producing queue backlog must not become a deployment-time replay.
   await e.DB.prepare(`UPDATE jobs SET status='failed',error='expired' WHERE kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<? AND (status='pending' OR (status='running' AND lease_until<?))`)
     .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1387,7 +1387,7 @@ async function scheduled(e: Env) {
   // Guarantee cheap discovery before the sender and optional extras spend the
   // remaining budget. Schedules and daily repo pruning have already run.
   const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
-  await sendOutbox(e);
+  await sendOutbox(e, 10);
   // Give scheduled replies first use of the sending budget, then fit each
   // retry/failure to the actual remainder. New notices go out next tick.
   await sweepStuckDeliveries(e, Date.now(), 1, stuckDeliveries);
@@ -2688,10 +2688,11 @@ export default {
   },
   async queue(batch: any, e: Env) {
     const base = e;
-    e = metered(base);
+    const limit = queueLimit(batch?.queue);
+    e = metered(base, limit);
     for (let i = 0; i < batch.messages.length; i++) {
       const m = batch.messages[i];
-      e = metered(base);
+      e = metered(base, limit);
       await processJob(e, m.body.id);
       if (i < batch.messages.length - 1) await flushTail(e);
       m.ack();
@@ -2700,7 +2701,7 @@ export default {
     await flushTail(e);
   },
   async scheduled(_c: any, e: Env, ctx: any) {
-    e = metered(e);
+    e = metered(e, D1_BUDGET.background);
     ctx.waitUntil(scheduled(e));
   },
 };
