@@ -50,6 +50,7 @@ import {
 } from "./vision";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
 import { handleCommand } from "./commands";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
@@ -830,7 +831,7 @@ async function processJob(e: Env, id: string) {
         return;
       }
       const spoken = decodeVoice(answer).text !== "[[SILENT]]";
-      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { source: latest, reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
       await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
         spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
@@ -1443,7 +1444,7 @@ async function api(r: Request, e: Env) {
         await set(e, "runner_pause_until", String(Date.now() + 60000));
       if (b.resume) await set(e, "runner_pause_until", "0");
       const busy = await e.DB.prepare(
-        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending')+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
+        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status IN ('sending','voice_sending'))+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
       )
         .bind(Date.now())
         .first();
@@ -1459,6 +1460,8 @@ async function api(r: Request, e: Env) {
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
 
+    if (path === "/api/runner/voice-outbox" && method === "POST") return json(await pullVoiceOutbox(e));
+    if (path === "/api/runner/voice/report" && method === "POST") return reportVoice(e, await r.json());
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
       await set(
@@ -1470,7 +1473,7 @@ async function api(r: Request, e: Env) {
           blocked: String(b.blocked || "").slice(0, 150),
         }),
       );
-      return json({ ok: true });
+      return json({ ok: true, voice: await voiceAvailable(e) });
     }
     if (path.endsWith("/delivery-target") && method === "POST") {
       const b: any = await r.json();

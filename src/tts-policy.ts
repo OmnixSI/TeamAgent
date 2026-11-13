@@ -4,6 +4,7 @@
 
 export type VoiceCfg = {
   enabled?: boolean;
+  delivery?: { mode?: string; sourceVoice?: boolean; requested?: boolean; parts?: number; quota?: boolean };
   voice?: string;
   rate?: string;
   max_chars?: number;
@@ -16,7 +17,9 @@ export type VoiceReason =
   | "empty"
   | "code"
   | "link"
-  | "too_long";
+  | "too_long"
+  | "parts"
+  | "quota";
 
 /** 语音硬上限：无论配置写多大，超过 300 字一律走文字。 */
 export const HARD_MAX_CHARS = 300;
@@ -38,7 +41,13 @@ export function voiceSkipReason(
   cfg?: VoiceCfg,
 ): VoiceReason {
   if (cfg?.enabled !== true) return "disabled";
-  if (!mode || !SPOKEN_MODES.has(mode)) return "mode";
+  if (cfg.delivery) {
+    const d = cfg.delivery;
+    if (d.mode === "off") return "disabled";
+    if (d.quota === false) return "quota";
+    if ((d.parts ?? 1) !== 1) return "parts";
+    if (d.mode !== "always" && !d.sourceVoice && !d.requested) return "mode";
+  } else if (!mode || !SPOKEN_MODES.has(mode)) return "mode";
   if (typeof reply !== "string") return "empty";
   const text = reply.trim();
   if (!text) return "empty";
