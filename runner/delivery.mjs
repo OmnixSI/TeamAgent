@@ -59,6 +59,16 @@ export function recoverDeliveries(dir) {
 // confirmed files are removed at that limit. Unconfirmed files expire after
 // 24 hours, or earlier when the global 20-file / 100 MiB budget is exceeded.
 const MAX_ATTEMPTS = 3;
+// Retry waits owned here because the files never leave this machine.
+// Keep the schedule in step with src/delivery-retry.ts.
+const RETRY_DELAYS_MS = [60_000, 300_000];
+function errorCode(error, attempted) {
+  if (attempted) return 'send_failed';
+  const message = String(error?.message || '');
+  if (message === 'file denied') return 'file_denied';
+  if (message === 'invalid files') return 'invalid_files';
+  return 'target_unavailable';
+}
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_FILES = 20;
 const MAX_RETAINED_BYTES = 100 * 1024 * 1024;
@@ -96,6 +106,7 @@ async function finishDelivery(file, d, root, report) {
     try {
       await report({id:d.id,status:d.status,sent_count:d.sent_count || 0,
         attempts:d.attempts,exhausted:d.exhausted,
+        ...(d.status === 'failed' ? {error:d.error || 'send_failed'} : {}),
         ...(d.status === 'unknown' ? {unconfirmed_files:unconfirmed(d).map(file => path.basename(file)),
           retain_until:d.retain_until,retention_removed:!!d.retention_removed} : {})});
     } catch { return; } // Retry reporting without sending files again.
@@ -124,7 +135,8 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
       await finishDelivery(file, d, root, report);
     } else if (d.status === "sent" || d.attempts >= MAX_ATTEMPTS) {
       await finishDelivery(file, d, root, report);
-    } else pending.push({file,d});
+    } else if (Number(d.next_attempt) > now) continue;
+    else pending.push({file,d});
   }
   for (const {file,d} of pending.slice(0,3)) {
     const base = file.replace(/\.(sent|failed|unknown)$/, ""), active = base + ".sending";
@@ -153,7 +165,15 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
         write(active, d);
       }
       d.status = "sent";
-    } catch { d.status = attempted ? "unknown" : "failed"; }
+      delete d.next_attempt;
+      delete d.error;
+    } catch (error) {
+      d.status = attempted ? "unknown" : "failed";
+      d.error = errorCode(error, attempted);
+      d.next_attempt = d.status === "failed" && d.attempts < MAX_ATTEMPTS
+        ? now + RETRY_DELAYS_MS[Math.min(RETRY_DELAYS_MS.length - 1, Math.max(0, d.attempts - 1))]
+        : 0;
+    }
     write(active, d);
     const terminal = base + "." + d.status;
     fs.renameSync(active, terminal);

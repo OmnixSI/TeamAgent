@@ -6,6 +6,7 @@ import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
+import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage, flushTail } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
@@ -1499,8 +1500,21 @@ async function api(r: Request, e: Env) {
           .bind(b.id)
           .first();
         if (!d) return json({ error: "unknown delivery" }, 404);
-        if (["sent", "failed", "unknown"].includes(d.status))
+        if (["sent", "failed", "unknown", "needs_attention"].includes(d.status))
           return json({ ok: true, already: true });
+        if (b.status === "failed" && b.exhausted === true) {
+          const attention = await recordDeliveryFailure(e, b, { now: Date.now() });
+          if (attention.recorded)
+            await activity(
+              e,
+              "delivery.needs_attention",
+              d.job_id,
+              "QQ网关",
+              "附件连续 " + attention.attempts + " 次发送失败，已停止自动重发并在群里说明",
+              b.id + "-result",
+            );
+          return json({ ok: true, needs_attention: true });
+        }
         const count = Math.min(
           JSON.parse(d.files).length,
           Math.max(0, Number(b.sent_count) || 0),
@@ -1669,7 +1683,11 @@ async function api(r: Request, e: Env) {
         } else if (!files.length)
           await job(e, "media-result-" + p.message, "voice_notice", {
             message: p.message,
-            result: body.slice(0, 8000),
+            status: utilityStatusText({
+              files: files.length,
+              wantFiles: p.want_files === true,
+            }),
+            result: utilityResultText(body, files.length).slice(0, 8000),
           });
       }
       return json({ ok: true });
