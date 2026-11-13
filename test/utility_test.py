@@ -131,6 +131,162 @@ class UtilityTests(unittest.TestCase):
         reports, files, kills = self.scenario(already_sent=True)
         self.assertEqual(files, [])
 
+    def test_download_budget_stops_at_100_mib_and_keeps_early_files(self):
+        size = 40 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as temp:
+            home = pathlib.Path(temp)
+            h = home / ".inkboard-team"
+            h.mkdir()
+            (h / "config.json").write_text(
+                '{"url":"https://example.invalid","runnerToken":"fake"}'
+            )
+            (h / "worker-secrets.json").write_text('{"DEEPSEEK_API_KEY":"shared-test-key"}')
+            with patch.object(pathlib.Path, "home", return_value=home):
+                spec = importlib.util.spec_from_file_location(
+                    "utility_budget",
+                    pathlib.Path(__file__).parents[1] / "runner/utility.py",
+                )
+                u = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(u)
+            job = {
+                "id": "file-budget",
+                "payload": {
+                    "message": "request",
+                    "lease": "lease",
+                    "effort": "high",
+                    "inputs": [
+                        {
+                            "attachments": [
+                                {
+                                    "filename": f"s{source}-{index}.bin",
+                                    "content_type": "application/octet-stream",
+                                    "url": f"https://files.invalid/{source}/{index}",
+                                }
+                                for index in range(5)
+                            ]
+                        }
+                        for source in range(3)
+                    ],
+                },
+            }
+            captured, downloads = {}, []
+
+            def fake_download(url, target, limit=None):
+                if limit is not None and size > limit:
+                    raise u.InputTooLarge("too_large")
+                with target.open("wb") as output:
+                    output.truncate(size)
+                downloads.append((url, target, target.stat().st_size))
+                return size
+
+            def cloud(path, body):
+                if path in ["inputs", "media/heartbeat"]:
+                    return {"messages": []}
+                if path == "media/claim":
+                    return {"job": job}
+                captured["report"] = body
+                return {"ok": True}
+
+            def communicate(input=None, timeout=None):
+                if input is not None:
+                    captured["task"] = input
+                cwd = pathlib.Path(u.subprocess.Popen.call_args.kwargs["cwd"])
+                captured["inputs"] = sorted(x.name for x in (cwd / "inputs").iterdir())
+                (cwd / "outputs/example.csv").write_text("ok")
+                return (
+                    json.dumps(
+                        {
+                            "type": "final",
+                            "reason": {"kind": "completed"},
+                            "text": "完成",
+                        }
+                    ),
+                    "",
+                )
+
+            proc = MagicMock()
+            proc.pid = 12345
+            proc.communicate.side_effect = communicate
+            with patch.object(u, "cloud", side_effect=cloud), patch.object(
+                u.subprocess, "Popen", return_value=proc
+            ), patch.object(u, "download", side_effect=fake_download), patch.object(
+                u.os, "killpg"
+            ), patch.object(pathlib.Path, "home", return_value=home):
+                u.once()
+            self.assertEqual(len(downloads), 2)
+            self.assertTrue(all(item[2] == size for item in downloads))
+            kept = [name for name in captured["inputs"] if name.endswith(".bin")]
+            self.assertEqual(kept, ["0-s0-0.bin", "1-s0-1.bin"])
+            self.assertIn("too_large", captured["task"])
+            self.assertIn("s0-2.bin", captured["task"])
+            self.assertNotEqual(captured["report"].get("success"), False)
+            self.assertIn("完成", captured["report"]["result"])
+
+    def test_download_rejects_a_file_over_the_remaining_budget(self):
+        import http.server, socket, threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(40 * 1024 * 1024))
+                self.end_headers()
+                try:
+                    self.wfile.write(b"x")
+                except BrokenPipeError:
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as temp:
+            home = pathlib.Path(temp)
+            (home / ".inkboard-team").mkdir()
+            (home / ".inkboard-team/config.json").write_text(
+                '{"url":"https://example.invalid","runnerToken":"fake"}'
+            )
+            with patch.object(pathlib.Path, "home", return_value=home):
+                spec = importlib.util.spec_from_file_location(
+                    "utility_download",
+                    pathlib.Path(__file__).parents[1] / "runner/utility.py",
+                )
+                u = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(u)
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_address[1]
+            target = home / "third.bin"
+
+            def local_connection(address, timeout=None):
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.settimeout(timeout)
+                client.connect(("127.0.0.1", port))
+                return client
+
+            try:
+                with patch.object(u, "safe", side_effect=lambda url: url), patch.object(
+                    u.socket,
+                    "getaddrinfo",
+                    return_value=[
+                        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+                    ],
+                ), patch.object(
+                    u.socket,
+                    "create_connection",
+                    side_effect=local_connection,
+                ):
+                    with self.assertRaises(u.InputTooLarge):
+                        u.download(
+                            f"http://public.invalid:{port}/third.bin",
+                            target,
+                            20 * 1024 * 1024,
+                        )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+            self.assertFalse(target.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
