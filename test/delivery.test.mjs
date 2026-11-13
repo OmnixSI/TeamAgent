@@ -244,6 +244,31 @@ test("retained unknown files obey global count and byte limits", async () => {
     } finally {f.clean();}
   }
 });
+test("receipts without an id are retired or parked as legacy instead of reported", async () => {
+  const f=fixture(),reports=[];
+  try {
+    const retiredFile=path.join(path.dirname(f.file),'retired.csv');
+    fs.writeFileSync(retiredFile,'confirmed earlier');
+    const sent=JSON.parse(fs.readFileSync(f.manifest));
+    delete sent.id;
+    fs.writeFileSync(f.manifest+'.sent',JSON.stringify({...sent,status:'sent',sent_count:1,files:[retiredFile]}));
+    fs.unlinkSync(f.manifest);
+    fs.writeFileSync(path.join(f.queue,'two.json.unknown'),
+      JSON.stringify({status:'unknown',files:[f.file],sent_count:0,attempts:3}));
+    const options={dir:f.queue,root:f.root,
+      target:async()=>assert.fail('legacy receipt must not target'),
+      sendFile:async()=>assert.fail('legacy receipt must not send'),
+      report:async receipt=>reports.push(receipt)};
+    await deliverFiles(options);
+    assert.equal(reports.length,0,'a receipt without id is never reported');
+    assert.ok(!fs.existsSync(f.manifest+'.sent'),'confirmed receipt without id is retired');
+    assert.ok(fs.existsSync(retiredFile),'retired receipt keeps its confirmed output');
+    assert.ok(fs.existsSync(path.join(f.queue,'two.json.legacy')),'unconfirmed receipt is parked as legacy');
+    assert.ok(fs.existsSync(f.file),'legacy content is kept, never deleted');
+    await deliverFiles(options);
+    assert.equal(reports.length,0);
+  } finally {f.clean();}
+});
 test("unknown retention expires even while cloud reporting is offline", async () => {
   const f=fixture();let sends=0,reports=0;const now=Date.now();
   const options={dir:f.queue,root:f.root,now,target:async()=>({group_id:'G'}),sendFile:async()=>{sends++;throw Error('unknown');},report:async()=>{reports++;throw Error('offline');}};

@@ -1183,6 +1183,14 @@ test("file production and QQ delivery are separate, terminal receipts are idempo
   );
 });
 
+test("delivery report without a string id is rejected with 400 before touching D1", async () => {
+  const e=env();
+  for(const id of [undefined,'',42]) {
+    const response=await req(e,'/api/runner/delivery/report',{id,status:'sent',sent_count:0},'runner-secret');
+    assert.equal(response.status,400);
+    assert.match((await response.json()).error,/id/i);
+  }
+});
 test("exhausted delivery reports one explicit cleanup notice even when its receipt is retried", async () => {
   for (const status of ['failed', 'unknown']) {
     const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
