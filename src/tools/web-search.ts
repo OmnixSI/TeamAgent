@@ -183,7 +183,19 @@ export function createWebSearchTool(deps: WebSearchDeps = {}): BotTool {
       const sender = senderOf(ctx);
       const resultBase = { ...base, query };
 
-      const guard = await dsGuard(e, { purpose: "search", group, sender });
+      let guard: any = null;
+      try {
+        guard = await dsGuard(e, { purpose: "search", group, sender });
+      } catch {
+        return {
+          ...resultBase,
+          ok: false,
+          error_kind: "upstream",
+          retryable: true,
+          reason_text: "限额检查失败",
+          next_action: "稍后再试；持续失败就告诉成员现在不能搜索。",
+        };
+      }
       if (!guard || guard.ok !== true) {
         const failed = (guard || {}) as DsFailShape;
         return {

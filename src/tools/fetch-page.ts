@@ -190,7 +190,17 @@ export async function fetchPageCore(e: any, rawUrl: unknown, opt: FetchPageOptio
   const sender = String(opt.sender || "");
   let guard: any = null;
   if (group || sender) {
-    guard = await dsGuard(e, { purpose: "fetch", group, sender });
+    try {
+      guard = await dsGuard(e, { purpose: "fetch", group, sender });
+    } catch {
+      return failure(url, {
+        ok: false,
+        error_kind: "upstream",
+        retryable: true,
+        reason_text: "限额检查失败",
+        next_action: "稍后再试；持续失败就告诉成员现在读不到这个页面。",
+      });
+    }
     if (!guard || guard.ok !== true) return failure(url, guard);
   }
   try {

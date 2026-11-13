@@ -236,6 +236,19 @@ test("限额：dsGuard 拒绝时直接返回，不调用云端", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("限额检查本身抛异常：结构化 upstream，不调用云端", async () => {
+  const calls = [];
+  const tool = api.createWebSearchTool({
+    callDsTool: async (e, o) => { calls.push(o); return okResult(); },
+    dsGuard: async () => { throw new Error("db down"); },
+  });
+  const r = await tool.run({}, { query: "q" }, ctx());
+  assert.equal(r.ok, false);
+  assert.equal(r.error_kind, "upstream");
+  assert.equal(calls.length, 0);
+  assert.doesNotMatch(JSON.stringify(r), /db down/);
+});
+
 test("云端每种失败形态原样映射，并且释放限额", async () => {
   const kinds = ["refused", "budget", "quota", "timeout", "upstream", "auth", "unsupported", "denied", "too_large"];
   for (const kind of kinds) {
