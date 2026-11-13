@@ -16,6 +16,10 @@ import { vdRule, vdR1Free, vdR2Mem } from "./review-accept/checks/rules.mjs";
 import { vdR3Cover, vdSnapSw, vdSnapRun } from "./review-accept/checks/trace.mjs";
 import { vdRIso, vdIso, vdRGolden, vdRBudget, vdRTrunc, vdRCap, vdRInj, vdRDual } from "./review-accept/checks/judge.mjs";
 import { vdBlocked } from "./review-accept/checks/blocked.mjs";
+import { vdGolden, vdNegative, vdR7M4 } from "./review-accept/checks/golden.mjs";
+import { vdM3, vdM5, vdF5 } from "./review-accept/checks/pipeline.mjs";
+import { vdPull } from "./review-accept/checks/pull.mjs";
+import { cleanupGoldenRuns } from "./review-accept/golden-run.mjs";
 
 import { vdWorker } from './review-accept/checks/worker.mjs';
 
@@ -49,7 +53,15 @@ const CHECK = {
   "VD-R7-CAP": vdRCap,
   "VD-INJ": vdRInj,
   "VD-R-DUAL": vdRDual,
+  "VD-M3": vdM3,
+  "VD-M5": vdM5,
+  "VD-F5": vdF5,
+  "VD-PULL": vdPull,
+  "VD-R1-G13": vdGolden,
+  "VD-R7-M4": vdR7M4,
 };
+for (let n = 1; n <= 20; n++) CHECK[`VD-G${String(n).padStart(2, "0")}`] = vdGolden;
+for (let n = 1; n <= 7; n++) CHECK[`VD-N${String(n).padStart(2, "0")}`] = vdNegative;
 
 function parseArgs(argv) {
   const args = { only: null, list: false, json: false, matrix: true, help: false };
@@ -149,6 +161,7 @@ async function main() {
   }
   if (args.json) console.log(JSON.stringify({ pass: passes.length, fail: fails.length, blocked: blocked.length, preflightFail: preflightFails.length, evidence }));
   cleanupEvidenceTmp();
+  cleanupGoldenRuns();
   return fails.length;
 }
 

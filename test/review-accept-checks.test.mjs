@@ -95,20 +95,30 @@ test("VD-R3-COVER keeps canonical outbox ownership across batch traces", { skip:
   assert.match(result.detail, /batch/);
 });
 
-test("VD-SNAP-SW rewrites a historically disabled tool to switch_or_policy_off", { skip: skipReplay }, async () => {
+test("VD-SNAP-SW maps settings off:repo_tools=1 to switch_or_policy_off", { skip: skipReplay }, async () => {
   const { vdSnapSw } = await import("../scripts/review-accept/checks/trace.mjs");
   const result = await run("VD-SNAP-SW", vdSnapSw);
+  assert.match(result.detail, /off:repo_tools":"on/);
   assert.match(result.detail, /switch_or_policy_off/);
 });
 
-test("blocked items stay blocked and preflight the golden trace", { skip: skipReplay }, async () => {
+test("blocked M4 keeps the amended v2 preflight", { skip: skipReplay }, async () => {
   const { vdBlocked } = await import("../scripts/review-accept/checks/blocked.mjs");
-  const item = { id: "VD-G13", blockedBy: "D-5a" };
+  const item = { id: "VD-M4", blockedBy: "VD-R7-M4（取代）" };
   const result = await vdBlocked(ctx, item);
   assert.equal(result.blocked, true);
-  assert.equal(result.blockedBy, "D-5a");
-  assert.equal(result.preflight, "FAIL");
-  assert.match(result.detail, /S7/);
+  assert.equal(result.blockedBy, "VD-R7-M4（取代）");
+  assert.equal(result.preflight, "PASS");
+  assert.match(result.detail, /145 无 S10/);
+});
+
+test("VD-G01 and VD-N07 run the three-night fake-judge pipeline", { skip: skipReplay }, async () => {
+  const { vdGolden, vdNegative } = await import("../scripts/review-accept/checks/golden.mjs");
+  const golden = await run("VD-G01", vdGolden);
+  assert.match(golden.detail, /repo_disambiguation/);
+  assert.match(golden.detail, /evidence=1/);
+  const negative = await run("VD-N07", vdNegative);
+  assert.match(negative.detail, /无 p1\+ finding/);
 });
 
 test("failure-mode scorer counts family + gap + one root-cause key", () => {

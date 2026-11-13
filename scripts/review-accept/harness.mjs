@@ -212,7 +212,7 @@ export function notIncludes(haystack, needle, message) {
 
 export function evidenceDir() {
   const dir = paths().release
-    ? join(paths().release, "evidence/D-10a")
+    ? join(paths().release, "evidence/D-10b1")
     : join(ROOT, ".wrangler/review-accept-evidence");
   mkdirSync(dir, { recursive: true });
   return dir;
