@@ -96,6 +96,7 @@ test('VF7 cache, budget, model, and database failures are distinguishable; abort
   const bytes=new Uint8Array([1,2,3]);
   for(const mode of ['cache','budget','describe','store']){
     const e=env(), events=[];
+    e.AI={async run(){return {response:mode==='describe'?'bad-json':'{\"desc\":\"敬礼\",\"tags\":[],\"meme\":true}'};}};
     if(mode==='budget'){
       const day=new Intl.DateTimeFormat('en-CA',{timeZone:vision.TEAM.memory.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
       await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('budget:vision:'+day,'300').run();
@@ -142,6 +143,7 @@ test('VF8 @ followup receives the actual download failure instead of unviewed',a
 
 test('VF9 model request timeout remains distinct from an invalid model description',async()=>{
   const e=env(),events=[];
+  e.AI={async run(){throw new DOMException('never-log '+jpeg.url,'AbortError');}};
   const result=await mocked(async()=>{throw new DOMException('never-log '+jpeg.url,'AbortError');},()=>
     vision.describeBytes(e,new Uint8Array([1,2,3]),'image/jpeg','',new AbortController().signal,'v1',event=>events.push(event)));
   assert.equal(result,null);
@@ -152,6 +154,7 @@ test('VF9 model request timeout remains distinct from an invalid model descripti
 
 test('VF10 a synthetic image of the real JPEG size completes download, description and message association',async()=>{
   const e=env(),logs=[],old=console.info;
+  e.AI={async run(){return {response:'{\"desc\":\"一张敬礼表情图\",\"tags\":[\"敬礼\"],\"meme\":true}'};}};
   console.info=(...args)=>logs.push(args.join(' '));
   let outcomes;
   try {

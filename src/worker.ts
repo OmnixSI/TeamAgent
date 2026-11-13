@@ -40,6 +40,7 @@ import {
   applyImageOutcomes,
   pickImages,
   visionProvider,
+  visionErrorFailure,
   SELFTEST_PNG,
 } from "./vision";
 import { cleanupBudget } from "./budget";
@@ -54,6 +55,7 @@ import {
   agentAnswer,
 } from "./semantic";
 type Env = {
+  AI?: { run(model: string, input: any): Promise<any> };
   DB: any;
   WORK?: any;
   CHAT?: any;
@@ -1819,7 +1821,7 @@ async function api(r: Request, e: Env) {
       return json({ error: "owner only" }, 403);
     const started = Date.now();
     try {
-      const provider = visionProvider(e);
+      const provider = visionProvider({ ...e, DB: undefined }); // Smoke must not mutate production D1.
       if (!provider)
         return json({ ok: false, error: "vision disabled" }, 503);
       const bytes = Uint8Array.from(atob(SELFTEST_PNG), (c) =>
@@ -1834,7 +1836,7 @@ async function api(r: Request, e: Env) {
       return json({ ok: true, desc: note.desc, ms: Date.now() - started });
     } catch (error) {
       return json(
-        { ok: false, error: String(error).slice(0, 200) },
+        visionErrorFailure(error),
         502,
       );
     }
