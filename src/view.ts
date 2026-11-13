@@ -1,5 +1,5 @@
 import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
-import { biliNoteText } from "./fetchjobs";
+import { biliNoteText } from "./bilinote";
 
 export type ViewMsg = {
   id: string; sortAt: number; ord: number; at: string; from: string; fromId: string;

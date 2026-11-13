@@ -1,0 +1,27 @@
+name = "inkboard-team-review"
+account_id = "fadeed4822ac4e4e518ed6eddc8d35ce"
+main = "src/review/worker.ts"
+compatibility_date = "2026-11-11"
+[[d1_databases]]
+binding = "DB"
+database_name = "inkboard-team"
+database_id = "42e95fb2-16f8-46d9-bf32-34f3e88a4443"
+[ai]
+binding = "AI"
+[triggers]
+crons = ["*/5 * * * *"]
+# Secrets (configured separately): OPENAI_API_KEY, DEEPSEEK_API_KEY.
+# Prices are usd_micros per token; empty prices disable the provider.
+[vars]
+REVIEW_MODE = "shadow"
+OPENAI_MODEL = ""
+DEEPSEEK_MODEL = "deepseek-flash"
+REVIEW_MONTH_CAP_USD_MICROS = "10000000"
+OPENAI_INPUT_USD_MICROS = ""
+OPENAI_OUTPUT_USD_MICROS = ""
+DEEPSEEK_INPUT_USD_MICROS = ""
+DEEPSEEK_OUTPUT_USD_MICROS = ""
+OPENAI_DAY_CAP_USD_MICROS = "500000"
+DEEPSEEK_DAY_CAP_USD_MICROS = "100000"
+REVIEW_BOARD_ORIGIN = "https://inkboard-team.inkboard-server.workers.dev"
+RELEASE = "development"
