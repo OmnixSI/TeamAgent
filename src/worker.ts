@@ -16,6 +16,7 @@ import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBe
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { runCronExtras } from "./cron-extra";
 import { TEAM } from "./config";
+import { SELF_CARD } from "./self-card.generated";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
 import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
@@ -1427,6 +1428,7 @@ async function api(r: Request, e: Env) {
       ok: true,
       service: "team-agent",
       release: e.RELEASE || "development",
+      selfCard: { commit: SELF_CARD.commit, built_at: SELF_CARD.built_at },
     });
   if (path === "/api/qq/events" && method === "POST") return receive(r, e);
   if (path === "/api/team/join" && method === "POST") {
