@@ -2209,7 +2209,7 @@ function renderReview() {
     () => loadReview(true),
   );
   refresh.id = "review-refresh";
-  refresh.disabled = review.loading || !REVIEW_BASE;
+  refresh.disabled = review.loading || !REVIEW_BASE || localOwner();
   actions.append(refresh);
   head.append(status, actions);
   host.append(head);
