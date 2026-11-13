@@ -1,15 +1,19 @@
+import { addressedMessages, guardMentionDecision, withMentionReceipt } from './mention-guard';
 import {webFailText,LINK_FAIL_RULE} from './linkfail';
 import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
+import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
+import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { requestPlan } from "./tasks";
 import { model, activity, redact, utilityText } from "./runtime";
+import { ToolRecovery } from "./tool-audit";
 import { rememberCorrection, recall } from "./memory";
 import {
   PARTICIPATION,
@@ -27,6 +31,7 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+import { capabilityCard } from "./capability-card";
 // A question about repository activity must reach the read-only repo tools even
 // in a round whose remaining D1 budget would normally hide every tool.
 const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
@@ -649,7 +654,18 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 }
 
 export async function agentAnswer(e: any, context: any) {
+  return withMentionReceipt(e, context, async () => {
+    const answer = await answerWithTools(e, context), text = decodeVoice(answer).text;
+    return (context.mentioned || addressedMessages(context).length) && (!text.trim() || text.trim() === '[[SILENT]]')
+      ? JSON.stringify({mode:'work',text:'我在，正在看这条消息。'}) : answer;
+  });
+}
+async function answerWithTools(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  // F6-6 定时闭嘴：除被 @ 外不进模型、不出声；创建闭嘴的那条消息本身豁免。
+  if (!context.mentioned && await muted(e, context.latest?.group_id, context.latest?.id))
+    return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
+  const recovery = new ToolRecovery(context.resume?.recovery);
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
@@ -661,7 +677,7 @@ export async function agentAnswer(e: any, context: any) {
     ).all()
   ).results;
   const acceptedActions: any[] = [];
-  const tools = [
+  const baseTools = [
     {
       type: "function",
       function: {
@@ -751,7 +767,7 @@ export async function agentAnswer(e: any, context: any) {
       function: {
         name: "prepare_project_task",
         description:
-          "明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。高难度开发默认生成成员本机AI接力方案。",
+          "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。",
         parameters: {
           type: "object",
           properties: {
@@ -810,16 +826,67 @@ export async function agentAnswer(e: any, context: any) {
       type: "function",
       function: {
         name: "get_project",
-        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。",
+        description: "读取项目现状、Issue、PR和已同步文档。代码改动用 repo_changes。repo 可填 owner/repo、代称或短名；repo_cache 里新发现的组织仓库也接受。",
         parameters: {
           type: "object",
-          properties: { repo: { type: "string", enum: REPOS } },
+          properties: {
+            repo: {
+              type: "string",
+              description: "owner/repo、项目代称或仓库短名",
+            },
+          },
           required: ["repo"],
         },
       },
     },
-    ...(isOn(sw, "repo_tools") ? repoTools : []),
+    {
+      type: "function",
+      function: {
+        name: "schedule_create",
+        description:
+          "成员明确要求定时推送日报/周报、几分钟后提醒、或让你闭嘴一段时间时调用。只建本群日程；时间按悉尼时间 HH:MM；不猜成员没说的时刻。",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["digest_daily", "digest_weekly", "reminder", "mute"] },
+            time: { type: "string", description: "每日/每周推送的悉尼时间 HH:MM，例如 08:00" },
+            weekdays: { type: "array", items: { type: "integer" }, description: "周报星期，0=周日" },
+            minutes: { type: "integer", description: "几分钟后提醒，或闭嘴多少分钟" },
+            run_at: { type: "string", description: "一次性提醒/闭嘴结束的绝对时间，ISO 8601 带时区" },
+            text: { type: "string", description: "提醒内容" },
+            source_id: { type: "string", description: "本条交办的消息ID，默认最新消息" },
+          },
+          required: ["kind"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_list",
+        description: "查本群当前的定时推送、提醒和闭嘴，带悉尼时间的下次执行时间与失败次数。",
+        parameters: {
+          type: "object",
+          properties: { include_done: { type: "boolean", description: "是否连已取消/已完成一起列出" } },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_cancel",
+        description: "取消本群一个定时任务。先用 schedule_list 拿到任务ID。",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "schedule_list 返回的任务ID" } },
+          required: ["id"],
+        },
+      },
+    },
   ];
+  // Keep switched-off tools in the capability card as 「当前已关闭」.
+  const allTools = [...baseTools, ...repoTools];
+  const tools = isOn(sw, "repo_tools") ? allTools : baseTools;
   const recentBot = (
     await e.DB.prepare(
       "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
@@ -851,8 +918,12 @@ export async function agentAnswer(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
+  const systemPrompt =
+    (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
+    "\n\n" +
+    capabilityCard(allTools, { switches: sw });
   const messages: any[] = context.resume?.messages || participationMessages({
-        system: rules.length ? PARTICIPATION + "\n" + rules.join("\n") : undefined,
+        system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (
           await e.DB.prepare(
             "SELECT value FROM settings WHERE key='self_note'",
@@ -877,13 +948,15 @@ export async function agentAnswer(e: any, context: any) {
         ).results,
         context: promptContext,
   });
-  for (let turn = context.resume?.turn || 0; turn < 3; turn++) {
+  messages.push({ role: "system", content: "工具失败时先换路再放弃；如实说原因，不说『没拿到』了事。" });
+  for (let turn = context.resume?.turn || 0; turn < 4; turn++) {
     let m: any;
+    let offerTools = true;
     if (context.resume?.pending) {
       m = context.resume.pending;
       context.resume.pending = null;
     } else {
-      const offerTools = turn < 2 && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
+      offerTools = (turn < 2 || recovery.retrying && turn < 3) && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
       const d = await model(
         e,
         context.background ? "research" : "participation",
@@ -915,7 +988,7 @@ export async function agentAnswer(e: any, context: any) {
         authz: { tainted: tainted(context, messages) },
         intent: context.intent,
         background: true,
-        resume: { messages, pending: m, turn },
+        resume: { messages, pending: m, turn, recovery: recovery.state() },
       };
       await e.DB.prepare(
         "INSERT OR IGNORE INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
@@ -933,7 +1006,7 @@ export async function agentAnswer(e: any, context: any) {
         id,
       );
       stage(e, context.latest.id, "research_queued");
-      if (!context.mentioned)
+      if (!context.mentioned && !addressedMessages(context).length)
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       return speakBrief(
         e,
@@ -945,9 +1018,10 @@ export async function agentAnswer(e: any, context: any) {
       );
     }
     if (!m.tool_calls?.length) {
+      if (offerTools && turn < 3 && recovery.retry(messages)) continue;
       if (!m.content?.trim()) throw Error("agent empty answer");
       const forced =
-        !!context.mentioned ||
+        !!context.mentioned || addressedMessages(context).length > 0 ||
         !!context.videoWaited ||
         context.latest?.meta?.replyTo?.kind === "bot" ||
         !!context.latest?.meta?.forwarded?.some((q: any) =>
@@ -955,14 +1029,14 @@ export async function agentAnswer(e: any, context: any) {
             (r: any) => r.body.trim() === String(q.content || "").trim(),
           ),
         );
-      const decision = parseDecision(m.content, { forced, allowWait: !!context.allowWait });
+      const decision = guardMentionDecision(parseDecision(m.content, { forced, allowWait: !!context.allowWait }), context);
       Object.assign(context.decisionOut ?? {}, decision, { forced });
       if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       const spoken = await speakBrief(
         e,
         {
-          facts: decision.brief,
+          facts: recovery.brief(decision.brief),
           learnedExpressions,
           acceptedActions,
           recentBot: recentBot.slice(-5),
@@ -975,15 +1049,14 @@ export async function agentAnswer(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return spoken;
+      return recovery.voice(spoken);
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
-      try {
+      result = await recovery.run(e, context, call, offerTools && tools.some(t => t.function.name === call.function.name), async (a) => {
         if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
-        if (index >= 3) throw Error("本轮工具额度已用完");
-        const a = JSON.parse(call.function.arguments);
+        if (index >= 3) throw new ResourceLimitError();
         switch (call.function.name) {
           case "get_work_status": {
             const tasks = (
@@ -1212,40 +1285,108 @@ export async function agentAnswer(e: any, context: any) {
                   text: untrusted(a.url, JSON.stringify(d)) };
             break;
           }
-          case "get_project":
-            if (!REPOS.includes(a.repo)) throw Error("unknown project");
+          case "get_project": {
+            const resolution = await resolveRepoRef(e, a.repo, { text: context.latest?.body });
+            if (resolution.ambiguous) {
+              result = toolFailure("get_project", null, { kind: "ambiguous", candidates: resolution.candidates });
+              break;
+            }
+            if (!resolution.ref) throw Error("unknown project");
+            const repo = resolution.ref.full;
+            // Snapshot lookup only exists for organisation projects; public
+            // repositories stay readable through the repo_* tools instead.
+            if (!REPOS.includes(repo) && !isOrgRepo(repo)) {
+              result = toolFailure("get_project", null, { kind: "invalid_args" });
+              break;
+            }
             const row = await e.DB.prepare(
               "SELECT json,updated_at FROM repo_cache WHERE repo=?",
             )
-              .bind(a.repo)
+              .bind(repo)
               .first();
             result = row
               ? {
                   ...JSON.parse(row.json),
+                  repo,
                   syncedAt: row.updated_at,
                   facts: (
                     await e.DB.prepare(
                       "SELECT repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL AND repo IN (?, 'team') ORDER BY valid_from DESC LIMIT 30",
                     )
-                      .bind(a.repo)
+                      .bind(repo)
                       .all()
                   ).results,
                 }
-              : { unavailable: true };
+              : { unavailable: true, repo };
             break;
-          case "repo_changes": case "repo_commit": case "repo_file":
-            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
+          }
+          case "schedule_create": {
+            const source =
+              context.batch?.find((m: any) => m.id === a.source_id) ||
+              context.latest;
+            if (!source?.group_id || source.group_id !== context.latest?.group_id)
+              throw Error("只能在本群建日程");
+            try {
+              const schedule = await createSchedule(e, {
+                group_id: source.group_id,
+                owner: source.sender || "群友",
+                kind: a.kind,
+                spec: {
+                  time: a.time,
+                  weekdays: a.weekdays,
+                  minutes: a.minutes,
+                  run_at: a.run_at,
+                  text: a.text,
+                },
+                source_msg_id: source.id,
+              });
+              result = {
+                accepted: true,
+                ok: true,
+                id: schedule.id,
+                kind: schedule.kind,
+                next_run_at: schedule.next_run_at,
+                next_run_text: sydneyText(schedule.next_run_at, schedule.tz),
+              };
+            } catch (error: any) {
+              result = scheduleFailure(error?.message);
+            }
+            break;
+          }
+          case "schedule_list": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            result = {
+              ok: true,
+              schedules: await listSchedules(e, group, {
+                includeDone: a.include_done === true,
+              }),
+            };
+            break;
+          }
+          case "schedule_cancel": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            const schedule = await cancelSchedule(e, group, String(a.id || ""));
+            result = schedule
+              ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
+              : {
+                  ok: false,
+                  error_kind: "not_found",
+                  retryable: false,
+                  next_action: "先用 schedule_list 看本群任务，再拿ID取消",
+                };
+            break;
+          }
+          case "repo_changes": case "repo_commit": case "repo_file": case "list_repos":
+            result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a, { text: context.latest?.body })
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
             break;
           default:
             result = { error: "unknown tool" };
         }
-      } catch (error) {
-        result = {
-          unavailable: true,
-          reason: error instanceof AuthorizationError || error instanceof ResourceLimitError ? error.message : "未能获得资料，不能据此编造结论",
-        };
-      }
+        return result;
+      });
       if (result?.accepted === true)
         acceptedActions.push({ tool: call.function.name, ...result });
       messages.push({
@@ -1256,6 +1397,7 @@ export async function agentAnswer(e: any, context: any) {
           : JSON.stringify(result).slice(0, 40000),
       });
     }
+    recovery.retry(messages);
   }
-  throw Error("检索轮次已到，需要成员进一步指定问题");
+  return recovery.voice(await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context));
 }

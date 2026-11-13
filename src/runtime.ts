@@ -41,6 +41,39 @@ export async function activity(
     )
     .run();
 }
+/** Visual calls share the credential filter and usage ledger, without the text endpoint. */
+export async function visionModel(e: any, body: any, signal: AbortSignal) {
+  const start = Date.now();
+  stage(e, e.timingTurn, "model_start", { kind: "vision" }, start);
+  let status = "failed", usage: any = {};
+  let onAbort: (() => void) | undefined;
+  try {
+    if (signal.aborted) throw new DOMException("aborted", "AbortError");
+    const stopped = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new DOMException("aborted", "AbortError"));
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    const result: any = await Promise.race([
+      e.AI.run("@cf/meta/llama-3.2-11b-vision-instruct", promptData(body)), stopped,
+    ]);
+    usage = result?.usage || {};
+    status = "ok";
+    return result;
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+    stage(e, e.timingTurn, "model_end", { kind: "vision" });
+    if (e.DB) await e.DB.batch([
+      e.DB.prepare("INSERT INTO model_runs VALUES(?,?,?,?,?,?,?,?)").bind(
+        crypto.randomUUID(), "vision", "none", status, Date.now() - start,
+        Number(usage.prompt_tokens || 0), Number(usage.completion_tokens || 0), start,
+      ),
+      e.DB.prepare("INSERT INTO model_usage VALUES(?,?,?,?,1,?,?,?) ON CONFLICT(hour,kind,effort,status) DO UPDATE SET n=n+1,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,duration_ms=duration_ms+excluded.duration_ms").bind(
+        Math.floor(start / 3600000) * 3600000, "vision", "none", status,
+        Number(usage.prompt_tokens || 0), Number(usage.completion_tokens || 0), Date.now() - start,
+      ),
+    ]);
+  }
+}
 /** A single instrumented model boundary for routing, voice, plans and memory. */
 export async function model(
   e: any,

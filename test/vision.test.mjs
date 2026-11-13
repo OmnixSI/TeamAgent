@@ -32,7 +32,7 @@ const {
   describeImage,
   annotateTurn,
   imageNotesFor,
-  deepSeekVision,
+  workersAiVision,
   visionProvider,
   TEAM,
 } = await import("../.wrangler/test-vision.mjs");
@@ -154,92 +154,24 @@ test("V3 promptData leaves a large image data URL unchanged", () => {
   assert.deepEqual(promptData(body), body);
 });
 
-test("V4 deepSeekVision sends image_url, disables thinking and validates JSON", async () => {
+test("V4 workersAiVision sends an image to the binding and validates JSON", async () => {
   let body;
-  const result = await withFetch(
-    async (_url, init) => {
-      body = JSON.parse(init.body);
-      return Response.json({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                desc: "红色圆形",
-                text: "hello",
-                tags: ["red", "circle"],
-                meme: false,
-              }),
-            },
-            finish_reason: "stop",
-          },
-        ],
-        usage: {},
-      });
-    },
-    () =>
-      deepSeekVision({ DEEPSEEK_API_KEY: "fake" }).describe(
-        png,
-        "image/png",
-        "看图",
-        new AbortController().signal,
-      ),
-  );
+  const e = { AI: { async run(_model, input) { body = input; return { response: JSON.stringify({desc:"红色圆形",text:"hello",tags:["red","circle"],meme:false}) }; } } };
+  const result = await workersAiVision(e).describe(png,"image/png","看图",new AbortController().signal);
   assert.equal(result.desc, "红色圆形");
   assert.equal(result.text, "hello");
   assert.deepEqual(result.tags, ["red", "circle"]);
   assert.equal(result.meme, false);
-  assert.equal(body.thinking.type, "disabled");
-  assert.equal(body.reasoning_effort, "none");
-  assert.match(
-    body.messages[1].content[1].image_url.url,
-    /^data:image\/png;base64,/,
-  );
-  await assert.rejects(
-    withFetch(
-      async () =>
-        Response.json({
-          choices: [
-            {
-              message: { content: "not json" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: {},
-        }),
-      () =>
-        deepSeekVision({ DEEPSEEK_API_KEY: "fake" }).describe(
-          png,
-          "image/png",
-          "",
-          new AbortController().signal,
-        ),
-    ),
-  );
+  assert.match(body.image, /^data:image\/png;base64,/);
+  e.AI.run = async () => ({response:"not json"});
+  await assert.rejects(workersAiVision(e).describe(png,"image/png","",new AbortController().signal));
 });
 
 test("V5 describeImage caches, respects budget and provider switch", async () => {
   const e = env();
   let modelCalls = 0;
+  e.AI = { async run() { modelCalls++; return {response:JSON.stringify({desc:"一只猫",text:"hi",tags:["cat"],meme:true})}; } };
   const mock = async (url) => {
-    if (String(url).includes("api.deepseek.com")) {
-      modelCalls++;
-      return Response.json({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                desc: "一只猫",
-                text: "hi",
-                tags: ["cat"],
-                meme: true,
-              }),
-            },
-            finish_reason: "stop",
-          },
-        ],
-        usage: {},
-      });
-    }
     return new Response(new TextEncoder().encode(String(url)), {
       status: 200,
       headers: { "content-type": "image/png" },
@@ -371,6 +303,7 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
 
 test("V8 selftest is owner-only and returns a description", async () => {
   const e = env();
+  e.AI = { async run() { return {response:JSON.stringify({desc:"红色圆形",tags:[],meme:false})}; } };
   const original = globalThis.fetch;
   globalThis.fetch = async () =>
     Response.json({
@@ -455,7 +388,13 @@ const imageEvent = (id, text, extra = {}) => {
 
 const runChat = (e, id) => runChatJob(e, "chat-" + id);
 
-const chatMock = (state, opts = {}) => async (url, init) => {
+const chatMock = (e, state, opts = {}) => {
+  e.AI = { async run() {
+    state.visionCalls = (state.visionCalls || 0) + 1;
+    if (opts.hangVision) return new Promise(() => {});
+    return {response:JSON.stringify({desc:"一张图",text:"",tags:["test"],meme:false})};
+  } };
+  return async (url, init) => {
   const u = String(url);
   if (u.endsWith(".png") && u.startsWith("https://multimedia.nt.qq.com.cn/")) {
     state.imageFetches = (state.imageFetches || 0) + 1;
@@ -468,34 +407,6 @@ const chatMock = (state, opts = {}) => async (url, init) => {
     throw Error("unexpected fetch " + u);
   const body = JSON.parse(init.body);
   const system = String(body.messages?.[0]?.content || "");
-  if (body.reasoning_effort === "none" || body.thinking?.type === "disabled") {
-    state.visionCalls = (state.visionCalls || 0) + 1;
-    if (opts.hangVision) {
-      return new Promise((_, reject) => {
-        init.signal.addEventListener(
-          "abort",
-          () => reject(new DOMException("aborted", "AbortError")),
-          { once: true },
-        );
-      });
-    }
-    return Response.json({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify({
-              desc: "一张图",
-              text: "",
-              tags: ["test"],
-              meme: false,
-            }),
-          },
-          finish_reason: "stop",
-        },
-      ],
-      usage: {},
-    });
-  }
   if (system.includes("最后的嘴替模块")) {
     return Response.json({
       choices: [
@@ -522,13 +433,14 @@ const chatMock = (state, opts = {}) => async (url, init) => {
     usage: {},
   });
 };
+};
 
 test("V9 a mentioned image is described before the participation prompt", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     await qq(e, imageEvent("img1", "这是什么"));
     await runChat(e, "img1");
@@ -554,7 +466,7 @@ test("V10 eight images in a mentioned batch stop at three vision calls", async (
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     for (let i = 0; i < 8; i++)
       await qq(e, imageEvent("many" + i, "看看图" + i));
@@ -577,7 +489,7 @@ test("V11 annotateTurn returns after the deadline and leaves no notes", async ()
   const e = env();
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state, { hangVision: true });
+  globalThis.fetch = chatMock(e, state, { hangVision: true });
   const picks = [1, 2, 3].map((i) => ({
     messageId: "slow" + i,
     idx: 0,
@@ -614,7 +526,7 @@ test("V12 daily budget allows only one of three parallel images", async () => {
     .run();
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     for (let i = 0; i < 3; i++)
       await qq(e, imageEvent("budget" + i, "看图" + i));
@@ -638,7 +550,7 @@ test("V13 research reuses cached image notes without fetching or describing", as
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     await qq(e, imageEvent("research-img", "这是什么"));
     await runChat(e, "research-img");
@@ -651,7 +563,7 @@ test("V13 research reuses cached image notes without fetching or describing", as
   };
   state.participation = undefined;
   const original2 = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     await e.DB.prepare(
       "INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)",
@@ -730,7 +642,7 @@ test("P1-A a quoted image outside the 24-message window is visible in the prompt
     .run();
   const state = {};
   const original = globalThis.fetch;
-  globalThis.fetch = chatMock(state);
+  globalThis.fetch = chatMock(e, state);
   try {
     await runChatJob(e, "chat-quote-latest");
   } finally {
@@ -789,7 +701,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
   });
   const quotedState = {};
   let original = globalThis.fetch;
-  globalThis.fetch = chatMock(quotedState);
+  globalThis.fetch = chatMock(quoted, quotedState);
   try {
     await runChatJob(quoted, "chat-bot-quote");
   } finally {
@@ -818,7 +730,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
   });
   const plainState = {};
   original = globalThis.fetch;
-  globalThis.fetch = chatMock(plainState, { silent: true });
+  globalThis.fetch = chatMock(plain, plainState, { silent: true });
   try {
     await runChatJob(plain, "chat-plain-image");
   } finally {

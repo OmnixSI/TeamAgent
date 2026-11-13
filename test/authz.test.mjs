@@ -141,7 +141,7 @@ test('Authorization errors are specific while unrelated tool exceptions stay fil
   };
   await mocked([project('帮我建个任务修登录')],async({seen,tools})=>{
     await agentAnswer(e,context);
-    assert.ok(tools.some(t=>t.unavailable&&t.reason==='未能获得资料，不能据此编造结论'));
+    assert.ok(tools.some(t=>t.unavailable&&t.ok===false&&t.error_kind==='internal'&&t.next_action));
     assert.ok(!JSON.stringify(seen).includes('private-diagnostic-must-not-escape'));
   });
 });
