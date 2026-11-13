@@ -21,7 +21,11 @@ function execute(command) {
     throw Error("Migration failed");
   return result;
 }
+<<<<<<< HEAD
 for (const file of ["schema.sql", "migrations/0002_plan_authority.sql", "migrations/0003_stage_timings.sql", "migrations/0004_repo_index.sql", "migrations/0020_history_idx.sql", "migrations/0021_summaries.sql", "migrations/0022_profiles.sql", "migrations/0025_tool_calls.sql"]) {
+=======
+for (const file of ["schema.sql", "migrations/0002_plan_authority.sql", "migrations/0003_stage_timings.sql", "migrations/0004_repo_index.sql", "migrations/0023_episodes.sql"]) {
+>>>>>>> pkg/F7-6
   const result = execute(readFileSync(file, "utf8"));
   if (file === "schema.sql") { ensureVideoWaitAttempts(execute); ensureVideoWaitPhase(execute); }
   console.log(file + ": " + result.length + " statements applied");
