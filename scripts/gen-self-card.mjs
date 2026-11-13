@@ -124,6 +124,17 @@ async function registries() {
       format: "esm",
       outfile,
       logLevel: "silent",
+      // describe-self.ts imports the card this script is about to write: stub it
+      // while bundling so a fresh checkout (no generated file yet) can bootstrap.
+      plugins: [
+        {
+          name: "self-card-stub",
+          setup(b) {
+            b.onResolve({ filter: /self-card\.generated$/ }, () => ({ path: "self-card-stub", namespace: "sc-stub" }));
+            b.onLoad({ filter: /.*/, namespace: "sc-stub" }, () => ({ contents: "export const SELF_CARD = {};", loader: "js" }));
+          },
+        },
+      ],
     });
     return await import(pathToFileURL(outfile).href);
   } catch (error) {

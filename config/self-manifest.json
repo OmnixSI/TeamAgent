@@ -1079,6 +1079,48 @@
       "requires_env": [],
       "runs_on": "cloud",
       "default_state": "on"
+    },
+    {
+      "id": "self_knowledge",
+      "title": "自知（自己的能力与代码）",
+      "aliases": [
+        "自知",
+        "自我介绍",
+        "你是怎么实现的",
+        "你用什么模型",
+        "仓库构成",
+        "你的代码",
+        "describe_self",
+        "自知卡"
+      ],
+      "tools": [
+        "describe_self"
+      ],
+      "how": "发布时 scripts/gen-self-card.mjs 从代码和 config/self-manifest.json 生成自知卡（带提交号）；被问到自身能力、厂商模型、本机/云端、开关、代码位置、仓库构成时，describe_self 读卡并合并运行时真实开关与环境绑定（只看有无，不看值）；细节再用 repo_file 读 OmnixSI/TeamAgent 源码。",
+      "files": [
+        {
+          "path": "src/self-card.ts",
+          "anchor": "export function renderSelf",
+          "role": "合并实时状态并渲染各 topic"
+        },
+        {
+          "path": "src/tools/describe-self.ts",
+          "anchor": "describe_self",
+          "role": "工具入口"
+        },
+        {
+          "path": "scripts/gen-self-card.mjs",
+          "anchor": "自知卡生成失败",
+          "role": "构建期生成与清单校验"
+        }
+      ],
+      "providers": [],
+      "switches": [
+        "describe_self"
+      ],
+      "requires_env": [],
+      "runs_on": "cloud",
+      "default_state": "on"
     }
   ],
   "vendors": [

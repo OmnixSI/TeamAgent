@@ -255,13 +255,14 @@ function repoMap(card: SelfCard): string {
   const lines = [
     `仓库：${text(m.repo, "未登记")}`,
     `顶层目录：${(m.top_dirs || []).map((d) => `${d.path}（${text(d.role, "未登记")}）`).join("、") || "未登记"}`,
-    `关键模块（按行数前 ${MODULE_MAX}）：${modules.join("、") || "未登记"}`,
     `入口：${(m.entrypoints || []).map((p) => `${p.kind} ${p.path}${p.line ? ":" + p.line : ""}${text(p.symbol) && text(p.symbol) !== p.kind ? " " + text(p.symbol) : ""}`).join("、") || "未登记"}`,
-    `数据表：${(m.tables || []).map((t) => `${t.name}（${t.migration}）`).join("、") || "未登记"}`,
+    `数据表：${(m.tables || []).map((t) => t.name).join("、") || "未登记"}`,
     `定时：${(m.crons || []).join("、") || "无"}`,
     `队列：${(m.queues || []).join("、") || "无"}`,
     `绑定：${(m.bindings || []).join("、") || "无"}`,
     `具体代码用 repo_file 读 ${text(m.repo, "OmnixSI/TeamAgent")}，给文件和大致行号。`,
+    // Last on purpose: when the segment is clipped only the long module list is lost.
+    `关键模块（按行数前 ${MODULE_MAX}）：${modules.join("、") || "未登记"}`,
   ];
   return lines.join("\n");
 }
