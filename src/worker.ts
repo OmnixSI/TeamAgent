@@ -1452,69 +1452,77 @@ async function api(r: Request, e: Env) {
       });
     }
     if (path.endsWith("/delivery/report") && method === "POST") {
-      const b: any = await r.json();
+      const b: any = await r.json().catch(() => null);
+      if (!b || typeof b !== "object")
+        return json({ error: "invalid delivery receipt" }, 400);
       if (!["sent", "failed", "unknown"].includes(b.status))
         return json({ error: "invalid status" }, 400);
-      const d = await e.DB.prepare("SELECT * FROM deliveries WHERE id=?")
-        .bind(b.id)
-        .first();
-      if (!d) return json({ error: "unknown delivery" }, 404);
-      if (["sent", "failed", "unknown"].includes(d.status))
-        return json({ ok: true, already: true });
-      const count = Math.min(
-        JSON.parse(d.files).length,
-        Math.max(0, Number(b.sent_count) || 0),
-      );
-      if (b.status === "sent" && count !== JSON.parse(d.files).length)
-        return json({ error: "附件数量未匹配" }, 400);
-      const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
-      const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
-      const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
-        (b.retention_removed === true
-          ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
-          : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
-      const updated = await e.DB.prepare(
-        "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
-      )
-        .bind(b.status, count, iso(), b.id)
-        .first();
-      if (updated) {
-        await activity(
-          e,
-          "delivery." + b.status,
-          d.job_id,
-          "QQ网关",
-          allConfirmed
-            ? "QQ 已确认发送全部附件"
-            : b.status === "unknown"
-              ? unknownNotice
-            : b.exhausted === true
-              ? "附件交付已停止，临时文件已清理"
-              : "附件发送失败，保留成果供接手",
-          b.id + "-result",
-        );
-        const message = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
-          .bind(d.message_id)
+      if (typeof b.id !== "string" || !b.id)
+        return json({ error: "invalid delivery id" }, 400);
+      try {
+        const d = await e.DB.prepare("SELECT * FROM deliveries WHERE id=?")
+          .bind(b.id)
           .first();
-        if (message)
-          await job(e, "delivery-notice-" + b.id, "voice_notice", {
-            message: message.id,
-            status:
-              allConfirmed
-                ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
-                : b.exhausted === true
-                  ? b.status === "unknown"
-                    ? unknownNotice
-                    : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
-                : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
-            result: {
-              files: JSON.parse(d.files),
-              sent_count: count,
-              status: b.status,
-            },
-          });
+        if (!d) return json({ error: "unknown delivery" }, 404);
+        if (["sent", "failed", "unknown"].includes(d.status))
+          return json({ ok: true, already: true });
+        const count = Math.min(
+          JSON.parse(d.files).length,
+          Math.max(0, Number(b.sent_count) || 0),
+        );
+        if (b.status === "sent" && count !== JSON.parse(d.files).length)
+          return json({ error: "附件数量未匹配" }, 400);
+        const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
+        const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
+        const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
+          (b.retention_removed === true
+            ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
+            : `未确认文件最多保留 24 小时（至 ${new Date(Number(b.retain_until) || Date.now() + 86400000).toLocaleString("zh-CN", {timeZone:"Australia/Sydney",hour12:false})} 悉尼时间），供人工取回；总计最多 20 个文件、100 MiB，超限提前清理，到期后下一轮交付检查自动清理。`);
+        const updated = await e.DB.prepare(
+          "UPDATE deliveries SET status=?,sent_count=?,updated_at=? WHERE id=? AND status='pending' RETURNING id",
+        )
+          .bind(b.status, count, iso(), b.id)
+          .first();
+        if (updated) {
+          await activity(
+            e,
+            "delivery." + b.status,
+            d.job_id,
+            "QQ网关",
+            allConfirmed
+              ? "QQ 已确认发送全部附件"
+              : b.status === "unknown"
+                ? unknownNotice
+              : b.exhausted === true
+                ? "附件交付已停止，临时文件已清理"
+                : "附件发送失败，保留成果供接手",
+            b.id + "-result",
+          );
+          const message = await e.DB.prepare("SELECT * FROM messages WHERE id=?")
+            .bind(d.message_id)
+            .first();
+          if (message)
+            await job(e, "delivery-notice-" + b.id, "voice_notice", {
+              message: message.id,
+              status:
+                allConfirmed
+                  ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
+                  : b.exhausted === true
+                    ? b.status === "unknown"
+                      ? unknownNotice
+                      : "附件交付连续失败，已停止交付，临时文件已清理。需要文件时请根据原消息重新交办。"
+                  : "附件未确认送达，请群友先核对群文件；结果与接力材料在开发台，不再自动重发。",
+              result: {
+                files: JSON.parse(d.files),
+                sent_count: count,
+                status: b.status,
+              },
+            });
+        }
+        return json({ ok: true });
+      } catch {
+        return json({ error: "delivery report failed" }, 500);
       }
-      return json({ ok: true });
     }
     if (path.endsWith("/media/claim") && method === "POST") {
       const b: any = await r.json();
