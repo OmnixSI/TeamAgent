@@ -726,6 +726,8 @@ async function processJob(e: Env, id: string) {
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
+      // R8: map the message to the video it asked about, even when the fetch is already cached or still waiting.
+      if (target && (e as any).tail) (e as any).tail.cache.push(["msgref:v1:" + latest.id, JSON.stringify({ ref: target.ref, match: isTitleRef(target.ref) ? "title" : "id" }), iso()]);
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;

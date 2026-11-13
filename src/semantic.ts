@@ -27,6 +27,7 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+import { biliNoteText } from "./fetchjobs";
 export type Services = {
   llm: (
     kind: "chat" | "plan" | "memory",
@@ -979,19 +980,49 @@ export async function agentAnswer(e: any, context: any) {
             ).results;
             const query = String(a.query || "").slice(0, 150),
               sourceId = String(a.source_id || "");
-            const materials = (
+            const media = (
               await e.DB.prepare(
                 "SELECT j.id,json_extract(j.payload,'$.title') AS title,json_extract(j.payload,'$.message') AS source_id,j.status,n.body AS result,d.status AS delivery_status,d.sent_count FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') LEFT JOIN deliveries d ON d.job_id=j.id LEFT JOIN messages m ON m.id=json_extract(j.payload,'$.message') WHERE j.kind='media' AND (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(COALESCE(m.body,''),?)>0) ORDER BY j.created_at DESC LIMIT 5",
               )
                 .bind(sourceId, sourceId, query, query, query)
                 .all()
             ).results;
+            // R8: the message -> video mapping survives cache hits, pending waits and title cards.
+            const sources = (
+              await e.DB.prepare(
+                "SELECT m.id AS source_id,r.body AS ref,a.body AS alias,n.body AS result FROM messages m JOIN media_notes r ON r.id='msgref:v1:'||m.id LEFT JOIN media_notes a ON a.id='alias:v1:bili:'||json_extract(r.body,'$.ref') LEFT JOIN media_notes n ON n.id='resource:v1:bili:'||json_extract(a.body,'$.bvid')||':p:'||json_extract(a.body,'$.page') WHERE (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(m.body,?)>0) ORDER BY m.rowid DESC LIMIT 5",
+              )
+                .bind(sourceId, sourceId, query, query, query)
+                .all()
+            ).results;
+            const materials: any[] = media.map((r: any) => ({
+              ...r,
+              result: utilityText(r.result).slice(0, 6000),
+            }));
+            for (const row of sources) {
+              if (materials.length >= 5 || !row.result) continue;
+              let note: string, fetchedAt = now();
+              try {
+                const value = JSON.parse(row.result);
+                note = biliNoteText(value);
+                if (typeof value.fetched_at === "string") fetchedAt = value.fetched_at;
+              } catch {
+                continue;
+              }
+              let ref: any = {};
+              try { ref = JSON.parse(row.ref); } catch {}
+              const prefix = ref.match === "title" ? "（按标题匹配，未必是同一视频）\n" : "";
+              materials.push({
+                id: "msgref:v1:" + row.source_id,
+                source_id: row.source_id,
+                ref: ref.ref ?? null,
+                match: ref.match === "title" ? "title" : "id",
+                result: prefix + untrusted("bilibili", note, fetchedAt),
+              });
+            }
             result = {
               tasks,
-              materials: materials.map((r: any) => ({
-                ...r,
-                result: utilityText(r.result).slice(0, 6000),
-              })),
+              materials,
               board: "https://inkboard-team.inkboard-server.workers.dev",
             };
             break;
