@@ -16,7 +16,7 @@ import type { Trace, Snapshot, JudgeCall, JudgeResult } from './types';
 type Env = { DB: any; [key: string]: any };
 type Row = Record<string, any>;
 // Test injection is an explicit JS argument, never a deployed variable or HTTP input.
-export type TickOptions = { now?: () => number; fetch?: typeof fetch };
+export type TickOptions = { now?: () => number; fetch?: typeof fetch; sampleIds?: string[] };
 const DAY = 86400000;
 const MAX_NIGHT_TRACES = 60;
 const parse = (s: any, fallback: any = {}) => { try { return typeof s === 'string' ? JSON.parse(s) : s ?? fallback; } catch { return fallback; } };
@@ -191,11 +191,13 @@ export async function reviewTick(env: Env, options: TickOptions = {}) {
         const unseen = (t: Trace) => !known.has(t.id) || known.get(t.id)!.state === 'pending';
         const samples = page.traces.filter(t => !t.signals.length && t.inbound?.mentioned === 1 && unseen(t))
           .map(t => ({ t, key: sampleKey(run.id + '|' + t.id) })).sort((a,b) => a.key - b.key || a.t.id.localeCompare(b.t.id)).slice(0,2).map(x => x.t.id);
+        // Test-only JS injection (never a deployed variable): force-sample named traces.
+        for (const t of page.traces) if (options.sampleIds?.includes(t.id) && unseen(t) && !samples.includes(t.id)) samples.push(t.id);
         stats.sampled_ids = samples;
         const pool = new Map<string,Trace>(oldTraces.filter(t => t.state === 'pending' && t.created_at >= now - 3*DAY).map(t => [t.id,parse(t.trace_json)]));
         for (const t of page.traces) if (unseen(t)) pool.set(t.id,t);
         stats.review_targets = [...pool.values()].filter(t => t.signals.length || samples.includes(t.id))
-          .sort((a,b) => priorityOf(b.signals) - priorityOf(a.signals) || a.id.localeCompare(b.id)).slice(0,MAX_NIGHT_TRACES).map(t => t.id);
+          .sort((a,b) => Number(samples.includes(b.id)) - Number(samples.includes(a.id)) || priorityOf(b.signals) - priorityOf(a.signals) || a.id.localeCompare(b.id)).slice(0,MAX_NIGHT_TRACES).map(t => t.id);
         stats.review_selection = true;
       }
       const eligible = (t: Trace) => t.signals.length > 0 || stats.sampled_ids.includes(t.id);

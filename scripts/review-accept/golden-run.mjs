@@ -257,14 +257,15 @@ export async function goldenRun({ mode = "full", variant = "base", extraNights =
   }
   const { specs } = makeSpecs({ golden, negatives, idOf, traces, variant });
   const fetch = fakeFetch({ specs });
+  const sampleIds = [...specs.keys()]; // D-6b samples unsignalled traces; golden labels must still be judged
 
   const counts = [];
   for (const night of sim.nights) {
-    counts.push(...await finish(e, Date.parse(night.utc), { fetch }, 1000));
+    counts.push(...await finish(e, Date.parse(night.utc), { fetch, sampleIds }, 1000));
   }
   for (let index = 0; index < extraNights; index++) {
     const at = Date.parse(sim.nights.at(-1).utc) + (index + 1) * DAY;
-    counts.push(...await finish(e, at, { fetch }, 1000));
+    counts.push(...await finish(e, at, { fetch, sampleIds }, 1000));
   }
 
   const result = {
