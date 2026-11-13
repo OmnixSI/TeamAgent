@@ -129,8 +129,10 @@ export async function speakBrief(e: any, brief: any, context: any) {
     },
     60000,
   );
-  const text = d.choices?.[0]?.message?.content;
-  if (!text?.trim() || d.choices[0].finish_reason === "length")
+  const raw = d.choices?.[0]?.message?.content;
+  // DeepSeek sometimes leaks its tool-call markup (<｜｜DSML｜｜ ...>) into the text; drop those lines, and treat "nothing left" as incomplete.
+  const text = typeof raw === "string" ? raw.split("\n").filter((l) => !/DSML/.test(l)).join("\n") : raw;
+  if (!text?.trim() || d.choices[0].finish_reason === "length" || (/DSML/.test(String(raw)) && !/"text"\s*:\s*"[^"]{4,}/.test(text)))
     throw Error("voice incomplete");
   if (!brief.acceptedActions?.length) {
     const v = decodeVoice(text);
