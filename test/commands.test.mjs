@@ -40,6 +40,7 @@ test('help is deterministic, short, and answers slash plus aliases', async () =>
     assert.match(row.body, /\/stop/);
     assert.match(row.body, /\/方案/);
     assert.match(row.body, /\/开工/);
+    assert.match(row.body, /@我 \+ 帮我画\/生成一张……的图/);
     assert.ok(row.body.split('\n').length <= 12, 'help must stay within 12 lines');
   }
   assert.match(out[0].body, /撤回/);

@@ -7,22 +7,38 @@
  * out; unknown tools fall back to their description. Switched-off tools stay
  * visible and carry 「当前已关闭」 instead of silently disappearing.
  *
+ * F8-4: F7/F8 extension tools (EXTRA_TOOLS) collapse into one 「还能：…」 line.
+ * The base tools keep their full wording (repo_* read-only constraints stay on
+ * their own rows) so CARD_MAX can no longer truncate them into uselessness.
+ *
  * Pure and D1-free: callers pass the already-loaded switches, this module
  * never touches the database or the network.
  */
+import { EXTRA_TOOLS } from "./tools/index";
+
 export const CARD_MAX = 1200;
 
 /** Required verbatim: the bot must never claim it can write the repo itself. */
 export const CARD_BOUNDARY =
   "我对代码仓库只读，不能直接改文件、提交或合并；要改代码我会建开发任务交给团队。";
 
-const CARD_HEADER = "能力卡（当前部署真实存在的工具，每个工具一行）：";
+const CARD_HEADER = "能力卡（当前部署真实存在的工具）：";
 const CARD_TAIL = "没列出的就是不能做，不要声称能做。";
-const DEFAULT_LIMIT = "只能按工具描述的用途使用";
+/** Unknown tools get no invented constraint: their own description is the limit. */
+const DEFAULT_LIMIT = "";
+const EXTRA_LEAD = "还能：";
+const EXTRA_SUFFIX = "（各只读/需明确要求）";
 
 /** Switch name (without the off: prefix) -> tool names it gates. */
 const TOOL_SWITCHES: Record<string, readonly string[]> = {
   repo_tools: ["repo_changes", "repo_commit", "repo_file"],
+  generate_image: ["generate_image"],
+  openai: ["generate_image"],
+};
+
+/** Card wording that must not depend on the registered tool description. */
+const DESC_OVERRIDES: Record<string, string> = {
+  generate_image: "按你给的描述生成一张图并发到群里",
 };
 
 /** Constraint half of each row: what the tool cannot do, or what it needs. */
@@ -38,7 +54,11 @@ const LIMITS: Record<string, string> = {
   repo_changes: "只读；私有仓库需 GitHub 只读令牌，本机部分需本机 runner",
   repo_commit: "只读；私有仓库需 GitHub 只读令牌",
   repo_file: "只读；私有仓库需 GitHub 只读令牌，本机回退需本机 runner",
+  generate_image: "需成员明确要求，每人每天限 5 张，会被内容安全拒绝",
 };
+
+/** Names registered through the F7/F8 extension registry (one merged line). */
+const EXTRA_NAMES = new Set(EXTRA_TOOLS.map((t) => t.name));
 
 /** True when an admin switch (off:<name>=1) has disabled this tool. */
 export function toolDisabled(
@@ -64,19 +84,43 @@ function clip(text: string, max: number): string {
 
 type Entry = { name: string; desc: string; limit: string; off: boolean };
 
-function compose(entries: Entry[], descMax: number): string {
+function row(e: Entry, descMax: number): string {
+  return (
+    "- " +
+    e.name +
+    "：" +
+    clip(e.desc, descMax) +
+    (e.limit ? " / " + e.limit : "") +
+    (e.off ? "（当前已关闭）" : "")
+  );
+}
+
+/** generate_image is named by the user, so it leads the merged line. */
+function extraLine(extras: Entry[]): string {
+  const ordered = extras
+    .filter((e) => e.name === "generate_image")
+    .concat(extras.filter((e) => e.name !== "generate_image"));
+  const parts = ordered.map((e) => {
+    if (e.name !== "generate_image")
+      return e.name + (e.off ? "（当前已关闭）" : "");
+    return (
+      e.name +
+      "（" +
+      e.desc +
+      " / " +
+      e.limit +
+      (e.off ? "；当前已关闭" : "") +
+      "）"
+    );
+  });
+  return EXTRA_LEAD + parts.join("、") + EXTRA_SUFFIX;
+}
+
+function compose(rows: Entry[], extras: Entry[], descMax: number): string {
   return [
     CARD_HEADER,
-    ...entries.map(
-      (e) =>
-        "- " +
-        e.name +
-        "：" +
-        clip(e.desc, descMax) +
-        " / " +
-        e.limit +
-        (e.off ? "（当前已关闭）" : ""),
-    ),
+    ...rows.map((e) => row(e, descMax)),
+    ...(extras.length ? [extraLine(extras)] : []),
     CARD_BOUNDARY,
     CARD_TAIL,
   ].join("\n");
@@ -85,9 +129,16 @@ function compose(entries: Entry[], descMax: number): string {
 /** Build the card from the tools actually registered in this deployment. */
 export function capabilityCard(
   tools: any[],
-  opts: { switches?: Record<string, string | undefined> } = {},
+  opts: {
+    switches?: Record<string, string | undefined>;
+    /** Defaults to the F7/F8 registry; pass a set to keep other tools as rows. */
+    extraNames?: Iterable<string>;
+  } = {},
 ): string {
   const switches = opts?.switches || {};
+  const extraNames = opts?.extraNames
+    ? new Set(opts.extraNames)
+    : EXTRA_NAMES;
   const seen = new Set<string>();
   const entries: Entry[] = [];
   for (const tool of Array.isArray(tools) ? tools : []) {
@@ -97,16 +148,18 @@ export function capabilityCard(
     const desc = firstSentence(String(tool?.function?.description || ""));
     entries.push({
       name,
-      desc: desc || "按工具描述使用",
+      desc: DESC_OVERRIDES[name] || desc || "按工具描述使用",
       limit: LIMITS[name] || DEFAULT_LIMIT,
       off: toolDisabled(name, switches),
     });
   }
-  const full = compose(entries, Number.POSITIVE_INFINITY);
+  const rows = entries.filter((e) => !extraNames.has(e.name));
+  const extras = entries.filter((e) => extraNames.has(e.name));
+  const full = compose(rows, extras, Number.POSITIVE_INFINITY);
   if ([...full].length <= CARD_MAX) return full;
   for (const max of [40, 28, 20, 14, 10, 6, 3]) {
-    const shortened = compose(entries, max);
+    const shortened = compose(rows, extras, max);
     if ([...shortened].length <= CARD_MAX) return shortened;
   }
-  return [...compose(entries, 1)].slice(0, CARD_MAX).join("");
+  return [...compose(rows, extras, 1)].slice(0, CARD_MAX).join("");
 }
