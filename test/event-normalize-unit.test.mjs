@@ -69,3 +69,23 @@ test('P1 malformed optional payload pieces and invalid timestamp do not throw',(
  const ne=normalize('UNKNOWN',{mentions:[null,4],attachments:[null],msg_elements:[null],message_scene:{ext:[null,3]}});
  assert.equal(ne.type,'UNKNOWN');assert.ok(Number.isNaN(ne.ts));assert.deepEqual(ne.segments,[]);
 });
+
+for(const kind of [0,101])for(const source of ['both','element','content'])
+ test(`rework 101 content priority (${kind}, ${source}) keeps images and mentions`,()=>{
+  const content='大家早上好呀 <@bot>',raw={...base,message_type:kind,
+   content:source==='element'?'':content,mentions:[{id:'bot',is_you:true}],
+   msg_elements:[{message_type:101,content:source==='content'?'':content,mentions:[{id:'bot',is_you:true}],attachments:[{url:image,content_type:'image/png'}]}]};
+  const ne=normalize('GROUP_MESSAGE_CREATE',raw);
+  assert.equal(ne.segments.filter(s=>s.type==='text').map(s=>s.text).join(''),'大家早上好呀 ');
+  assert.equal(ne.segments.filter(s=>s.type==='mention').length,1);
+  assert.equal(ne.segments.find(s=>s.type==='mention').self,true);
+  assert.equal(ne.segments.filter(s=>s.type==='image').length,1);
+ });
+
+for(const content of [' ', '\n', '', '真正的正文'])
+ test('rework2 101 treats trimmed blank content as absent '+JSON.stringify(content),()=>{
+  const ne=normalize('GROUP_MESSAGE_CREATE',{...base,content,message_type:101,
+   msg_elements:[{message_type:101,content:'大家早上好呀',attachments:[{url:image,content_type:'image/png'}]}]});
+  assert.equal(ne.segments.filter(s=>s.type==='text').map(s=>s.text).join('').trim(),content.trim()||'大家早上好呀');
+  assert.equal(ne.segments.filter(s=>s.type==='image').length,1);
+ });

@@ -112,12 +112,12 @@ export function toInbound(ne: NormalizedEvent, raw: any): Inbound {
   const d = raw || {}, elements = records(d.msg_elements), kind = elementKind(d);
   const parallel = elements.filter(el => elementKind(el)==='101' || kind==='101' && !['102','103'].includes(elementKind(el)));
   const quotes = kind==='102' ? [] : kind==='103' ? elements : elements.filter(el=>elementKind(el)==='103' || kind!=='101' && !['101','102'].includes(elementKind(el)));
-  const original = String(d.content || '') + parallel.map(el=>String(el.content || el.text || el.text_element?.content || '')).join('');
+  const original = String(d.content || '').trim() || parallel.map(el=>String(el.content || el.text || el.text_element?.content || '')).join('');
   const body = redact(segmentText(ne.segments,original)).replace(/^\s*<@!?[^>]+>\s*/,'').trim();
   const tokens = ne.segments.filter((s):s is Extract<Segment,{type:'mention'}>=>s.type==='mention');
   const rawMentions=records(d.mentions);
-  const mentions:Mention[] = rawMentions.map((m:any,i:number) => {
-    const id=String(m.member_openid ?? m.id ?? ''),token=tokens.find(s=>s.id===id) || (tokens.length===rawMentions.length ? tokens[i] : undefined);
+  const mentions:Mention[] = rawMentions.map((m:any) => {
+    const id=String(m.member_openid ?? m.id ?? ''),token=tokens.find(s=>s.id===id);
     return {id:token?.id ?? id,name:token?.name ?? String(m.nickname ?? m.username ?? ''),isBot:token?.self ?? !!m.is_you};
   });
   const refMsgIdx=ne.refIdx,reply=ne.segments.find((s):s is Extract<Segment,{type:'reply'}>=>s.type==='reply');

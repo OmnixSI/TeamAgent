@@ -70,3 +70,16 @@ test('P4 a preview 403 yields an explicit failed-evidence placeholder and no inv
  assert.match(view.material.quote.media[0],/读取失败.*HTTP 403/);assert.match(view.material.quote.media[0],/请重发/);
  assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM message_images').first()).n,0);
 });
+
+test('rework2 quote budget counts both elements and attachments toward 64 items',()=>{
+ const elements=Array.from({length:70},(_,i)=>({author:{id:'owner'+i},attachments:[{...attachment,url:url+'/'+i}]}));
+ const images=api.quotedImages({message_type:103,msg_elements:elements},100);
+ assert.equal(images.length,32);
+ assert.deepEqual(images.map(x=>x.owner),elements.slice(0,32).map(x=>x.author.id));
+});
+test('rework2 one quoted element leaves budget for at most 63 attachments',()=>{
+ const attachments=Array.from({length:70},(_,i)=>({...attachment,url:url+'/'+i}));
+ const raw={message_type:103,msg_elements:[{attachments}]};
+ assert.equal(api.quotedImages(raw,100).length,63);
+ assert.equal(api.quotedImages(raw).length,3);
+});
