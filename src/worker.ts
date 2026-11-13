@@ -44,6 +44,7 @@ import {
 } from "./vision";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { handleCommand } from "./commands";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
 import {
@@ -301,6 +302,18 @@ async function receive(r: Request, e: Env) {
   const text = ib.body;
   const direct =
     !m.msg_elements?.length && (!m.message_type || m.message_type === 0);
+  if (
+    direct &&
+    (await handleCommand(e, {
+      groupId: m.group_openid,
+      messageId: m.id,
+      memberId: "qq:" + String(m.author.member_openid || m.author.id),
+      text,
+    }))
+  ) {
+    await sendOutbox(e);
+    return json({ op: 12, d: 0 });
+  }
   const c = direct ? command(text) : null;
   const ref = ib.refMsgIdx
     ? await e.DB.prepare(
