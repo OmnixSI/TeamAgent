@@ -47,6 +47,7 @@ test('help is deterministic, short, and answers slash plus aliases', async () =>
 
 test('status reports live facts and degrades when optional tables are absent', async () => {
   const e = await bind(env());
+  for (const t of ['schedules', 'turn_tools']) await e.DB.prepare(`DROP TABLE IF EXISTS ${t}`).run(); // F6-6/F6-3 schema now ship these; simulate absent
   e.RELEASE = 'c1a6c9d';
   e.GITHUB_TOKEN = 'present-but-never-read';
   await put(e, 'runner_seen', new Date(Date.now() - 3 * 60000).toISOString());
@@ -75,6 +76,7 @@ test('status reports live facts and degrades when optional tables are absent', a
 
 test('status includes schedules and recent tool failure when those tables exist', async () => {
   const e = await bind(env());
+  for (const t of ['schedules', 'turn_tools']) await e.DB.prepare(`DROP TABLE IF EXISTS ${t}`).run(); // use this test's own table shapes
   await e.DB.prepare(`CREATE TABLE schedules(id TEXT PRIMARY KEY,group_id TEXT,owner TEXT,kind TEXT,tz TEXT,spec TEXT,status TEXT,
     next_run_at INTEGER,last_run_at INTEGER,fail_count INTEGER DEFAULT 0,last_error TEXT,source_msg_id TEXT,created_at INTEGER)`).run();
   await e.DB.prepare(`CREATE TABLE turn_tools(id TEXT PRIMARY KEY,turn_id TEXT NOT NULL,group_id TEXT,name TEXT NOT NULL,args TEXT NOT NULL DEFAULT '{}',
