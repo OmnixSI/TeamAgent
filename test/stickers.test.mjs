@@ -34,7 +34,7 @@ test('S1 byte descriptions share the original image cache and exact return value
  await models(e,async state=>{
   const first=await vision.describeBytes(e,bytes,'image/gif','表情图片',AbortSignal.timeout(1000));
   const second=await vision.describeImage(e,{kind:'image',url:'https://multimedia.nt.qq.com.cn/sticker.gif'},'表情图片',AbortSignal.timeout(1000));
-  assert.deepEqual(second,first);assert.equal(first.sha,sha+':'+vision.VISION_VERSION);assert.equal(state.vision,1);assert.equal(state.images,1);
+  assert.deepEqual(second,first);assert.ok(first.sha.startsWith(sha+':'));assert.match(first.sha,/:v1$/);assert.equal(state.vision,1);assert.equal(state.images,1);
  });
 });
 test('S2/S3 same sender stays a candidate; second sender queues exactly one tag job, including races',async()=>{
