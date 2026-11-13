@@ -72,7 +72,7 @@ test('VD-R-GUARD VD-R-SHADOW-LOCAL three real fixture nights finish with bounded
   const target=join(dir,'copy.sqlite');if(real)copyFileSync(join(replay,'seed-437.sqlite'),target);
   const {e,db}=setup('shadow',real?target:undefined);t.after(()=>db.close());if(!real)seed(db,40);
   const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'review_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
-  const snapshot=()=>tables.map(({name})=>[name,JSON.stringify(db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all())]);const before=snapshot(),seen=[];
+  const snapshot=()=>tables.map(({name})=>[name,JSON.stringify((()=>{try{return db.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all();}catch{return db.prepare('SELECT * FROM "'+name+'" ORDER BY 1,2').all();}})())]);const before=snapshot(),seen=[];
   const nights=real?JSON.parse(readFileSync(join(replay,'sim-nights.json'),'utf8')).nights.map(n=>Date.parse(n.utc)):[night-86400000,night,night+86400000];
   const counts=[];for(const at of nights)counts.push(...await finish(e,at,{fetch:fakeFetch(seen,{issue:false})},1000));
   t.diagnostic(`real_fixture=${real}; nights=3; runs=${db.prepare('SELECT count(*) n FROM review_runs').get().n}; traces=${db.prepare('SELECT count(*) n FROM review_traces').get().n}; max_tick_statements=${Math.max(...counts)}; real_sends=0; online_rows_written=0`);

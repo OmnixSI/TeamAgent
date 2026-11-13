@@ -1,5 +1,6 @@
 import type {Card} from './inbound';
-import {biliNoteText, type BiliResult} from './fetchjobs';
+import {biliNoteText} from './bilinote';
+import type {BiliResult} from './fetchjobs';
 import {untrusted} from './untrusted';
 
 export const BILI_CARD_NOTE = '【仅卡片（标题+预览）】QQ 只提供了这张 B站卡片的标题和预览图，没有视频链接；未读取视频内容。只能依据卡片标题讨论。请在 B 站点“复制链接”发来。';
