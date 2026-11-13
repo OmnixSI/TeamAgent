@@ -1,5 +1,6 @@
 import { chunks } from "./d1";
 import { TEAM } from "./config";
+import { WorkersAiBudgetFault } from "./ai-budget";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
 import { renderMentions } from "./inbound";
@@ -44,6 +45,8 @@ export type VisionEvent = {
   bytes?: number;
   hop?: number;
   detail?: "url" | "redirect_host" | "redirect_location";
+  /** Human diagnostic only, e.g. why the provider chain switched. Never a URL or prompt. */
+  note?: string;
   elapsedMs?: number;
   traceId?: string;
 };
@@ -76,7 +79,7 @@ export function visionFailure(event: VisionEvent): VisionToolFailure {
   const reason = event.reason;
   let error_kind = "upstream", detail = "图片分析失败", next_action = "稍后重试，或提供图中文字";
   if (reason === "cap" || reason === "provider_cap") {
-    error_kind = "budget"; detail = reason === "cap" ? "今日看图预算已用完" : "视觉模型额度超额";
+    error_kind = "budget"; detail = reason === "cap" ? "今日看图预算已用完" : "今天看图额度用完了";
     next_action = "等待额度恢复后重试，或先提供图中文字";
   } else if (reason === "unsupported" || reason === "disabled") {
     error_kind = "runner_unsupported"; detail = reason === "disabled" ? "看图功能已关闭" : "视觉模型不支持或 AI 未绑定";
@@ -106,7 +109,7 @@ export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: Image
     blocked: "图片地址不符合安全规则", redirect_limit: "图片跳转超过2次上限", http: "图片服务器返回异常状态", mime: "返回内容不是支持的图片类型",
     oversize: "图片超过大小上限", empty: "返回图片为空", network: "网络请求失败",
     timeout: "取图或分析超时", database: "图片记录读写失败", cap: "今日看图预算已用完",
-    disabled: "看图功能已关闭", unsupported: "视觉模型不支持或AI未绑定", provider_cap: "视觉模型额度超额", provider_denied: "视觉模型拒绝请求", invalid: "视觉描述未成功生成",
+    disabled: "看图功能已关闭", unsupported: "视觉模型不支持或AI未绑定", provider_cap: "今天看图额度用完了", provider_denied: "视觉模型拒绝请求", invalid: "视觉描述未成功生成",
   };
   for (const outcome of outcomes) {
     if (outcome.status !== "failed" || !outcome.reason || !reasons[outcome.reason]) continue;
@@ -472,6 +475,8 @@ export function workersAiVision(e: any): VisionProvider {
       } catch (error: any) {
         if (controller.signal.aborted || error?.name === "AbortError" || error?.name === "TimeoutError") throw new VisionFault("timeout");
         if (error instanceof VisionFault) throw error;
+        // The neuron hold rejected this call before the binding; the chain may fall back.
+        if (error instanceof WorkersAiBudgetFault) throw new VisionFault("provider_cap");
         const status = Number(error?.status || error?.statusCode || 0);
         const message = String(error?.message || ""); // Classification only; never exposed.
         // The AI binding often throws AiError with a numeric code and no HTTP status.
@@ -582,7 +587,7 @@ function providerFor(e: any, name: ProviderName, model: string): VisionProvider 
 
 function providerOrder(mode: ProviderName | "auto", lowValue: boolean): ProviderName[] {
   if (mode !== "auto") return [mode];
-  // Stickers and low-value images stay on the free Workers AI binding first.
+  // Stickers and low-value images stay on the Workers AI binding first; its neuron hold still applies.
   return lowValue ? ["workers", ...AUTO_CHAIN.filter((n) => n !== "workers")] : [...AUTO_CHAIN];
 }
 
@@ -593,14 +598,22 @@ async function describeWithChain(
   hint: string,
   signal: AbortSignal,
   lowValue: boolean,
+  report?: Report,
 ): Promise<Omit<ImageNote, "sha">> {
   const { mode, model } = await visionSettings(e);
   const errors: VisionFault[] = [];
+  let workersCapped = false;
   for (const name of providerOrder(mode, lowValue)) {
     try {
-      return await providerFor(e, name, model).describe(bytes, mime, hint, signal);
+      const note = await providerFor(e, name, model).describe(bytes, mime, hint, signal);
+      // Diagnostic only: the group already heard the answer from the fallback.
+      if (workersCapped && name === "deepseek")
+        report?.({ stage: "describe", status: "ok", reason: "provider_cap", note: "Workers AI 今日额度已用完，改用 DeepSeek" });
+      return note;
     } catch (error) {
-      errors.push(error instanceof VisionFault ? error : new VisionFault("invalid"));
+      const fault = error instanceof VisionFault ? error : new VisionFault("invalid");
+      if (name === "workers" && fault.reason === "provider_cap") workersCapped = true;
+      errors.push(fault);
       if (signal.aborted) break;
     }
   }
@@ -708,6 +721,7 @@ async function describeBytesOnce(e: any, bytes: Uint8Array, mime: string, hint: 
       hint,
       signal,
       lowValue,
+      report,
     ), signal), hint);
     aborted(signal);
     report({ stage, status: "ok" });
