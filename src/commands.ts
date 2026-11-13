@@ -267,21 +267,22 @@ export async function stopGroupJobs(e: any, groupId: string): Promise<string> {
          OR (j.kind='video_reply' AND json_extract(j.payload,'$.wait') IN (SELECT id FROM video_waits WHERE group_id=?1))
          OR (j.kind='plan' AND json_extract(j.payload,'$.task') IN (SELECT id FROM tasks WHERE source_id IN (SELECT id FROM messages WHERE group_id=?1)))
        )
-       ORDER BY j.created_at`,
+       ORDER BY j.created_at LIMIT 90`,
     )
       .bind(groupId)
       .all()
   ).results as any[];
   if (!jobs.length) return "现在没有在跑的长任务。";
+  const ids = jobs.map((j: any) => j.id);
   await e.DB.batch([
     e.DB.prepare(
       "UPDATE video_waits SET status='cancelled' WHERE group_id=? AND status IN ('waiting','running')",
     ).bind(groupId),
-    ...jobs.map((j: any) =>
-      e.DB.prepare(
-        "UPDATE jobs SET status='cancelled',error='群内 /stop 取消' WHERE id=? AND status IN ('pending','running')",
-      ).bind(j.id),
-    ),
+    e.DB.prepare(
+      "UPDATE jobs SET status='cancelled',error='群内 /stop 取消' WHERE status IN ('pending','running') AND id IN (" +
+        ids.map(() => "?").join(",") +
+        ")",
+    ).bind(...ids),
   ]);
   const lines = jobs.slice(0, 5).map((j: any) => `· ${jobLine(j)}`);
   if (jobs.length > 5) lines.push(`· 还有 ${jobs.length - 5} 个`);
