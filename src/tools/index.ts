@@ -13,6 +13,7 @@ import { readDocumentTool } from "./read-document";
 import { readImageTextTool } from "./read-image-text";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
+import { stockQuoteTool } from "./stock-quote";
 import { summarizeChatTool } from "./summarize-chat";
 import { webSearchTool } from "./web-search";
 
@@ -31,6 +32,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   ...repoSearchTools,
   searchHistoryTool,
   searchKbTool,
+  stockQuoteTool,
   summarizeChatTool,
   webSearchTool,
 ];
