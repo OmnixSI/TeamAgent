@@ -226,7 +226,7 @@ test("T5 个人额度用尽：quota，不调 generateImage，日志 1 行 quota"
   assert.equal(r.error_kind, "quota");
   assert.match(r.reason_text, /5\/5/);
   assert.match(r.reason_text, /0 张/);
-  assert.match(r.reason_text, /0 点/);
+  assert.match(r.reason_text, /24 小时滚动/);
   assert.equal(calls.images.length, 0);
   assert.equal(calls.enqueued.length, 0);
   const log = await all(e, "SELECT * FROM image_gen_log");
