@@ -89,7 +89,7 @@ export function mediaViews(
     imageIdx++;
     const info = meta.images?.find((image:any) => image.url === m.url);
     const label = info ? (info.owner ? memberName(info.owner,names.get(info.owner))+"发的" : "")+(info.animated ? "动图" : "图片") : "";
-    const describe = (value:string) => label ? label+"："+value : value;
+    const describe = (value:string) => label ? label+"："+(info.owner ? value.replace(/^图片：/, "") : value) : value;
     const note = imageNotes?.get(messageId)?.[imageIdx];
     if (note) return describe(note);
     if (imagePicks?.has(messageId + ":" + imageIdx)) return describe("图片（未分析：没有可用结果，原因未记录）");
