@@ -55,6 +55,25 @@ function targetOf(meta: any,sourceId=''): VideoTarget | null {
   const title = meta.biliCard?.title, ref = typeof title === 'string' ? titleRef(title) : null;
   return ref ? asVideo({kind:'title',base:ref,page:1,sourceId},title) : null;
 }
+/** A complaint about an unread link asks for the most recent Bilibili target again. */
+const BILI_REREAD = /读不了|读不出|没读|打不开|看不了|再读|重新读|怎么不读/i;
+const BILI_WORD = /b\s*站|哔哩|短链|链接|视频/i;
+export function complaintIntent(body: any): boolean {
+  const text = String(body ?? '');
+  return BILI_REREAD.test(text) && BILI_WORD.test(text);
+}
+/** A bare @ carries no content of its own; it may inherit the closest recent video. */
+export function bareMention(latest: Row, meta = metaOf(latest)): boolean {
+  if (!latest?.mentioned) return false;
+  if (String(latest.body ?? '').replace(/<@!?[^>]+>/g, '').trim()) return false;
+  return !meta.placeholder && !(meta.media || []).length;
+}
+function recentLink(recent: Row[], latest: Row): VideoTarget | null {
+  const same = (recent || []).filter(r => r && (!latest.group_id || !r.group_id || r.group_id === latest.group_id));
+  const candidates = same.some(r => r.id === latest.id) ? same : [...same, latest];
+  for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r), r.id); if (target) return target; }
+  return null;
+}
 export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any): VideoTarget | null {
   if (!cfg.bili?.enabled) return null;
   const meta = metaOf(latest);
@@ -65,6 +84,8 @@ export function videoTarget(_batch: Row[], latest: Row, recent: Row[], cfg: any)
   const direct = targetIn(extractBili(meta.quotedBiliUrls ?? meta.quotedUrls ?? [], ""),meta.replyTo?.targetId||latest.id);
   if (direct) return asVideo(direct);
   const embedded = targetOf(meta.quoted || {},meta.replyTo?.targetId||latest.id); if (embedded) return embedded;
+  if (bareMention(latest,meta)) { const inherited = recentLink(recent,latest); if (inherited) return inherited; }
+  if (complaintIntent(latest.body)) { const retry = recentLink(recent,latest); if (retry) return retry; }
   if (/视频|讲了?啥|讲的什么|说了什么|总结|值得看|up主/i.test(latest.body || "")) {
     const candidates = recent.some(r => r.id === latest.id) ? recent : [...recent, latest];
     for (const r of candidates.slice(-10).reverse()) { const target = targetOf(metaOf(r),r.id); if (target) return target; }
@@ -123,6 +144,14 @@ function fetchStatement(e: any, ref: string, tier: string, waiter: string, waitC
 export async function requestBili(e: any, ref: string, tier: string, waiter: string): Promise<void> {
   if (!validRef(ref) || tier !== "light") throw Error("invalid fetch request");
   await fetchStatement(e, ref, tier, waiter).run();
+}
+/** A silent prefetch: one light fetch with no waiter; never reopens an existing job. */
+export async function requestPrefetch(e: any, ref: string): Promise<boolean> {
+  const target = refTarget(ref);
+  if (!target || target.kind === 'title' || left(e) < 2) return false;
+  const row = await e.DB.prepare("INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,'fetch',?,?) ON CONFLICT(id) DO NOTHING RETURNING id")
+    .bind('fetch-bili-' + ref, JSON.stringify({v:2,type:'bili',tier:'light',ref,...target,waiters:[]}), Date.now()).first();
+  return !!row;
 }
 /** A committed handoff remains authoritative even after its reply finishes. */
 export async function videoWaitExists(e: any, groupId: string, latestId: string | string[]): Promise<boolean> {

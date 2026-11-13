@@ -11,6 +11,7 @@ import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
@@ -761,6 +762,7 @@ async function processJob(e: Env, id: string) {
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
+      if (!transferred) await prefetchTurn(e, { latest, recent: context.recent, target, cfg: TEAM });
       if(target)(e as any).tail?.cache.push(['msgref:v1:'+target.target.sourceId,JSON.stringify({ref:target.ref,match:target.target.kind==='title'?'title':'id'}),iso()]);
       // R8: map the message to the video it asked about, even when the fetch is already cached or still waiting.
       if (target && (e as any).tail) (e as any).tail.cache.push(["msgref:v1:" + latest.id, JSON.stringify({ ref: target.ref, match: isTitleRef(target.ref) ? "title" : "id" }), iso()]);
