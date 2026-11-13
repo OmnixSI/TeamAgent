@@ -27,6 +27,14 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+// A question about repository activity must reach the read-only repo tools even
+// in a round whose remaining D1 budget would normally hide every tool.
+const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
+export function isRepoActivityAsk(body: unknown): boolean {
+  return REPO_ACTIVITY_ASK.test(String(body ?? ""));
+}
+const REPO_ASK_HINT = { role: "system", content: "用户在问仓库动态，必须先调用 repo_changes" };
+const REPO_ASK_FLOOR = 16;
 export type Services = {
   llm: (
     kind: "chat" | "plan" | "memory",
@@ -643,6 +651,8 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 export async function agentAnswer(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
+  const repoAsk = isRepoActivityAsk(context.latest?.body) &&
+    (!!context.mentioned || context.latest?.meta?.direct === true);
   const facts = (
     await e.DB.prepare(
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
@@ -870,14 +880,15 @@ export async function agentAnswer(e: any, context: any) {
       m = context.resume.pending;
       context.resume.pending = null;
     } else {
+      const offerTools = turn < 2 && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
       const d = await model(
         e,
         context.background ? "research" : "participation",
         "high",
         {
           max_tokens: 8192,
-          messages,
-          ...(turn < 2 && left(e) >= COST.turn * 2 + COST.tool + COST.tail ? { tools } : {}),
+          messages: offerTools && repoAsk ? [...messages, REPO_ASK_HINT] : messages,
+          ...(offerTools ? { tools } : {}),
         },
       );
       m = d.choices?.[0]?.message;
