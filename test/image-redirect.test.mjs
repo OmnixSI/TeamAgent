@@ -112,6 +112,7 @@ test('IR4 streamed size and timeout limits still apply after redirects',{timeout
 });
 for(const mode of ['direct image while replying to bot','quoted member image'])test('IR5 '+mode+' selects and links the redirected image',async()=>{
  const e=env(),media=api.mediaOf([{url:original,content_type:'image/png',width:600,height:800}]);
+ e.AI={async run(){return {response:'{\"desc\":\"合成图片\",\"tags\":[],\"meme\":false}'};}};
  const source={id:'source',body:'图片',meta:{media}};
  const latest=mode.startsWith('direct')?{id:'ask',body:'',meta:{media,replyTo:{kind:'bot',targetId:'bot-old'}}}
   :{id:'ask',body:'图里是什么',meta:{replyTo:{kind:'member',targetId:'source'}}};

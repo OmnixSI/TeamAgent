@@ -165,6 +165,7 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
   const base=await bound();
   await qq(base,{...msg('image-turn','这是什么'),attachments:[{content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/one.png',width:64,height:64}]},'GROUP_AT_MESSAGE_CREATE');
   const old=globalThis.fetch;let visionCalls=0,decisions=0;
+  base.AI={async run(){visionCalls++;return {response:'{"desc":"图中有红圆","tags":[],"meme":false}'};}};
   globalThis.fetch=async(url,options)=>{
     if(String(url).endsWith('.png'))return new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'image/png'}});
     const b=JSON.parse(options.body),voice=b.messages[0].content.includes('最后的嘴替模块');
@@ -227,6 +228,7 @@ test('G3/I11 mentions bypass the gate, describe their image and force a reply',a
   const e=await seedHard();await qq(e,{...msg('mentioned','这是什么'),attachments:imageAttachments.slice(0,1)},'GROUP_AT_MESSAGE_CREATE');
   const {runChat}=await import('./support.mjs');
   await decide({action:'stop'},async state=>{
+    e.AI={async run(){state.vision++;return {response:'{\"desc\":\"图像资料\",\"tags\":[],\"meme\":false}'};}};
     await runChat(e,'chat-mentioned');assert.equal(state.vision,1);assert.equal(state.decisions,1);assert.equal(state.voices,1);
     const d=await e.DB.prepare("SELECT * FROM chat_decisions WHERE latest_id='mentioned'").first();assert.equal(d.action,'reply');assert.equal(d.forced,1);
   });
@@ -425,6 +427,7 @@ test('B3 three cold images, a reference and two sent segments fit both phases',a
   assert.equal(BASELINE_F16C96D,45);
   const {base,id}=await imageBudgetFixture();
   await budgetModel(async state=>{
+    base.AI={async run(){state.vision++;return {response:'{\"desc\":\"图像资料\",\"tags\":[],\"meme\":false}'};}};
     const image=await measured(base,'p1-B3-image',e=>queue(e,'chat-'+id));
     const answer=await measured(base,'p1-B3-answer',e=>queue(e,'chat-v-'+id));
     assert.equal(state.vision,3);assert.equal(state.decisions,1);assert.equal(state.sent.length,2);
@@ -493,6 +496,7 @@ test('B6 fetch report and each of three original video questioners stay below bu
 test('B8 newer unmentioned message between image and answer coalesces without a second decision',async()=>{
   const base=await bound();await qq(base,{...msg('budget-old-image','图片是什么'),attachments:[{content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/phase.png',width:64,height:64}]});
   await budgetModel(async state=>{
+    base.AI={async run(){state.vision++;return {response:'{\"desc\":\"图像资料\",\"tags\":[],\"meme\":false}'};}};
     await queue(base,'chat-budget-old-image');assert.equal(state.vision,1);assert.equal(state.decisions,0);
     await qq(base,msg('budget-new-message','再看看这个问题'));
     await queue(base,'chat-v-budget-old-image');assert.equal(state.decisions,0);

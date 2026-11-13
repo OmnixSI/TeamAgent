@@ -1,0 +1,77 @@
+{
+  "source": "Existing read-only messages.json export, original rid retained; ids, filenames and signed URLs removed. msg305 asks about msg304; msg384 follows image msg383. URLs replaced: original image URL already probed as expired in image-url-diagnostic.json. Actual msg386 is the mentioned quoted-image question after msg383/384; reply target remapped after verifying it matches the original msg383 id.",
+  "rows": [
+    {
+      "ordinal": 304,
+      "id": "history-304",
+      "body": "<faceType=6,faceId=\"0\",ext=\"eyJ0ZXh0IjoiIn0=\">",
+      "mentioned": 0,
+      "ts": "2026-11-12T13:06:23+08:00",
+      "meta": {
+        "media": [
+          {
+            "kind": "image",
+            "contentType": "image/jpeg",
+            "width": 519,
+            "height": 1271,
+            "size": 275673,
+            "url": "https://multimedia.nt.qq.com.cn/expired-history-304.jpg"
+          }
+        ]
+      }
+    },
+    {
+      "ordinal": 305,
+      "id": "history-305",
+      "body": "做得好呀 你能看到我的表情吗",
+      "mentioned": 1,
+      "ts": "2026-11-12T13:06:34+08:00",
+      "meta": {
+        "media": []
+      }
+    },
+    {
+      "ordinal": 383,
+      "id": "history-383",
+      "body": "",
+      "mentioned": 0,
+      "ts": "2026-11-13T07:47:45+08:00",
+      "meta": {
+        "media": [
+          {
+            "kind": "image",
+            "contentType": "image/jpeg",
+            "width": 1440,
+            "height": 3200,
+            "size": 679176,
+            "url": "https://multimedia.nt.qq.com.cn/expired-history-383.jpg"
+          }
+        ]
+      }
+    },
+    {
+      "ordinal": 384,
+      "id": "history-384",
+      "body": "真是服",
+      "mentioned": 0,
+      "ts": "2026-11-13T07:47:50+08:00",
+      "meta": {
+        "media": []
+      }
+    },
+    {
+      "ordinal": 386,
+      "id": "history-386",
+      "body": "这黄仁勋怎么回事 怎么这么多出轨对象",
+      "mentioned": 1,
+      "ts": "2026-11-13T07:50:13+08:00",
+      "meta": {
+        "media": [],
+        "replyTo": {
+          "kind": "member",
+          "targetId": "history-383"
+        }
+      }
+    }
+  ]
+}
