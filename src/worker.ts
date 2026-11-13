@@ -1236,7 +1236,15 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   if (left(e) < cost + COST.tail) return;
   await fn();
 }
-async function scheduled(e: Env) {
+const VIDEO_CRON = "*/5 * * * *";
+async function scheduled(e: Env, cron = "") {
+  // The dedicated five-minute trigger runs only the video fallback. The main
+  // one-minute trigger keeps chat delivery and leaves video rescans to it.
+  if (cron === VIDEO_CRON) {
+    await sweepVideoWaits(e);
+    await flushTail(e);
+    return;
+  }
   // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
   // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
   await runSchedules(e);
@@ -1305,7 +1313,9 @@ async function scheduled(e: Env) {
       await set(e, "dream_batches_" + date, String(batches + 1));
     }
   }
-  await sweepVideoWaits(e);
+  // Manual and test invocations keep the full sweep; the deployed main trigger
+  // leaves video fallback to the dedicated five-minute trigger.
+  if (cron !== "* * * * *") await sweepVideoWaits(e);
   // Old reply-producing queue backlog must not become a deployment-time replay.
   await e.DB.prepare(`UPDATE jobs SET status='failed',error='expired' WHERE kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<? AND (status='pending' OR (status='running' AND lease_until<?))`)
     .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
@@ -2699,8 +2709,8 @@ export default {
     await sendOutbox(e);
     await flushTail(e);
   },
-  async scheduled(_c: any, e: Env, ctx: any) {
+  async scheduled(c: any, e: Env, ctx: any) {
     e = metered(e);
-    ctx.waitUntil(scheduled(e));
+    ctx.waitUntil(scheduled(e, c?.cron || ""));
   },
 };
