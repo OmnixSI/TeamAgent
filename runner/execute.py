@@ -1,9 +1,13 @@
 try:
     from runner.settings import settings, api_key, dsh_program
+    from runner import gitsafe
+    from runner.repo_index import MAX_PATCH_BYTES, _numstat, denied, redact
 except ModuleNotFoundError:
     from settings import settings, api_key, dsh_program
+    import gitsafe
+    from repo_index import MAX_PATCH_BYTES, _numstat, denied, redact
 #!/usr/bin/env python3
-import json, os, pathlib, subprocess, time, hashlib, signal, threading, urllib.request, urllib.error, ssl, re
+import json, os, pathlib, subprocess, time, hashlib, signal, threading, urllib.request, urllib.error, ssl, re, secrets
 
 H = pathlib.Path.home() / ".inkboard-team"
 REPOS = settings()["repositories"]
@@ -117,6 +121,126 @@ def run_agent(args, *, task, input, cwd, env, timeout=1800):
             signal.signal(sig, handler)
 
 
+def _snapshot_changes(work):
+    """Tracked line counts and changed paths, using the read-only Git class."""
+    status = gitsafe.run(
+        work, 'read', 'status', '--porcelain=v1', '-z', '--untracked-files=all'
+    ).split('\0')
+    stats = {
+        item['path']: item
+        for item in _numstat(
+            gitsafe.run(work, 'read', 'diff', '--numstat', '-z', 'HEAD')
+        )
+    }
+    files, allowed, seen = [], [], set()
+    add = deleted = untracked = 0
+    index = 0
+    while index < len(status):
+        row = status[index]
+        index += 1
+        if not row:
+            continue
+        code, path = row[:2], row[3:]
+        previous = None
+        if 'R' in code or 'C' in code:
+            previous = status[index] if index < len(status) else None
+            index += 1
+        if path in seen:
+            continue
+        seen.add(path)
+        item = {'path': path, 'status': code.strip(), 'add': None, 'del': None}
+        if code != '??' and path in stats:
+            item['add'] = stats[path]['add']
+            item['del'] = stats[path]['del']
+            add += item['add'] or 0
+            deleted += item['del'] or 0
+        if code == '??':
+            untracked += 1
+        if denied(path) or (previous is not None and denied(previous)):
+            item['hidden'] = True
+        else:
+            allowed.append(path)
+        files.append(item)
+    return files, allowed, add, deleted, untracked
+
+
+def _write_snapshot(key, round, patch):
+    directory = H / 'snapshots' / key
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target = directory / (str(round) + '.patch')
+    temporary = directory / (target.name + '.tmp-' + secrets.token_hex(6))
+    try:
+        fd = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(patch)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def snapshot(work, key, t, round, summary=''):
+    """C4 progress snapshot; every failure is logged and never blocks the task."""
+    try:
+        config = json.loads((H / 'config.json').read_text())
+        if not config.get('snapshot', True):
+            return None
+        files, allowed, add, deleted, untracked = _snapshot_changes(work)
+        patch, patch_ok = '', True
+        if allowed:
+            try:
+                patch = gitsafe.run(
+                    work, 'read', 'diff', 'HEAD', '--',
+                    *((':(literal)' + path) for path in allowed),
+                    max_bytes=MAX_PATCH_BYTES,
+                )
+            except Exception as error:
+                patch_ok = False
+                print(
+                    'task snapshot patch: ' + type(error).__name__ + ': ' + str(error)[:200],
+                    flush=True,
+                )
+        if patch_ok:
+            _write_snapshot(key, round, redact(patch))
+        body = {
+            'id': t['id'],
+            'version': t['version'],
+            'lease': t['lease'],
+            'round': round,
+            'files': files[:100],
+            'add': add,
+            'del': deleted,
+            'untracked': untracked,
+            'summary': redact(str(summary or ''))[:300],
+        }
+        request = urllib.request.Request(
+            config['url'].rstrip('/') + '/api/runner/task_snapshot',
+            data=json.dumps(body, ensure_ascii=False).encode(),
+            headers={
+                'Authorization': 'Bearer ' + config['runnerToken'],
+                'Content-Type': 'application/json',
+                'User-Agent': 'TeamAgent/2',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(
+            request,
+            timeout=12,
+            context=ssl.create_default_context(
+                cafile='/etc/ssl/cert.pem' if os.path.exists('/etc/ssl/cert.pem') else None
+            ),
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError('task snapshot rejected: ' + str(response.status))
+    except Exception as error:
+        print(
+            'task snapshot: ' + type(error).__name__ + ': ' + str(error)[:200],
+            flush=True,
+        )
+        return None
+
+
 def main():
     parameters = settings()
     t = json.loads((H / "current.json").read_text())
@@ -209,6 +333,16 @@ def main():
                     pass
             final = next((x for x in reversed(events) if x.get("type") == "final"), {})
             summary = str(final.get("text") or "")
+            try:
+                snapshot(work, key, t, attempt + 1, summary)
+            except Exception as error:
+                print(
+                    "task snapshot: "
+                    + type(error).__name__
+                    + ": "
+                    + str(error)[:200],
+                    flush=True,
+                )
             if final.get("reason", {}).get("kind") != "completed":
                 raise RuntimeError("DSH 未完成任务：" + summary[-2000:])
             run(["git", "diff", "--check"], work)
