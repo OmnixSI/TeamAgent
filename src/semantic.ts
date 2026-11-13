@@ -3,7 +3,8 @@ import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file"]);
+import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -650,6 +651,9 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
 
 export async function agentAnswer(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  // F6-6 定时闭嘴：除被 @ 外不进模型、不出声；创建闭嘴的那条消息本身豁免。
+  if (!context.mentioned && await muted(e, context.latest?.group_id, context.latest?.id))
+    return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
@@ -815,6 +819,50 @@ export async function agentAnswer(e: any, context: any) {
           type: "object",
           properties: { repo: { type: "string", enum: REPOS } },
           required: ["repo"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_create",
+        description:
+          "成员明确要求定时推送日报/周报、几分钟后提醒、或让你闭嘴一段时间时调用。只建本群日程；时间按悉尼时间 HH:MM；不猜成员没说的时刻。",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["digest_daily", "digest_weekly", "reminder", "mute"] },
+            time: { type: "string", description: "每日/每周推送的悉尼时间 HH:MM，例如 08:00" },
+            weekdays: { type: "array", items: { type: "integer" }, description: "周报星期，0=周日" },
+            minutes: { type: "integer", description: "几分钟后提醒，或闭嘴多少分钟" },
+            run_at: { type: "string", description: "一次性提醒/闭嘴结束的绝对时间，ISO 8601 带时区" },
+            text: { type: "string", description: "提醒内容" },
+            source_id: { type: "string", description: "本条交办的消息ID，默认最新消息" },
+          },
+          required: ["kind"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_list",
+        description: "查本群当前的定时推送、提醒和闭嘴，带悉尼时间的下次执行时间与失败次数。",
+        parameters: {
+          type: "object",
+          properties: { include_done: { type: "boolean", description: "是否连已取消/已完成一起列出" } },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "schedule_cancel",
+        description: "取消本群一个定时任务。先用 schedule_list 拿到任务ID。",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "schedule_list 返回的任务ID" } },
+          required: ["id"],
         },
       },
     },
@@ -1233,6 +1281,64 @@ export async function agentAnswer(e: any, context: any) {
                 }
               : { unavailable: true };
             break;
+          case "schedule_create": {
+            const source =
+              context.batch?.find((m: any) => m.id === a.source_id) ||
+              context.latest;
+            if (!source?.group_id || source.group_id !== context.latest?.group_id)
+              throw Error("只能在本群建日程");
+            try {
+              const schedule = await createSchedule(e, {
+                group_id: source.group_id,
+                owner: source.sender || "群友",
+                kind: a.kind,
+                spec: {
+                  time: a.time,
+                  weekdays: a.weekdays,
+                  minutes: a.minutes,
+                  run_at: a.run_at,
+                  text: a.text,
+                },
+                source_msg_id: source.id,
+              });
+              result = {
+                accepted: true,
+                ok: true,
+                id: schedule.id,
+                kind: schedule.kind,
+                next_run_at: schedule.next_run_at,
+                next_run_text: sydneyText(schedule.next_run_at, schedule.tz),
+              };
+            } catch (error: any) {
+              result = scheduleFailure(error?.message);
+            }
+            break;
+          }
+          case "schedule_list": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            result = {
+              ok: true,
+              schedules: await listSchedules(e, group, {
+                includeDone: a.include_done === true,
+              }),
+            };
+            break;
+          }
+          case "schedule_cancel": {
+            const group = context.latest?.group_id;
+            if (!group) throw Error("缺少群信息");
+            const schedule = await cancelSchedule(e, group, String(a.id || ""));
+            result = schedule
+              ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
+              : {
+                  ok: false,
+                  error_kind: "not_found",
+                  retryable: false,
+                  next_action: "先用 schedule_list 看本群任务，再拿ID取消",
+                };
+            break;
+          }
           case "repo_changes": case "repo_commit": case "repo_file":
             result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a)
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });

@@ -24,6 +24,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
+import { runSchedules } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -1133,6 +1134,9 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   await fn();
 }
 async function scheduled(e: Env) {
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
+  // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
+  await runSchedules(e);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",
