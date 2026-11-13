@@ -1458,6 +1458,7 @@ async function api(r: Request, e: Env) {
       if (b.status === "sent" && count !== JSON.parse(d.files).length)
         return json({ error: "附件数量未匹配" }, 400);
       const unconfirmedNames = JSON.parse(d.files).slice(count).map((file: any) => file.name);
+      const allConfirmed = b.status === "sent" || b.status === "unknown" && !unconfirmedNames.length;
       const unknownNotice = `附件未确认送达：${unconfirmedNames.join("、")}。请先核对群文件；已停止交付，不再自动重发。` +
         (b.retention_removed === true
           ? "未确认文件已因到期或保留上限清理，需要文件时请根据原消息重新交办。"
@@ -1473,7 +1474,7 @@ async function api(r: Request, e: Env) {
           "delivery." + b.status,
           d.job_id,
           "QQ网关",
-          b.status === "sent"
+          allConfirmed
             ? "QQ 已确认发送全部附件"
             : b.status === "unknown"
               ? unknownNotice
@@ -1489,7 +1490,7 @@ async function api(r: Request, e: Env) {
           await job(e, "delivery-notice-" + b.id, "voice_notice", {
             message: message.id,
             status:
-              b.status === "sent"
+              allConfirmed
                 ? "QQ SDK已确认成功发送全部附件。只说实际文件和必要要点。"
                 : b.exhausted === true
                   ? b.status === "unknown"

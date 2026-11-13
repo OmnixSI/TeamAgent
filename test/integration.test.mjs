@@ -1188,6 +1188,24 @@ test("exhausted delivery reports one explicit cleanup notice even when its recei
   }
 });
 
+test("unknown receipts with every file confirmed use the complete-send notice", async () => {
+  for (const exhausted of [false, true]) {
+    const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});
+    await qq(e,msg('confirmed-source','生成CSV'));
+    await e.DB.prepare('INSERT INTO deliveries VALUES(?,?,?,?,?,?,?)')
+      .bind('confirmed-delivery','file-job','confirmed-source','pending',JSON.stringify([{name:'confirmed.csv',bytes:10}]),0,new Date().toISOString()).run();
+    const receipt={id:'confirmed-delivery',status:'unknown',sent_count:1,exhausted};
+    for(let i=0;i<2;i++)assert.equal((await req(e,'/api/runner/delivery/report',receipt,'runner-secret')).status,200);
+    const notices=(await e.DB.prepare("SELECT payload FROM jobs WHERE kind='voice_notice'").all()).results;
+    assert.equal(notices.length,1);
+    const notice=JSON.parse(notices[0].payload);
+    assert.match(notice.status,/确认成功发送全部附件/);
+    assert.doesNotMatch(notice.status,/未确认送达|保留|重新交办/);
+    const activities=(await e.DB.prepare("SELECT summary FROM activity WHERE id=?").bind('confirmed-delivery-result').all()).results;
+    assert.match(activities[0].summary,/确认发送全部附件/);
+  }
+});
+
 test("partial unknown notices name only unconfirmed files and disclose expired retention", async () => {
   for(const removed of [false,true]) {
     const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});

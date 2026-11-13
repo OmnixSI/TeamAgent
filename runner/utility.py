@@ -128,6 +128,14 @@ def stage_outputs(path, report):
     key = hashlib.sha256(report["id"].encode()).hexdigest()[:32]
     original = H / "utility" / key / "outputs"
     staged = H / "utility" / "_deliveries" / key / "outputs"
+    source_dir = original if original.exists() else staged
+    if sum((source_dir / pathlib.Path(value).name).stat().st_size
+           for value in report["local_files"]) > 100 * 1024 * 1024:
+        # Reject the set before moving it into the globally bounded delivery spool.
+        report.update(success=False, local_files=[], files=[],
+                      result="产物太大，请缩小范围后重新交办。临时文件将自动清理。")
+        save_json(path, report)
+        return
     staged.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if original.exists():
         if original.is_symlink():

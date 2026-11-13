@@ -113,6 +113,51 @@ process.stdout.write(JSON.stringify(sent));
             self.deliver(h)
             self.assertFalse(output.exists(), 'confirmed delivery must clean its staged output')
 
+    def test_output_budget_is_checked_before_staging_and_survives_report_retry(self):
+        mib = 1024 * 1024
+        for sizes in ([50 * mib, 50 * mib], [40 * mib, 40 * mib, 20 * mib + 1]):
+            oversized = sum(sizes) > 100 * mib
+            with self.subTest(sizes=sizes), self.fixture() as (u, h):
+                with self.execution(u, h, fail_report=True) as state:
+                    spawn = u.subprocess.Popen.side_effect
+                    def produce(args, **kwargs):
+                        proc = spawn(args, **kwargs)
+                        outputs = h / 'utility' / KEY / 'outputs'
+                        (outputs / 'example.csv').unlink()
+                        for i, size in enumerate(sizes):
+                            with (outputs / (str(i) + '.csv')).open('wb') as output:
+                                output.truncate(size)  # Sparse fixtures avoid allocating 100 MiB.
+                        return proc
+                    u.subprocess.Popen.side_effect = produce
+                    moves, replace = [], pathlib.Path.replace
+                    def track_move(source, target):
+                        moves.append(pathlib.Path(target))
+                        return replace(source, target)
+                    with patch.object(pathlib.Path, 'replace', track_move), self.assertRaises(u.urllib.error.URLError):
+                        u.once()
+                    self.assert_clean_work(h)
+                    staged = h / 'utility/_deliveries' / KEY
+                    self.assertEqual(staged.exists(), not oversized)
+                    self.assertEqual(any('_deliveries' in target.parts for target in moves), not oversized)
+                    receipt = json.loads(next((h / 'utility-reports').glob('*/completion.json')).read_text())
+                    if oversized:
+                        self.assertIs(receipt['success'], False)
+                        self.assertEqual(receipt['local_files'], [])
+                        self.assertEqual(receipt['files'], [])
+                        self.assertIn('产物太大，请缩小范围后重新交办', receipt['result'])
+                    u.flush_reports()
+                    self.assertEqual(len(state['processes']), 1)
+                    self.assertEqual(len(state['reports']), 2)
+                    if oversized:
+                        self.assertIn('产物太大，请缩小范围后重新交办', state['reports'][-1]['result'])
+                        self.assertFalse(list((h / 'file-deliveries').glob('*.json')))
+                        self.assertFalse(staged.exists())
+                    else:
+                        manifest = json.loads(next((h / 'file-deliveries').glob('*.json')).read_text())
+                        self.assertEqual(len(manifest['files']), len(sizes))
+                        self.assertEqual(sum(pathlib.Path(p).stat().st_size for p in manifest['files']), 100 * mib)
+                    self.assertFalse(list((h / 'utility-reports').glob('*/completion.json')))
+
     def test_report_outage_keeps_only_retry_receipt_and_sendable_output(self):
         with self.fixture() as (u, h):
             with self.execution(u, h, fail_report=True) as state:
