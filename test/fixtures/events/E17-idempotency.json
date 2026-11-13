@@ -1,0 +1,246 @@
+[
+ {
+  "id": "EV17-1",
+  "group": "G17",
+  "source": "d1",
+  "note": "同一事件重放 3 次只有一份消息/元数据/job",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e17-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "replay": 3,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV17-2",
+  "group": "G17",
+  "source": "synth",
+  "note": "入库后 job 被删，重放补齐",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e17-2",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "replay": 2,
+   "between": [
+    {
+     "sql": "DELETE FROM jobs WHERE kind='chat'",
+     "args": []
+    }
+   ],
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV17-3",
+  "group": "G17",
+  "source": "synth",
+  "note": "同 id 不同时间戳仍去重",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e17-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "replay": 2,
+   "seconds": 5,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV17-4",
+  "group": "G17",
+  "source": "synth",
+  "note": "先普通后 AT 同一 id 不新增行",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e17-4",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "replay": 2,
+   "ret": "GROUP_AT_MESSAGE_CREATE",
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ }
+]

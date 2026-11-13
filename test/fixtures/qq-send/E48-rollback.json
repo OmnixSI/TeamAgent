@@ -1,0 +1,326 @@
+[
+ {
+  "id": "EV24-1",
+  "group": "G24",
+  "source": "synth",
+  "note": "回滚 SQL 后 retry+已定 seq 不再发，未触碰的 pending 照旧",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "retry",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ],
+   "outbox_send": [
+    {
+     "id": "a",
+     "msg_seq": 1,
+     "lock_tok": "tok",
+     "claimed_at": 1794564823740,
+     "tries": 1
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "skipped",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ },
+ {
+  "id": "EV24-2",
+  "group": "G24",
+  "source": "synth",
+  "note": "根段 unknown + 后段 held：旧 sender 一条不发",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "unknown",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "a~1",
+     "status": "held",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ],
+   "outbox_send": [
+    {
+     "id": "a",
+     "msg_seq": 1,
+     "lock_tok": "tok",
+     "claimed_at": 1794564823740,
+     "tries": 1
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "unknown",
+    "a~1": "skipped",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ },
+ {
+  "id": "EV24-3",
+  "group": "G24",
+  "source": "synth",
+  "note": "根段 pending + 后段 held：回滚后回到旧语义正常发出",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "a~1",
+     "status": "held",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "sent",
+    "a~1": "sent"
+   },
+   "sends": 2,
+   "msgIds": [
+    "a",
+    "a~1"
+   ]
+  }
+ },
+ {
+  "id": "EV24-4",
+  "group": "G24",
+  "source": "synth",
+  "note": "借用 msg_id + 已定 seq：回滚后仍不发",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "retry",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ],
+   "outbox_send": [
+    {
+     "id": "a",
+     "msg_seq": 1,
+     "lock_tok": "tok",
+     "claimed_at": 1794564823740,
+     "tries": 1,
+     "passive_msg_id": "other"
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "skipped",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ },
+ {
+  "id": "EV24-5",
+  "group": "G24",
+  "source": "synth",
+  "note": "sending 有戳有 seq→unknown，不重发",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "sending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ],
+   "outbox_send": [
+    {
+     "id": "a",
+     "msg_seq": 1,
+     "lock_tok": "tok",
+     "claimed_at": 1794564823740,
+     "tries": 1
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "unknown",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ },
+ {
+  "id": "EV24-6",
+  "group": "G24",
+  "source": "synth",
+  "note": "sending 有戳无 seq→unknown，不卡在 sending",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "a",
+     "status": "sending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ],
+   "outbox_send": [
+    {
+     "id": "a",
+     "msg_seq": null,
+     "lock_tok": "tok",
+     "claimed_at": 1794564823740,
+     "tries": 1
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "a": "unknown",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ },
+ {
+  "id": "EV24-7",
+  "group": "G24",
+  "source": "synth",
+  "note": "muted/active_rejected 收敛后的行旧 sender 不碰",
+  "scenario": "rollback",
+  "setup": {
+   "outbox": [
+    {
+     "id": "muted",
+     "status": "failed",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "rejected",
+     "status": "skipped",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    },
+    {
+     "id": "ctl",
+     "status": "pending",
+     "group": "g",
+     "msg_id": "src",
+     "body": "测试文本",
+     "created_at": 1794564944740
+    }
+   ]
+  },
+  "expect": {
+   "statuses": {
+    "muted": "failed",
+    "rejected": "skipped",
+    "ctl": "sent"
+   },
+   "sends": 1,
+   "msgIds": [
+    "ctl"
+   ]
+  }
+ }
+]

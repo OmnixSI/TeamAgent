@@ -1,0 +1,541 @@
+[
+ {
+  "id": "EV02-1",
+  "group": "G2",
+  "source": "doc",
+  "note": "AT 事件本身即 mentionsBot",
+  "event": {
+   "op": 0,
+   "t": "GROUP_AT_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 1,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 8
+  }
+ },
+ {
+  "id": "EV02-2",
+  "group": "G2",
+  "source": "d1",
+  "note": "AT 文本里的 <@!id> 转成 mention 段",
+  "event": {
+   "op": 0,
+   "t": "GROUP_AT_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-2",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "<@!u2> 测试文本",
+    "mentions": [
+     {
+      "member_openid": "u2",
+      "nickname": "成员B",
+      "is_you": true
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 1,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [
+     {
+      "id": "u2",
+      "name": "成员B",
+      "isBot": true
+     }
+    ],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV02-3",
+  "group": "G2",
+  "source": "d1",
+  "note": "只带 is_you 的 mention 也算喊机器人",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本",
+    "mentions": [
+     {
+      "member_openid": "u2",
+      "nickname": "成员B",
+      "is_you": true
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 1,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [
+     {
+      "id": "u2",
+      "name": "成员B",
+      "isBot": true
+     }
+    ],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV02-4",
+  "group": "G2",
+  "source": "synth",
+  "note": "@ 别人不算喊机器人，标 addressedOther",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-4",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "<@!u3> 测试文本",
+    "mentions": [
+     {
+      "member_openid": "u3",
+      "nickname": "成员C"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 0,
+   "meta": {
+    "addressedOther": true
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [
+     {
+      "id": "u3",
+      "name": "成员C",
+      "isBot": false
+     }
+    ],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV02-5",
+  "group": "G2",
+  "source": "doc",
+  "note": "author.bot 的事件丢弃",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-5",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u9",
+     "username": "成员I",
+     "bot": true
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "inbound": {
+    "senderId": "u9",
+    "senderName": "成员I",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 1
+  }
+ },
+ {
+  "id": "EV02-6",
+  "group": "G2",
+  "source": "doc",
+  "note": "自身 app id 的消息丢弃",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-6",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "bot-self",
+     "username": "机器人",
+     "bot": false
+    },
+    "content": "测试文本"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "env": {
+    "QQ_APP_ID": "bot-self"
+   },
+   "inbound": {
+    "senderId": "bot-self",
+    "senderName": "机器人",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 1
+  }
+ },
+ {
+  "id": "EV02-7",
+  "group": "G2",
+  "source": "doc",
+  "note": "AT 事件同时 @ 别人仍算 AT",
+  "event": {
+   "op": 0,
+   "t": "GROUP_AT_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-7",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "<@!u3> 测试文本",
+    "mentions": [
+     {
+      "member_openid": "u3",
+      "nickname": "成员C"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 1,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [
+     {
+      "id": "u3",
+      "name": "成员C",
+      "isBot": false
+     }
+    ],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV02-8",
+  "group": "G2",
+  "source": "synth",
+  "note": "重复 @ 机器人 token 只留一个身份",
+  "event": {
+   "op": 0,
+   "t": "GROUP_AT_MESSAGE_CREATE",
+   "d": {
+    "id": "e02-8",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "<@u2> <@u2> 测试文本",
+    "mentions": [
+     {
+      "member_openid": "u2",
+      "nickname": "成员B",
+      "is_you": true
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "mentioned": 1,
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "<@u2> 测试文本",
+    "mentions": [
+     {
+      "id": "u2",
+      "name": "成员B",
+      "isBot": true
+     }
+    ],
+    "mentionsBot": true,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "maxStatements": 9
+  }
+ }
+]

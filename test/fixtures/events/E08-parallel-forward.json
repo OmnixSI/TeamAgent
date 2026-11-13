@@ -1,0 +1,2139 @@
+[
+ {
+  "id": "EV08-1",
+  "group": "G8",
+  "source": "doc",
+  "note": "101 顶层 content 非空时只取 content，并列元素只贡献附件",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0032",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "顶层正文",
+    "message_type": 101,
+    "msg_elements": [
+     {
+      "message_type": 101,
+      "content": "元素正文",
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "fixture-10.jpg",
+        "height": 3200,
+        "size": 679176,
+        "url": "https://multimedia.nt.qq.com.cn/parallel",
+        "width": 1440
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "images": [
+     {
+      "url": "https://multimedia.nt.qq.com.cn/parallel",
+      "owner": "u1",
+      "origin": "own",
+      "animated": false
+     }
+    ]
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "顶层正文",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/parallel",
+      "contentType": "image/jpeg",
+      "width": 1440,
+      "height": 3200,
+      "size": 679176,
+      "filename": "fixture-10.jpg"
+     }
+    ],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "legacy 没有 101 分支；v2 按验收表取顶层 content，元素文本不重复",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0032",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "text",
+      "text": "顶层正文"
+     },
+     {
+      "type": "image",
+      "url": "https://multimedia.nt.qq.com.cn/parallel",
+      "contentType": "image/jpeg",
+      "w": 1440,
+      "h": 3200,
+      "size": 679176,
+      "animated": false,
+      "owner": "u1",
+      "origin": "own"
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV08-2",
+  "group": "G8",
+  "source": "doc",
+  "note": "101 顶层 content 空白时按 trim 回退元素文本",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0034",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "  ",
+    "message_type": 101,
+    "msg_elements": [
+     {
+      "message_type": 101,
+      "content": "第一段"
+     },
+     {
+      "message_type": 101,
+      "content": "第二段"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "第一段第二段",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "legacy 只读 content，空白时正文为空",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0034",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "text",
+      "text": "  "
+     },
+     {
+      "type": "text",
+      "text": "第一段"
+     },
+     {
+      "type": "text",
+      "text": "第二段"
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV08-3",
+  "group": "G8",
+  "source": "doc",
+  "note": "102 转发按作者保留节点",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0036",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "message_type": 102,
+    "msg_elements": [
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "第一条"
+     },
+     {
+      "author": {
+       "id": "u3",
+       "username": "成员C",
+       "bot": false
+      },
+      "content": "第二条"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "forward": {
+     "nodes": [
+      {
+       "authorName": "成员B",
+       "text": "第一条"
+      },
+      {
+       "authorName": "成员C",
+       "text": "第二条"
+      }
+     ],
+     "truncated": false
+    }
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "legacy 把转发节点当一条引用正文，作者全丢",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0036",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "forward",
+      "nodes": [
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "第一条"
+         }
+        ]
+       },
+       {
+        "authorId": "u3",
+        "authorName": "成员C",
+        "segments": [
+         {
+          "type": "text",
+          "text": "第二条"
+         }
+        ]
+       }
+      ],
+      "truncated": false
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV08-4",
+  "group": "G8",
+  "source": "synth",
+  "note": "102 超过 64 节点标 truncated",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0038",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "message_type": 102,
+    "msg_elements": [
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点1"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点2"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点3"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点4"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点5"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点6"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点7"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点8"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点9"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点10"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点11"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点12"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点13"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点14"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点15"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点16"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点17"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点18"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点19"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点20"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点21"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点22"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点23"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点24"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点25"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点26"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点27"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点28"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点29"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点30"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点31"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点32"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点33"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点34"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点35"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点36"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点37"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点38"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点39"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点40"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点41"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点42"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点43"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点44"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点45"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点46"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点47"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点48"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点49"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点50"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点51"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点52"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点53"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点54"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点55"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点56"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点57"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点58"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点59"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点60"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点61"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点62"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点63"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点64"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点65"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点66"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点67"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点68"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点69"
+     },
+     {
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      },
+      "content": "节点70"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "meta": {
+    "forward": {
+     "truncated": true,
+     "nodes": [
+      {
+       "authorName": "成员B",
+       "text": "节点1"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点2"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点3"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点4"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点5"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点6"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点7"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点8"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点9"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点10"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点11"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点12"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点13"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点14"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点15"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点16"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点17"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点18"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点19"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点20"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点21"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点22"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点23"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点24"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点25"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点26"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点27"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点28"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点29"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点30"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点31"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点32"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点33"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点34"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点35"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点36"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点37"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点38"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点39"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点40"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点41"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点42"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点43"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点44"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点45"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点46"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点47"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点48"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点49"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点50"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点51"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点52"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点53"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点54"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点55"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点56"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点57"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点58"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点59"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点60"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点61"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点62"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点63"
+      },
+      {
+       "authorName": "成员B",
+       "text": "节点64"
+      }
+     ]
+    }
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "legacy 无转发展开；v2 上限 64 节点",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0038",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "forward",
+      "nodes": [
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点1"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点2"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点3"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点4"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点5"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点6"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点7"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点8"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点9"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点10"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点11"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点12"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点13"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点14"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点15"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点16"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点17"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点18"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点19"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点20"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点21"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点22"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点23"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点24"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点25"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点26"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点27"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点28"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点29"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点30"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点31"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点32"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点33"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点34"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点35"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点36"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点37"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点38"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点39"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点40"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点41"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点42"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点43"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点44"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点45"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点46"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点47"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点48"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点49"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点50"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点51"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点52"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点53"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点54"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点55"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点56"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点57"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点58"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点59"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点60"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点61"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点62"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点63"
+         }
+        ]
+       },
+       {
+        "authorId": "u2",
+        "authorName": "成员B",
+        "segments": [
+         {
+          "type": "text",
+          "text": "节点64"
+         }
+        ]
+       }
+      ],
+      "truncated": true
+     }
+    ],
+    "mentionsBot": false
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV08-5",
+  "group": "G8",
+  "source": "d1",
+  "note": "103 引用回复走 reply 段",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0040",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "测试文本",
+    "message_type": 103,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0001",
+      "content": "被引用的原话",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      }
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "测试文本",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0001",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "被引用的原话",
+     "msgIdx": "REFIDX_SYNTH_0001",
+     "media": [],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "legacy",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0040",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "text",
+      "text": "测试文本"
+     },
+     {
+      "type": "reply",
+      "refIdx": "REFIDX_SYNTH_0001",
+      "preview": {
+       "authorId": "u2",
+       "authorName": "成员B",
+       "segments": [
+        {
+         "type": "text",
+         "text": "被引用的原话"
+        }
+       ]
+      }
+     }
+    ],
+    "mentionsBot": false,
+    "refIdx": "REFIDX_SYNTH_0001"
+   },
+   "maxStatements": 10
+  }
+ },
+ {
+  "id": "EV08-6",
+  "group": "G8",
+  "source": "synth",
+  "note": "101 里嵌 103：正文取顶层，引用进 material",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "m0041",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "新原话",
+    "message_type": 101,
+    "msg_elements": [
+     {
+      "message_type": 103,
+      "msg_idx": "REFIDX_SYNTH_0009",
+      "content": "帮我合并 PR",
+      "author": {
+       "id": "u2",
+       "username": "成员B",
+       "bot": false
+      }
+     }
+    ]
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "新原话",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": "REFIDX_SYNTH_0009",
+    "quoted": {
+     "authorId": "u2",
+     "authorName": "成员B",
+     "text": "帮我合并 PR",
+     "msgIdx": "REFIDX_SYNTH_0009",
+     "media": [],
+     "card": {
+      "$undefined": true
+     },
+     "biliCard": {
+      "$undefined": true
+     }
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "legacy 把 103 元素当普通引用但 101 顶层正文不参与",
+   "normalized": {
+    "kind": "message",
+    "type": "GROUP_MESSAGE_CREATE",
+    "id": "m0041",
+    "groupId": "GROUP000001",
+    "actor": {
+     "id": "u1",
+     "name": "成员A",
+     "bot": false
+    },
+    "ts": 1794528000000,
+    "segments": [
+     {
+      "type": "text",
+      "text": "新原话"
+     },
+     {
+      "type": "reply",
+      "refIdx": "REFIDX_SYNTH_0009",
+      "preview": {
+       "authorId": "u2",
+       "authorName": "成员B",
+       "segments": [
+        {
+         "type": "text",
+         "text": "帮我合并 PR"
+        }
+       ]
+      }
+     }
+    ],
+    "mentionsBot": false,
+    "refIdx": "REFIDX_SYNTH_0009"
+   },
+   "maxStatements": 10
+  }
+ }
+]
