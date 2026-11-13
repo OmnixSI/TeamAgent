@@ -38,3 +38,12 @@ test('default async discovery preserves synchronous definitions without touching
   assert.deepEqual(k.extraUntrustedNames(context), k.extraUntrustedNames());
   assert.equal(k.findExtraTool('calc', context).untrusted, false);
 });
+
+test("an admin switch disables a registered tool", async () => {
+  const k = await load({ real: true });
+  const name = k.extraToolDefs()[0].function.name;
+  const db = { prepare: () => ({ bind: () => ({ first: async () => ({ value: "1" }) }) }) };
+  const result = await k.runExtraTool({ DB: db }, name, {}, { context: {}, messages: [], isTainted: () => false });
+  assert.equal(result.unavailable, true);
+  assert.equal(result.error_kind, "denied");
+});
