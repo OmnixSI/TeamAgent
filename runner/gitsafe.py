@@ -17,6 +17,11 @@ import threading
 import time
 import urllib.parse
 
+try:
+    from runner import team_home
+except ModuleNotFoundError:
+    import team_home
+
 
 class GitDenied(ValueError):
     pass
@@ -63,7 +68,7 @@ def time_budget(seconds=120):
 
 
 def _private_target(root, target):
-    base = Path.home().resolve() / '.inkboard-team/sub'
+    base = (team_home.home() / 'sub').resolve()
     path = Path(target)
     path = (path if path.is_absolute() else Path(root) / path).resolve()
     return path != base and base in path.parents

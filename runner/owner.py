@@ -9,11 +9,16 @@ from local_bili_login import BiliPaused, LocalBiliLogin, login_error
 from local_login_page import PAGE
 from owner_unlock import redeem_code, mint_code, OwnerSessions
 
-C = json.loads((Path.home() / ".inkboard-team/config.json").read_text())
+try:
+    from runner import team_home
+except ModuleNotFoundError:
+    import team_home
+
+C = team_home.config()
 
 
 class Handler(BaseHTTPRequestHandler):
-    runtime = Path.home() / '.inkboard-team'
+    runtime = team_home.home()
     sessions = OwnerSessions()
     bili_login = None
     def log_message(self, *a):

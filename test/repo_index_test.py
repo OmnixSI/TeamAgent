@@ -368,10 +368,13 @@ class RepoIndexTests(unittest.TestCase):
         started = threading.Event(); release = threading.Event(); ticks = []
         class Done(Exception): pass
         def slow(): started.set(); release.wait(2)
+        def start_daemons():
+            threading.Thread(target=lambda: None, daemon=True).start()
+            threading.Thread(target=slow, daemon=True).start()
         def tick(): self.assertTrue(started.wait(1)); ticks.append(len(ticks)*15)
         def sleep(seconds):
             if len(ticks) == 3: raise Done()
-        namespace = {'threading':threading,'sync_loop':lambda:None,'repo_index':types.SimpleNamespace(loop=slow),'tick':tick,'time':types.SimpleNamespace(sleep=sleep),'urllib':__import__('urllib'),'CURRENT':self.h/'current.json'}
+        namespace = {'threading':threading,'sync_loop':lambda:None,'start_daemons':start_daemons,'repo_index':types.SimpleNamespace(loop=slow),'tick':tick,'time':types.SimpleNamespace(sleep=sleep),'urllib':__import__('urllib'),'CURRENT':self.h/'current.json'}
         try:
             with self.assertRaises(Done): exec(compile(ast.Module(body=block.body,type_ignores=[]),str(source),'exec'), namespace)
             self.assertEqual(ticks, [0,15,30])

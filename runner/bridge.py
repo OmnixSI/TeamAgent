@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """One leased task at a time. Source credentials remain local; owner credentials never leave this machine."""
-import threading, json, os, time, urllib.request, urllib.error, pathlib, subprocess, base64, ssl, hashlib
+import threading, json, os, time, urllib.request, urllib.error, subprocess, base64, ssl, hashlib
 
-import repo_index
+try:
+    from runner import repo_index, subagent, team_home
+except ModuleNotFoundError:
+    import repo_index
+    import subagent
+    import team_home
 
-HOME = pathlib.Path.home() / ".inkboard-team"
-CONFIG = json.loads((HOME / "config.json").read_text())
+HOME = team_home.home()
+CONFIG = team_home.config()
 CURRENT = HOME / "current.json"
 
 
@@ -289,9 +294,13 @@ def sync_loop():
         time.sleep(30)
 
 
+def start_daemons():
+    for target in (sync_loop, repo_index.loop, subagent.loop):
+        threading.Thread(target=target, daemon=True).start()
+
+
 if __name__ == "__main__":
-    threading.Thread(target=sync_loop, daemon=True).start()
-    threading.Thread(target=repo_index.loop, daemon=True).start()
+    start_daemons()
     while True:
         try:
             tick()

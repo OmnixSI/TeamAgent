@@ -1,11 +1,13 @@
 try:
     from runner.settings import settings, api_key, dsh_program
+    from runner import team_home
 except ModuleNotFoundError:
     from settings import settings, api_key, dsh_program
+    import team_home
 #!/usr/bin/env python3
 import json, os, pathlib, subprocess, time, hashlib, signal, threading, urllib.request, urllib.error, ssl, re
 
-H = pathlib.Path.home() / ".inkboard-team"
+H = team_home.home()
 REPOS = settings()["repositories"]
 
 

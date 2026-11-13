@@ -18,12 +18,13 @@ import urllib.request
 
 try:
     from runner.settings import settings, dsh_program, api_key
-    from runner import gitsafe
+    from runner import gitsafe, team_home
 except ModuleNotFoundError:
     from settings import settings, dsh_program, api_key
     import gitsafe
+    import team_home
 
-H = Path.home() / '.inkboard-team'
+H = team_home.home()
 HEARTBEAT = 20
 PROMPT = '你是只读代码调查员。只回答问题，不修改任何文件，不运行会写文件或访问网络的命令。先读 .teamagent-context.md。答案中文，不超过 1500 字；每个结论带 文件:行。不知道就写还差什么。'
 # Step 0 has not yet verified real DSH read/tool events. Stay on deterministic B.

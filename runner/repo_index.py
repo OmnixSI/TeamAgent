@@ -11,13 +11,14 @@ import time
 import urllib.request
 
 try:
-    from runner import gitsafe
+    from runner import gitsafe, team_home
     from runner.settings import settings
 except ModuleNotFoundError:
     import gitsafe
+    import team_home
     from settings import settings
 
-H = Path.home() / '.inkboard-team'
+H = team_home.home()
 MAX_PATCH_BYTES = 1_048_576
 MAX_BODY = 900_000  # Paired with worker.ts /api/runner/repo_index's 1 MiB limit.
 DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed25519*',

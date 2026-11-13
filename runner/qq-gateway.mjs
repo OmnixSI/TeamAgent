@@ -1,10 +1,10 @@
 import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-const home = path.join(os.homedir(), ".inkboard-team");
+import {runtimeHome} from "./home.mjs";
+const home = runtimeHome();
 const config = JSON.parse(fs.readFileSync(path.join(home, "config.json")));
 const secret = JSON.parse(
   fs.readFileSync(path.join(home, "worker-secrets.json")),

@@ -1,7 +1,12 @@
 """Apply a published runtime once cloud work and local code execution are idle."""
 import pathlib,json,urllib.request,ssl,os,subprocess,time,sys,shutil
 
-H=pathlib.Path.home()/".inkboard-team"
+try:
+    from runner import team_home
+except ModuleNotFoundError:
+    import team_home
+
+H=team_home.home()
 SERVICES=["com.inkboard.team-qq","com.inkboard.team-runner","com.inkboard.team-owner","com.inkboard.team-utility","com.inkboard.team-utility-quick","com.inkboard.team-fetch","com.inkboard.team-media"]
 def live_markers():
     live=[]

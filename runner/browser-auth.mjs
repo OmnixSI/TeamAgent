@@ -8,6 +8,7 @@ import {createRequire} from 'node:module';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {openNativeX,xAuthTokenPresent,xMetadata,X_ERRORS,publishX} from './native-x-browser.mjs';
+import {runtimeHome} from './home.mjs';
 
 const COOKIE_NAMES=['SESSDATA','bili_jct','DedeUserID','buvid3'];
 const LABELS={bili:'B 站',x:'X'};
@@ -109,7 +110,7 @@ async function currentXPage(context,previous){
  return pages.includes(previous)?previous:pages.length===1?pages[0]:null;
 }
 export function createBrowserAuth(options={}){
- const home=options.home||resolve(homedir(),'.inkboard-team'),now=options.now||Date.now,sleep=options.sleep||wait;
+ const home=options.home||runtimeHome(),now=options.now||Date.now,sleep=options.sleep||wait;
  const launch=options.launch||launchBrowser,report=options.report||asyncNoop,notify=options.notify||macNotification;
  let biliClient=options.client;
  async function client(){

@@ -1,15 +1,17 @@
 try:
     from runner.settings import settings, api_key, dsh_program
+    from runner import team_home
 except ModuleNotFoundError:
     from settings import settings, api_key, dsh_program
+    import team_home
 #!/usr/bin/env python3
 """Local file/media agent. Separate workspaces, no repository writes or cloud-account credentials."""
 import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client, shutil, fcntl
 from contextlib import contextmanager
 
 ACTIVE = None
-H = pathlib.Path.home() / ".inkboard-team"
-C = json.loads((H / "config.json").read_text())
+H = team_home.home()
+C = team_home.config()
 TLS = ssl.create_default_context(
     cafile="/etc/ssl/cert.pem" if os.path.exists("/etc/ssl/cert.pem") else None
 )

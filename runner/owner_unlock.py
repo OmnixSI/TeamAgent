@@ -12,6 +12,11 @@ import threading
 import time
 import uuid
 
+try:
+    from runner import team_home
+except ModuleNotFoundError:
+    import team_home
+
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
 
 def now_ms():
@@ -96,7 +101,7 @@ class OwnerSessions:
             return True
 
 def main():
-    code = mint_code(Path.home() / '.inkboard-team')
+    code = mint_code(team_home.home())
     url = 'http://127.0.0.1:3391/login#unlock=' + code
     if Path('/Applications/Microsoft Edge.app').exists():
         args = ['/usr/bin/open', '-a', 'Microsoft Edge', url]

@@ -93,6 +93,11 @@ class FetchInstallTests(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertTrue((self.runtime / 'browser/x').exists(), 'rollback preserves user login data')
 
+    def test_apply_distributes_bridge_subagent_and_team_home(self):
+        self.apply()
+        for name in ['bridge.py', 'subagent.py', 'team_home.py', 'reload_runtime.py']:
+            self.assertTrue((self.runtime / name).exists(), name)
+
     def test_L5_reload_fetch_failure_optional_other_services_required(self):
         module = runpy.run_path(str(ROOT / 'runner/reload_runtime.py'))
         self.assertIn('com.inkboard.team-fetch', module['SERVICES'])
