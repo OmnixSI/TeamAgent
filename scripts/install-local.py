@@ -156,7 +156,7 @@ def main():
     home = Path.home() / ".inkboard-team"
     if "--remove-media" in sys.argv:
         if remove_media_service():
-            for name in ["xasr-venv","media-tmp","media-reports","media.lock","media-child.pid"]:
+            for name in ["xasr-venv","media-tmp","media-reports","voice-tmp","media.lock","media-child.pid"]:
                 path=home/name
                 if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
                 else: path.unlink(missing_ok=True)

@@ -14,6 +14,7 @@ import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
@@ -385,6 +386,9 @@ async function receive(r: Request, e: Env) {
       .filter(v => v.name)
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
+  // Voice only: this block issues no statement for text, image or file messages.
+  if (inserted && ib.media.some((x: any) => x.kind === "voice"))
+    await enqueueVoiceJobs(e, ib.media, { message: m.id, group: m.group_openid, sender: ib.senderId });
   if (TEAM.stickers.enabled && TEAM.stickers.collect) {
     const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text))).slice(0,2);
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
@@ -551,7 +555,7 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 async function processJob(e: Env, id: string) {
   const now = Date.now();
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
   )
     .bind(now + 660000, id, now, now)
     .first();
@@ -715,6 +719,7 @@ async function processJob(e: Env, id: string) {
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
     }
+    if (claim.kind === "voice_asr") await runVoiceCloudJob(e, p);
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
@@ -1235,7 +1240,7 @@ async function scheduled(e: Env) {
   await sweepVideoWaits(e);
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1281,7 +1286,7 @@ async function scheduled(e: Env) {
     .bind(Date.now() - 30 * 86400000)
     .run();
   await e.DB.prepare(
-    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout') AND created_at<?",
+    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
   )
     .bind(Date.now() - 7 * 86400000)
     .run();
@@ -1468,6 +1473,8 @@ async function api(r: Request, e: Env) {
 
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
+    if (path.startsWith("/api/runner/voice/") && method === "POST")
+      return voiceRoute(e, path, await r.json());
 
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
