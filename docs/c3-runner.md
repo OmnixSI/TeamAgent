@@ -1,6 +1,6 @@
 # C3 本机只读调查 runner（尚未接入 Worker）
 
-> 当前状态（v1.5）：按 M0–M4 矩阵选用 W1；真实 HOME 下 DSH 配置转储/帮助启动及 OS 沙箱边界检查通过，S-3/S-27–S-31 本机回归通过、无跳过。真实模型工具事件未完成，因此 `READER_VERIFIED=False`，运行模式仍是方案 B。详情见文末 v1.5；下列 v1.3/v1.4/返工结果是历史记录。
+> 当前状态（V-B / B-0）：临时 HOME 下真实 DSH 配置转储、帮助启动通过；原生模型探针在请求前以 `MISSING_CREDENTIAL` 退出，实际模型调用 0 次。真实工具/read 事件未通过，`READER_VERIFIED=False`，本版采用方案 B。逐项结论见文末 B-0；下列 v1.3/v1.4/v1.5 是历史记录。
 
 > v1.5 后续修复：仅给 `/dev/null` 增加 literal 写例外，读规则与六读根未改；见文末“空设备写例外”。
 
@@ -31,9 +31,9 @@
 | 真实安装的 DSH + 精简 patch，`--dump-config` | exit 0，没有退出 71 |
 | 工具配置 | 组合配置中派生/workflow/shell/web 均禁用，fs write/edit/applyPatch 为 false |
 | `dsh-tool-fs` | `0.2.2-rc.1` |
-| 模型返回的真实工具表、未知工具探针、README read 事件 | **待现场核**，配置转储不能替代这些事件 |
-| 原生空文件/空白文件事件 S-26(g)(h) | **待现场核**，没有用手工夹具冒充原生事件 |
-| 网络仅 TCP 443 + DNS | 规则已生成；真实模型连通性未验收 |
+| 模型返回的真实工具表、未知工具探针、README read 事件 | **不通过（B-0）**：`MISSING_CREDENTIAL`，没有产生模型工具事件；配置转储不能替代 |
+| 原生空文件/空白文件事件 S-26(g)(h) | **不通过（B-0）**：同一凭据前置条件阻断，没有原生 read 事件；未添加手工夹具 |
+| 网络仅 TCP 443 + DNS | 规则已生成；**真实模型连通性不通过验证（B-0）**：请求前即缺凭据，不能推断网络是否可达 |
 
 详细离线证据：`.agent/c3-step0-result.json`（不提交），临时原始输出目录记录在该文件中。单测还使用真实 `sandbox-exec` 检查合成 cookie/gh/aws/codex/claude/Keychains 等目录，阻止真实 HOME/仓库外写入，允许子 worktree 和临时 HOME 写入。
 
@@ -161,3 +161,30 @@ v1.5 测试先红（53 项、13 个失败断言、2 个错误），实现 W1 和
 完整宿主机回归：check、主测试、Python/Node runner、clients、check:ui、config:check 均 exit 0；计数维持 **464 + 112 + 51 + 2 = 629**，无跳过；`git diff --check` 干净。真实 DSH 配置转储仍 **exit 0，stderr 无 EPERM**，没有报错路径；`READER_VERIFIED=False`、方案 B 不变。真实模型工具事件仍未验收，未推送或部署。
 
 证据均不提交：`.agent/c3-devnull-baseline.log`、`c3-devnull-red.log`、`c3-devnull-green.log`、`c3-devnull-{check,test,runner,clients,ui,config}.log`、`c3-devnull-dsh.json`。最后的 JSON 同时记录读规则一致性和 DSH 启动结果。
+
+
+## V-B / B-0：隔离 HOME 的真实模型探针未通过
+
+2026-11-13（悉尼时间），基于 `df11aa2`，真实安装的 DSH、既有 W1 沙箱及原样 reader patch；未改变读根、网络规则或权限模式。仅生成临时 HOME / DSH_HOME、合成 git 仓库、README、空文件、空白文件与仓库外合成 canary / symlink。没有读取真实凭据文件，也没有调用 `runner.settings.api_key()`。启动环境没有可继承的 `DEEPSEEK_API_KEY`；headless 合成配置中的 `credentials` 与 `deepseek-account` 均禁用，不能假设它会自动读取桌面端已有凭据。
+
+| 本次探针项 | 结论与证据 |
+| --- | --- |
+| 真实 DSH 配置转储 | 通过：exit 0，stderr 0 字节；只读 patch 组合成功 |
+| 真实 DSH headless 帮助启动 | 通过：exit 0，stderr 0 字节 |
+| fs 包版本 | 通过：安装包元数据为 `0.2.2-rc.1` |
+| 模型实际工具表 | 不通过：模型请求前 `MISSING_CREDENTIAL`；没有工具表，不能把插件配置当实际工具表 |
+| 未知工具 `b0_unknown_tool` 拒绝 | 不通过：同一凭据前置条件阻断，未产生 tool_call / tool_result；不推断拒绝行为 |
+| `README.md` 原生 read | 不通过：同上，没有 read 证据 |
+| S-26(g) 空文件原生 read | 不通过：同上，没有原生空文件事件，不加入夹具 |
+| S-26(h) 空白文件原生 read | 不通过：同上，没有原生空白文件事件，不加入夹具 |
+| 仓库外 canary / symlink 原生 read | 不通过：同上，未执行到工具阶段；不能用已有 OS 沙箱测试代替 DSH 事件 |
+| 真实模型网络连通性 | 不通过验证：没有发起模型请求，不能判断连接成败 |
+| 临时目录与沙箱清理 | 通过：两个探针临时根目录与生成的 `.sb` 均已删除；无后台进程 |
+
+原生任务只启动 1 次 DSH，exit 1；stdout 仅有 session、4 条 status、final，final.reason.kind 为 `error`、error.code 为 `MISSING_CREDENTIAL`、text 为空，stderr 同样报告缺失 `deepseek-official` API key。实际模型请求 **0 / 10 次**；配置/帮助转储不调用模型。没有为了获取事件而放开真实 HOME 或改用合成服务冒充真实模型。
+
+结论：本次启用门槛不通过，保持 `READER_VERIFIED=False`，V-B 使用方案 B。若后续重跑，需要由安全启动环境向临时 HOME 内 DSH 提供既有 key，仅由 DSH 使用，且继续遵守不读真实凭据的限制；本包不修改凭据加载路径。
+
+证据（不提交）：包 worktree 的 `.agent/B-0-{startup,native-result}.json`、`B-0-{config,help}.txt`、`B-0-native-stdout.jsonl`、`B-0-native-stderr.txt`。这些报告只包含合成环境信息和缺凭据错误。相关基线 `subagent_test.py` 为 54 项通过、0 skip；最终全量结果记录于下文。
+
+最终验证：`npm run check && npm test && npm run test:runner` 整链 exit 0；主测试 **739/739**，Python runner **204 项、0 失败、1 skip**，Node runner **61/61**。唯一跳过项为既有可选 `XasrChunks.test_R12_real_chinese_english_and_multichunk`（未设置 `XASR_REAL_TEST=1`，需显式提供真实音频样本），与 B-0 无关；未开启或改写该测试。`git diff --check` 通过。没有功能实现变更，故未新增红绿单测；没有真实 read 事件，故未补原生事件夹具。
