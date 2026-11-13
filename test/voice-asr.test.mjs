@@ -96,7 +96,7 @@ test("V2 format detection uses content type, filename and URL suffix", () => {
 
 test("V3 transcript text carries the marker and the not-verbatim warning", () => {
   const note = voice.voiceNote("明天下午三点开会。");
-  assert.match(note, /^\[语音转写\] 明天下午三点开会。/);
+  assert.match(note, /^\[语音转写\]（自动转写，可能有误）\n明天下午三点开会。/);
   assert.match(note, /自动转写，可能有误/);
   assert.match(voice.voiceNote("很长", { truncated: true }), /只转写了前 110 秒/);
   assert.match(voice.voiceFailureNote({ error_kind: "expired", reason_text: "语音链接已过期", next_action: "请重新发一次语音" }), /转写失败：语音链接已过期/);
@@ -210,7 +210,7 @@ test("V9 Worker cloud path stores a cloud transcript and records usage", async (
   assert.equal(meta.media[0].asr, "云端转写成功");
   assert.equal(meta.media[0].asrSource, "cloud");
   const v = await viewOf(e, "v-cloud");
-  assert.match(v.text, /^\[语音转写\] 云端转写成功/);
+  assert.match(v.text, /^\[语音转写\]（自动转写，可能有误）\n云端转写成功/);
   assert.match(v.text, /自动转写，可能有误/);
   assert.equal(v.material.media[0], "语音（已转写）");
   const usage = await e.DB.prepare("SELECT status,units,purpose FROM ds_usage").first();
@@ -304,4 +304,27 @@ test("V13 runner failure report carries error_kind and a next step", async () =>
   assert.equal(meta.media[0].asrError.error_kind, "expired");
   const v = await viewOf(e, "v-runner-fail");
   assert.match(v.text, /语音链接已过期/);
+});
+
+test("V14 a generic CDN content-type does not lose an Ogg voice attachment", async () => {
+  const e = await setup();
+  await qq(e, voiceMsg("v-octet", [{ content_type: "audio/ogg", url: "https://multimedia.nt.qq.com.cn/download?file=a.ogg" }]));
+  const job = (await voiceJobs(e))[0];
+  const original = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const target = String(url);
+    if (target.startsWith("https://multimedia.nt.qq.com.cn/"))
+      return new Response(new Uint8Array([79, 103, 103, 83, 0, 2, 0, 0]), {
+        headers: { "content-type": "application/octet-stream" },
+      });
+    if (target === "https://api.deepseek.com/v1/tools/asr")
+      return Response.json({ text: "通用类型也能转写", duration_ms: 1000 });
+    throw Error("unexpected fetch " + target);
+  };
+  try {
+    await worker.queue({ messages: [{ body: { id: job.id }, ack() {} }] }, e);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal((await metaOf(e, "v-octet")).media[0].asr, "通用类型也能转写");
 });

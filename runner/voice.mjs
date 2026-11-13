@@ -27,6 +27,10 @@ const FAILURES = {
     reason_text: "这段语音里没有听清人声",
     next_action: "再说一次，或打字补充",
   },
+  tool_not_ready: {
+    reason_text: "本机还没装 silk 解码组件",
+    next_action: "让管理员按 runbook 安装 silk-wasm",
+  },
   too_large: { reason_text: "语音太长或文件太大", next_action: "分成几条短语音发" },
   download_failed: {
     reason_text: "语音文件没下载下来",
@@ -317,10 +321,23 @@ export async function runVoiceCycle({ cloud, deps = {}, max = 1 } = {}) {
   if (typeof cloud !== "function") throw Error("voice cloud client is required");
   const reports = [];
   for (let i = 0; i < max; i++) {
-    const claimed = await cloud("claim", {});
+    let claimed;
+    try {
+      claimed = await cloud("claim", {});
+    } catch {
+      break;
+    }
     const job = claimed?.data?.job;
     if (claimed?.status !== 200 || !job) break;
-    const result = await runVoiceJob(job, deps);
+    let result;
+    try {
+      result = await runVoiceJob(job, deps);
+    } catch (error) {
+      result = {
+        report: failure(String(error?.reason || "asr_failed")),
+        cleanup: { residue: 0, paths: [] },
+      };
+    }
     const body = {
       id: job.id,
       lease: job.payload?.lease,

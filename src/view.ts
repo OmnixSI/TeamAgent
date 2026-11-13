@@ -81,9 +81,10 @@ function stamp(at: number) {
 /** A voice transcript is evidence, so it carries the marker and a warning. */
 export function voiceText(media: any): string | undefined {
   if (typeof media?.asr === "string" && media.asr.trim()) {
-    let text = "[语音转写] " + media.asr.trim();
-    if (media.asrTruncated === true) text += "\n（语音较长，只转写了前 110 秒）";
-    return text + "\n（自动转写，可能有误）";
+    const marks =
+      "[语音转写]（自动转写，可能有误）" +
+      (media.asrTruncated === true ? "（语音较长，只转写了前 110 秒）" : "");
+    return marks + "\n" + media.asr.trim();
   }
   if (typeof media?.asrError?.reason_text === "string" && media.asrError.reason_text)
     return "[语音] 转写失败：" + media.asrError.reason_text;

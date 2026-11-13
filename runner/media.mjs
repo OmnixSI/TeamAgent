@@ -95,6 +95,8 @@ export async function sweepLocal(home,now=Date.now(),deps={}){
   fs.rmSync(pidFile,{force:true});
  }
  const tmp=join(home,'media-tmp');privateDir(tmp);for(const file of names(tmp))fs.rmSync(join(tmp,file),{recursive:true,force:true});
+ // Stale voice jobs from a killed runner; active jobs are younger than an hour.
+ const voiceTmp=join(home,'voice-tmp');if(exists(voiceTmp))for(const file of names(voiceTmp)){const p=join(voiceTmp,file);try{if(now-fs.lstatSync(p).mtimeMs>3600000)fs.rmSync(p,{recursive:true,force:true})}catch{}}
  for(const file of names(join(home,'media-reports')))if(file.endsWith('.json')){const path=join(home,'media-reports',file);if(now-fs.lstatSync(path).mtimeMs>DAY)fs.rmSync(path,{force:true});}
  // Approved cleanup patch: metadata only, no marker and no log-content reads. Oversized logs are cleared.
  for(const file of ['media.log','media-error.log']){

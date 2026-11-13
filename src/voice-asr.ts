@@ -73,6 +73,10 @@ const FAILURES: Record<string, { reason_text: string; next_action: string }> = {
     reason_text: "这段语音里没有听清人声",
     next_action: "再说一次，或打字补充",
   },
+  tool_not_ready: {
+    reason_text: "本机还没装 silk 解码组件",
+    next_action: "让管理员按 runbook 安装 silk-wasm",
+  },
   too_large: {
     reason_text: "语音太长或文件太大",
     next_action: "分成几条短语音发",
@@ -224,11 +228,10 @@ export function voiceNote(
   options: { truncated?: boolean; source?: "qq" | "cloud" | "runner" } = {},
 ): string {
   const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, VOICE_MAX_CHARS);
-  let note = "[语音转写] " + clean;
-  if (options.truncated)
-    note += "\n（语音较长，只转写了前 " + VOICE_TRUNCATE_SECONDS + " 秒）";
-  note += "\n（自动转写，可能有误）";
-  return note;
+  const marks =
+    "[语音转写]（自动转写，可能有误）" +
+    (options.truncated ? "（语音较长，只转写了前 " + VOICE_TRUNCATE_SECONDS + " 秒）" : "");
+  return marks + "\n" + clean;
 }
 
 export function voiceFailureNote(failure: VoiceFailure): string {
@@ -432,10 +435,22 @@ export async function runVoiceCloudJob(
     return fail(error?.reason === "too_large" ? "too_large" : "download_failed");
   }
   if (!bytes.byteLength) return fail("no_speech");
-  const type = String(response.headers.get("content-type") || payload.contentType || "")
+  let type = String(response.headers.get("content-type") || "")
     .split(";")[0]
     .trim()
     .toLowerCase();
+  const declared = String(payload.contentType || "").split(";")[0].trim().toLowerCase();
+  if (!ASR_TYPES.test(type) && ASR_TYPES.test(declared)) type = declared;
+  const head = String.fromCharCode(...Array.from(bytes.slice(0, 12)));
+  if (head.startsWith("\u0002#!SILK_V3") || head.startsWith("#!SILK_V3"))
+    return fail("unsupported", {
+      reason_text: "这条语音是 SILK 格式，Worker 不能直接解码",
+      next_action: "让本机 runner 处理，或直接打字",
+    });
+  if (!ASR_TYPES.test(type)) {
+    if (head.startsWith("OggS")) type = "audio/ogg";
+    else if (head.startsWith("RIFF") && head.slice(8, 12) === "WAVE") type = "audio/wav";
+  }
   if (!ASR_TYPES.test(type)) return fail("unsupported");
   const filename = String(payload.filename || "voice." + (type.includes("ogg") || type.includes("opus") ? "ogg" : "wav"));
   const form = new FormData();
