@@ -36,7 +36,7 @@ export async function unansweredProactive(e: any, groupId: string, now = Date.no
     WHERE group_id=?1 AND outbox_id IS NOT NULL ORDER BY created_at DESC LIMIT 1),
   lastout AS (
     SELECT CASE WHEN instr(id,'~')>0 THEN substr(id,1,instr(id,'~')-1) ELSE id END AS base
-    FROM outbox WHERE group_id=?1 AND status IN ('pending','sent') AND id NOT LIKE '%~s'
+    FROM outbox WHERE group_id=?1 AND status IN ('pending','sent','voice','voice_sending') AND id NOT LIKE '%~s'
     ORDER BY created_at DESC LIMIT 1),
   after AS (
     SELECT m.mentioned,json_extract(mm.json,'$.replyTo.kind') AS rk
@@ -62,7 +62,8 @@ export async function recordDecision(e: any, row: any): Promise<void> {
 }
 export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "gate:mode", "gate:config"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
-  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
+  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ") OR key IN ('voice:mode','tts:provider') OR key LIKE 'voice:mode:%'").bind(...SWITCH_KEYS).all()).results;
+  e.voiceSwitches = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith("voice:mode") || r.key === "tts:provider").map((r:any)=>[r.key,r.value]));
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
   return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
 }

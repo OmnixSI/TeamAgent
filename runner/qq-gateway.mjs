@@ -1,3 +1,4 @@
+import { processVoiceOutbox } from "./voice-delivery.mjs";
 import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
@@ -153,11 +154,12 @@ async function cloud(pathname, body) {
   if (!response.ok) throw Error("cloud HTTP " + response.status);
   return response.json();
 }
-let delivering = false;
+let delivering = false, voiceReady = false;
 setInterval(async () => {
   if (delivering) return;
   delivering = true;
   try {
+    if (voiceReady && connected) await processVoiceOutbox({ cloud, bot, deps: { log: console.log } });
     await deliverFiles({
       dir: deliveryDir,
       root: path.join(home, "utility"),
@@ -175,7 +177,7 @@ setInterval(async () => {
 
 setInterval(async () => {
   try {
-    await fetch(config.url + "/api/runner/gateway-status", {
+    const response = await fetch(config.url + "/api/runner/gateway-status", {
       method: "POST",
       headers: {
         Authorization: "Bearer " + config.runnerToken,
@@ -184,6 +186,7 @@ setInterval(async () => {
       body: JSON.stringify({ connected, blocked }),
       signal: AbortSignal.timeout(15000),
     });
+    if (response.ok) voiceReady = (await response.json()).voice === true;
   } catch {}
 }, 30000);
 const abort = new AbortController();

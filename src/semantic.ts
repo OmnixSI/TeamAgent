@@ -8,6 +8,7 @@ import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel"]);
+import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -406,8 +407,8 @@ function tweetText(html: string) {
 }
 export type { ReadReason } from './linkfail';
 import type { ReadReason } from './linkfail';
-export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
-export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research' };
+export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek' | 'deepseek_fetch'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
+export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research'; group?: string; sender?: string };
 /** All sources, including response bodies, spend the same absolute budget. */
 export function slot(deadline: number, cap: number, reserve = 0): AbortSignal | null {
   const milliseconds = Math.floor(Math.min(cap, deadline - Date.now() - reserve));
@@ -503,6 +504,13 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
       if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
     } catch {if(Date.now()>=deadline-10)reason='timeout';}
   }
+  if (opt.purpose==='research' && deadline-Date.now()>=300) {
+    try {
+      const page=await fetchPageCore(e,url,{timeoutMs:Math.max(300,deadline-Date.now()),group:opt.group,sender:opt.sender});
+      if (page.ok===true && page.content.trim()) return {ok:true,source:'deepseek_fetch',text:page.content};
+      if (page.ok===false && page.error_kind==='denied') reason='login_required';
+    } catch {}
+  }
   return {ok:false,reason};
 }
 export function untrustedResults(results: any) {
@@ -524,7 +532,7 @@ export async function understandLinks(e: any, p: any, s: Services) {
   if (!m) return;
   const urls: string[] = (p.urls || []).filter(publicUrl).slice(0, 3);
   const deadline = Date.now() + 20000;
-  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline })));
+  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline, group: m.group_id, sender: m.sender })));
   const pages = reads.map((read, index) => {
     const url = urls[index];
     const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
@@ -1276,7 +1284,7 @@ async function answerWithTools(e: any, context: any) {
             );
             break;
           case "read_web": {
-            const d = await readUrl(e, a.url, { purpose: "research" });
+            const d = await readUrl(e, a.url, { purpose: "research", group: context.latest?.group_id, sender: context.latest?.sender });
             result = d.ok
               ? {
                   source: d.source,

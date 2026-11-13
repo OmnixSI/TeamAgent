@@ -7,7 +7,9 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createFetchClient,createSafeLookup,sanitize,classifyMedia} from './fetcher.mjs';
 import {loadBiliCookies} from './browser-auth.mjs';
-import {runAsr,runCommand,expandHome,fault} from './asr.mjs';
+import {runCommand,expandHome,fault} from './asr.mjs';
+import {runVoiceCycle} from './voice.mjs';
+import {transcribeAudio} from './cloud-asr.mjs';
 const DAY=86400000,MAX_TMP=2048*1024**2,BV=/^BV[0-9A-Za-z]{10}$/;
 const DEFAULT={enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048};
 const DEFAULT_MODEL=join(homedir(),'Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03');
@@ -94,6 +96,8 @@ export async function sweepLocal(home,now=Date.now(),deps={}){
   fs.rmSync(pidFile,{force:true});
  }
  const tmp=join(home,'media-tmp');privateDir(tmp);for(const file of names(tmp))fs.rmSync(join(tmp,file),{recursive:true,force:true});
+ // Stale voice jobs from a killed runner; active jobs are younger than an hour.
+ const voiceTmp=join(home,'voice-tmp');if(exists(voiceTmp))for(const file of names(voiceTmp)){const p=join(voiceTmp,file);try{if(now-fs.lstatSync(p).mtimeMs>3600000)fs.rmSync(p,{recursive:true,force:true})}catch{}}
  for(const file of names(join(home,'media-reports')))if(file.endsWith('.json')){const path=join(home,'media-reports',file);if(now-fs.lstatSync(path).mtimeMs>DAY)fs.rmSync(path,{force:true});}
  // Approved cleanup patch: metadata only, no marker and no log-content reads. Oversized logs are cleared.
  for(const file of ['media.log','media-error.log']){
@@ -152,10 +156,10 @@ export async function runMediaJob(job,deps={}){
   await (deps.ffmpeg||ffmpegAudio)(m4a,wav,{maxMinutes:Math.min(90,cfg.max_minutes),signal:controller.signal,onChild});observe();fs.rmSync(m4a,{force:true});
   stage='asr_failed';
   const asrConfig=deps.asrConfig||{python:join(home,'xasr-venv/bin/python'),model_dir:DEFAULT_MODEL};
-  asrResult=await (deps.asr||runAsr)(wav,{python:expandHome(asrConfig.python),modelDir:expandHome(asrConfig.model_dir),memCapMb:Math.min(1300,cfg.mem_cap_mb),timeoutMs:60000+covered*cfg.rtf*4000,signal:controller.signal,onChild,onProgress:p=>{deps.progress='转写 '+p.done+'/'+p.total}});
+  asrResult=await transcribeAudio(wav,{settings:{...cfg,...payload.settings},keyFile:deps.deepseekConfig?.key_file,python:expandHome(asrConfig.python),modelDir:expandHome(asrConfig.model_dir),memCapMb:Math.min(1300,cfg.mem_cap_mb),timeoutMs:Math.min(60000+covered*cfg.rtf*4000,payload.until-Date.now()),signal:controller.signal,onChild,onProgress:p=>{deps.progress='转写 '+p.done+'/'+p.total}},{local:deps.asr,callDs:deps.callDs,fetch:deps.fetch});
   fs.rmSync(wav,{force:true});if(controller.signal.aborted)throw controller.signal.reason;
   const text=asrResult.segments.map(s=>'['+timestamp(s.start)+'] '+s.text).join('\n');
-  report={id:job.id,lease:payload.lease,success:true,result:{bvid,text,covered:Math.min(covered,asrResult.audio_s),duration,partial:duration>Math.min(covered,asrResult.audio_s),chunks:asrResult.segments.length}};
+  report={id:job.id,lease:payload.lease,success:true,result:{bvid,text,covered:Math.min(covered,asrResult.audio_s),duration,partial:duration>Math.min(covered,asrResult.audio_s),chunks:asrResult.chunks,provider:asrResult.provider,cloud_chunks:asrResult.cloud_chunks,local_chunks:asrResult.local_chunks,units:asrResult.units,...(asrResult.meta?{meta:asrResult.meta}:{})}};
  }catch(error){
   const reason=controller.signal.aborted?controller.signal.reason?.reason:error.reason||(['风控'].includes(error.message)||[403,412].includes(error.status)||[-352,-412].includes(error.code)?'risk':stage);
   report=conflict?null:{id:job.id,lease:payload.lease,success:false,reason:reason==='cancelled'?'media_timeout':reason};
@@ -195,7 +199,7 @@ export async function runCycle(deps){
  }finally{release()}
 }
 function settings(home){
- const repo=fileURLToPath(new URL('../config/team.json',import.meta.url)),path=exists(repo)?repo:join(home,'agent-settings.json');return {...DEFAULT,...JSON.parse(fs.readFileSync(path,'utf8')).bili?.media};
+ const repo=fileURLToPath(new URL('../config/team.json',import.meta.url)),path=exists(repo)?repo:join(home,'agent-settings.json');const config=JSON.parse(fs.readFileSync(path,'utf8'));return {...DEFAULT,...config.settings,...config.bili?.media};
 }
 export async function main(argv=process.argv.slice(2)){
  const home=homes(),cfg=settings(home),client=await makeClient(home);
@@ -211,10 +215,14 @@ export async function main(argv=process.argv.slice(2)){
    const r=result.report.result;console.log(JSON.stringify({bvid,subtitle_status:light.subtitle_status,duration:r.duration,covered:r.covered,partial:r.partial,chunks:r.chunks,chars:r.text.length,head:r.text.slice(0,300),files_seen:result.files_seen,max_rss_mb:result.max_rss_mb,nice:result.nice,wall_s:result.wall_s,cleanup:result.cleanup}));return 0;
   }catch(error){console.log(JSON.stringify({bvid,error:error.reason||'download_failed',cleanup:{residue:0,paths:[]}}));return 1;}finally{release()}
  }
- if(!cfg.enabled)return 0;
  const config=JSON.parse(fs.readFileSync(join(home,'config.json'),'utf8')),url=new URL(config.url);if(url.protocol!=='https:'||url.username||url.password)throw fault('asr_unavailable');
- const cloud=async(path,body)=>{const r=await fetch(new URL('/api/runner/fetch/media/'+path,url),{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+config.runnerToken,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});return {status:r.status,data:await r.json().catch(()=>({}))}};
+ const cloudAt=base=>async(path,body)=>{const r=await fetch(new URL(base+path,url),{method:'POST',redirect:'error',headers:{Authorization:'Bearer '+config.runnerToken,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});return {status:r.status,data:await r.json().catch(()=>({}))}};
+ const cloud=cloudAt('/api/runner/fetch/media/'),voiceCloud=cloudAt('/api/runner/voice/');
  const controller=new AbortController(),stop=()=>controller.abort(fault('media_timeout'));process.once('SIGTERM',stop);
- try{await runCycle({home,client,settings:cfg,asrConfig:config.asr,cloud,signal:controller.signal,log:s=>console.error(s)});}finally{process.removeListener('SIGTERM',stop)}return 0;
+ try{
+  // Voice replies are interactive: drain the short voice queue before long Bili work.
+  await runVoiceCycle({cloud:voiceCloud,deps:{home,log:s=>console.error(s)},max:2});
+  if(cfg.enabled) await runCycle({home,client,settings:{...cfg,...config.settings,...(config.asr?.provider?{'asr:provider':config.asr.provider}:{})},asrConfig:config.asr,deepseekConfig:config.deepseek,cloud,signal:controller.signal,log:s=>console.error(s)});
+ }finally{process.removeListener('SIGTERM',stop)}return 0;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().then(code=>{process.exitCode=code}).catch(()=>{console.error('media worker unavailable');process.exitCode=1});

@@ -7,6 +7,7 @@ import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
 import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
+import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
 import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
@@ -16,6 +17,7 @@ import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected, prefetchBili } from "./fetchjobs";
+import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
 import { TEAM } from "./config";
 import { parseInbound, extractBili } from "./inbound";
@@ -51,9 +53,12 @@ import {
   visionErrorFailure,
   SELFTEST_PNG,
 } from "./vision";
+import { imagegenSelftest } from "./imagegen-selftest";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
 import { handleCommand } from "./commands";
+import { dsSelfTest } from "./deepseek-tools";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
 import {
@@ -385,6 +390,9 @@ async function receive(r: Request, e: Env) {
       .filter(v => v.name)
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
+  // Voice only: this block issues no statement for text, image or file messages.
+  if (inserted && ib.media.some((x: any) => x.kind === "voice"))
+    await enqueueVoiceJobs(e, ib.media, { message: m.id, group: m.group_openid, sender: ib.senderId });
   if (TEAM.stickers.enabled && TEAM.stickers.collect) {
     const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text))).slice(0,2);
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
@@ -557,7 +565,7 @@ async function processJob(e: Env, id: string) {
       lease_until=CASE WHEN ${expired} THEN lease_until ELSE ?1 END,
       attempts=CASE WHEN ${expired} THEN attempts ELSE attempts+1 END,
       error=CASE WHEN ${expired} THEN 'expired' ELSE error END
-      WHERE id=?2 AND kind NOT IN ('fetch','bili_media')
+      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner')
       AND (status='pending' OR (status='running' AND lease_until<?4))
       AND (${expired} OR (attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=?4)) RETURNING *`,
   )
@@ -723,6 +731,7 @@ async function processJob(e: Env, id: string) {
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
     }
+    if (claim.kind === "voice_asr") await runVoiceCloudJob(e, p);
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
@@ -852,7 +861,7 @@ async function processJob(e: Env, id: string) {
         return;
       }
       const shadowReason = gate && !gate.speak ? "gate_shadow:" + gate.reason : "";
-      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { source: latest, reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
       await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
         spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: [shadowReason, decision.reason].filter(Boolean).join(" ") || undefined, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
@@ -1106,6 +1115,13 @@ async function sendOutbox(e: Env) {
       try { meta = JSON.parse(o.meta); } catch {}
       switches ??= await loadSwitches(e);
     }
+    if (typeof meta?.gen_image === "string" || o.id.endsWith("~g")) {
+      if (left(e) < COST.send_row) break;
+      const source = o.msg_id ? await e.DB.prepare("SELECT ts FROM messages WHERE id=? AND group_id=?").bind(o.msg_id,o.group_id).first() : null;
+      const status = await sendGeneratedImage(e,o,accessToken,source,messageSequence(o.id));
+      if (status === 401) qqToken = undefined;
+      continue;
+    }
     const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
     if (/^mention-(recovery|receipt):/.test(o.id)) {
       if (left(e) < COST.send_row + 2) break;
@@ -1274,7 +1290,7 @@ async function scheduled(e: Env) {
     .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1320,7 +1336,7 @@ async function scheduled(e: Env) {
     .bind(Date.now() - 30 * 86400000)
     .run();
   await e.DB.prepare(
-    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout') AND created_at<?",
+    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
   )
     .bind(Date.now() - 7 * 86400000)
     .run();
@@ -1492,7 +1508,7 @@ async function api(r: Request, e: Env) {
         await set(e, "runner_pause_until", String(Date.now() + 60000));
       if (b.resume) await set(e, "runner_pause_until", "0");
       const busy = await e.DB.prepare(
-        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending')+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
+        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status IN ('sending','voice_sending'))+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
       )
         .bind(Date.now())
         .first();
@@ -1507,7 +1523,11 @@ async function api(r: Request, e: Env) {
 
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
+    if (path.startsWith("/api/runner/voice/") && method === "POST")
+      return voiceRoute(e, path, await r.json());
 
+    if (path === "/api/runner/voice-outbox" && method === "POST") return json(await pullVoiceOutbox(e));
+    if (path === "/api/runner/voice-outbox/report" && method === "POST") return reportVoice(e, await r.json());
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
       await set(
@@ -1519,7 +1539,7 @@ async function api(r: Request, e: Env) {
           blocked: String(b.blocked || "").slice(0, 150),
         }),
       );
-      return json({ ok: true });
+      return json({ ok: true, voice: await voiceAvailable(e) });
     }
     if (path.endsWith("/delivery-target") && method === "POST") {
       const b: any = await r.json();
@@ -1931,6 +1951,13 @@ async function api(r: Request, e: Env) {
       );
     }
   }
+  if (path === "/api/team/dstools/selftest" && method === "GET") {
+    if (who.role !== "owner") return json({ error: "owner only" }, 403);
+    const result = await dsSelfTest(e);
+    return json(result.body, result.status);
+  }
+  if (path === "/api/team/imagegen/selftest" && method === "GET")
+    return imagegenSelftest(e, who);
   if (who.via === "ai" && !aiRouteAllowed(path, method))
     return json(
       { error: "本机AI仅可查询项目、创建与领取任务、回填自己的进展" },
