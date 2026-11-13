@@ -1,3 +1,4 @@
+import { runWorkersAi } from "./ai-budget";
 import { modelSettings, type Effort } from "./config";
 import { stage } from "./timing";
 /** Credentials are never prompt material, query strings, metrics or activity records. */
@@ -54,7 +55,7 @@ export async function visionModel(e: any, body: any, signal: AbortSignal) {
       signal.addEventListener("abort", onAbort, { once: true });
     });
     const result: any = await Promise.race([
-      e.AI.run("@cf/meta/llama-3.2-11b-vision-instruct", promptData(body)), stopped,
+      runWorkersAi(e, "@cf/meta/llama-3.2-11b-vision-instruct", promptData(body)), stopped,
     ]);
     usage = result?.usage || {};
     status = "ok";

@@ -43,7 +43,7 @@
 
 ## Worker 阶段待接入与待测
 
-- D-1–D-26 全部：start/配额/稳定 id、claim/lease/deadline、取消、report 原子幂等、progress 去重、owner/runner 鉴权、过期与恢复、resolved SHA、D1 每次 ≤48。
+- D-1–D-26 全部：start/配额/稳定 id、claim/lease/deadline、取消、report 原子幂等、progress 去重、owner/runner 鉴权、过期与恢复、resolved SHA、D1 聊天 ≤48、后台 ≤200。
 - S-10 的服务端第三次 claim 拒绝、S-14 的方案 B research 工具表及 resume 深度闸。当前只验证本机槽位上限。
 - 方案 B 的资料要创建 `research`，payload 保持 `origin:'subagent'`，不得直接投递资料片段冒充最终答案；report/任务路由集成在该阶段完成。
 - bridge 注册 `subagent.loop()`、安装文件分发、Worker idle/quiesce busy 计数与开关；本批不启用服务。真实模型探针全过前不可启用 DSH 路径。

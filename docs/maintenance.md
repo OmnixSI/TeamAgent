@@ -25,7 +25,7 @@
 
 日常与小活默认 `quick_effort=high`，重要工作默认 `important_effort=max`。`effort_by_kind` 优先于这两个默认值，可分别调整 `voice`、`participation`、`research`、`memory`、`code`，也可新增实际调用类型。支持 `none / low / high / max`；`none`关闭思考。模型默认 `deepseek-flash`，也可明确改为 `deepseek-v4-pro`。这些值来自[DeepSeek官方接口](https://api-docs.deepseek.com/api/create-chat-completion/)。
 
-夜间默认悉尼03:00–06:00、安静20分钟后整理，每批最多60条，最多8批。批大小受免费D1查询预算约束。默认每天12点和19点探索技术；把 `scout.enabled` 改为false可停用。参数范围由配置校验器检查，超出支持范围时发布会停止；若要扩展机制，同时修改校验、实现与相关回归检查。
+夜间默认悉尼03:00–06:00、安静20分钟后整理，每批最多60条，最多8批。批大小受后台 D1 查询预算（≤200 条语句/次）约束，先测再调。默认每天12点和19点探索技术；把 `scout.enabled` 改为false可停用。参数范围由配置校验器检查，超出支持范围时发布会停止；若要扩展机制，同时修改校验、实现与相关回归检查。
 
 本机执行器从相同配置生成DSH的high/max档位，不再读取维护者个人的DSH API密钥。开发轮数、文件超时、代码超时也从该文件读取。正在运行的任务按既有回执与版本继续，更新服务会等待空闲。
 
@@ -47,7 +47,7 @@
 
 PR只执行检查，合并进main后才发布本助手。这个流程不会自动合并、发布其他业务仓库。`workflow_dispatch`可手动重新发布main。无需成员登录Cloudflare、重填API或开放电脑端口；发布电脑离线时等待它重新上线。
 
-当前GitHub官方说明[自托管runner不收Actions计算费用](https://docs.github.com/en/actions/concepts/billing-and-usage)。本项目使用现有电脑，Cloudflare保持免费档，DeepSeek API仍按团队账户计量。没有更改组织账单或提高预算。
+当前GitHub官方说明[自托管runner不收Actions计算费用](https://docs.github.com/en/actions/concepts/billing-and-usage)。本项目使用现有电脑，Cloudflare 于 2026-11-14 升级为 Workers Paid（$5/月），只用套餐自带额度、未开附加项；DeepSeek API 仍按团队账户计量。
 
 ## 本机改完再提交
 
@@ -98,15 +98,15 @@ INSERT INTO settings(key,value) VALUES('off:quote','1') ON CONFLICT(key) DO UPDA
 
 `chat_decisions` 保存每轮的批次、动作、是否 forced、等待、硬规则、引用目标与 outbox id；`outbox_meta` 单独保存引用，保留旧表的位置插入格式。两张表只通过幂等 CREATE 追加。冷图段不写决策或推进游标，续跑的 `chat-v-*` 才判定；等待续跑是 `chat-wait-*`。
 
-部署后的观察点：`last_chat_timing.queueMs` 可核对 Queues 延迟投递；若被 @ 的队列等待持续超过 5 秒，按方案将四个防抖秒数设为 0 后部署回退。QQ 拒绝引用的真实码型、外部请求与 D1 子请求配额仍需线上日志核验，单测不能替代。
+部署后的观察点：`last_chat_timing.queueMs` 可核对 Queues 延迟投递；若被 @ 的队列等待持续超过 5 秒，按方案将四个防抖秒数设为 0 后部署回退。QQ 拒绝引用的真实码型、外部请求与 D1 每次调用语句预算（聊天 48、后台 200）仍需线上日志核验，单测不能替代。
 
 ## D1 预算与插话评测
 
-`src/d1.ts` 的 `metered()` 在 fetch、每条 queue 消息和 scheduled 入口记录真实执行数，`batch` 的每条语句分别计数。上限 48 为故障路径保留两条；计量器只记录，工具、发送和视频扫描在调用处判断余量。
+`src/d1.ts` 的 `metered()` 在 fetch、每条 queue 消息和 scheduled 入口记录真实执行数，`batch` 的每条语句分别计数。聊天/HTTP 入口上限 48（为故障路径保留两条），后台队列与 scheduled 上限 200（平台单次 1,000）；计量器只记录，工具、发送和视频扫描在调用处判断余量。
 
-`COST` 依据 `test/rhythm.test.mjs` 的 B3–B7 实测：冷图 `image=6`，每次模型用量记录 `turn=2`；带八条旧事实更新的纠正工具最多 12，故 `tool` 从 8 升为 12。首次读开关、引用去除重发及第三次失败熔断合计最多 10，故 `send_row` 从 7 升为 10。`tail=16` 保留后续回答与持久化余量，`sticker=5` 为尚未实现的 P2 初值。本次实测三图段 28、引用加两段发送的回答段 44、重工具回合 44、research 30、视频 report 8、各 video_reply 29、积压 cron 最多 44 条。视频扫描每类最多五条；积压由后续 cron 和独立队列任务继续处理。cron 先完成必要维护，再把剩余额度交给发送，避免发送耗尽维护额度。
+`COST` 依据 `test/rhythm.test.mjs` 的 B3–B7 实测：冷图 `image=8`（含 Workers AI neurons 预扣），每次模型用量记录 `turn=2`；带八条旧事实更新的纠正工具最多 12，故 `tool` 从 8 升为 12。首次读开关、引用去除重发及第三次失败熔断合计最多 10，故 `send_row` 从 7 升为 10。`tail=16` 保留后续回答与持久化余量，`sticker=5` 为尚未实现的 P2 初值。本次实测三图段 28、引用加两段发送的回答段 44、重工具回合 44、research 30、视频 report 8、各 video_reply 29、积压 cron 最多 44 条。视频扫描每类最多五条；积压由后续 cron 和独立队列任务继续处理。cron 先完成必要维护，再把剩余额度交给发送，避免发送耗尽维护额度。
 
-不准通过调高 48 或调低常量掩盖超限。后续实现扩大工具或发送路径时，先补最大路径的计数测试，再按实测提高常量；三图段应分别保持不超过 30 和 44。
+不准通过调高入口预算（聊天 48、后台 200）或调低常量掩盖超限。后续实现扩大工具或发送路径时，先补最大路径的计数测试，再按实测提高常量；三图段应分别保持不超过 30 和 44。
 
 60 条合成场景在 `test/fixtures/timing-synthetic.json`，全部虚构，不含群消息。`scripts/evaluate-timing.mjs` 调用生产的视图、提示组装、三态解析和硬规则函数；标签不进入提示，模型走既有 runtime 边界。真实模型评测只接收当前进程已有的 `DEEPSEEK_API_KEY`，不读取 `.env` 或凭据文件，不发送 QQ、不读远端 D1、不在 CI 调用模型。
 

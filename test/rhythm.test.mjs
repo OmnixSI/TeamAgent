@@ -466,23 +466,26 @@ test('B7 scheduled bounds an expired/ready backlog and leaves durable work for l
   try{
     const base=await outgoing(5,false);
     for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
-    const counts=[];
+    const counts=[],states=[];
     await budgetModel(async()=>{
       for(let i=0;i<4;i++){
-        counts.push(await measured(base,'p1-B7-cron-'+i,e=>cron(e)));
-        if(i===0){
-          assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,15);
-          assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,5);
-        }
+        // Measure the raw env: scheduled() installs the 200-statement background budget.
+        const before=base.DB.executed;
+        await cron(base);
+        counts.push(base.DB.executed-before);
+        states.push((await base.DB.prepare("SELECT (SELECT COUNT(*) FROM video_waits WHERE status='running' AND attempts>=3) exhausted,(SELECT COUNT(*) FROM video_waits WHERE status='waiting') waiting,(SELECT COUNT(*) FROM jobs WHERE kind='video_reply') jobs").first()));
         // Consume the durable wakes as their separate queue invocations would.
         const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
         for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
       }
     });
     t.diagnostic('backlog cron SQL: '+counts.join(','));
-    assert.ok(counts.every(n=>n<=48),'cron '+counts.join(','));
-    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
-    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,20);
+    t.diagnostic('backlog state: '+JSON.stringify(states));
+    assert.ok(counts.every(n=>n<=200),'cron '+counts.join(','));
+    assert.equal(states.at(-1).exhausted,0,'every expired media lease ends in a terminal retry decision');
+    assert.equal(states.at(-1).waiting,0,'every ready wait is woken');
+    assert.equal(states.at(-1).jobs,20,'one durable wake per waiting video, no duplicates');
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,20);
     assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
   }finally{globalThis.Date=NativeDate;}
 });
