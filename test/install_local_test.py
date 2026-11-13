@@ -103,9 +103,9 @@ class FetchInstallTests(unittest.TestCase):
                 raise subprocess.CalledProcessError(1,args)
         with patch('subprocess.run', side_effect=run):
             module['restart_services']()
-        self.assertEqual(len(calls),6)
-        self.assertTrue(all(kw['check'] for _,kw in calls[:-1]))
-        self.assertFalse(calls[-1][1]['check'])
+        self.assertEqual(len(calls),7)
+        self.assertTrue(all(kw['check'] for _,kw in calls[:-2]))
+        self.assertFalse(calls[-1][1]['check']);self.assertFalse(calls[-2][1]['check'])
         with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1,['launchctl'])):
             with self.assertRaises(subprocess.CalledProcessError): module['restart_services']()
 
@@ -132,5 +132,54 @@ class FetchInstallTests(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertEqual(path.read_bytes(), before)
         self.assertTrue(any('警告' in str(call) for call in output.call_args_list))
+
+class MediaInstallTests(unittest.TestCase):
+    setUp=FetchInstallTests.setUp
+    apply=FetchInstallTests.apply
+    run_command=FetchInstallTests.run_command
+    def module(self):
+        spec=importlib.util.spec_from_file_location('installer',ROOT/'scripts/install-local.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+    def test_I1_staging_includes_runtime_and_requirements(self):
+        m=self.module()
+        with patch.object(m,'ensure_xasr',return_value=True),patch('subprocess.check_output',return_value='fake-release'),patch('sys.argv',['install-local.py']):
+            with self.assertRaises(SystemExit)as r:m.main()
+        self.assertEqual(r.exception.code,0)
+        stage=self.runtime/'runtime-staging/fake-release/runner'
+        for name in ['media.mjs','asr.mjs','xasr_transcribe.py','requirements-xasr.txt']:self.assertTrue((stage/name).exists(),name)
+    def test_I2_apply_flattens_files_and_writes_absolute_asr_paths(self):
+        self.apply()
+        import json
+        config=json.loads((self.runtime/'config.json').read_text())
+        self.assertTrue(Path(config['asr']['python']).is_absolute());self.assertTrue(Path(config['asr']['model_dir']).is_absolute())
+        for name in ['media.mjs','asr.mjs','xasr_transcribe.py','requirements-xasr.txt']:self.assertTrue((self.runtime/name).exists(),name)
+    def test_I3_apply_does_not_install_and_unchanged_requirement_skips_pip(self):
+        self.apply();self.assertFalse(any('pip' in c or '--check' in c for c in self.commands))
+        m=self.module();venv=self.runtime/'xasr-venv';(venv/'bin').mkdir(parents=True)
+        (venv/'bin/python').write_text('');import hashlib
+        (venv/'.req.sha256').write_text(hashlib.sha256((ROOT/'runner/requirements-xasr.txt').read_bytes()).hexdigest())
+        self.commands.clear()
+        with patch('subprocess.run',side_effect=self.run_command):self.assertTrue(m.ensure_xasr(ROOT))
+        self.assertFalse(any('pip' in c for c in self.commands));self.assertTrue(any('--check' in c for c in self.commands))
+        (venv/'.req.sha256').unlink();self.commands.clear()
+        with patch('subprocess.run',side_effect=self.run_command):self.assertTrue(m.ensure_xasr(ROOT))
+        pip=next(c for c in self.commands if 'pip' in c);self.assertIn('--no-cache-dir',pip);self.assertEqual(pip[-2:],['-r',str(ROOT/'runner/requirements-xasr.txt')])
+    def test_I4_media_is_an_interval_job_and_fetch_plist_remains_byte_exact(self):
+        m=self.module()
+        with patch.object(m,'find_node',return_value='/node'),patch.object(m,'launchctl',return_value=False):
+            m.install_fetch_service();m.install_media_service()
+        fetch=plistlib.dumps({'Label':'com.inkboard.team-fetch','ProgramArguments':['/node',str(self.runtime/'fetcher.mjs')],'EnvironmentVariables':{'PATH':'/:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin'},'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':30,'StandardOutPath':str(self.runtime/'fetch.log'),'StandardErrorPath':str(self.runtime/'fetch-error.log')})
+        self.assertEqual((self.home/'Library/LaunchAgents/com.inkboard.team-fetch.plist').read_bytes(),fetch)
+        media=plistlib.loads((self.home/'Library/LaunchAgents/com.inkboard.team-media.plist').read_bytes());self.assertEqual(media['StartInterval'],60);self.assertEqual(media['Nice'],10);self.assertEqual(media['ProcessType'],'Background');self.assertTrue(media['LowPriorityIO']);self.assertEqual(media['WorkingDirectory'],str(self.runtime));self.assertNotIn('RunAtLoad',media);self.assertNotIn('KeepAlive',media)
+    def test_I5_optional_media_service_is_restarted_without_requiring_a_live_instance(self):
+        m=runpy.run_path(str(ROOT/'runner/reload_runtime.py'));self.assertIn('com.inkboard.team-media',m['SERVICES']);calls=[]
+        with patch('subprocess.run',side_effect=lambda *a,**kw:calls.append((a,kw))):m['restart_services']()
+        self.assertFalse(next(kw['check'] for (a,kw)in calls if a[0][-1].endswith('team-media')))
+    def test_I6_remove_media_deletes_only_its_named_runtime_artifacts(self):
+        m=self.module();(self.runtime/'unrelated').write_text('preserved')
+        for name in ['xasr-venv','media-tmp','media-reports','media.lock']:(self.runtime/name).mkdir()
+        (self.runtime/'media-child.pid').write_text('1')
+        with patch.object(m,'launchctl',return_value=True),patch('sys.argv',['install-local.py','--remove-media']):m.main()
+        for name in ['xasr-venv','media-tmp','media-reports','media.lock','media-child.pid']:self.assertFalse((self.runtime/name).exists(),name)
+        self.assertEqual((self.runtime/'unrelated').read_text(),'preserved')
 
 if __name__ == '__main__': unittest.main()

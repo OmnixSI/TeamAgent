@@ -177,7 +177,21 @@ export function createFetchClient(options={}){
  const pauseForRisk=()=>{riskCount=Math.max(2,riskCount);pausedUntil=Math.max(pausedUntil,now()+600000);persistPause(pausedUntil);};
  const isSearchPaused=()=>now()<searchPausedUntil;
  const pauseSearch=ms=>{searchPausedUntil=Math.max(searchPausedUntil,now()+ms);};
- return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
+ // Audio-only reader: no fingerprint/login preparation and no video format access.
+ async function biliAudio(bvid){
+   if(!BV.test(bvid))throw Object.assign(Error('not_found'),{reason:'not_found'});
+   if(isPaused())throw Object.assign(Error('risk'),{reason:'risk'});
+   const view=await biliApi('/x/web-interface/view',{bvid});
+   if(view.code!==0)throw Object.assign(Error(classifyMedia(view.code)),{reason:classifyMedia(view.code)});
+   const cid=view.data?.pages?.[0]?.cid||view.data?.cid;
+   if(!cid)throw Object.assign(Error('audio_unavailable'),{reason:'audio_unavailable'});
+   const play=await biliApi('/x/player/playurl',{bvid,cid,fnval:16,fnver:0,qn:16});
+   if(play.code!==0)throw Object.assign(Error(classifyMedia(play.code)),{reason:classifyMedia(play.code)});
+   const audio=play.data?.dash?.audio;
+   if(!Array.isArray(audio)||!audio.length)throw Object.assign(Error('audio_unavailable'),{reason:'audio_unavailable'});
+   return {cid,duration:view.data.duration||0,pic:view.data.pic||'',urls:audio};
+ }
+ return {biliApi,biliSubtitle,biliPassport,anonymousBuvid,resolveShort,biliLight,biliAudio,prepare,setSessionCookies,isPaused,pauseForRisk,isSearchPaused,pauseSearch,sanitize:safe};
 }
 export function classify(error) {
  if(error?.message==='风控'||[412,403].includes(error?.status)||[-412,-352].includes(error?.code))return {reason:'risk',retryAfter:error?.scope==='search'?3600:600};
@@ -230,3 +244,11 @@ async function main(){
  }
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message==='需要装一次浏览器（Chromium），请联系维护者安装后再登录。'?error.message:'fetcher startup failed；登录未完成，请检查本机运行环境。');process.exitCode=1;});
+
+export function classifyMedia(code){
+ if(code===-101)return 'login_required';
+ if([-404,62002,62004,62012].includes(code))return 'not_found';
+ if([-10403,87007,87008].includes(code))return 'paid';
+ if([-412,-352,403,412].includes(code))return 'risk';
+ return 'audio_unavailable';
+}

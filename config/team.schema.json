@@ -231,11 +231,49 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 90
+        },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "max_minutes": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "rtf": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "deadline_cap_minutes": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "mem_cap_mb": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "tmp_cap_mb": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "enabled",
+            "max_minutes",
+            "rtf",
+            "deadline_cap_minutes",
+            "mem_cap_mb",
+            "tmp_cap_mb"
+          ]
         }
       },
       "required": [
         "enabled",
-        "wait_seconds"
+        "wait_seconds",
+        "media"
       ]
     },
     "rhythm": {

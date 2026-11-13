@@ -87,7 +87,15 @@
   },
   "bili": {
     "enabled": true,
-    "wait_seconds": 30
+    "wait_seconds": 30,
+    "media": {
+      "enabled": false,
+      "max_minutes": 90,
+      "rtf": 0.05,
+      "deadline_cap_minutes": 40,
+      "mem_cap_mb": 1300,
+      "tmp_cap_mb": 2048
+    }
   },
   "rhythm": {
     "mention": 1,
