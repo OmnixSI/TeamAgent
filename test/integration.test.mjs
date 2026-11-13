@@ -1210,7 +1210,7 @@ test("exhausted delivery reports one explicit cleanup notice even when its recei
     } else {
       assert.equal(notices.length,0,'failed deliveries use one deterministic group explanation');
       const row=await e.DB.prepare('SELECT status FROM deliveries WHERE id=?').bind('delivery-exhausted').first();
-      assert.equal(row.status,'needs_attention');
+      assert.equal(row.status,'failed');
       const outbox=(await e.DB.prepare("SELECT * FROM outbox WHERE id=?").bind('delivery-attention-delivery-exhausted').all()).results;
       assert.equal(outbox.length,1);
       assert.match(outbox[0].body,/没发出去/);assert.match(outbox[0].body,/3 次/);
