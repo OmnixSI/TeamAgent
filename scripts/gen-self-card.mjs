@@ -535,8 +535,14 @@ function buildCard(manifest, api) {
     const files = entry.files.map((file) => resolveRef(file, id));
     const providers = (entry.providers ?? []).map((provider) => resolveProvider(provider, id, vendors));
     for (const provider of providers) vendors.get(provider.vendor).used_for.push(title);
-    const switches = strArray(entry.switches ?? [], `${id}.switches`);
-    for (const name of switches) validateSwitch(name, id, srcCorpus, tools, registered);
+    const declared = strArray(entry.switches ?? [], `${id}.switches`);
+    for (const name of declared) validateSwitch(name, id, srcCorpus, tools, registered);
+    // Review P1: the runtime refuses a tool when off:<tool.switch||name> is set, so every
+    // switch of a tool the capability owns belongs on the card whether or not the manifest listed it.
+    // Only when every tool of the capability is gated: one optional sub-tool being off must not mark a multi-tool capability (e.g. repo_read) as off.
+    const owned = tools.filter((t) => toolsFor.includes(t.name));
+    const toolSwitches = owned.length && owned.every((t) => t.switch) ? owned.map((t) => t.switch) : [];
+    const switches = [...new Set([...declared, ...toolSwitches])];
     const requires_env = strArray(entry.requires_env ?? [], `${id}.requires_env`);
     for (const name of requires_env) validateEnv(name, [envCorpus]);
     const runs_on = str(entry.runs_on, `${id}.runs_on`);
