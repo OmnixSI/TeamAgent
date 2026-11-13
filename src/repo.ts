@@ -149,6 +149,7 @@ export async function runLocalRepoFile(e: any, name: string, a: any): Promise<an
     }
   }
   const paths = [...seen].sort((x, y) => x.length - y.length || x.localeCompare(y)).slice(0, 50).map(p => redactPatch(p));
+  if (!paths.length) return toolFailure(name, null, { kind: "needs_token" });
   return { repo, mode, paths, more: seen.size > 50, source: "local_index_patch", partial: true, note: LOCAL_PATCH_NOTE, ...indexMeta(state, rows[0]?.at ?? Date.now()), untrusted: true };
 }
 export async function runIndexedRepoTool(e: any, name: string, a: any): Promise<any> {

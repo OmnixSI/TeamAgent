@@ -216,6 +216,8 @@ test('R4 repo_file falls back to local index patches without a GitHub token',asy
  assert.ok(read.lines<=200);assert.match(read.note,/GitHub 令牌/);
  const missing=await api.runRepoTool(e,'repo_file',{repo,mode:'read',path:'src/missing.ts'});
  assert.equal(missing.error_kind,'needs_token');
+ const noFind=await api.runRepoTool(e,'repo_file',{repo,mode:'find',query:'nowhere'});
+ assert.equal(noFind.error_kind,'needs_token');
  const changes=await api.runRepoTool(e,'repo_changes',{repo});
  assert.equal(changes.source,'local_index');assert.ok(changes.indexedAt);assert.equal(typeof changes.stale,'boolean');
 });
