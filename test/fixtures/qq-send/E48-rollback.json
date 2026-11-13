@@ -13,7 +13,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -21,7 +21,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "outbox_send": [
@@ -29,7 +29,7 @@
      "id": "a",
      "msg_seq": 1,
      "lock_tok": "tok",
-     "claimed_at": 1794564823740,
+     "claimed_at": "now-121s",
      "tries": 1
     }
    ]
@@ -59,7 +59,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "a~1",
@@ -67,7 +67,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -75,7 +75,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "outbox_send": [
@@ -83,7 +83,7 @@
      "id": "a",
      "msg_seq": 1,
      "lock_tok": "tok",
-     "claimed_at": 1794564823740,
+     "claimed_at": "now-121s",
      "tries": 1
     }
    ]
@@ -114,7 +114,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "a~1",
@@ -122,7 +122,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ]
   },
@@ -152,7 +152,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -160,7 +160,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "outbox_send": [
@@ -168,7 +168,7 @@
      "id": "a",
      "msg_seq": 1,
      "lock_tok": "tok",
-     "claimed_at": 1794564823740,
+     "claimed_at": "now-121s",
      "tries": 1,
      "passive_msg_id": "other"
     }
@@ -199,7 +199,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -207,7 +207,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "outbox_send": [
@@ -215,7 +215,7 @@
      "id": "a",
      "msg_seq": 1,
      "lock_tok": "tok",
-     "claimed_at": 1794564823740,
+     "claimed_at": "now-121s",
      "tries": 1
     }
    ]
@@ -245,7 +245,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -253,7 +253,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "outbox_send": [
@@ -261,7 +261,7 @@
      "id": "a",
      "msg_seq": null,
      "lock_tok": "tok",
-     "claimed_at": 1794564823740,
+     "claimed_at": "now-121s",
      "tries": 1
     }
    ]
@@ -291,7 +291,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "rejected",
@@ -299,7 +299,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "ctl",
@@ -307,7 +307,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ]
   },

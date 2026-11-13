@@ -127,7 +127,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "EV18-5-1",
@@ -135,7 +135,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "EV18-5-2",
@@ -143,7 +143,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "EV18-5-3",
@@ -151,7 +151,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "EV18-5-4",
@@ -159,7 +159,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     },
     {
      "id": "EV18-5-5",
@@ -167,7 +167,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "passive": [
@@ -178,7 +178,7 @@
     {
      "msg_id": "other",
      "used": 0,
-     "at": 1794564944741
+     "at": "now-30s"
     }
    ],
    "settings": {
@@ -220,7 +220,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "passive": [
@@ -270,7 +270,7 @@
      "group": "g",
      "msg_id": "src",
      "body": "测试文本",
-     "created_at": 1794564944740
+     "created_at": "now"
     }
    ],
    "settings": {

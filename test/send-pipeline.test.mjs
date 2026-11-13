@@ -27,13 +27,24 @@ const responseOf=r=>Response.json(r.body??{},r.status?{status:r.status}:undefine
 const setting=(f,key,value)=>f.sqlite.prepare('INSERT OR REPLACE INTO settings VALUES(?,?)').run(key,String(value));
 const count=(f,sql,...args)=>f.sqlite.prepare(sql).get(...args)?.n;
 
+// Fixtures must not freeze wall-clock timestamps: passive claims expire after 280 s and
+// unansweredProactive looks back 30 min. "now", "now-30s", "now+1s" are resolved per run.
+const timeValue=value=>{
+ if(typeof value!=='string')return value;
+ const match=/^now(?:([+-])(\d+)([smh]))?$/.exec(value);
+ if(!match)return value;
+ const unit={s:1000,m:60000,h:3600000}[match[3]]||0;
+ return Date.now()+(match[1]==='-'?-1:1)*Number(match[2]||0)*unit;
+};
+const expand=value=>value.replace(/\$now(?:([+-])(\d+)([smh]))?/g,(_all,sign,n,unit)=>String(timeValue(`now${sign||''}${n||''}${unit||''}`)));
+
 function seed(f,setup={}){
- for(const o of setup.outbox||[])f.out(o.id,o.status,o.group||'g',o.msg_id??'src',o.body||'测试文本',o.created_at??Date.now());
- for(const s of setup.passive||[])f.source(s.msg_id,s.used??0,s.at??Date.now(),s.group||'g');
+ for(const o of setup.outbox||[])f.out(o.id,o.status,o.group||'g',o.msg_id??'src',o.body||'测试文本',timeValue(o.created_at)??Date.now());
+ for(const s of setup.passive||[])f.source(s.msg_id,s.used??0,timeValue(s.at)??Date.now(),s.group||'g');
  for(const m of setup.meta||[])f.sqlite.prepare('INSERT OR REPLACE INTO outbox_meta VALUES(?,?)').run(m.id,JSON.stringify(m.json));
- for(const s of setup.outbox_send||[])f.sqlite.prepare('INSERT INTO outbox_send(id,passive_msg_id,msg_seq,not_before,tries,reason,lock_tok,claimed_at) VALUES(?,?,?,?,?,?,?,?)').run(s.id,s.passive_msg_id??null,s.msg_seq??null,s.not_before??0,s.tries??1,s.reason??null,s.lock_tok??null,s.claimed_at??null);
+ for(const s of setup.outbox_send||[])f.sqlite.prepare('INSERT INTO outbox_send(id,passive_msg_id,msg_seq,not_before,tries,reason,lock_tok,claimed_at) VALUES(?,?,?,?,?,?,?,?)').run(s.id,s.passive_msg_id??null,s.msg_seq??null,timeValue(s.not_before)??0,s.tries??1,s.reason??null,s.lock_tok??null,timeValue(s.claimed_at)??null);
  for(const [key,value] of Object.entries(setup.settings||{}))setting(f,key,value);
- for(const s of setup.sql||[])f.sqlite.exec(s);
+ for(const s of setup.sql||[])f.sqlite.exec(expand(s));
  return f;
 }
 
