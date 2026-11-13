@@ -25,7 +25,7 @@ SELECT stage, at, extra FROM stage_timings WHERE turn_id = ? ORDER BY at;
 
 主测试 508/508（基线 464，新增 44）；Python 53、runner Node 51、clients 2；check / check:ui / config:check / git diff --check 全绿。
 
-`test/fastlinks-readers.test.mjs` 覆盖识别、内容质量、长推文、子预算、响应体取消、公开 README 和 untrusted 边界。`test/fastlinks-budget.test.mjs` 覆盖 P0a 路径、计数相等、两段送出、tail 降级、心跳节流、整点清理、租约拒绝和多消息顺序。原 B3–B7 均通过；B3 回答上限由 44 同步为 45（新增一条发送后的计时 SQL），48 上限未放宽。
+`test/fastlinks-readers.test.mjs` 覆盖识别、内容质量、长推文、子预算、响应体取消、公开 README 和 untrusted 边界。`test/fastlinks-budget.test.mjs` 覆盖 P0a 路径、计数相等、两段送出、tail 降级、心跳节流、整点清理、租约拒绝和多消息顺序。原 B3–B7 均通过；B3 回答上限由 44 同步为 45（新增一条发送后的计时 SQL），聊天 48 上限未放宽（后台入口 200 另计）。
 
 | P0a 路径 | 实测 D1 语句数 |
 | --- | --- |
