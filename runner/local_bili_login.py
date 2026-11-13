@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import secrets
 import ssl
+import subprocess
 import threading
 import time
 import urllib.request
@@ -19,6 +20,18 @@ GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key="
 NAMES = ("SESSDATA", "bili_jct", "DedeUserID", "buvid3")
 RISK_PATH = "state/bili-risk.json"
+SETTLE_MS = 30000
+
+def process_started(pid):
+    """A stable start stamp for pid, or None when that process is gone."""
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=2, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (result.stdout or "").strip()
+    return text or None
 
 class BiliLoginError(Exception):
     def __init__(self, reason, http=None, code=None, until=None):
@@ -107,6 +120,24 @@ class LocalBiliLogin:
             self._bad_risk_until = now + 60000
             raise BiliPaused(reason='risk_state')
 
+    def _stale_lock(self, lock):
+        """A lock is reclaimable only when its owner is gone or a different process now holds that pid."""
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except OSError:
+            return True
+        try:
+            owner = json.loads((lock / "owner").read_text())
+            pid, started = owner.get("pid"), owner.get("started")
+        except (OSError, ValueError, TypeError, AttributeError):
+            return age > 30
+        if type(pid) is not int or not isinstance(started, str) or not started:
+            return age > 30
+        current = process_started(pid)
+        if current is None:
+            return True
+        return current != started
+
     def _pause(self):
         path = self._risk_path()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -116,14 +147,22 @@ class LocalBiliLogin:
             try:
                 os.mkdir(lock, 0o700)
                 held = True
-                break
-            except FileExistsError:
                 try:
-                    if time.time() - lock.stat().st_mtime > 30:
-                        lock.rmdir()
-                        continue
+                    fd = os.open(lock / "owner", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(fd, "w") as stream:
+                        os.fchmod(stream.fileno(), 0o600)
+                        json.dump({"pid": os.getpid(), "started": process_started(os.getpid())}, stream)
                 except OSError:
                     pass
+                break
+            except FileExistsError:
+                if self._stale_lock(lock):
+                    try:
+                        (lock / "owner").unlink(missing_ok=True)
+                        lock.rmdir()
+                        continue
+                    except OSError:
+                        pass
                 time.sleep(0.01)
             except OSError:
                 break
@@ -152,6 +191,7 @@ class LocalBiliLogin:
         finally:
             if held:
                 try:
+                    (lock / "owner").unlink(missing_ok=True)
                     lock.rmdir()
                 except OSError:
                     pass
@@ -261,7 +301,7 @@ class LocalBiliLogin:
             item = self._sessions.get("active") if isinstance(login_id, str) else None
             if not item or item["id"] != login_id:
                 return {"phase": "expired"}
-            if item["expires_at"] <= time.time() * 1000:
+            if item["expires_at"] + SETTLE_MS <= time.time() * 1000:
                 self._sessions = {}
                 return {"phase": "expired"}
             key = item["key"]
@@ -272,7 +312,7 @@ class LocalBiliLogin:
                 code = (body.get("data") or {}).get("code")
                 if code == 0:
                     current = self._sessions.get("active")
-                    if not current or current is not item or current["expires_at"] <= time.time() * 1000:
+                    if not current or current is not item or current["expires_at"] + SETTLE_MS <= time.time() * 1000:
                         return {"phase": "expired"}
                     try:
                         self._save(self._cookies(headers, time.time() * 1000))

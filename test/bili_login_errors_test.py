@@ -71,6 +71,26 @@ class BiliLoginErrorsTests(unittest.TestCase):
             self.assertIn('证书', error['error'])
             opened.assert_not_called()
 
+    def test_ok_poll_gets_a_bounded_settle_window_after_qr_expiry(self):
+        headers = Message(); calls = []
+        def http(url):
+            calls.append(url)
+            if 'generate' in url:
+                return headers, {'code':0,'data':{'url':self.qr,'qrcode_key':self.key}}
+            return headers, {'code':0,'data':{'code':0}}
+        for name in ('SESSDATA','bili_jct','DedeUserID'):
+            headers.add_header('Set-Cookie', name + '=synthetic-' + name + '; Max-Age=3600')
+        self.login._http = http
+        self.login._report = lambda state: None
+        started = self.login.start()
+        self.login._sessions['active']['expires_at'] = int(time.time() * 1000) - 1000
+        self.assertEqual(self.login.status(started['id']), {'phase':'ok'})
+        started = self.login.start()
+        self.login._sessions['active']['expires_at'] = int(time.time() * 1000) - 31000
+        before = len(calls)
+        self.assertEqual(self.login.status(started['id']), {'phase':'expired'})
+        self.assertEqual(len(calls), before)
+
     def test_corrupt_or_unreadable_risk_state_is_closed_and_explained(self):
         risk = self.runtime / bili.RISK_PATH
         risk.parent.mkdir()
