@@ -38,7 +38,7 @@ test('P0a schema and registered migration are idempotent',()=>{
 const voice=JSON.stringify({mode:'banter',text:'先看画面中的标志。\n\n再核对原消息的语境。'});
 async function imageFixture(){const e=env();e.QQ_APP_ID='fastlinks-budget';await req(e,'/api/admin/bind',{groupId:'GROUP000001'});await qq(e,{...msg('reference','引用问题'),message_scene:{ext:['msg_idx=FAST-REF']}});
  let id;for(let i=0;i<100;i++)if(fragments(voice,'chat-v-fast-image-'+i).length===2){id='fast-image-'+i;break;}assert.ok(id);
- await qq(e,{...msg(id,'纠正负责人是小王'),message_scene:{ext:['msg_idx=FAST-IMAGE','ref_msg_idx=FAST-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://example.com/fast-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');return {e,id};}
+ await qq(e,{...msg(id,'纠正负责人是小王'),message_scene:{ext:['msg_idx=FAST-IMAGE','ref_msg_idx=FAST-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/fast-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');return {e,id};}
 test('P0a three images, a reference and both segments send before the timing tail',async()=>{
  const {e,id}=await imageFixture(),old=globalThis.fetch,sent=[];let active;globalThis.fetch=async(target,opt)=>{
  const u=String(target);if(u.endsWith('.png'))return new Response(new TextEncoder().encode(u),{headers:{'content-type':'image/png'}});if(u.includes('getAppAccessToken'))return Response.json({access_token:'fake',expires_in:300});

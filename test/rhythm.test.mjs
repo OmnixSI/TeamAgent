@@ -163,7 +163,7 @@ test('B1/B9 meter counts executions and batch statements exactly; plain env has 
 
 test('B8 cold images run in a separate invocation without advancing cursor or deciding',async()=>{
   const base=await bound();
-  await qq(base,{...msg('image-turn','这是什么'),attachments:[{content_type:'image/png',url:'https://example.com/one.png',width:64,height:64}]},'GROUP_AT_MESSAGE_CREATE');
+  await qq(base,{...msg('image-turn','这是什么'),attachments:[{content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/one.png',width:64,height:64}]},'GROUP_AT_MESSAGE_CREATE');
   const old=globalThis.fetch;let visionCalls=0,decisions=0;
   globalThis.fetch=async(url,options)=>{
     if(String(url).endsWith('.png'))return new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'image/png'}});
@@ -203,7 +203,7 @@ async function seedHard(kind='proactive',age=1000){
   await rhythm.recordDecision(e,{id:'seed-bot',group_id:'GROUP000001',latest_id:'seed',batch_ids:['seed'],gate:'model',action:'reply',spoken_kind:kind,outbox_id:'seed-bot',created_at:Date.now()-age});
   return e;
 }
-const imageAttachments=[0,1].map(i=>({content_type:'image/png',url:'https://example.com/hard'+i+'.png',width:64,height:64}));
+const imageAttachments=[0,1].map(i=>({content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/hard'+i+'.png',width:64,height:64}));
 test('I9/G1 hard unanswered gate skips all models, even for two unseen images',async()=>{
   for(const images of [false,true]){
     const e=await seedHard();await qq(e,msg('one','接着聊'));await qq(e,{...msg('two','这是什么'),...(images?{attachments:imageAttachments}:{})});
@@ -403,7 +403,7 @@ async function imageBudgetFixture(){
   const base=await bound();base.QQ_APP_ID='budget-'+(++quoteFixture);
   await qq(base,{...msg('budget-reference','引用的问题'),message_scene:{ext:['msg_idx=BUDGET-REF']}});
   let id;for(let i=0;i<100;i++)if(fragments(splitVoice,'chat-v-budget-image-'+i).length===2){id='budget-image-'+i;break;}
-  assert.ok(id);await qq(base,{...msg(id,'纠正负责人是小王'),author:{id:'member2'},message_scene:{ext:['msg_idx=BUDGET-IMAGE','ref_msg_idx=BUDGET-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://example.com/budget-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');
+  assert.ok(id);await qq(base,{...msg(id,'纠正负责人是小王'),author:{id:'member2'},message_scene:{ext:['msg_idx=BUDGET-IMAGE','ref_msg_idx=BUDGET-REF']},attachments:[0,1,2].map(i=>({content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/budget-'+i+'.png',width:64,height:64}))},'GROUP_AT_MESSAGE_CREATE');
   return {base,id};
 }
 async function budgetModel(run,{calls,voice=splitVoice}={}){
@@ -491,7 +491,7 @@ test('B6 fetch report and each of three original video questioners stay below bu
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='done'").first()).n,3);
 });
 test('B8 newer unmentioned message between image and answer coalesces without a second decision',async()=>{
-  const base=await bound();await qq(base,{...msg('budget-old-image','图片是什么'),attachments:[{content_type:'image/png',url:'https://example.com/phase.png',width:64,height:64}]});
+  const base=await bound();await qq(base,{...msg('budget-old-image','图片是什么'),attachments:[{content_type:'image/png',url:'https://multimedia.nt.qq.com.cn/phase.png',width:64,height:64}]});
   await budgetModel(async state=>{
     await queue(base,'chat-budget-old-image');assert.equal(state.vision,1);assert.equal(state.decisions,0);
     await qq(base,msg('budget-new-message','再看看这个问题'));

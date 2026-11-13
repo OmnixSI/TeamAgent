@@ -19,12 +19,12 @@ const shaOf=b=>createHash('sha256').update(b).digest('hex');
 async function models(run,{meme=true,oversize=false,failImage=false}={}){
  const old=globalThis.fetch,state={images:0,vision:0};
  globalThis.fetch=async(url,init)=>{
-  if(String(url).startsWith('https://example.com/')){state.images++;return failImage?new Response('fail',{status:404}):new Response(oversize?new Uint8Array(400001):bytes,{headers:{'Content-Type':'image/gif'}});}
+  if(String(url).startsWith('https://multimedia.nt.qq.com.cn/')){state.images++;return failImage?new Response('fail',{status:404}):new Response(oversize?new Uint8Array(400001):bytes,{headers:{'Content-Type':'image/gif'}});}
   state.vision++;return Response.json({choices:[{message:{content:JSON.stringify({desc:'无语凝视',tags:['无语','凝视'],meme})}}]});
  };
  try{return await run(state);}finally{globalThis.fetch=old;}
 }
-const collect=(e,sender,message=sender)=>stickers().then(s=>s.collectSticker(e,{url:'https://example.com/sticker.gif',sender,message,idx:0}));
+const collect=(e,sender,message=sender)=>stickers().then(s=>s.collectSticker(e,{url:'https://multimedia.nt.qq.com.cn/sticker.gif',sender,message,idx:0}));
 async function seed(e,id=sha,{state=1,created=Date.now(),senders=['a','b']}={}){
  await e.DB.prepare('INSERT INTO stickers(sha,mime,bytes,data,state,senders,created_at) VALUES(?,?,?,?,?,?,?)').bind(id,'image/gif',bytes.length,bytes.buffer,state,JSON.stringify(senders),created).run();
 }
@@ -32,7 +32,7 @@ test('S1 byte descriptions share the original image cache and exact return value
  const e=env();
  await models(async state=>{
   const first=await vision.describeBytes(e,bytes,'image/gif','表情图片',AbortSignal.timeout(1000));
-  const second=await vision.describeImage(e,{kind:'image',url:'https://example.com/sticker.gif'},'表情图片',AbortSignal.timeout(1000));
+  const second=await vision.describeImage(e,{kind:'image',url:'https://multimedia.nt.qq.com.cn/sticker.gif'},'表情图片',AbortSignal.timeout(1000));
   assert.deepEqual(second,first);assert.equal(first.sha,sha+':'+vision.VISION_VERSION);assert.equal(state.vision,1);assert.equal(state.images,1);
  });
 });
@@ -45,7 +45,7 @@ test('S2/S3 same sender stays a candidate; second sender queues exactly one tag 
  });
 });
 test('receive queues at most two candidates on WORK without fetching images; off collect takes effect',async()=>{
- const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});const images=[0,1,2].map(i=>({content_type:'image/gif',url:'https://example.com/'+i+'.gif',width:100,height:100}));
+ const e=env();await req(e,'/api/admin/bind',{groupId:'GROUP000001'});const images=[0,1,2].map(i=>({content_type:'image/gif',url:'https://multimedia.nt.qq.com.cn/'+i+'.gif',width:100,height:100}));
  await qq(e,{...msg('collection-in',''),attachments:images});
  const jobs=(await all(e,'jobs')).filter(j=>j.kind==='sticker');assert.equal(jobs.length,2);assert.ok(jobs.every(j=>e.WORK.sent.some(x=>x.body.id===j.id)));
  await put(e,'off:sticker_collect','1');await qq(e,{...msg('collection-off',''),attachments:images});assert.equal((await all(e,'jobs')).filter(j=>j.kind==='sticker').length,2);
@@ -61,7 +61,7 @@ test('S4 tagging accepts memes, rejects ordinary images and defers when daily ta
 });
 test('S5 download failure and oversized image never create rows and the worker finishes the task',async()=>{
  for(const options of [{failImage:true},{oversize:true}]){
-  const e=env();await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('oversize','sticker',JSON.stringify({url:'https://example.com/x.gif',sender:'a',message:'m'}),Date.now()).run();
+  const e=env();await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('oversize','sticker',JSON.stringify({url:'https://multimedia.nt.qq.com.cn/x.gif',sender:'a',message:'m'}),Date.now()).run();
   await models(async()=>{await queue(e,'oversize');assert.equal((await all(e,'stickers')).length,0);assert.equal((await all(e,'jobs'))[0].status,'done');},options);
  }
 });
@@ -106,7 +106,7 @@ test('new import, receive, collection, tagging and retry invocations stay within
  const measure=async(name,fn)=>{const e=metered(base),before=base.DB.executed;await fn(e);assert.equal(e.meter.used,base.DB.executed-before);assert.ok(e.meter.used<=48,name+': '+e.meter.used);counts[name]=e.meter.used;};
  await req(base,'/api/admin/bind',{groupId:'GROUP000001'});
  await measure('import',async e=>assert.equal((await req(e,'/api/team/stickers',{mime:'image/png',data_base64:Buffer.alloc(400000).toString('base64')})).status,200));
- await measure('receive',e=>qq(e,{...msg('meter-sticker',''),attachments:[{content_type:'image/gif',url:'https://example.com/a.gif'}]}));
+ await measure('receive',e=>qq(e,{...msg('meter-sticker',''),attachments:[{content_type:'image/gif',url:'https://multimedia.nt.qq.com.cn/a.gif'}]}));
  await models(async()=>{
   await measure('collect',e=>queue(e,'sticker-meter-sticker-0'));
   await collect(base,'second');await measure('tag',e=>queue(e,'sticker-tag-'+sha));

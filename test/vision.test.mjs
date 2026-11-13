@@ -66,7 +66,7 @@ test("V2 fetchImage enforces https, MIME and size limits", async () => {
       async () => {
         throw Error("aborted request must not be made");
       },
-      () => fetchImage("https://example.com/a.png", controller.signal),
+      () => fetchImage("https://multimedia.nt.qq.com.cn/a.png", controller.signal),
     ),
     null,
   );
@@ -87,7 +87,7 @@ test("V2 fetchImage enforces https, MIME and size limits", async () => {
             "content-length": "6000000",
           },
         }),
-      () => fetchImage("https://example.com/big.png", new AbortController().signal),
+      () => fetchImage("https://multimedia.nt.qq.com.cn/big.png", new AbortController().signal),
     ),
     null,
   );
@@ -98,7 +98,7 @@ test("V2 fetchImage enforces https, MIME and size limits", async () => {
           status: 200,
           headers: { "content-type": "text/html" },
         }),
-      () => fetchImage("https://example.com/a.html", new AbortController().signal),
+      () => fetchImage("https://multimedia.nt.qq.com.cn/a.html", new AbortController().signal),
     ),
     null,
   );
@@ -119,7 +119,7 @@ test("V2 fetchImage enforces https, MIME and size limits", async () => {
           status: 200,
           headers: { "content-type": "image/png" },
         }),
-      () => fetchImage("https://example.com/stream.png", new AbortController().signal),
+      () => fetchImage("https://multimedia.nt.qq.com.cn/stream.png", new AbortController().signal),
     ),
     null,
   );
@@ -130,7 +130,7 @@ test("V2 fetchImage enforces https, MIME and size limits", async () => {
         status: 200,
         headers: { "content-type": "image/png" },
       }),
-    () => fetchImage("https://example.com/ok.png", new AbortController().signal),
+    () => fetchImage("https://multimedia.nt.qq.com.cn/ok.png", new AbortController().signal),
   );
   assert.equal(ok.mime, "image/png");
   assert.deepEqual(Array.from(ok.bytes), Array.from(png));
@@ -247,11 +247,11 @@ test("V5 describeImage caches, respects budget and provider switch", async () =>
   };
   const signal = new AbortController().signal;
   const first = await withFetch(mock, () =>
-    describeImage(e, { kind: "image", url: "https://example.com/cat.png" }, "猫", signal),
+    describeImage(e, { kind: "image", url: "https://multimedia.nt.qq.com.cn/cat.png" }, "猫", signal),
   );
   assert.equal(first.desc, "一只猫");
   await withFetch(mock, () =>
-    describeImage(e, { kind: "image", url: "https://example.com/cat.png" }, "猫", signal),
+    describeImage(e, { kind: "image", url: "https://multimedia.nt.qq.com.cn/cat.png" }, "猫", signal),
   );
   assert.equal(modelCalls, 1);
 
@@ -266,7 +266,7 @@ test("V5 describeImage caches, respects budget and provider switch", async () =>
     .run();
   assert.equal(
     await withFetch(mock, () =>
-      describeImage(e, { kind: "image", url: "https://example.com/dog.png" }, "狗", signal),
+      describeImage(e, { kind: "image", url: "https://multimedia.nt.qq.com.cn/dog.png" }, "狗", signal),
     ),
     null,
   );
@@ -277,7 +277,7 @@ test("V5 describeImage caches, respects budget and provider switch", async () =>
   assert.equal(visionProvider(e), null);
   assert.equal(
     await withFetch(mock, () =>
-      describeImage(e, { kind: "image", url: "https://example.com/bird.png" }, "鸟", signal),
+      describeImage(e, { kind: "image", url: "https://multimedia.nt.qq.com.cn/bird.png" }, "鸟", signal),
     ),
     null,
   );
@@ -286,7 +286,7 @@ test("V5 describeImage caches, respects budget and provider switch", async () =>
   const v2 = await withFetch(mock, () =>
     describeImage(
       e,
-      { kind: "image", url: "https://example.com/cat.png" },
+      { kind: "image", url: "https://multimedia.nt.qq.com.cn/cat.png" },
       "猫",
       signal,
       "v2",
@@ -319,7 +319,7 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
     id: "m1",
     body: "",
     mentioned: 1,
-    meta: { media: [image("https://example.com/1.png")] },
+    meta: { media: [image("https://multimedia.nt.qq.com.cn/1.png")] },
   };
   assert.equal(pickImages([latest], latest, new Map())[0].messageId, "m1");
 
@@ -332,7 +332,7 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
     body: "",
     mentioned: 0,
     meta: {
-      media: [image("https://example.com/bot.png")],
+      media: [image("https://multimedia.nt.qq.com.cn/bot.png")],
       replyTo: { kind: "bot", targetId: "b1" },
     },
   };
@@ -349,7 +349,7 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
   const target = {
     id: "target",
     body: "看图",
-    meta: { media: [image("https://example.com/q.png")] },
+    meta: { media: [image("https://multimedia.nt.qq.com.cn/q.png")] },
   };
   assert.equal(
     pickImages([quoted], quoted, new Map([["target", target]]))[0].messageId,
@@ -360,7 +360,7 @@ test("V7 pickImages follows @, quote and batch priority with max 3", () => {
     id: "b" + i,
     body: "图" + i,
     mentioned: i === 9 ? 1 : 0,
-    meta: { media: [image("https://example.com/" + i + ".png")] },
+    meta: { media: [image("https://multimedia.nt.qq.com.cn/" + i + ".png")] },
   }));
   const latestBatch = batch[9];
   const picks = pickImages(batch, latestBatch, new Map(), 3);
@@ -417,7 +417,7 @@ test("V14 image download failure does not call the model", async () => {
   try {
     const note = await describeImage(
       e,
-      { kind: "image", url: "https://example.com/denied.png" },
+      { kind: "image", url: "https://multimedia.nt.qq.com.cn/denied.png" },
       "",
       new AbortController().signal,
     );
@@ -441,7 +441,7 @@ const imageEvent = (id, text, extra = {}) => {
   event.attachments = [
     {
       content_type: "image/png",
-      url: "https://example.com/" + id + ".png",
+      url: "https://multimedia.nt.qq.com.cn/" + id + ".png",
       width: 64,
       height: 64,
       size: 100,
@@ -457,7 +457,7 @@ const runChat = (e, id) => runChatJob(e, "chat-" + id);
 
 const chatMock = (state, opts = {}) => async (url, init) => {
   const u = String(url);
-  if (u.endsWith(".png") && u.startsWith("https://example.com/")) {
+  if (u.endsWith(".png") && u.startsWith("https://multimedia.nt.qq.com.cn/")) {
     state.imageFetches = (state.imageFetches || 0) + 1;
     return new Response(new TextEncoder().encode(u), {
       status: 200,
@@ -583,7 +583,7 @@ test("V11 annotateTurn returns after the deadline and leaves no notes", async ()
     idx: 0,
     media: {
       kind: "image",
-      url: "https://example.com/slow" + i + ".png",
+      url: "https://multimedia.nt.qq.com.cn/slow" + i + ".png",
     },
     hint: "",
   }));
@@ -698,7 +698,7 @@ test("P1-A a quoted image outside the 24-message window is visible in the prompt
         media: [
           {
             kind: "image",
-            url: "https://example.com/old.png",
+            url: "https://multimedia.nt.qq.com.cn/old.png",
             width: 64,
             height: 64,
           },
@@ -780,7 +780,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
     media: [
       {
         kind: "image",
-        url: "https://example.com/bot-quote.png",
+        url: "https://multimedia.nt.qq.com.cn/bot-quote.png",
         width: 64,
         height: 64,
       },
@@ -810,7 +810,7 @@ test("P1-D quoted bot plus pure image triggers vision; plain pure image does not
     media: [
       {
         kind: "image",
-        url: "https://example.com/plain.png",
+        url: "https://multimedia.nt.qq.com.cn/plain.png",
         width: 64,
         height: 64,
       },
