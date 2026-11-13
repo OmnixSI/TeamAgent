@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import secrets
 import ssl
+import subprocess
 import time
 import urllib.request
 
@@ -20,6 +21,11 @@ except ModuleNotFoundError:
 H = Path.home() / '.inkboard-team'
 MAX_PATCH_BYTES = 1_048_576
 MAX_BODY = 900_000  # Paired with worker.ts /api/runner/repo_index's 1 MiB limit.
+MAX_REFS = 60  # Pushed branches reported per repository; the default branch always fits.
+MAX_WORKTREES = 60  # Directories examined per round, newest first, across every configured root.
+PROJECTS_WORKTREES = ('Projects', '.worktrees')  # Team package worktrees live next to the home directory.
+CLONE_TIMEOUT = 120
+CLONE_BACKOFF = 1800.0
 DENY = ('.env', '.env.*', '*.pem', '*.key', '*.p12', '*.pfx', 'id_rsa*', 'id_ed25519*',
         '.npmrc', '.netrc', '.pypirc', '*secret*', '*credential*', '*cookie*',
         'worker-secrets.json', '.git/*', '.dev.vars', 'wrangler.toml.local')
@@ -36,6 +42,8 @@ TOKEN_PATTERN = re.compile(
 _fetch_at = {}
 _offset = 0
 _backlog = False
+_clone_at = {}
+_cloned_round = False
 CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'accesstoken', 'refreshtoken',
                               'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
                               'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0',
@@ -107,10 +115,19 @@ def _default_ref(root):
 
 
 def tracked_refs(root):
+    """Every pushed branch, default first and the rest newest first, capped at MAX_REFS."""
     default = _default_ref(root)
-    rows = _git(root, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/remotes/origin').splitlines()
-    return {name:sha for name, sha in (row.split(' ', 1) for row in rows)
-            if name == default or name.startswith(('refs/remotes/origin/agent/', 'refs/remotes/origin/team/'))}
+    rows = _git(root, 'for-each-ref', '--sort=-committerdate', '--format=%(refname) %(objectname)',
+                'refs/remotes/origin').splitlines()
+    refs = {}
+    for row in rows:
+        name, sep, sha = row.partition(' ')
+        if sep and name != 'refs/remotes/origin/HEAD' and name not in refs:
+            refs[name] = sha
+    # The remote default branch outranks the newest of the rest when the cap binds.
+    ordered = {default: refs[default]} if default in refs else {}
+    ordered.update((name, sha) for name, sha in refs.items() if name not in ordered)
+    return dict(list(ordered.items())[:MAX_REFS])
 
 
 def _pending(root, st, heads):
@@ -214,53 +231,111 @@ def _matches_remote(root, repo):
     return remote in ('https://github.com/'+repo, 'https://github.com/'+repo+'.git', 'git@github.com:'+repo, 'git@github.com:'+repo+'.git')
 
 
-def worktrees(roots, repo):
-    result = []; seen = set()
+def worktree_roots():
+    """Parents scanned for worktrees; TEAM_INDEX_WORKTREE_ROOTS replaces the default set."""
+    override = os.environ.get('TEAM_INDEX_WORKTREE_ROOTS', '')
+    if override.strip():
+        return [Path(part) for part in override.split(':') if part]
+    extra = _config().get('index', {}).get('extra_worktree_roots', [])
+    return [H/'work', *map(Path, extra), Path.home().joinpath(*PROJECTS_WORKTREES)]
+
+
+def _worktree_candidates(roots):
+    """Directories to inspect, newest first; Git calls start only after a cheap .git check."""
+    seen = set(); found = []
     for parent in roots:
         parent = Path(parent).resolve()
         if not parent.is_dir():
             continue
-        for candidate in sorted(parent.iterdir()):
-            resolved = candidate.resolve()
+        try:
+            children = list(parent.iterdir())
+        except OSError:
+            continue
+        for candidate in children:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
             if parent not in resolved.parents or resolved in seen or not resolved.is_dir():
                 continue
             seen.add(resolved)
-            try:
-                _git(resolved, 'rev-parse', '--git-common-dir')
-                if not _matches_remote(resolved, repo):
-                    continue
-                changed = _git(resolved, 'status', '--porcelain=v1', '-z', '--untracked-files=all').split('\0')
-                stats = {f['path']:f for f in _numstat(_git(resolved, 'diff', '--numstat', '-z', 'HEAD'))}
-                files = []; i = 0
-                while i < len(changed):
-                    line = changed[i]; i += 1
-                    if not line:
-                        continue
-                    status, path = line[:2], line[3:]
-                    if 'R' in status or 'C' in status:
-                        i += 1
-                    item = {'path':path, 'status':status, 'add':None, 'del':None}
-                    if status != '??' and path in stats:
-                        item.update(add=stats[path]['add'], **{'del':stats[path]['del']})
-                    if denied(path):
-                        item['hidden'] = True
-                    files.append(item)
-                result.append({'label':candidate.name, 'branch':_git(resolved, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
-                               'base':_git(resolved, 'rev-parse', 'HEAD').strip(), 'files':files[:100],
-                               'untracked':sum(f['status']=='??' for f in files), 'updatedAt':int(time.time()*1000)})
-            except gitsafe.GitFiltersConfigured:
-                result.append({'label':candidate.name, 'skipReason':'filters_configured'})
-            except (gitsafe.GitFailed, gitsafe.GitDenied):
+            if not (resolved/'.git').exists():
                 continue
-            if len(result) == 20:
-                return result
+            try:
+                mtime = resolved.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            found.append((mtime, candidate, resolved))
+    found.sort(key=lambda item: (-item[0], str(item[2])))
+    return [(candidate, resolved) for _, candidate, resolved in found[:MAX_WORKTREES]]
+
+
+def worktrees(roots, repo):
+    result = []
+    for candidate, resolved in _worktree_candidates(roots):
+        try:
+            _git(resolved, 'rev-parse', '--git-common-dir')
+            if not _matches_remote(resolved, repo):
+                continue
+            changed = _git(resolved, 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+                           max_bytes=MAX_PATCH_BYTES).split('\0')
+            stats = {f['path']:f for f in _numstat(_git(resolved, 'diff', '--numstat', '-z', 'HEAD', max_bytes=MAX_PATCH_BYTES))}
+            files = []; i = 0
+            while i < len(changed):
+                line = changed[i]; i += 1
+                if not line:
+                    continue
+                status, path = line[:2], line[3:]
+                if 'R' in status or 'C' in status:
+                    i += 1
+                item = {'path':path, 'status':status, 'add':None, 'del':None}
+                if status != '??' and path in stats:
+                    item.update(add=stats[path]['add'], **{'del':stats[path]['del']})
+                if denied(path):
+                    item['hidden'] = True
+                files.append(item)
+            result.append({'label':candidate.name, 'branch':_git(resolved, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
+                           'base':_git(resolved, 'rev-parse', 'HEAD').strip(), 'files':files[:100],
+                           'untracked':sum(f['status']=='??' for f in files), 'updatedAt':int(time.time()*1000)})
+        except gitsafe.GitFiltersConfigured:
+            result.append({'label':candidate.name, 'skipReason':'filters_configured'})
+        except (gitsafe.GitFailed, gitsafe.GitDenied):
+            continue
+        except TimeoutError:
+            # One slow worktree must not consume the whole round's Git budget.
+            break
+        if len(result) == 20:
+            break
     return result
+
+
+def _clone_once(repo):
+    """Try one bounded `gh repo clone`; failures back off per repository."""
+    global _cloned_round
+    now = time.monotonic()
+    if _cloned_round or now - _clone_at.get(repo, float('-inf')) < CLONE_BACKOFF:
+        return
+    _cloned_round = True
+    _clone_at[repo] = now
+    target = H / 'repos' / repo.split('/')[1]
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        result = subprocess.run(['gh', 'repo', 'clone', repo, str(target), '--', '--quiet'],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=CLONE_TIMEOUT, env=dict(os.environ, GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1'))
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f'repo index: clone failed {repo} {type(error).__name__}', flush=True)
+        return
+    if result.returncode:
+        print(f'repo index: clone failed {repo} exit {result.returncode}', flush=True)
+        return
+    print(f'repo index: cloned {repo}', flush=True)
 
 
 def build(repo, st, budget, known_values=()):
     root = repo_root(repo)
     if not root.is_dir():
-        print('repo index: clone missing', repo, flush=True)
+        _clone_once(repo)
         return None
     if not _matches_remote(root, repo):
         return None
@@ -269,7 +344,7 @@ def build(repo, st, budget, known_values=()):
         return None
     pending = _pending(root, st, heads)
     default = _default_ref(root); sha = heads[default]
-    local = worktrees([H/'work', *map(Path, _config().get('index', {}).get('extra_worktree_roots', []))], repo)
+    local = worktrees(worktree_roots(), repo)
     fingerprint = hashlib.sha256(json.dumps([heads, [{k:v for k,v in w.items() if k != 'updatedAt'} for w in local]], sort_keys=True).encode()).hexdigest()
     return {'repo':repo, 'head':{'sha':sha, 'branch':default[len('refs/remotes/origin/'):], 'at':int(_git(root,'show','--no-patch','--format=%at',sha).strip())*1000},
             'commits':[commit_record(root,s,known_values) for s in pending[:budget]], 'branches':branches(root), 'worktrees':local,
@@ -296,7 +371,8 @@ def _save(state):
 
 
 def sync_once(now, known_values=()):
-    global _offset, _backlog
+    global _offset, _backlog, _cloned_round
+    _cloned_round = False
     config = _config()
     if config.get('index', {}).get('enabled', True) is False:
         return
@@ -345,6 +421,7 @@ def sync_once(now, known_values=()):
             if full:
                 break
         if not body['repos']:
+            _offset += 1  # Rotate anyway, so a missing clone cannot starve the others.
             return
         try:
             if _post(body,config) != 200:
