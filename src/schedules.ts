@@ -159,7 +159,7 @@ export function scheduleFailure(detail: string) {
     error_kind: "invalid_args",
     retryable: false,
     next_action: "把类型、悉尼时间 HH:MM、分钟数或提醒内容说清楚再试",
-    detail: String(detail || "参数不完整").slice(0, 160),
+    detail: redact(String(detail || "参数不完整")).slice(0, 160),
   };
 }
 
