@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "commit": "0000000000000000000000000000000000000000",
+  "built_at": "2026-11-14T00:00:00.000Z",
+  "capabilities": [
+    {
+      "id": "image_generation", "title": "生图", "aliases": ["生图", "画图", "出图", "文生图", "generate_image"],
+      "tools": ["generate_image"],
+      "how": "成员明确要求时，generate_image 工具把描述发给 OpenAI 图片接口，拿到图片后经 outbox 发到群里；每人每天限额，被内容安全拒绝会如实告知。",
+      "providers": [{ "role": "生成图片", "vendor": "OpenAI", "model": "gpt-image-1", "host": "api.openai.com", "evidence": [{ "path": "src/imagegen.ts", "line": 120 }] }],
+      "files": [{ "path": "src/tools/generate-image.ts", "line": 1, "role": "工具入口" }, { "path": "src/imagegen.ts", "line": 100, "role": "调用 OpenAI 并落库" }],
+      "switches": ["image_gen", "openai"], "requires_env": ["OPENAI_API_KEY"],
+      "runs_on": "cloud", "limit": "每人每天 5 张", "default_state": "on"
+    },
+    {
+      "id": "reply_model", "title": "回复与推理", "aliases": ["回复", "对话", "聊天", "大模型", "模型"],
+      "tools": [],
+      "how": "群消息进入 Worker 后由 semantic.ts 组装提示词，调用 DeepSeek 对话接口，必要时多轮调用工具再回复。",
+      "providers": [{ "role": "回复与工具调用", "vendor": "DeepSeek", "model": "deepseek-flash", "host": "api.deepseek.com", "evidence": [{ "path": "src/semantic.ts", "line": 300 }] }],
+      "files": [{ "path": "src/semantic.ts", "line": 890, "role": "组装提示词与工具表" }],
+      "switches": [], "requires_env": ["DEEPSEEK_API_KEY"], "runs_on": "cloud", "default_state": "on"
+    },
+    {
+      "id": "voice_asr", "title": "语音识别", "aliases": ["语音识别", "听语音", "转写", "ASR"],
+      "tools": [],
+      "how": "QQ 语音由本机 runner 下载后交给本机 X-ASR 转写，结果写回线上。",
+      "providers": [{ "role": "语音转文字", "vendor": "X-ASR", "evidence": [{ "path": "runner/xasr_transcribe.py", "line": 1 }] }],
+      "files": [{ "path": "runner/asr.mjs", "line": 1, "role": "本机转写入口" }],
+      "switches": [], "requires_env": [], "runs_on": "local", "local_component": "runner/asr.mjs", "default_state": "on"
+    }
+  ],
+  "vendors": [
+    { "vendor": "DeepSeek", "used_for": ["回复与推理"], "env_names": ["DEEPSEEK_API_KEY"], "key_location": "Cloudflare Worker secret" },
+    { "vendor": "OpenAI", "used_for": ["生图"], "env_names": ["OPENAI_API_KEY"], "key_location": "Cloudflare Worker secret" },
+    { "vendor": "X-ASR", "used_for": ["语音识别"], "env_names": [], "key_location": "无需密钥（本机模型）" }
+  ],
+  "tools": [{ "name": "generate_image", "desc": "按描述生成一张图", "switch": "image_gen" }],
+  "repo_map": {
+    "repo": "OmnixSI/TeamAgent",
+    "top_dirs": [{ "path": "src", "role": "Cloudflare Worker 主体" }, { "path": "runner", "role": "本机服务（QQ 网关、抓取、语音、执行）" }, { "path": "migrations", "role": "D1 表结构迁移" }],
+    "modules": [{ "path": "src/semantic.ts", "role": "组装提示词、工具循环、回复", "lines": 1900 }],
+    "entrypoints": [{ "kind": "fetch", "path": "src/worker.ts", "symbol": "fetch", "line": 1400 }],
+    "tables": [{ "name": "messages", "migration": "migrations/0001_init.sql" }],
+    "crons": ["* * * * *"], "queues": ["inkboard-team", "inkboard-team-chat", "team-agent-tools"], "bindings": ["DB", "WORK", "CHAT", "TOOLS", "AI"]
+  }
+}
