@@ -44,6 +44,7 @@ import {
 } from "./vision";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { isListed, loadRepoRegistry } from "./repo-registry";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
 import {
@@ -418,7 +419,8 @@ async function receive(r: Request, e: Env) {
   return json({ op: 12, d: 0 });
 }
 async function repoContext(e: Env, repo: string) {
-  if (!REPOS.includes(repo)) throw Error("repository not allowed");
+  if (!isListed(e, repo)) await loadRepoRegistry(e);
+  if (!isListed(e, repo)) throw Error("repository not allowed");
   const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
     .bind(repo)
     .first();
