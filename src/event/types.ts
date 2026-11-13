@@ -27,7 +27,7 @@ export type SegmentNode = {
 export type Segment =
   | { type: "text"; text: string }
   | { type: "mention"; id: string; name?: string; self: boolean }
-  | { type: "face"; id: string; name?: string; kind: "face" | "mface" }
+  | { type: "face"; id: string; name?: string; kind: "face" | "mface"; ext?: string; face_unparsed?: true }
   | {
       type: "image";
       url: string;

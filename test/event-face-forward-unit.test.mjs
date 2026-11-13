@@ -12,6 +12,21 @@ test('P3 existing face decoding is shared by normalized segments and display lab
  }
  assert.equal(api.faceName('<faceType=6,faceId=2,ext="broken">'),'[表情（名称未知）]');
 });
+test('A-2 base64 face ext decodes the name and keeps the quoted face id',()=>{
+ const tag='<faceType=1,faceId="21",ext="eyJ0ZXh0Ijoi5Y+v54ixIn0=">';
+ assert.equal(api.faceName(tag),'[表情：可爱]');
+ assert.deepEqual(api.parseFace(tag),{type:'face',id:'21',kind:'face',name:'可爱'});
+ assert.deepEqual(api.normalize('GROUP_MESSAGE_CREATE',{content:tag}).segments[0],{type:'face',id:'21',kind:'face',name:'可爱'});
+});
+test('A-2 unparsed face ext keeps the raw value, marks face_unparsed and never throws',()=>{
+ const tag='<faceType=1,faceId="182",ext="bm90LWpzb24=">';
+ assert.equal(api.faceName(tag),'[表情（名称未知）]');
+ assert.deepEqual(api.parseFace(tag),{type:'face',id:'182',kind:'face',ext:'bm90LWpzb24=',face_unparsed:true});
+ const face=api.normalize('GROUP_MESSAGE_CREATE',{content:tag}).segments[0];
+ assert.equal(face.ext,'bm90LWpzb24=');
+ assert.equal(face.face_unparsed,true);
+ assert.doesNotThrow(()=>api.parseFace('<faceType=1,faceId="1",ext="!!!">'));
+});
 test('P3 mface image keeps an image plus a material hint and never invents member prose',async()=>{
  const raw={attachments:[{content_type:'image/gif',type:'sticker',url:image}]};
  const ne=api.normalize('GROUP_MESSAGE_CREATE',raw);
