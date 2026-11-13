@@ -19,3 +19,11 @@
 2. S7–S10 阈值与词表**不改**；上面的偏差写进本文件，judge 看到的是真实信号，不是为金标造出来的信号。
 3. 真实 #2/#3/#13 的旧金标期望应改成「INSUFFICIENT/由 judge 结合上下文判」，不能要求 D-3 强行打 S8/S10/S7。
 4. 等 D-7 落地 `turn_offers`/`turn_tools` 和 job kind 后，S9 可以从当轮记录取 `spoken_kind`；在那之前 outbound trace 的 `tools_offered="unknown"`、`decision` 缺省是正确行为。
+
+## D-10b1 金标修订（2026-11-14）
+
+- `golden.jsonl` 已把 5 个预检偏差改成与真实数据一致：`#13` S7 记 absent、`#20` S9 记 absent 且 `expect_gap_type=null`、`M4` 145 无 S10 / 149 有 S10；`#2` S8、`#3` S10 写入 `v2_note`。`acceptance.json` 的 `passes` 未改。
+- 假 judge 三晚回放把 `golden.jsonl` 的 family/gap/capability 标签注入真实 Worker，验证 prompt → validate → apply → publish 链路；不代表真实模型准确率，`VD-R-JUDGE`/`VD-GOLD-SUM` 仍由 D-10b-2 真模型执行。
+- 真实种子 `turn_offers=0`，四类历史能力 gap（`tool_missing`/`tool_not_selected`/`switch_or_policy_off`/`capability_offline`）按 D-4 `R7-CAP` 清空为 `null` + `tool_choice=INSUFFICIENT`，并记 `historical_capability_unknown`/`gap_historical_conflict` reject。
+- `#13` 的 `burst_max` requirement 以 message 95 为证据时被 D-5b 记 `not_addressed_to_bot`（95 没有 @/回复），规则部分记 INSUFFICIENT；finding 部分仍按金标通过。是否放宽来源或换金标由 D-10b-2/主程决定。
+- 另记 6 处 `acceptance.json` 与 `golden.jsonl` 的 family/gap 措辞差异（#4/#6/#12/#14/#16/#17/#18/#19），本包按 acceptance 的 gap 与 golden 的 family 跑链路并在矩阵逐条写明；D-10b-2 用 golden 评分前需与架构师核对口径。

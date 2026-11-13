@@ -52,25 +52,32 @@ async function goldenPreflight(ctx, item) {
   if (!row) return { ok: false, detail: `golden case missing for ${item.id}` };
   const pf = tracePreflight(info, row);
   const problems = [...pf.problems];
+  const notes = [];
   if (item.id === "VD-G13" || item.id === "VD-R1-G13") {
     const trace = pf.traces[0];
-    if (!trace?.signals.includes("S7")) problems.push("D-3: message 95 trace has no S7 (only one reply is paired to it; 77–82 are paired to 96–101)");
+    if (trace?.signals.includes("S7")) notes.push("S7 出现（与 v2 记录不同，需复核）");
+    else notes.push("v2：message 95 只有 1 条 outbox 回复，S7 不成立；judge 结合上下文/INSUFFICIENT，不要求 S7");
     if (row.expect_rule && (row.expect_rule.kind !== "burst_max" || row.expect_rule.params?.max !== 1 || row.expect_rule.ttl_days_max > 7)) {
       problems.push("golden case 13 expect_rule is not burst_max max=1 ttl<=7");
     }
   }
   if (item.id === "VD-G20") {
     const out = pf.outboxTraces[0];
-    if (!out?.signals.includes("S9")) problems.push("D-3: outbound 233 trace has no S9 (scout outbox has no decision/spoken_kind; prior S3 window not applied)");
+    if (out?.signals.includes("S9")) notes.push("S9 出现（与 v2 记录不同，需复核）");
+    else notes.push("v2：outbound 233 无 decision/spoken_kind，S9 不成立；judge 结合上下文，gap=null");
+    if (row.expect_gap_type !== null) problems.push("golden case 20 expect_gap_type must be null after the v2 amendment");
   }
   if (item.id === "VD-M4" || item.id === "VD-R7-M4") {
     const a = pf.outboxTraces[0], b = pf.outboxTraces[1];
-    if (!a?.signals.includes("S10")) problems.push("D-3: outbox 145 trace has no S10 (contradiction is with 149, a later turn)");
-    if (!b?.signals.includes("S10")) problems.push("D-3: outbox 149 trace has no S10");
+    if (a?.signals.includes("S10")) notes.push("outbox 145 出现 S10（与 v2 记录不同，需复核）");
+    else notes.push("v2：outbox 145 无 S10（与 149 跨轮矛盾，未检测）");
+    if (b?.signals.includes("S10")) notes.push("outbox 149 带 S10（真实数据）");
+    else problems.push("golden M4: outbox 149 trace has no S10");
+    notes.push("145 可 INSUFFICIENT；149 成功自纠不落 finding；由 VD-R7-M4 执行");
   }
   return {
     ok: problems.length === 0,
-    detail: `golden #${row.case}: ${pf.traces.length}/${row.inbound_rowids.length} inbound trace、${pf.outboxTraces.length}/${row.outbox_rowids.length} outbox trace` +
+    detail: `golden #${row.case}: ${pf.traces.length}/${row.inbound_rowids.length} inbound trace、${pf.outboxTraces.length}/${row.outbox_rowids.length} outbox trace；${notes.join("；")}` +
       (problems.length ? `；${problems.join("；")}` : ""),
   };
 }
@@ -155,7 +162,7 @@ export async function vdBlocked(ctx, item) {
         const disputed = info.golden.filter((row) => row.disputed_label);
         const score = existsSync("scripts/review-accept/score.mjs");
         ok = numbered.length === 20 && info.negatives.length === 8 && score;
-        detail = `golden=${info.golden.length}（编号 ${numbered.length}，disputed ${disputed.length}）negatives=${info.negatives.length} scorer=${score}；真实首判/复核属 D-10b`;
+        detail = `golden=${info.golden.length}（编号 ${numbered.length}，disputed ${disputed.length}）negatives=${info.negatives.length} scorer=${score}；假 judge 不算准确率，真实首判/复核属 D-10b-2`;
       }
     } else if (/^VD-N\d{2}$/.test(id)) {
       const pf = await negativePreflight(ctx, item);
@@ -188,8 +195,10 @@ export async function vdBlocked(ctx, item) {
     ok = true; // D-12 owns the spec; absence is recorded, not a script failure.
     detail = `ui-spec.md ${spec && existsSync(spec) ? "已存在" : "未在资料目录"}；看板实现属 D-12`;
   } else if (id === "VD-SHADOW" || id === "VD-R-SHADOW-PROD") {
-    ok = missingFile("wrangler.review.toml");
-    detail = "线上 review Worker 未部署（D-11）";
+    // D-6 merged the Worker, but production deployment and three online nights
+    // are D-11. The local code being present is not a preflight failure.
+    ok = existsSync("wrangler.review.toml") && existsSync("src/review/worker.ts");
+    detail = `review Worker 代码已合入（wrangler.review.toml=${existsSync("wrangler.review.toml")}），线上未部署、无 3 晚线上数据（D-11）`;
   } else if (id === "VD-R-D0B") {
     const note = paths().release && join(paths().release, "notes/D-0b.md");
     ok = true;

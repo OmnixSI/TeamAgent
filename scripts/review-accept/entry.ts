@@ -10,3 +10,6 @@ export { compareVerdicts, selectForSecond, secondJudge } from "../../src/review/
 export { buildJudgeInput, JUDGE_PROMPT_VERSION, JUDGE_BASELINE, PRIMARY_FORMAT, SECOND_FORMAT, batchSize } from "../../src/review/prompt";
 export { applyRequirements, advanceRules, approveRule, revokeRule, activeRulesFor, renderRule } from "../../src/review/rules";
 export { reviewWrite, reviewRead, reviewBatch, reviewOwnClauses, reviewRedact, applyMemoryCandidate } from "../../src/review/db";
+export { applyJudgment, fingerprintOf } from "../../src/review/apply";
+export { proposeTasks } from "../../src/review/publish";
+export { quoteIn } from "../../src/view";
