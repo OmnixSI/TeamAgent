@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import './test_browser_auth.mjs';
 import './test_qr_login.mjs';
 import './test_card_samples.mjs';
+import './test_local_login_page.mjs';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {mkdtemp,rm,readFile,stat} from 'node:fs/promises';

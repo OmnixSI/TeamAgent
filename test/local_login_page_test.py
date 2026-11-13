@@ -178,6 +178,23 @@ class LocalLoginPageTests(unittest.TestCase):
         lock.mkdir(); started = time.time(); login._pause(); self.assertFalse(risk.exists()); self.assertGreaterEqual(time.time()-started, 0.9)
         os.utime(lock, (time.time()-60, time.time()-60)); login._pause(); self.assertTrue(risk.exists()); self.assertFalse(lock.exists())
 
+    def test_local_bili_lock_is_reclaimed_only_when_its_owner_is_gone_or_replaced(self):
+        spec = importlib.util.spec_from_file_location('local_bili_unit5', ROOT / 'runner/local_bili_login.py')
+        module = importlib.util.module_from_spec(spec); sys.path.insert(0, str(ROOT / 'runner')); spec.loader.exec_module(module)
+        login = module.LocalBiliLogin(self.runtime, {'url':'https://cloud.test','runnerToken':'runner'})
+        risk = self.runtime / 'state/bili-risk.json'; risk.parent.mkdir(parents=True); lock = risk.with_name(risk.name + '.lock')
+        lock.mkdir(); (lock / 'owner').write_text(json.dumps({'pid': os.getpid(), 'started': 'stamp-live'}))
+        with patch.object(module, 'process_started', return_value='stamp-live'):
+            login._pause()
+        self.assertFalse(risk.exists()); self.assertTrue(lock.exists())
+        with patch.object(module, 'process_started', return_value='stamp-reused'):
+            login._pause()
+        self.assertTrue(risk.exists()); self.assertFalse(lock.exists())
+        risk.unlink(); lock.mkdir(); (lock / 'owner').write_text(json.dumps({'pid': 999999, 'started': 'stamp-dead'}))
+        with patch.object(module, 'process_started', return_value=None):
+            login._pause()
+        self.assertTrue(risk.exists()); self.assertFalse(lock.exists())
+
     def test_local_bili_generate_and_ok_poll_write_0600_cookie_file(self):
         spec = importlib.util.spec_from_file_location('local_bili_unit', ROOT / 'runner/local_bili_login.py')
         module = importlib.util.module_from_spec(spec)

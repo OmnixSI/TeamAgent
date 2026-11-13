@@ -97,19 +97,34 @@ async function xState(page){
 }
 function xSessionUrl(page){
  try{
-  const url=new URL(page.url()),path=decodeURIComponent(url.pathname).replace(/\/+$/,'');
-  // Internal /i routes include changing onboarding flows; wait conservatively.
-  return url.hostname==='x.com'&&!['/login','/logout','/i'].includes(path)&&!path.startsWith('/i/');
+  const url=new URL(page.url()),path=decodeURIComponent(url.pathname).replace(/\/+$/,'')||'/';
+  if(url.hostname!=='x.com')return false;
+  if(path==='/login'||path==='/logout')return false;
+  // Only the known onboarding/verification flows are excluded; ordinary /i/ settings pages are signed-in.
+  if(['/i/flow','/i/jf'].some(base=>path===base||path.startsWith(base+'/')))return false;
+  return true;
  }catch{return false;}
 }
-async function currentXPage(context,previous){
+async function xCookiePresent(context,name){
+ try{const cookies=await context.cookies(['https://x.com']);return cookies.some(c=>c.name===name&&['x.com','.x.com'].includes(c.domain));}catch{return false;}
+}
+async function hasFocus(page,timeout){
+ let timer;
+ try{
+  const focused=page.evaluate(()=>document.visibilityState==='visible'&&document.hasFocus());
+  return await Promise.race([focused,new Promise(done=>{timer=setTimeout(()=>done(false),timeout);})]);
+ }catch{return false;}
+ finally{clearTimeout(timer);}
+}
+async function currentXPage(context,previous,timeout){
  const pages=context.pages();
- for(const page of pages)if(await page.evaluate(()=>document.visibilityState==='visible'&&document.hasFocus()).catch(()=>false))return page;
+ for(const page of pages)if(await hasFocus(page,timeout))return page;
  // Never choose a background tab just because its URL looks authenticated.
  return pages.includes(previous)?previous:pages.length===1?pages[0]:null;
 }
 export function createBrowserAuth(options={}){
  const home=options.home||resolve(homedir(),'.inkboard-team'),now=options.now||Date.now,sleep=options.sleep||wait;
+ const focusTimeout=Number.isFinite(options.focusTimeout)&&options.focusTimeout>0?options.focusTimeout:500;
  const launch=options.launch||launchBrowser,report=options.report||asyncNoop,notify=options.notify||macNotification;
  let biliClient=options.client;
  async function client(){
@@ -186,8 +201,9 @@ export function createBrowserAuth(options={}){
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
      }else if(context.nativeX){
       const present=await xAuthTokenPresent(context);
-      xPage=await currentXPage(context,xPage);
-      const loggedIn=present&&!!xPage&&xSessionUrl(xPage)&&(await xState(xPage).catch(()=>null))==='ok';
+      const ct0=present&&await xCookiePresent(context,'ct0');
+      xPage=await currentXPage(context,xPage,focusTimeout);
+      const loggedIn=present&&!!xPage&&(xSessionUrl(xPage)||ct0)&&(await xState(xPage).catch(()=>null))==='ok';
       const title=xPage?await xPage.title().catch(()=>''):'';
       const http=xPage?await xPage.evaluate(()=>performance.getEntriesByType('navigation')[0]?.responseStatus||null).catch(()=>null):null;
       await context.publishX({phase:loggedIn?'ok':'waiting',reason:loggedIn?undefined:'not_logged_in',expires_at:deadline,metadata:xMetadata(title,http,present)});

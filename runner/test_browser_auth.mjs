@@ -131,3 +131,33 @@ test('L5b legacy Bili launch keeps the sandbox without stealth or warning-suppre
  assert.doesNotMatch(JSON.stringify(options),/enable-automation|disable-blink-features|no-sandbox|disable-infobars/);
  assert.equal(options.headless,false);
 });
+
+function nativeXFixture(home,extra={}){
+ const f=fixture(home,extra);
+ f.ctx.nativeX=true;f.ctx.publishX=async()=>{};
+ f.page.title=async()=> 'X';f.page.evaluate=async()=>null;
+ f.ctx.cookies=async()=>[{name:'auth_token',value:'synthetic-auth',domain:'.x.com'},{name:'ct0',value:'synthetic-ct0',domain:'.x.com'}];
+ return f;
+}
+test('L19 X session accepts ordinary /i pages and excludes only known onboarding flows',async t=>{
+ const f=nativeXFixture(await temp(t));
+ f.page.url=()=> 'https://x.com/i/communities';
+ assert.equal(await f.auth.login('x'),'ok');
+});
+test('L20 a ct0 cookie can stand in when no usable session page is present',async t=>{
+ const f=nativeXFixture(await temp(t));
+ f.page.url=()=> 'https://x.com/i/flow/step';
+ assert.equal(await f.auth.login('x'),'ok');
+ const g=nativeXFixture(await temp(t));
+ g.page.url=()=> 'https://x.com/i/flow/step';
+ g.ctx.cookies=async()=>[{name:'auth_token',value:'synthetic-auth',domain:'.x.com'}];
+ assert.equal(await g.auth.login('x'),'timeout');
+});
+test('L21 a page that never answers hasFocus cannot stall X login',async t=>{
+ const f=nativeXFixture(await temp(t),{focusTimeout:20});
+ const stuck={url:()=> 'https://x.com/home',locator:()=>({first(){return this;},isVisible:async()=>false}),evaluate:()=>new Promise(()=>{}),title:async()=>'X'};
+ const live={url:()=> 'https://x.com/home',locator:selector=>({first(){return this;},isVisible:async()=>selector.includes('SideNav_AccountSwitcher_Button')}),evaluate:async()=>true,title:async()=>'X'};
+ f.ctx.pages=()=>[stuck,live];
+ const result=await Promise.race([f.auth.login('x'),new Promise(r=>setTimeout(()=>r('hung'),3000))]);
+ assert.equal(result,'ok');
+});
