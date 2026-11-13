@@ -1,4 +1,4 @@
-// V-D 评判闭环 · 共享类型（种子，来自 design.md §接口与数据结构；D-2 补全，其他包只 import 不改枚举）
+// V-D 评判闭环 · 共享类型（种子 v2，来自 design.md §接口与数据结构 + amendments-v2.md；其他包只 import 不改枚举）
 export const FAILURE_TYPES = [
   "reasoning.hallucination.language", "reasoning.hallucination.tool",
   "reasoning.information.poor_retrieval", "reasoning.information.tool_misread",
@@ -28,6 +28,15 @@ export const SIGNALS = { S1:"漏答", S2:"拒答/降级措辞", S3:"随后用户
 export const CAPABILITIES = ["repo_visibility", "repo_read", "repo_disambiguation", "bili_video", "bili_shortlink",
   "xhs_note", "web_search", "attachment_send", "attachment_read", "image_read", "ci_logs", "scheduling", "api_quota",
   "memory_write", "participation", "addressee", "persona_tone", "health_selfcheck"] as const; // 另允许 `other:<词>`
+// v2/P1-1：文本来源。只有 direct 能当规则/记忆的证据；其余只能当「发生了什么」的证据
+export const ORIGINS = ["direct", "quoted", "forwarded", "card", "attachment_text", "image_text", "bot"] as const;
+// v2/P1-1：类型化规则；free 只能停在 candidate，管理员批准后才进 canary
+export const RULE_KINDS = ["reply_max_chars", "burst_max", "mention_only_window", "language", "format_pref", "free"] as const;
+// v2：双判官
+export const PROVIDERS = ["deepseek", "workers-ai", "openai", "codex-offline"] as const;
+export const AGREEMENT = ["agree", "disagree", "single", "pending"] as const;
+export const FINDING_STATUS = ["open", "disputed", "accepted", "rejected", "fixed", "wontfix", "regression"] as const;
+export const MEMORY_CANDIDATE_STATUS = ["candidate", "approved", "applied", "rejected", "blocked", "conflict", "superseded"] as const;
 
 export type FailureType = (typeof FAILURE_TYPES)[number];
 export type GapType = (typeof GAP_TYPES)[number];
@@ -37,18 +46,33 @@ export type Dimension = (typeof DIMENSIONS)[number];
 export type Verdict = (typeof VERDICT)[number];
 export type SignalKey = keyof typeof SIGNALS;
 export type ToolErrorKind = (typeof TOOL_ERROR_KINDS)[number];
+export type Origin = (typeof ORIGINS)[number];
+export type RuleKind = (typeof RULE_KINDS)[number];
+export type Provider = (typeof PROVIDERS)[number];
+export type Agreement = (typeof AGREEMENT)[number];
+export type FindingStatus = (typeof FINDING_STATUS)[number];
+
+export type Seg = { origin: Origin; text: string };   // 一条消息按来源切开的片段
+export type TraceMsg = { id: string; sender: string; ts: string; body: string; segs: Seg[];
+  bound_member: string | null;                     // members.id（未绑定 / 已吊销 = null）
+  addressed: "bot" | "other" | "none";            // mentioned / replyTo.kind='bot' / 点名在前 = bot
+  images: { idx: number; sha: string; desc: string | null; url_ok: boolean | null }[] };
 
 export type Trace = {
-  id: string; group_id: string;
-  inbound: { id: string; rowid?: number; ts: string; sender: string; body: string; mentioned: 0|1 };
-  context_before: { id: string; sender: string; body: string; ts: string }[];   // ≤6 条，每条 ≤300 字
+  id: string; group_id: string;                   // 'tr-in-<message id>' | 'tr-out-<outbox id>'
+  kind: "inbound" | "outbound";                   // v2/P1-3：outbound = 无法配对的独立外发
+  inbound: (TraceMsg & { mentioned: 0|1 }) | null; // v2/P1-3：outbound trace 为 null；不再带 rowid
+  context_before: TraceMsg[];                      // ≤6 条，每条 ≤300 字
   decision?: { action: string; gate: string; spoken_kind?: string; reason?: string; model_ms?: number };
-  replies: { outbox_id: string; body: string; status: string; at: number }[];  // ≤4 条，每条 ≤800 字
-  after: { id: string; sender: string; body: string; ts: string }[];           // 其后 ≤3 条用户消息（看纠正）
+  replies: { outbox_id: string; body: string; status: string; at: number;
+    link: "reply_to" | "decision" | "batch" | "none" }[];  // ≤4 条，每条 ≤800 字；link=怎么配上的
+  after: TraceMsg[];                               // 其后 ≤3 条用户消息（看纠正）
   job?: { id: string; kind: string; status: string; error?: string };
-  tools: { name: string; ok: boolean; error_kind: string; ms: number }[] | "unrecorded";
-  tools_offered: string[] | "unknown";            // D-7 之后来自 turn_tools.offered
+  tools: { id: string; name: string; ok: boolean; error_kind: string; ms: number }[] | "unrecorded"; // id=turn_tools.id
+  tools_offered: { names: string[]; catalog_version: string; switches: Record<string, "on"|"off">;
+    runner_ok: 0|1|null; turn_id: string } | "unknown";  // v2/P1-7：当轮 turn_offers；没有就是 unknown，不拿现在补
   snapshot_ref: { health_at: number; gateway_ok: 0|1; runner_ok: 0|1 } | null;
+  has_image: boolean;
   signals: (keyof typeof SIGNALS)[];
 };
 
@@ -60,22 +84,38 @@ export type Snapshot = {
   repo: { repo: string; state_age_s: number|null; cache_age_s: number|null; commits: number }[];
   jobs_24h: { kind: string; failed: number; done: number }[];
   tools_catalog: { name: string; readonly: boolean; needs: ("runner"|"github_token"|"switch")[] }[];
+  catalog_version: string;                        // v2/P1-7：结构化目录版本；capabilityCard 文本不是数据源
   release: string;                                // /health 的 release
 };
 
-export type Evidence = { source: "message" | "outbox" | "snapshot" | "tool"; id: string; quote: string };
+export type Evidence = { source: "message" | "outbox" | "snapshot" | "tool" | "image"; id: string; quote: string;
+  origin?: Origin;                                // v2/P1-1：校验器回填，不信模型自报
+  image?: { message_id: string; idx: number; sha: string } }; // source='image' 时必填；quote 对 image_notes.desc 或看图模型输出逐字
 export type JudgeVerdict = {
   trace_id: string; reasoning: string; dimensions: Record<Dimension, Verdict>;
   failure_type: FailureType | null; severity: Severity; fix_layer: FixLayer;
   gap_type: GapType | null; capability: string | null; should_use_tool: string | null;
   evidence: Evidence[]; what_happened: string; expected: string; root_cause: string;
   next_attempt_plan: string; confidence: number;
+  kind: "response_fault" | "capability_gap" | "system_fault" | "none"; // v2：与黄金基线 judge-prompt-v2 对齐
 };
-export type JudgeRequirement = { rule: string; scene: string; evidence: Evidence[]; ttl_days: number };
+export type JudgeRequirement = { kind: RuleKind; params: Record<string, string | number>; // v2/P1-1
+  rule: string; scene: string; evidence: Evidence[]; ttl_days: number };  // rule 仅 free 用；类型化规则由模板渲染
 export type JudgeMemoryUpdate = { op: "ADD" | "UPDATE" | "DELETE" | "NONE"; repo: string; subject: string;
   predicate: string; value: string; evidence: Evidence[] };
 export type JudgePromise = { outbox_id: string; quote: string; what: string; due: string | null; recurring: string | null };
 export type JudgeResult = {
-  schema: "ta.review.result.v1"; verdicts: JudgeVerdict[]; requirements: JudgeRequirement[];
+  schema: "ta.review.result.v2"; verdicts: JudgeVerdict[]; requirements: JudgeRequirement[];
   memory_updates: JudgeMemoryUpdate[]; promises: JudgePromise[]; no_action: { trace_id: string; why: string }[];
 };
+// v2：第二家复核的输出（只判不提新要求/记忆/承诺）
+export type SecondVerdict = { trace_id: string; verdict: "issue" | "pass" | "insufficient";
+  failure_type: FailureType | null; gap_type: GapType | null; severity: Severity;
+  dimensions: Record<Dimension, Verdict>; evidence: Evidence[]; reason: string; confidence: number };
+export type SecondResult = { schema: "ta.review.second.v1"; verdicts: SecondVerdict[] };
+// v2：provider 适配层接口（judge-model.ts 实现；按配置选）
+export type JudgeCall = { provider: Provider; model: string; system: string; user: string;
+  images?: { message_id: string; idx: number; mime: string; b64: string }[];  // 只 openai(Luna) 用
+  max_tokens: number; timeout_ms: number };
+export type JudgeReply = { ok: boolean; text: string; finish_reason: "stop" | "length" | "error" | "timeout";
+  usage: { input: number; output: number; neurons?: number; usd_micros?: number } | null; error_kind?: string };
