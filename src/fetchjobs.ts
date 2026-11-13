@@ -132,7 +132,7 @@ export function biliNoteText(r: BiliResult, opts: BiliMaterialOptions = {}): str
   // Keep answerable facts before long descriptions/subtitles so bounded material
   // never loses the video's identity or the first available viewer comment.
   return [`BV号：${r.bvid}`, `标题：${r.title}`, `UP主：${r.owner}`, `时长：${r.duration}秒`,
-    `热评：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "未读到"}`,
+    `热评：${r.comments.map(c => c.uname + "：" + c.message).join("\n") || "热评未读到"}`,
     hasSubtitle ? '【已取得字幕】' : '【已读元数据/热评】',
     `分区：${r.tname}`, `简介：${r.desc}`,
     hasSubtitle
@@ -144,20 +144,24 @@ export function biliNoteText(r: BiliResult, opts: BiliMaterialOptions = {}): str
 const RESEARCH_REFS = 3, RESEARCH_READS = 8, MATERIAL_CHARS = 4000, MATERIALS_CHARS = 10000;
 // These are application requirements, not instructions supplied by a video/UP.
 // Keep them outside the untrusted envelope, whose closing boundary stays intact.
-const BILI_ANSWER_RULE = '回答必须保留素材里已读到的BV号、标题、UP主、时长，并转述至少一条热评（没有热评就如实说未读到）。给最终表达的brief必须包含这五项原文，不要只说“已读到”。没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。素材里没有的数字不要写，不把另行检索的信息当成视频内容。';
+const BILI_ANSWER_RULE = '回答必须保留素材里已读到的BV号、标题、UP主、时长，有热评就转述至少一条；没有就如实说热评未读到。给最终表达的brief必须包含这五项原文，不要只说“已读到”。没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。素材里没有的数字不要写，不把另行检索的信息当成视频内容。';
 const BILI_ASR_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '没拿到字幕但有音轨转写时，以转写为主要依据，开头说明“根据音轨转写”，转写可能有错别字和专名误识；转写只覆盖部分时说明覆盖到几分几秒。');
 const BILI_ASR_OMITTED_RULE = BILI_ANSWER_RULE.replace('没拿到字幕时说“没拿到字幕，以下基于标题与评论”，不能因此整体否定已取得的素材。', '本轮只附一份转写；未附转写的视频只依据各自标题、简介和热评，不推测音轨内容。');
-export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS, opts: BiliMaterialOptions = {}) {
+export type VideoMaterial = {material:string;rule:string};
+/** The application rule is returned beside the envelope, never inside it. */
+export function videoMaterial(r: BiliResult | TitleMiss, ref = '', max = MATERIAL_CHARS, opts: BiliMaterialOptions = {}): VideoMaterial {
   let answerRule = BILI_ANSWER_RULE;
   if (!('miss' in r) && !(r.subtitle_status==='ok' && r.subtitle?.trim()))
     answerRule = opts.asr ? BILI_ASR_RULE : opts.asrOmitted ? BILI_ASR_OMITTED_RULE : BILI_ANSWER_RULE;
-  const rule = 'miss' in r ? '' : answerRule + '\n';
-  const bodyMax = Math.max(0, max - rule.length - untrusted('bilibili', '', r.fetched_at).length);
-  return rule + ('miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
-    : untrusted('bilibili',biliNoteText(r,opts),r.fetched_at,bodyMax));
+  const rule = 'miss' in r ? '' : answerRule;
+  const bodyMax = Math.max(0, max - untrusted('bilibili', '', r.fetched_at).length);
+  const material = 'miss' in r ? titleMissMaterial(r, bodyMax) : isTitleRef(ref) ? titleMaterial(r, bodyMax)
+    : untrusted('bilibili',biliNoteText(r,opts),r.fetched_at,bodyMax);
+  return {material, rule};
 }
 /** Cached Bili notes already fetched for this turn; never invent missing content. */
-export async function biliResearchMaterials(e: any, context: any): Promise<string[]> {
+export type BiliResearchMaterials = {materials:string[];rules:string[]};
+export async function biliResearchMaterials(e: any, context: any): Promise<BiliResearchMaterials> {
   const batch = (context.batch || []).filter(Boolean), latest = context.latest, recent = context.recent || [];
   const refs: string[] = [];
   const add = (value: any) => {
@@ -175,20 +179,21 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
     }
     const quoted = targetOf(meta.quoted || {}); if (quoted) add(quoted.ref);
   }
-  if (!refs.length) return [];
-  const materials: string[] = [];
+  if (!refs.length) return {materials:[],rules:[]};
+  const materials: string[] = [], rules: string[] = [];
   let total = 0, reads = 0, asrAttached = false;
   const budget = Math.min(RESEARCH_READS, Number.isFinite(left(e)) ? Math.max(0, left(e) - 2) : RESEARCH_READS);
   for (const ref of refs.slice(0, RESEARCH_REFS)) {
     if (reads + 1 > budget) break;
     const cached = await biliCached(e, ref); reads++;
-    let material: string, extra: string | undefined, isAsr = false;
+    let material: string, rule = '', extra: string | undefined, isAsr = false;
     if (cached) {
       if(reads+1>budget)break;
       const plan=await planVideo(e,cached,ref,'research',Date.now());reads++;
       isAsr=plan.materials[1]?.includes('来源:bilibili-asr')??false;
       extra=isAsr&&asrAttached?undefined:plan.materials[1];
-      material=videoMaterial(cached,ref,Math.min(MATERIAL_CHARS,MATERIALS_CHARS-total),{asr:isAsr&&!asrAttached,asrOmitted:isAsr&&asrAttached});
+      const out=videoMaterial(cached,ref,Math.min(MATERIAL_CHARS,MATERIALS_CHARS-total),{asr:isAsr&&!asrAttached,asrOmitted:isAsr&&asrAttached});
+      material=out.material; rule=out.rule;
     }
     else {
       if (reads + 1 > budget) break;
@@ -198,12 +203,13 @@ export async function biliResearchMaterials(e: any, context: any): Promise<strin
     }
     if (materials.includes(material) || total + material.length > MATERIALS_CHARS) continue;
     materials.push(material); total += material.length;
+    if(rule&&!rules.includes(rule))rules.push(rule);
     if(extra&&!materials.includes(extra)){
       if(isAsr&&!asrAttached){materials.push(extra);asrAttached=true;}
       else if(!isAsr&&total+extra.length<=MATERIALS_CHARS){materials.push(extra);total+=extra.length;}
     }
   }
-  return materials;
+  return {materials,rules};
 }
 /** True when a resume message list already carries this material; a handoff must not append it twice. */
 export function materialInjected(messages: any[], material: string): boolean {
@@ -235,17 +241,17 @@ export async function runVideoWait(e: any, waitId: string): Promise<void> {
       await e.DB.prepare("UPDATE video_waits SET status='done' WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).run();
       return;
     }
-    let materials: string[];
+    let materials: string[], rules: string[] = [];
     if(cached){
       const plan=await planVideo(e,cached,w.ref,w.phase,now,w.due_at);
       if(plan.media==='start'){await switchToMedia(e,w,cached as BiliResult);return;}
       if(plan.media==='release'){
         await e.DB.prepare("UPDATE video_waits SET status='waiting',ready=0,lease_until=NULL,attempts=MAX(attempts-1,0) WHERE id=? AND status='running' AND lease_until=?").bind(w.id,w.lease_until).run();return;
       }
-      materials=plan.materials;
+      materials=plan.materials;rules=plan.rules;
     }else materials=[biliFailMaterial(outcome!,{title:isTitleRef(w.ref),titleFallback:TITLE_FALLBACK})];
     const context = await loadChatContext(e, { groupId: w.group_id, latestId: w.latest_id, batchIds: JSON.parse(w.batch_ids) });
-    const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, videoWaited: true });
+    const answer = await agentAnswer(e, { ...context, mentioned: !!w.mentioned, materials, rules, videoWaited: true });
     // A timed-out old attempt must not finish a newer lease.
     const owns = await e.DB.prepare("SELECT id FROM video_waits WHERE id=? AND status='running' AND lease_until=?").bind(w.id, w.lease_until).first();
     if (!owns) return;
