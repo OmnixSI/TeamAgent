@@ -253,7 +253,11 @@ export function buildChecks(facts) {
       pattern: /(?:还没接进|未接进|没接进|不会主动发|尚未接入|没有接进)/,
     },
     "repo.entry": anyOf("Worker 入口", [facts.repo.entry, "worker.ts"]),
-    "repo.dirs": custom("顶层目录职责", (text) => facts.repo.dirs.every((d) => d.pattern.test(text))),
+    "repo.dirs": custom(
+      "顶层目录名（src/runner/migrations/scripts 都出现）",
+      (text) => facts.repo.dirs.every((d) => text.includes(d.path)),
+    ),
+    "repo.dirs.roles": custom("顶层目录职责", (text) => facts.repo.dirs.every((d) => d.pattern.test(text))),
     "repo.tables": custom(
       "D1 表名与 schema.sql 一致",
       (text) => facts.repo.coreTables.every((name) => text.includes(name)),
@@ -336,8 +340,11 @@ export function attributionConflicts(text, rules = []) {
 }
 
 /** Evaluate one rendered answer against one question/state. */
-export function evaluateAnswer(text, group, facts, checks, question = null, state = null) {
-  const expected = (state?.expect ?? question?.expect ?? group.expect ?? []).slice();
+export function evaluateAnswer(text, group, facts, checks, question = null, state = null, opts = {}) {
+  let expected = (state?.expect ?? question?.expect ?? group.expect ?? []).slice();
+  // The group chat answer must name the directories, not recite their roles.
+  // The deterministic A layer still checks the roles (repo.dirs.roles).
+  if (opts.layer === "B") expected = expected.filter((key) => key !== "repo.dirs.roles");
   const failures = [];
   const asserted = [];
   for (const key of expected) {

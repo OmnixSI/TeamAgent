@@ -118,6 +118,7 @@
       "expect": [
         "repo.entry",
         "repo.dirs",
+        "repo.dirs.roles",
         "repo.tables",
         "repo.cron",
         "repo.queues",
@@ -130,7 +131,11 @@
         },
         {
           "id": "S4-q2",
-          "text": "你的代码都放在哪些目录里、入口是什么"
+          "text": "你的代码都放在哪些目录里、入口是什么",
+          "expect": [
+            "repo.entry",
+            "repo.dirs"
+          ]
         }
       ]
     },

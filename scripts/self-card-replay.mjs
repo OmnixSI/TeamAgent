@@ -301,9 +301,11 @@ if (MODE === "b" || MODE === "all") {
             globalThis.fetch = realFetch;
           }
           const answer = outputText(raw);
-          const result = evaluateAnswer(answer, group, FACTS, CHECKS, question, state);
+          const result = evaluateAnswer(answer, group, FACTS, CHECKS, question, state, { layer: "B" });
           const leaked = answer.includes(key) || /sk-[A-Za-z0-9_-]{20,}/.test(answer);
           if (leaked) result.failures.push("回答里出现了密钥/令牌形状");
+          const dsmlInAnswer = /DSML|＜｜｜|<｜｜/.test(answer);
+          if (dsmlInAnswer) result.failures.push("正文含 DSML 残片");
           result.pass = result.failures.length === 0;
           const sent = await e.DB.prepare("SELECT COUNT(*) AS n FROM outbox WHERE status='sent'").first();
           const r = row({
@@ -320,6 +322,7 @@ if (MODE === "b" || MODE === "all") {
               online_d1_writes: 0,
               outbox_sent_rows: Number(sent?.n || 0),
               secret_leak: leaked,
+              dsml_in_answer: dsmlInAnswer,
               tool_trace: redactSecrets(JSON.stringify(trace.slice(-8)), [key]).slice(0, 3000),
               secrets: [key],
             },
