@@ -3,6 +3,8 @@ import json, pathlib, os, subprocess
 
 MAPPING = {"DEEPSEEK_API_KEY":"DEEPSEEK_API_KEY", "TEAM_ADMIN_TOKEN":"ADMIN_TOKEN", "TEAM_RUNNER_TOKEN":"RUNNER_TOKEN",
            "TEAM_QQ_APP_ID":"QQ_APP_ID", "TEAM_QQ_APP_SECRET":"QQ_APP_SECRET"}
+# Optional secrets: absent values are skipped without failing the deployment.
+OPTIONAL_MAPPING = {"TEAM_OPENAI_API_KEY": "OPENAI_API_KEY"}
 
 
 def github_token():
@@ -28,9 +30,11 @@ def main():
     h.mkdir(mode=0o700, exist_ok=True)
     path = h/"worker-secrets.json"
     secrets = json.loads(path.read_text()) if path.exists() else {}
-    for source, target in MAPPING.items():
+    for source, target in {**MAPPING, **OPTIONAL_MAPPING}.items():
         if os.environ.get(source):
             secrets[target] = os.environ[source]
+    if not os.environ.get("TEAM_OPENAI_API_KEY"):
+        print("未设置 TEAM_OPENAI_API_KEY，跳过 OPENAI_API_KEY")
     token = github_token()
     if token:
         secrets["GITHUB_TOKEN"] = token
