@@ -102,20 +102,14 @@ async function set(e: Env, k: string, v: string) {
     .bind(k, v)
     .run();
 }
-async function getChatCursor(e: Env, groupId: string) {
-  const key = "chat_cursor:" + groupId;
-  const legacyKey = "chat_cursor";
-  // One read covers both keys so the chat turn keeps its D1 statement budget.
-  const stored = (
-    await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (?,?)")
-      .bind(key, legacyKey)
-      .all()
-  ).results as any[];
-  const current = stored.find((r: any) => r.key === key)?.value;
+async function getChatCursor(e: Env, m: { group_id: string; current_cursor?: string; legacy_cursor?: string }) {
+  const key = "chat_cursor:" + m.group_id;
+  // Both keys were read with the message; keep first-turn initialization intact.
+  const current = m.current_cursor;
   if (current != null) return Number(current);
   // One-time migration from the legacy global key. Clamp to rows that still
   // exist so a cursor inflated by a deleted replay batch cannot skip live rows.
-  const legacy = Number(stored.find((r: any) => r.key === legacyKey)?.value || 0);
+  const legacy = Number(m.legacy_cursor || 0);
   // A zero legacy cursor initializes to zero whatever the table holds; skip the
   // MAX(rowid) read on that path to keep the chat turn inside its D1 budget.
   const maxRow =
@@ -719,12 +713,15 @@ async function processJob(e: Env, id: string) {
     if (claim.kind === "chat") {
       const claimedAt = Date.now();
       const m = await e.DB.prepare(
-        "SELECT rowid AS ordinal,* FROM messages WHERE id=?",
+        `SELECT m.rowid AS ordinal,m.*,
+          (SELECT value FROM settings WHERE key='chat_cursor:'||m.group_id) AS current_cursor,
+          (SELECT value FROM settings WHERE key='chat_cursor') AS legacy_cursor
+         FROM messages m WHERE m.id=?`,
       )
         .bind(p.message)
         .first();
       if (!m) return;
-      const cursor = await getChatCursor(e, m.group_id);
+      const cursor = await getChatCursor(e, m);
       const head = await e.DB.prepare(
         "SELECT (SELECT id FROM messages WHERE group_id=?1 ORDER BY rowid DESC LIMIT 1) AS newest_id,(SELECT ts FROM messages WHERE group_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 1) AS oldest_ts",
       ).bind(m.group_id, cursor).first();
