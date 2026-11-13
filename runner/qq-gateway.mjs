@@ -1,4 +1,5 @@
 import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
+import { mentionsBili, writeFetchWake } from "./fetch-wake.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
 import os from "node:os";
@@ -113,6 +114,11 @@ bot.on("message", async (ctx) => {
   const target = path.join(spool, name);
   fs.writeFileSync(target + ".tmp", raw, { mode: 0o600 });
   fs.renameSync(target + ".tmp", target);
+  try {
+    if (mentionsBili(raw)) writeFetchWake(home);
+  } catch {
+    console.log("fetch wake write failed");
+  }
   await flush();
 });
 bot.on("ready", () => {

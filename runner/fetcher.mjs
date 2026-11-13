@@ -2,6 +2,7 @@
 import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
 import {runLoginFlow} from './qr-login.mjs';
 import {biliByTitle} from './bili-title.mjs';
+import {createWakePort} from './fetch-wake.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -213,6 +214,27 @@ export async function runJob(job,client,cloud,log=()=>{},beforeUse=async()=>{}){
  }catch(error){const c=classify(error);report={...report,...c};log(client.sanitize('fetch '+c.reason));}
  await cloud('report',client.sanitize(report));
 }
+/** Claim loop: 10 s idle, 2 s for 60 s after a wake or a finished job, login runs off-loop. */
+export async function runFetchLoop({claim,work,login,wait,wake,now=Date.now,signal,log=()=>{}}){
+ let fastUntil=0;
+ const fast=()=>{fastUntil=now()+60000;};
+ while(!signal?.aborted){
+  try{
+   const {job,login:task}=await claim();
+   if(task){
+    const started=login(task);
+    // A login may be a long promise; never await it, only notice a busy refusal.
+    Promise.resolve(started).catch(()=>{});
+    if(started===false)await wait(1000);
+    continue;
+   }
+   if(job){await work(job);fast();continue;}
+  }catch(error){log('fetch cycle incomplete');}
+  if(wake?.check?.()){fast();continue;}
+  const delay=now()<fastUntil?2000:10000;
+  if(await wait(delay))fast();
+ }
+}
 async function main(){
  const home=resolve(homedir(),'.inkboard-team');
  const config=JSON.parse(await readFile(resolve(home,'config.json'),'utf8'));
@@ -224,7 +246,6 @@ async function main(){
    const r=await fetch(new URL('/api/runner/fetch/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
    if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
  };
- const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
  if(process.argv[2]==='login'){
    const state=await auth.login(process.argv[3]);
@@ -232,16 +253,18 @@ async function main(){
    if(state!=='ok')process.exitCode=1;
    return;
  }
- for(;;){
-   try{
-     await auth.daily();
-     const {job,login}=await cloud('claim',{});
-     if(login){await runLoginFlow(login,{home,client,auth,cloud});continue;}
-     if(!job){await sleep(10000);continue;}
-     const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).catch(()=>{}),30000);
-     try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client));}finally{clearInterval(heartbeat);}
-   }catch{log('fetch cycle incomplete');await sleep(10000);}
- }
+ let loginTask=null;
+ const startLogin=task=>{
+   if(loginTask)return false;
+   loginTask=runLoginFlow(task,{home,client,auth,cloud}).catch(()=>log('login incomplete')).finally(()=>{loginTask=null;});
+   return true;
+ };
+ const work=async job=>{
+   const heartbeat=setInterval(()=>cloud('heartbeat',{id:job.id,lease:job.payload.lease}).catch(()=>{}),30000);
+   try{await runJob(job,client,cloud,log,()=>auth.prepareBili(client));}finally{clearInterval(heartbeat);}
+ };
+ const wake=createWakePort(resolve(home,'fetch-wake'));
+ await runFetchLoop({claim:async()=>{await auth.daily();return cloud('claim',{});},work,login:startLogin,wait:ms=>wake.wait(ms),wake,log});
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message==='需要装一次浏览器（Chromium），请联系维护者安装后再登录。'?error.message:'fetcher startup failed；登录未完成，请检查本机运行环境。');process.exitCode=1;});
 
