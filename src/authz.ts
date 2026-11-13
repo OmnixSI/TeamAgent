@@ -66,7 +66,7 @@ function ownClauses(text: string): string[] {
 const LABEL_MAX = 16;
 // Only a head that names the work item may open a request; any other head
 // (a person, "没有授权", ...) keeps the whole clause so it is judged as reported speech.
-const TASK_LABEL = /(?:任务|小活|需求|工单|待办|事项)$/;
+const TASK_LABEL = /^(?:小|大|新|临时|紧急|接入|验收|开发|修复|测试|文档|一个|个)*(?:任务|小活|活|需求|工单|待办|事项)$/;
 const REPORTED_LABEL = /说|讲|问|写道|回复|提到|表示|称|转述|引用|贴|粘贴|转发|上次|昨天|之前|曾经|已经|刚才/;
 const NEGATED_LABEL = /^(?:别|不要|不用|不必|无需|勿|请勿|禁止)/;
 const NEGATED_REQUEST = /^(?:请|麻烦)?(?:你)?\s*(?:勿|不要|别|不用|不必|无需|不想|不需要)/;

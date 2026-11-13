@@ -302,11 +302,16 @@ test('label colon splits a work request without opening reported, quoted or nega
     '群友: 请把数据整理成文档',
     '没有授权：请把数据整理成文档',
     '没有授权: 请把数据整理成文档',
+    '他的任务：帮我建个任务修登录',
+    '没有授权的任务：请把数据整理成文档',
+    '小王任务：请把数据整理成文档',
+    '别人说的任务：请把数据整理成文档',
+    '他的任务: 请把数据整理成文档',
     '任务说明过于冗长已经超过十六个字：请把数据整理成文档',
   ];
   for(const body of reject)assert.equal(az.authorize('create_file_task',body,source(body),{batch:[source(body)]},[]).ok,false,body);
   // A person's name before a colon never opens a request, clean or dirty.
-  for(const body of ['小王：帮我建个任务修登录','群友: 请把数据整理成文档']){
+  for(const body of ['小王：帮我建个任务修登录','群友: 请把数据整理成文档','他的任务：帮我建个任务修登录','没有授权的任务：请把数据整理成文档']){
     const row=source(body);
     for(const tool of ['prepare_project_task','create_file_task'])for(const extra of [{batch:[row]},{batch:[row],materials:['web']}])assert.equal(az.authorize(tool,body,row,extra,[]).ok,false,tool+' '+body);
   }
