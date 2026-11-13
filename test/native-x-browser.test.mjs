@@ -71,7 +71,7 @@ for(const [label,domain,path,expected,form=false,marker=true] of [
  ['login trailing slash','.x.com','/login/','waiting'],
  ['logout trailing slash','.x.com','/logout/','waiting'],
  ['logout','.x.com','/logout','waiting'],
- ['other internal flow','.x.com','/i/unknown-guide','waiting'],
+ ['unknown /i page is a signed-in page','.x.com','/i/unknown-guide','ok'],
  ['home login overlay with old account marker','.x.com','/home','waiting',true],
  ['home without authenticated marker','.x.com','/home','waiting',false,false],
  ['malformed encoded path','.x.com','/%ZZ','waiting'],
