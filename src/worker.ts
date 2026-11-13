@@ -12,6 +12,7 @@ import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
+import {runReachReply} from "./reachreply";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { runCronExtras } from "./cron-extra";
 import { TEAM } from "./config";
@@ -644,6 +645,7 @@ async function processJob(e: Env, id: string) {
         id + "-done",
       );
     }
+    if (claim.kind === "reach_reply") await runReachReply(e,p,id);
     if (claim.kind === "semantic_reply")
       await proactiveReply(e, p, semanticServices(e));
     if (claim.kind === "links")

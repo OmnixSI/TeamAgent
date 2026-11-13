@@ -7,6 +7,7 @@ import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
 import { newsSearchTool } from "./news-search";
 import { readDocumentTool } from "./read-document";
+import { readSocialTool } from "./read-social";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
 import { summarizeChatTool } from "./summarize-chat";
@@ -18,6 +19,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   getProfileTool,
   newsSearchTool,
   readDocumentTool,
+  readSocialTool,
   recallEpisodeTool,
   ...repoSearchTools,
   searchHistoryTool,

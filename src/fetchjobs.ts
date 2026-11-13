@@ -1,3 +1,4 @@
+import {reportReach} from "./reachjobs";
 import {planVideo,switchToMedia,sweepMedia,dispatchMedia} from "./mediajobs";
 import {FAILURE_PREFIX,OFFLINE_MS,READ_REASONS,fetchFailure,failureTtl,jobReason,biliFailReply,biliFailMaterial,type ReadReason} from './linkfail';
 import { left } from "./d1";
@@ -289,8 +290,13 @@ export async function sweepVideoWaits(e: any): Promise<void> {
 export async function claimFetch(e: any): Promise<Row | null> {
   const now = Date.now(), lease = crypto.randomUUID();
   const row = await e.DB.prepare(`UPDATE jobs SET status='running',attempts=attempts+1,lease_until=?,payload=json_set(payload,'$.lease',?)
-    WHERE id=(SELECT id FROM jobs WHERE kind='fetch' AND attempts<2 AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY created_at LIMIT 1) RETURNING *`)
-    .bind(now + 120000, lease, now).first();
+    WHERE id=(SELECT id FROM jobs WHERE kind='fetch' AND attempts<2 AND (COALESCE(json_extract(payload,'$.source'),'')!='reach' OR (
+      (SELECT value FROM settings WHERE key='reach:mode')='on'
+      AND COALESCE((SELECT value FROM settings WHERE key='off:reach'),'0') IN ('','0','false')
+      AND COALESCE((SELECT value FROM settings WHERE key='off:reach:'||json_extract(payload,'$.channel')),'0') IN ('','0','false')
+      AND COALESCE((SELECT json_extract(value,'$.until') FROM settings WHERE key='reach:cooldown:'||json_extract(payload,'$.channel')),0)<=?
+    )) AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY created_at LIMIT 1) RETURNING *`)
+    .bind(now + 120000, lease, now, now).first();
   return row ? { ...row, payload: JSON.parse(row.payload) } : null;
 }
 export async function heartbeatFetch(e: any, id: string, lease: string): Promise<boolean> {
@@ -319,7 +325,7 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   }
   const now = Date.now();
   // Repeat reports can finish cache/waiter writes after an interrupted response.
-  const row = await e.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='fetch' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status IN ('done','failed'))").bind(b.id, b.lease, now).first();
+  const row = await e.DB.prepare("SELECT * FROM jobs WHERE id=? AND kind='fetch' AND COALESCE(json_extract(payload,'$.source'),'')!='reach' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status IN ('done','failed'))").bind(b.id, b.lease, now).first();
   if (!row) return Response.json({ error: "lease conflict" }, { status: 409 });
   if (row.status !== "running" && (row.status === "done") !== (b.success === true))
     return Response.json({ error: "lease conflict" }, { status: 409 });
@@ -327,7 +333,7 @@ export async function reportFetch(e: any, b: any): Promise<Response> {
   if (result && 'miss' in result && !isTitleRef(p.ref)) return Response.json({error:'invalid title result'}, {status:400});
   // Fence every write, not only the initial read: another runner may acquire the
   // expired lease between reading the payload and committing this batch.
-  const guard = "id=? AND kind='fetch' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status=?)";
+  const guard = "id=? AND kind='fetch' AND COALESCE(json_extract(payload,'$.source'),'')!='reach' AND json_extract(payload,'$.lease')=? AND ((status='running' AND lease_until>?) OR status=?)";
   const leaseArgs = [b.id, b.lease, now, status];
   const writes = [];
   if (result) for (const ref of new Set('miss' in result ? [p.ref] : [p.ref,result.bvid]))
@@ -355,12 +361,12 @@ async function dispatchFetch(e: any, path: string, b: any): Promise<Response> {
   if (path.endsWith('/claim')) {
     const login=await claimLogin(e);
     const job=login?null:await claimFetch(e);
-    for (const waiter of (job?.payload?.waiters || []).slice(0,3)) stage(e, waiter.slice(3), "fetch_claimed");
+    for (const waiter of (job?.payload?.source==='reach'?[]:job?.payload?.waiters || []).slice(0,3)) stage(e, waiter.slice(3), "fetch_claimed");
     return Response.json({login,job});
   }
   if(path.endsWith('/login-state'))return reportLogin(e,b);
   if (path.endsWith('/heartbeat')) { const ok = await heartbeatFetch(e, b.id, b.lease); return Response.json({ ok }, { status: ok ? 200 : 409 }); }
-  if (path.endsWith('/report')) return reportFetch(e, b);
+  if (path.endsWith('/report')) return b.source==='reach'?reportReach(e,b):reportFetch(e,b);
   if (path.endsWith('/auth-status')) return recordAuthStatus(e,b);
   return Response.json({ error: "not found" }, { status: 404 });
 }
