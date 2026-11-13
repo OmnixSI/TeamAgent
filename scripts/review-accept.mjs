@@ -19,6 +19,7 @@ import { vdBlocked } from "./review-accept/checks/blocked.mjs";
 import { vdGolden, vdNegative, vdR7M4 } from "./review-accept/checks/golden.mjs";
 import { vdM3, vdM5, vdF5 } from "./review-accept/checks/pipeline.mjs";
 import { vdPull } from "./review-accept/checks/pull.mjs";
+import { vdProbe } from "./review-accept/checks/probes.mjs";
 import { cleanupGoldenRuns } from "./review-accept/golden-run.mjs";
 
 import { vdWorker } from './review-accept/checks/worker.mjs';
@@ -57,6 +58,7 @@ const CHECK = {
   "VD-M5": vdM5,
   "VD-F5": vdF5,
   "VD-PULL": vdPull,
+  "VD-PROBE": vdProbe,
   "VD-R1-G13": vdGolden,
   "VD-R7-M4": vdR7M4,
 };

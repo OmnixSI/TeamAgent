@@ -8,6 +8,7 @@ import {
   rowidId, seedGroup, traceRun,
 } from "../harness.mjs";
 import { staticGuard, secretScanText, seedSecretScan, fakeKeyScan } from "./guard.mjs";
+import { probeEvidence } from "./probes.mjs";
 
 let goldenCache = null;
 async function goldenInfo(ctx) {
@@ -185,11 +186,14 @@ export async function vdBlocked(ctx, item) {
   } else if (id === "VD-PULL") {
     ok = missingFile("scripts/review-pull.mjs");
     detail = "scripts/review-pull.mjs 未合入（D-8）";
-  } else if (id === "VD-PROBE" || id === "VD-EXPLORE") {
-    ok = missingFile("scripts/review-probes.mjs");
-    const info = await goldenInfo(ctx);
-    const gaps = info ? info.run.raw.prepare("SELECT COUNT(*) AS n FROM capability_gaps").get().n : "no-replay";
-    detail = `scripts/review-probes.mjs 未合入；种子 capability_gaps=${gaps}（D-9）`;
+  } else if (id === "VD-PROBE") {
+    ok = false; detail = "registry marks VD-PROBE runnable";
+  } else if (id === "VD-EXPLORE") {
+    const probes = await probeEvidence();
+    const gap = probes.gap_check;
+    ok = gap.gaps.length >= 7 && gap.selftest.probe_pass_gap_open === true &&
+      gap.selftest.gap_fixed_probe_fail === true && gap.flags.unknown_no_turn_offer?.length > 0;
+    detail = `D-9 层 2 已产出 ${gap.gaps.length} 条夹具 gap 对照：selftest 双标记、unknown_no_turn_offer=${(gap.flags.unknown_no_turn_offer || []).length}、switch/offline 均按当轮 turn_offers；仍缺真实三晚 capability_gaps（种子 ${probes.seed.capability_gaps ?? "n/a"} 行）、C2/C10/C7 的 7 类分型复核与运维动作分流（调研员）`;
   } else if (id === "VD-UI") {
     const spec = paths().release && join(paths().release, "ui-spec.md");
     ok = true; // D-12 owns the spec; absence is recorded, not a script failure.
@@ -228,11 +232,10 @@ export async function vdBlocked(ctx, item) {
     ok = missingFile("src/review/apply.ts");
     detail = `${sub}；中断/并发/迟到旧代需 D-5a`;
   } else if (id === "VD-R-IMG") {
-    const info = await goldenInfo(ctx);
-    const images = info ? info.run.raw.prepare("SELECT COUNT(*) AS n FROM message_images").get().n : "no-replay";
-    const notes = info ? info.run.raw.prepare("SELECT COUNT(*) AS n FROM image_notes WHERE text IS NOT NULL").get().n : "no-replay";
-    ok = true;
-    detail = `线上 message_images=${images}、有文字 image_notes=${notes}，无真实带图样本；探针属 D-9`;
+    const probes = await probeEvidence();
+    const image = probes.probes.find((probe) => probe.name === "image_route");
+    ok = image?.status === "synthetic" && /has_image=1/.test(image.detail) && /provider=openai/.test(image.detail);
+    detail = `D-9 图片探针 synthetic：trace.has_image=1、second provider=openai（0 模型调用）；种子 message_images=${probes.seed.message_images ?? "n/a"}、有文字 image_notes=${probes.seed.image_notes_text ?? "n/a"}；仍缺真实带图 @bot 消息、失效 URL 的 url_ok=false/INSUFFICIENT 实跑与 Luna 复核`;
   } else if (id === "VD-GATE" || id === "VD-R-MIG" || id === "VD-D0") {
     // These are runnable; reaching here means the registry drifted.
     ok = false; detail = "registry marks this runnable";
