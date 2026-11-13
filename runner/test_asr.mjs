@@ -6,7 +6,7 @@ import {isAbsolute} from 'node:path';
 const good={type:'result',segments:[{start:0,end:2,text:'这是超过十个汉字的完整转写结果。'}],audio_s:2,max_rss_mb:300};
 function fake(exit=0,{data=JSON.stringify(good)+'\n',error,hold=false}={}){
  const calls=[],kills=[],priorities=[],intervals=[];
- const spawn=(command,args,options)=>{calls.push({command,args,options});const c=new EventEmitter();c.pid=43210;c.stdout=new EventEmitter();c.stderr=new EventEmitter();queueMicrotask(()=>{if(error)c.emit('error',Object.assign(Error(error),{code:error}));else if(!hold){c.stdout.emit('data',Buffer.from(data));c.emit('close',exit)}});return c};
+ const spawn=(command,args,options)=>{calls.push({command,args,options});const c=new EventEmitter();c.pid=43210;c.stdout=new EventEmitter();c.stderr=new EventEmitter();queueMicrotask(()=>{if(error)c.emit('error',Object.assign(Error(error),{code:error}));else if(!hold){for(const chunk of Array.isArray(data)?data:[Buffer.from(data)])c.stdout.emit('data',chunk);c.emit('close',exit)}});return c};
  return {calls,kills,priorities,intervals,spawn,kill:(...a)=>kills.push(a),setPriority:(...a)=>priorities.push(a),getPriority:()=>15,setInterval:fn=>{intervals.push(fn);return fn},clearInterval(){},rss:async()=>200};
 }
 test('R5 ASR child is unbuffered, detached, low priority, and receives only PATH HOME LANG',async()=>{
@@ -24,6 +24,13 @@ test('R5 ASR exit reasons, missing runtime and no speech are distinct',async()=>
 test('R11 progress is consumed but only a final valid result can finish recognition',()=>{
  assert.equal(parseAsrOutput('{"type":"progress","done":1,"total":2}\n'+JSON.stringify(good)+'\n').audio_s,2);
  for(const data of [JSON.stringify(good)+'\n{broken',JSON.stringify({type:'result'}),JSON.stringify({...good,segments:[{start:'0',end:1,text:'x'}]})])assert.throws(()=>parseAsrOutput(data),e=>e.reason==='asr_failed');
+});
+test('R11 UTF-8 Chinese transcript survives a 64KiB child stdout split inside a character',async()=>{
+ const result={...good,segments:[{start:0,end:2,text:'中文转写。'.repeat(6000)}]};
+ const bytes=Buffer.from(JSON.stringify({type:'progress',done:1,total:1})+'\n'+JSON.stringify(result)+'\n');
+ const split=65536;assert.ok((bytes[split]&0xc0)===0x80,'split must be inside a UTF-8 character');
+ const progress=[],actual=await runAsr('a',{timeoutMs:500,onProgress:p=>progress.push(p)},fake(0,{data:[bytes.subarray(0,split),bytes.subarray(split)]}));
+ assert.deepEqual(actual.segments,result.segments);assert.doesNotMatch(actual.segments[0].text,/�/);assert.equal(progress.length,1);
 });
 test('R13 script path survives flat installation and home expansion is explicit',()=>{
  assert.ok(isAbsolute(SCRIPT));assert.ok(SCRIPT.endsWith('/runner/xasr_transcribe.py'));assert.equal(expandHome('~/x','/temporary-home'),'/temporary-home/x');assert.equal(expandHome('/x','/temporary-home'),'/x');

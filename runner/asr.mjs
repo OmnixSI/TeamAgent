@@ -3,6 +3,7 @@ import {spawn as spawnChild,execFile} from 'node:child_process';
 import {setPriority,getPriority,homedir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
+import {StringDecoder} from 'node:string_decoder';
 export const SCRIPT=fileURLToPath(new URL('./xasr_transcribe.py',import.meta.url));
 export const expandHome=(p,home=homedir())=>typeof p==='string'&&p.startsWith('~/')?join(home,p.slice(2)):p;
 export const childEnv=(env=process.env)=>({PATH:env.PATH||'/usr/bin:/bin',HOME:env.HOME||homedir(),LANG:env.LANG||'en_US.UTF-8'});
@@ -21,10 +22,11 @@ export function runCommand(command,args,options={},deps={}){
  return new Promise((resolve,reject)=>{
   if(options.signal?.aborted){reject(fault('cancelled'));return;}
   let child,done=false,stdout='',stderr='',nice=15,peak=0,timer,watch,pending='';
+  const outputDecoder=new StringDecoder('utf8'),errorDecoder=new StringDecoder('utf8');
   const kill=()=>{if(child?.pid)try{(deps.kill||process.kill)(-child.pid,'SIGKILL')}catch{}};
   const finish=(reason,code)=>{
    if(done)return;done=true;clearTimeout(timer);if(watch)(deps.clearInterval||clearInterval)(watch);options.signal?.removeEventListener('abort',abort);
-   if(reason){kill();reject(fault(reason));}else resolve({stdout,stderr,code,nice,max_rss_mb:peak});
+   if(reason){kill();reject(fault(reason));}else {stdout+=outputDecoder.end();stderr=(stderr+errorDecoder.end()).slice(-2048);resolve({stdout,stderr,code,nice,max_rss_mb:peak});}
   };
   const abort=()=>finish(options.signal?.reason?.reason||'cancelled');
   try{
@@ -33,10 +35,10 @@ export function runCommand(command,args,options={},deps={}){
    child.on('close',code=>finish(null,code));
    if(child.pid){(deps.setPriority||setPriority)(child.pid,15);nice=(deps.getPriority||getPriority)(child.pid);options.onChild?.(child.pid,nice);}
    child.stdout.on('data',buffer=>{
-    stdout+=buffer.toString();if(stdout.length>1_000_000){finish('asr_failed');return;}
-    pending+=buffer.toString();let index;while((index=pending.indexOf('\n'))>=0){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const item=JSON.parse(line);if(item.type==='progress')options.onProgress?.(item)}catch{}}
+    const chunk=outputDecoder.write(buffer);stdout+=chunk;if(stdout.length>1_000_000){finish('asr_failed');return;}
+    pending+=chunk;let index;while((index=pending.indexOf('\n'))>=0){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const item=JSON.parse(line);if(item.type==='progress')options.onProgress?.(item)}catch{}}
    });
-   child.stderr.on('data',buffer=>{stderr=(stderr+buffer.toString()).slice(-2048)});
+   child.stderr.on('data',buffer=>{stderr=(stderr+errorDecoder.write(buffer)).slice(-2048)});
    options.signal?.addEventListener('abort',abort,{once:true});if(options.signal?.aborted){abort();return;}
    timer=setTimeout(()=>finish(options.timeoutReason||'asr_failed'),options.timeoutMs??120000);
    if(options.memCapMb)watch=(deps.setInterval||setInterval)(async()=>{

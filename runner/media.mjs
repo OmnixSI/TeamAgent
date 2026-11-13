@@ -90,7 +90,7 @@ export async function sweepLocal(home,now=Date.now(),deps={}){
     const command=(deps.command||((p)=>execFileSync('ps',['-o','command=','-p',String(p)],{encoding:'utf8',timeout:2000})))(pid);
     if(/xasr_transcribe|ffmpeg/.test(command))(deps.kill||process.kill)(-pid,'SIGKILL');
    }
-  }catch{}
+  }catch{deps.log?.('子进程清理未完成，保留 PID 待下次重试');return false;}
   fs.rmSync(pidFile,{force:true});
  }
  const tmp=join(home,'media-tmp');privateDir(tmp);for(const file of names(tmp))fs.rmSync(join(tmp,file),{recursive:true,force:true});
@@ -100,6 +100,7 @@ export async function sweepLocal(home,now=Date.now(),deps={}){
   const path=join(home,file);if(!exists(path))continue;const stat=fs.lstatSync(path);if(!stat.isFile()||stat.size<=1024**2)continue;
   fs.truncateSync(path,0);
  }
+ return true;
 }
 export function startupGate(home,deps={}){
  let level=100;try{level=(deps.memory||(()=>Number(execFileSync('sysctl',['-n','kern.memorystatus_level'],{encoding:'utf8',timeout:2000}))))()}catch{}
@@ -139,7 +140,15 @@ export async function runMediaJob(job,deps={}){
   const client=deps.client||await makeClient(home,deps);if(client.isPaused())throw fault('risk');
   const info=await client.biliAudio(bvid);if(controller.signal.aborted)throw controller.signal.reason;
   const candidates=pickAudio(info.urls);const duration=Number(payload.duration||info.duration),covered=Math.min(duration,Math.min(90,cfg.max_minutes)*60);
-  await (deps.download||downloadAudio)(candidates[0],m4a,{signal:controller.signal,tmpRoot:join(home,'media-tmp'),tmpCapBytes:Math.min(2048,cfg.tmp_cap_mb)*1024**2});observe();
+  for(let i=0;i<candidates.length;i++){
+   try{
+    await (deps.download||downloadAudio)(candidates[i],m4a,{signal:controller.signal,tmpRoot:join(home,'media-tmp'),tmpCapBytes:Math.min(2048,cfg.tmp_cap_mb)*1024**2});break;
+   }catch(error){
+    if(controller.signal.aborted||error.reason!=='download_failed'||i===candidates.length-1)throw error;
+    fs.rmSync(m4a,{force:true});
+   }
+  }
+  observe();
   await (deps.ffmpeg||ffmpegAudio)(m4a,wav,{maxMinutes:Math.min(90,cfg.max_minutes),signal:controller.signal,onChild});observe();fs.rmSync(m4a,{force:true});
   stage='asr_failed';
   const asrConfig=deps.asrConfig||{python:join(home,'xasr-venv/bin/python'),model_dir:DEFAULT_MODEL};
@@ -162,7 +171,7 @@ function reportPath(home,id){if(!/^bmedia-BV[0-9A-Za-z]{10}$/.test(id))throw fau
 export async function sendReport(report,deps){
  const home=deps.home||homes(),path=reportPath(home,report.id),safe=cleanReport(report,deps.client);let delivered=false;
  for(let i=0;i<3;i++){
-  try{const r=await deps.cloud('report',safe);if(r.status===409||r.status>=200&&r.status<300){delivered=true;break;}}catch{}
+  try{const r=await deps.cloud('report',safe);if(r.status>=400&&r.status<500||r.status>=200&&r.status<300){delivered=true;break;}}catch{}
   if(i<2)await (deps.sleep||wait)(2000*2**i);
  }
  if(delivered){fs.rmSync(path,{force:true});return true;}
@@ -174,7 +183,7 @@ export async function flushReports(deps){
 export async function runCycle(deps){
  const home=deps.home||homes(),release=acquireLock(home);if(!release)return;
  try{
-  await sweepLocal(home,Date.now(),deps);await flushReports(deps);
+  if(!await sweepLocal(home,Date.now(),deps))return;await flushReports(deps);
   for(let count=0;count<3;count++){
    if(deps.signal?.aborted||!(deps.gate||(()=>startupGate(home)) )().ok)return;
    const job=deps.claim?await deps.claim():(await deps.cloud('claim',{})).data?.job;
@@ -194,7 +203,7 @@ export async function main(argv=process.argv.slice(2)){
   const bvid=argv[1];if(!BV.test(bvid||'')){console.log(JSON.stringify({error:'not_found',cleanup:{residue:0,paths:[]}}));return 1;}
   const release=acquireLock(home);if(!release){console.log(JSON.stringify({bvid,error:'local_busy',cleanup:{residue:0,paths:[]}}));return 1;}
   try{
-   await sweepLocal(home);if(!startupGate(home).ok){console.log(JSON.stringify({bvid,error:'local_busy',cleanup:{residue:0,paths:[]}}));return 1;}
+   if(!await sweepLocal(home)||!startupGate(home).ok){console.log(JSON.stringify({bvid,error:'local_busy',cleanup:{residue:0,paths:[]}}));return 1;}
    const light=await client.biliLight(bvid);if(light.subtitle_status==='ok'){console.log(JSON.stringify({error:'has_subtitle'}));return 7;}
    const job={id:'bmedia-'+bvid,kind:'bili_media',payload:{bvid,duration:light.duration,lease:'local-only',until:Date.now()+cfg.deadline_cap_minutes*60000}};
    const result=await runMediaJob(job,{home,client,settings:cfg});

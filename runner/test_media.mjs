@@ -83,6 +83,47 @@ test('R15 report spooling retries three times, stays private, replays and drops 
   await flushReports({home:t.home,cloud:async()=>({status:409}),sleep:async()=>{}});assert.equal(fs.existsSync(p),false);
  }finally{t.clean()}
 });
+test('R15 permanent 4xx reports stop retrying and remove an existing spool',async()=>{
+ for(const status of [400,401,403,404,408,422,429]){const t=temporary();try{
+  const report={id:'bmedia-'+BV,lease:'old',success:false,reason:'asr_failed',cleanup:{residue:0,paths:[]}};
+  await sendReport(report,{home:t.home,cloud:async()=>({status:500}),sleep:async()=>{}});
+  let attempts=0;await flushReports({home:t.home,cloud:async()=>{attempts++;return {status}},sleep:async()=>{assert.fail('4xx must not retry')}});
+  assert.equal(attempts,1);assert.deepEqual(fs.readdirSync(path.join(t.home,'media-reports')),[]);
+  assert.equal(await sendReport(report,{home:t.home,cloud:async()=>({status}),sleep:async()=>{assert.fail('4xx must not retry')}}),true);
+  assert.deepEqual(fs.readdirSync(path.join(t.home,'media-reports')),[]);
+ }finally{t.clean()}}
+});
+test('R2 backup CDN is tried after primary 403 with one audio file and the same download guards',async()=>{
+ const t=temporary();try{
+  const backup='https://backup.bilivideo.cn/a',d=network(n=>n===1?{status:403}:{body:[Buffer.from('audio')]}),destinations=[];
+  const result=await runMediaJob(job(),stages(t.home,{
+   client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async()=>({urls:[{baseUrl:cdn,backupUrl:[backup]}]})},
+   download:async(url,dest,options)=>{destinations.push(dest);return downloadAudio(url,dest,{...d,...options})}
+  }));
+  assert.equal(result.report.success,true);assert.deepEqual(d.calls.map(c=>c.host),['audio.bilivideo.com','backup.bilivideo.cn']);
+  assert.ok(d.calls.every(c=>!c.headers.Cookie&&c.lookup&&c.headers.Range==='bytes=0-'));
+  assert.equal(new Set(destinations).size,1);assert.equal(result.cleanup.residue,0);
+ }finally{t.clean()}
+});
+test('R2 backup retries discard partial audio, still reject unsafe downloads, and stop on pressure or cancellation',async()=>{
+ for(const mode of ['partial','length','dns','redirect','local_busy','cancelled']){const t=temporary();try{
+  let attempts=0;const controller=new AbortController(),backup='https://backup.bilivideo.cn/a';
+  const d=stages(t.home,{signal:controller.signal,client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async()=>({urls:[{baseUrl:cdn,backupUrl:[backup]}]})},download:async(url,dest,options)=>{
+   attempts++;
+   if(attempts===1){
+    fs.writeFileSync(dest,'partial');
+    if(mode==='cancelled')controller.abort();
+    throw Object.assign(Error('synthetic'),{reason:mode==='local_busy'?'local_busy':'download_failed'});
+   }
+   assert.equal(fs.existsSync(dest),false,'discard the partial primary before backup');
+   const n=mode==='length'?network(()=>({headers:{'content-length':'300000000'}})):mode==='dns'?network(()=>({}),'127.0.0.1'):mode==='redirect'?network(()=>({status:302,headers:{location:'https://evil.example/a'}})):network(()=>({}));
+   return downloadAudio(url,dest,{...n,...options});
+  }});
+  const result=await runMediaJob(job(),d);assert.equal(attempts,['local_busy','cancelled'].includes(mode)?1:2);
+  assert.equal(result.report.success,mode==='partial');if(['length','dns','redirect'].includes(mode))assert.equal(result.report.reason,'download_failed');
+  if(mode==='local_busy')assert.equal(result.report.reason,'local_busy');assert.equal(result.cleanup.residue,0);
+ }finally{t.clean()}}
+});
 test('R15 replayed bvid uses its new lease without repeating audio or recognition',async()=>{
  const t=temporary();try{
   const j=job();await sendReport({id:j.id,lease:'old',success:false,reason:'asr_failed',cleanup:{residue:0,paths:[]}},{home:t.home,cloud:async()=>{throw Error('offline')},sleep:async()=>{}});
@@ -166,6 +207,18 @@ test('R22 startup kills a real detached orphan process and preserves unrelated r
   const exited=new Promise(resolve=>child.once('exit',(_code,signal)=>resolve(signal)));fs.writeFileSync(path.join(t.home,'media-child.pid'),String(child.pid));
   await sweepLocal(t.home);assert.equal(await exited,'SIGKILL');assert.equal(fs.existsSync(path.join(t.home,'media-child.pid')),false);assert.equal(fs.readFileSync(path.join(t.home,'unrelated'),'utf8'),'keep');
  }finally{if(child?.pid)try{process.kill(-child.pid,'SIGKILL')}catch{}t.clean()}
+});
+test('R22 ps refusal or kill failure retains the orphan PID and defers claims until a successful retry',{timeout:1000},async()=>{
+ for(const mode of ['ps-denied','ps-timeout','kill-failed']){const t=temporary();try{
+  const pidFile=path.join(t.home,'media-child.pid');fs.writeFileSync(pidFile,'43123');
+  let claims=0;const deps=stages(t.home,{gate:()=>({ok:true}),claim:async()=>{claims++;return null},command:()=>{
+   if(mode.startsWith('ps-'))throw Object.assign(Error('ps unavailable'),{code:mode==='ps-denied'?'EPERM':'ETIMEDOUT'});
+   return 'ffmpeg audio';
+  },kill:()=>{throw Object.assign(Error('kill denied'),{code:'EPERM'})}});
+  await runCycle(deps);assert.equal(fs.readFileSync(pidFile,'utf8'),'43123');assert.equal(claims,0);
+  const kills=[];await runCycle({...deps,command:()=> 'xasr_transcribe.py',kill:(...args)=>kills.push(args)});
+  assert.deepEqual(kills,[[-43123,'SIGKILL']]);assert.equal(fs.existsSync(pidFile),false);assert.equal(claims,1);
+ }finally{t.clean()}}
 });
 test('R14/R22 a lease conflict kills an active child group and SIGTERM still clears outputs',async()=>{
  for(const mode of ['conflict','term']){const t=temporary();try{
