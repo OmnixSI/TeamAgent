@@ -20,7 +20,7 @@ const MAX_PROMPT = 1000;
 const LOG_PROMPT = 500;
 
 export type GenerateImageDeps = {
-  generateImage: (e: any, o: { prompt: string; size: string; group: string; sender: string }) => Promise<any>;
+  generateImage: (e: any, o: { prompt: string; size?: any; quality?: any; group: string; sender: string }) => Promise<any>;
   enqueueGeneratedImage: (e: any, o: any) => Promise<{ outbox_id: string }>;
   reserveQuota: (
     e: any,
