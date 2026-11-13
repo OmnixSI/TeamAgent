@@ -34,7 +34,7 @@ export type ImagePick = {
 };
 
 type VisionStage = "fetch" | "body" | "cache" | "budget" | "describe" | "store" | "link";
-type VisionReason = "blocked" | "http" | "mime" | "oversize" | "empty" | "network" | "timeout" | "database" | "cap" | "disabled" | "invalid";
+type VisionReason = "blocked" | "redirect_limit" | "http" | "mime" | "oversize" | "empty" | "network" | "timeout" | "database" | "cap" | "disabled" | "invalid";
 export type VisionEvent = {
   stage: VisionStage;
   status: "attempt" | "ok" | "failed";
@@ -42,6 +42,8 @@ export type VisionEvent = {
   http?: number;
   mime?: string;
   bytes?: number;
+  hop?: number;
+  detail?: "url" | "redirect_host" | "redirect_location";
   elapsedMs?: number;
   traceId?: string;
 };
@@ -64,15 +66,15 @@ async function untilAbort<T>(run: () => Promise<T>, signal: AbortSignal): Promis
   try { return await Promise.race([run(), stopped]); }
   finally { signal.removeEventListener("abort", onAbort!); }
 }
-function failed(report: Report, stage: VisionStage, error: unknown, signal: AbortSignal, fallback: VisionReason) {
+function failed(report: Report, stage: VisionStage, error: unknown, signal: AbortSignal, fallback: VisionReason, hop?: number) {
   const timedOut = signal.aborted || error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
-  report({ stage, status: "failed", reason: timedOut ? "timeout" : error instanceof VisionFault ? error.reason : fallback });
+  report({ stage, status: "failed", reason: timedOut ? "timeout" : error instanceof VisionFault ? error.reason : fallback, ...(hop === undefined ? {} : { hop }) });
 }
 export type ImageOutcome = VisionEvent & { messageId: string; idx: number };
 export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: ImageOutcome[] = []) {
   const reasons: Record<VisionReason, string> = {
-    blocked: "图片地址不符合安全规则", http: "服务器拒绝下载", mime: "返回内容不是支持的图片类型",
-    oversize: "图片超过大小上限", empty: "返回图片为空", network: "网络请求失败（含可能的跳转拒绝）",
+    blocked: "图片地址不符合安全规则", redirect_limit: "图片跳转超过2次上限", http: "图片服务器返回异常状态", mime: "返回内容不是支持的图片类型",
+    oversize: "图片超过大小上限", empty: "返回图片为空", network: "网络请求失败",
     timeout: "取图或分析超时", database: "图片记录读写失败", cap: "今日看图预算已用完",
     disabled: "看图功能已关闭", invalid: "视觉描述未成功生成",
   };
@@ -81,8 +83,14 @@ export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: Image
     const list = notes.get(outcome.messageId) || [];
     if (list[outcome.idx]) continue; // A real cached note takes priority over a previous failure.
     const download = outcome.stage === "fetch" || outcome.stage === "body";
-    list[outcome.idx] = "图片（" + (download ? "未取得" : "未分析") + "：" + reasons[outcome.reason]
-      + (outcome.reason === "http" && Number.isInteger(outcome.http) ? "，HTTP " + outcome.http : "") + "）";
+    const reason = outcome.detail === "redirect_host" ? "跳转目标不在允许的QQ图片域名范围"
+      : outcome.detail === "redirect_location" ? "图片跳转地址缺失或格式不正确" : reasons[outcome.reason];
+    const position = Number.isInteger(outcome.hop) && outcome.hop! >= 0 && outcome.hop! <= 3
+      ? "；位置：" + (outcome.hop === 0 ? "原始地址" : "第" + outcome.hop + "次跳转") : "";
+    list[outcome.idx] = "图片（" + (download ? "未取得：图片下载失败：" : "未分析：") + reason
+      + (outcome.reason === "http" && Number.isInteger(outcome.http) ? "，HTTP " + outcome.http : "")
+      + (outcome.reason === "mime" && outcome.mime ? "，MIME " + outcome.mime : "")
+      + "；reason=" + outcome.reason + position + (download ? "；请重发图片" : "；请稍后重试") + "）";
     notes.set(outcome.messageId, list);
   }
 }
@@ -108,19 +116,23 @@ export function b64(bytes: Uint8Array) {
 function imageUrl(value: string) {
   try {
     const u = new URL(value);
+    const host = u.hostname.toLowerCase().replace(/\.$/, "");
     return (
       u.protocol === "https:" &&
       !u.username &&
       !u.password &&
-      !/^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[)/i.test(
-        u.hostname,
-      ) &&
-      !u.hostname.endsWith(".local")
+      (!u.port || u.port === "443") &&
+      !/^\[|^\d+\.\d+\.\d+\.\d+$/.test(host) &&
+      !/(?:^|\.)(?:localhost|local|internal|lan)$/.test(host)
     );
   } catch {
     return false;
   }
 }
+
+// Keep exact QQ hosts; add other CDN hosts only after a production probe verifies them.
+const QQ_IMAGE_REDIRECT_HOSTS = new Set(["multimedia.nt.qq.com.cn"]);
+const MAX_IMAGE_REDIRECTS = 2;
 
 async function cancelQuietly(run: () => Promise<unknown>) {
   await Promise.race([
@@ -171,16 +183,39 @@ export async function fetchImage(
   report: Report = reportVision,
 ): Promise<{ bytes: Uint8Array; mime: string } | null> {
   let stage: VisionStage = "fetch";
-  report({ stage, status: "attempt" });
-  if (!imageUrl(url)) {
-    report({ stage, status: "failed", reason: "blocked" });
-    return null;
-  }
+  let hop = 0;
   try {
-    const response = await untilAbort(() => fetch(url, { signal, redirect: "error" }), signal);
+    let response: Response;
+    while (true) {
+      report({ stage, status: "attempt", hop });
+      if (!imageUrl(url)) {
+        report({ stage, status: "failed", reason: "blocked", detail: "url", hop });
+        return null;
+      }
+      if (hop > 0 && !QQ_IMAGE_REDIRECT_HOSTS.has(new URL(url).hostname.toLowerCase().replace(/\.$/, ""))) {
+        report({ stage, status: "failed", reason: "blocked", detail: "redirect_host", hop });
+        return null;
+      }
+      response = await untilAbort(() => fetch(url, { signal, redirect: "manual" }), signal);
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      if (response.body) await cancelQuietly(() => response.body!.cancel());
+      if (hop >= MAX_IMAGE_REDIRECTS) {
+        report({ stage, status: "failed", reason: "redirect_limit", http: response.status, hop: hop + 1 });
+        return null;
+      }
+      const location = response.headers.get("location");
+      try {
+        if (!location) throw new VisionFault("blocked");
+        url = new URL(location, url).href;
+      } catch {
+        report({ stage, status: "failed", reason: "blocked", detail: "redirect_location", hop: hop + 1 });
+        return null;
+      }
+      hop++;
+    }
     if (!response.ok) {
       if (response.body) await cancelQuietly(() => response.body!.cancel());
-      report({ stage, status: "failed", reason: "http", http: response.status });
+      report({ stage, status: "failed", reason: "http", http: response.status, hop });
       return null;
     }
     const mime = String(response.headers.get("content-type") || "")
@@ -190,25 +225,25 @@ export async function fetchImage(
     if (!IMAGE_MIME.has(mime)) {
       if (response.body) await cancelQuietly(() => response.body!.cancel());
       const knownMime = new Set(["text/html", "text/plain", "application/json", "application/octet-stream"]);
-      report({ stage, status: "failed", reason: "mime", http: response.status, mime: knownMime.has(mime) ? mime : mime ? "unsupported" : "missing" });
+      report({ stage, status: "failed", reason: "mime", http: response.status, mime: knownMime.has(mime) ? mime : mime ? "unsupported" : "missing", hop });
       return null;
     }
     const length = Number(response.headers.get("content-length") || 0);
     if (length > maxBytes) {
       if (response.body) await cancelQuietly(() => response.body!.cancel());
-      report({ stage, status: "failed", reason: "oversize", http: response.status, mime });
+      report({ stage, status: "failed", reason: "oversize", http: response.status, mime, hop });
       return null;
     }
-    report({ stage, status: "ok", http: response.status, mime });
+    report({ stage, status: "ok", http: response.status, mime, hop });
     stage = "body";
-    report({ stage, status: "attempt" });
+    report({ stage, status: "attempt", hop });
     const bytes = await readBytesLimited(response, maxBytes, signal);
     aborted(signal);
     if (!bytes.byteLength) throw new VisionFault("empty");
-    report({ stage, status: "ok", mime, bytes: bytes.byteLength });
+    report({ stage, status: "ok", mime, bytes: bytes.byteLength, hop });
     return { bytes, mime };
   } catch (error) {
-    failed(report, stage, error, signal, "network");
+    failed(report, stage, error, signal, "network", hop);
     return null;
   }
 }
