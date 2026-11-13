@@ -3,6 +3,7 @@ import type { BotTool } from "../toolkit";
 import { calcTool } from "./calc";
 import { emojiSearchTool } from "./emoji-search";
 import { fetchPageTool } from "./fetch-page";
+import { generateImageTool } from "./generate-image";
 import { recallEpisodeTool } from "./episodes";
 import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
@@ -18,6 +19,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   emojiSearchTool,
   fetchPageTool,
   forgetProfileTool,
+  generateImageTool,
   getProfileTool,
   newsSearchTool,
   readDocumentTool,

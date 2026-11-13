@@ -75,6 +75,20 @@ class SyncRuntimeSecretsTests(unittest.TestCase):
         self.assertIn('为空', result.stdout)
         self.assertNotIn('GITHUB_TOKEN', self.secrets())
 
+    def test_optional_openai_key_is_synced_without_printing_value(self):
+        key = 'sk-' + 'b' * 40
+        result = self.run_script({'TEAM_OPENAI_API_KEY': key})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(key, result.stdout)
+        self.assertNotIn(key, result.stderr)
+        self.assertNotIn(key, self.calls.read_text())
+        self.assertEqual(self.secrets()['OPENAI_API_KEY'], key)
+
+    def test_missing_openai_key_does_not_fail_or_add_secret(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('OPENAI_API_KEY', self.secrets())
+
 
 if __name__ == '__main__':
     unittest.main()
