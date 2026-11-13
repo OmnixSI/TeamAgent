@@ -56,7 +56,7 @@ const review = {
   loading: false, loadedAt: 0, error: null, data: null, health: null, healthError: null,
   tab: sessionStorage.getItem("review-tab") || "days",
   filter: "all", showRetired: false, openDays: new Set(), openFindings: new Set(),
-  daysInit: false, memory: null, memoryLoading: false, memoryError: null, memoryLoadedAt: 0,
+  daysInit: false,
 };
 
 const date = (t) =>
@@ -1084,6 +1084,14 @@ function reviewAllFindings() {
       if (!map.has(finding.id)) map.set(finding.id, finding);
   return [...map.values()];
 }
+function reviewAllMemory() {
+  const map = new Map();
+  for (const day of review.data?.days || [])
+    for (const candidate of day.memory_candidates || [])
+      if (candidate?.id && !map.has(candidate.id))
+        map.set(candidate.id, { ...candidate, date: day.date });
+  return [...map.values()];
+}
 function reviewAllStatusCounts() {
   const counts = { all: 0, open: 0, accepted: 0, rejected: 0 };
   for (const f of reviewAllFindings()) {
@@ -1824,38 +1832,6 @@ function reviewRulesTab() {
   box.append(grid);
   return box;
 }
-async function loadReviewMemory(force) {
-  if (!review.data || review.memoryLoading) return;
-  if (!force && review.memory !== null) return;
-  review.memoryLoading = true;
-  review.memoryError = null;
-  renderReview();
-  const days = (review.data.days || []).filter((day) => day.answers?.memory);
-  const found = [];
-  let failed = null;
-  await Promise.all(
-    days.map(async (day) => {
-      try {
-        const digest = await reviewApi(
-          "/review/digest?date=" + encodeURIComponent(day.date),
-        );
-        for (const candidate of digest.questions?.memory?.candidates || [])
-          found.push({ ...candidate, date: day.date });
-      } catch (e) {
-        failed = e;
-      }
-    }),
-  );
-  const unique = new Map();
-  for (const candidate of found)
-    if (candidate?.id && !unique.has(candidate.id))
-      unique.set(candidate.id, candidate);
-  review.memory = [...unique.values()];
-  review.memoryError = failed;
-  review.memoryLoadedAt = Date.now();
-  review.memoryLoading = false;
-  renderReview();
-}
 async function reviewMemoryAction(candidate, status) {
   try {
     const result = await reviewApi(
@@ -1863,15 +1839,23 @@ async function reviewMemoryAction(candidate, status) {
       { status },
       "PATCH",
     );
-    candidate.status =
+    const next =
       status === "approved" ? (result.fact_id ? "applied" : "approved") : "rejected";
+    candidate.status = next;
+    candidate.state = next;
+    for (const day of review.data?.days || [])
+      for (const item of day.memory_candidates || [])
+        if (item.id === candidate.id) {
+          item.status = next;
+          item.state = next;
+        }
     toast(status === "approved" ? "已写入记忆" : "已驳回");
     renderReview();
   } catch (e) {
     if (e.status === 401 || e.status === 403) toast("只有管理员可以处理记忆候选");
     else if (e.status === 409) {
       toast("这条候选已被处理或目标记忆已变化，刷新后再看");
-      loadReviewMemory(true);
+      loadReview(true);
     } else toast("没保存：" + (e.message || "未知错误"));
   }
 }
@@ -1879,24 +1863,36 @@ function reviewMemoryCard(candidate) {
   const card = el("article", undefined, "card review-memory");
   const head = el("div", undefined, "card-head"),
     tags = el("div", undefined, "review-finding-tags");
-  const op = REVIEW_MEMORY_OP[candidate.op] || [candidate.op || "未知", ""],
-    status = REVIEW_MEMORY_STATUS[candidate.status] || [candidate.status || "未知", ""];
+  const statusKey = candidate.status || candidate.state || "",
+    op = REVIEW_MEMORY_OP[candidate.op] || [candidate.op || "未知", ""],
+    status = REVIEW_MEMORY_STATUS[statusKey] || [statusKey || "未知", ""],
+    meta = [candidate.repo, candidate.created_at ? reviewDateShort(candidate.created_at) : candidate.date ? reviewDayShort(candidate.date) : ""].filter(Boolean);
   tags.append(badge(op[0], op[1]), badge(status[0], status[1]));
-  head.append(tags, el("small", candidate.date ? reviewDayShort(candidate.date) : ""));
+  head.append(tags, el("small", meta.join(" · ")));
   card.append(head);
   card.append(el("h3", (candidate.subject || "—") + " · " + (candidate.predicate || "—")));
   card.append(el("p", candidate.value || "—"));
-  if (candidate.evidence?.[0]?.quote)
-    card.append(el("blockquote", candidate.evidence[0].quote));
-  else if (candidate.source_msg_id)
-    card.append(el("small", "来源消息 " + candidate.source_msg_id, "muted"));
-  if (candidate.status === "conflict")
+  if ((candidate.evidence || []).length) {
+    const evidence = el("div", undefined, "review-evidence");
+    for (const item of candidate.evidence) evidence.append(reviewEvidence(item));
+    card.append(evidence);
+  }
+  if (candidate.target_version) {
+    const version = el("small", "目标记忆版本：", "muted");
+    version.append(el("code", String(candidate.target_version), "review-code"));
+    card.append(version);
+  }
+  if (statusKey === "conflict")
     card.append(
-      el("p", "目标记忆已经变化，需要重新核对后再决定。", "review-error"),
+      el(
+        "p",
+        "目标记忆版本与生成时不一致，需要重新核对后再决定。",
+        "review-error",
+      ),
     );
-  if (candidate.status === "blocked")
+  if (statusKey === "blocked")
     card.append(el("p", "这条候选命中了已删除的记忆，不能重新学习。", "review-error"));
-  if (reviewIsAdmin() && candidate.status === "candidate") {
+  if (reviewIsAdmin() && statusKey === "candidate") {
     const actions = el("div", undefined, "actions");
     actions.append(
       button("批准写入", () => reviewMemoryAction(candidate, "approved"), "review-mini"),
@@ -1907,23 +1903,22 @@ function reviewMemoryCard(candidate) {
   return card;
 }
 function reviewMemoryTab() {
-  if (review.memoryLoading) return reviewState("正在读取记忆候选…");
-  if (review.memoryError && !(review.memory || []).length) {
-    const box = reviewState(reviewErrorText(review.memoryError), true, false);
-    box.append(button("重试", () => loadReviewMemory(true), "review-mini"));
-    return box;
-  }
-  if (review.memory === null) return reviewState("正在读取记忆候选…");
-  const candidates = [...review.memory].sort((a, b) =>
-    String(b.date || "").localeCompare(String(a.date || "")),
+  const candidates = [...reviewAllMemory()].sort(
+    (a, b) => Number(b.created_at || 0) - Number(a.created_at || 0),
   );
+  if (!candidates.length) return reviewState("还没有待批准的记忆候选。");
   const visible = candidates.filter((candidate) =>
     matches(
-      [candidate.subject, candidate.predicate, candidate.value, candidate.op].join(" "),
+      [
+        candidate.subject,
+        candidate.predicate,
+        candidate.value,
+        candidate.op,
+        candidate.repo,
+      ].join(" "),
       "team",
     ),
   );
-  if (!candidates.length) return reviewState("还没有待批准的记忆候选。");
   if (!visible.length) return reviewState("没有符合条件的记忆候选。");
   const list = el("div", undefined, "review-list");
   for (const candidate of visible) list.append(reviewMemoryCard(candidate));
@@ -2087,9 +2082,11 @@ function reviewTabs() {
     rules = (review.data?.rules || []).filter((rule) =>
       ["canary", "active"].includes(rule.status),
     ).length,
-    memory = review.memory
-      ? review.memory.filter((item) => item.status === "candidate").length
-      : null,
+    memory =
+      review.data?.days === undefined
+        ? null
+        : reviewAllMemory().filter((item) => (item.status || item.state) === "candidate")
+            .length,
     items = [
       ["days", "日报", days ?? "·"],
       ["findings", "发现", days === undefined ? "·" : open],
@@ -2103,14 +2100,7 @@ function reviewTabs() {
       () => {
         review.tab = key;
         sessionStorage.setItem("review-tab", key);
-        if (
-          key === "memory" &&
-          review.data &&
-          review.memory === null &&
-          !review.memoryLoading
-        )
-          loadReviewMemory();
-        else renderReview();
+        renderReview();
       },
       "review-tab",
     );
@@ -2151,15 +2141,6 @@ function renderReview() {
     (!review.loadedAt || Date.now() - review.loadedAt > 300000)
   ) {
     loadReview();
-    return;
-  }
-  if (
-    review.tab === "memory" &&
-    review.data &&
-    review.memory === null &&
-    !review.memoryLoading
-  ) {
-    loadReviewMemory();
     return;
   }
   const focusId =
@@ -2237,7 +2218,7 @@ function renderReview() {
             : "覆盖账 平",
           coverage.balanced === false ? "bad" : "ok",
         ),
-        badge("judge_failed " + reviewNumber(failed), failed > 0 ? "warn" : ""),
+        badge("评判失败 " + reviewNumber(failed), failed > 0 ? "warn" : ""),
         badge("当日预算 " + budget.text, budget.cls === "is-bad" ? "bad" : budget.cls === "is-warn" ? "warn" : ""),
       );
       host.append(strip);
@@ -2321,8 +2302,6 @@ async function loadReview(force) {
     review.data = digest.value;
     review.loadedAt = Date.now();
     review.error = null;
-    review.memory = null;
-    review.memoryLoadedAt = 0;
     if (!review.daysInit) {
       review.daysInit = true;
       const first = reviewSortedDays()[0];

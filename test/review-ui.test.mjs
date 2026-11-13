@@ -86,6 +86,26 @@ function reviewFixture() {
             finding({ id: "f4", status: "disputed", agreement: "disagree", severity: "p0", created_at: stamp("2026-11-13", 8) }),
             finding({ id: "f5", status: "fixed", agreement: "agree", severity: "p2", created_at: stamp("2026-11-13", 7) }),
           ],
+          memory_candidates: [
+            {
+              id: "mc1", op: "ADD", repo: "OmnixSI/TeamAgent", subject: "TeamAgent", predicate: "仓库",
+              value: "OmnixSI/TeamAgent", state: "candidate", status: "candidate", target_version: null,
+              created_at: stamp("2026-11-13", 6),
+              evidence: [{ source: "message", id: "m20", quote: "以后记住仓库是 OmnixSI/TeamAgent", origin: "direct" }],
+            },
+            {
+              id: "mc2", op: "DELETE", repo: "OmnixSI/TeamAgent", subject: "陪玩店", predicate: "仓库",
+              value: "旧仓库", state: "candidate", status: "candidate",
+              target_version: "2026-11-10T00:00:00Z", created_at: stamp("2026-11-13", 5),
+              evidence: [{ source: "message", id: "m21", quote: "陪玩店那个仓库别再记了", origin: "direct" }],
+            },
+            {
+              id: "mc3", op: "UPDATE", repo: "OmnixSI/TeamAgent", subject: "部署", predicate: "方式",
+              value: "手动 runbook", state: "conflict", status: "conflict",
+              target_version: "2026-11-12T00:00:00Z", created_at: stamp("2026-11-13", 4),
+              evidence: [{ source: "message", id: "m22", quote: "部署改成手动 runbook", origin: "direct" }],
+            },
+          ],
           coverage: { balanced: true, unaccounted: 0 },
           budget: {
             providers: [
@@ -106,6 +126,7 @@ function reviewFixture() {
           new_gaps: 0,
           promises_broken: [],
           findings: [finding({ id: "f6", status: "open", agreement: "single", created_at: stamp("2026-11-12", 9) })],
+          memory_candidates: [],
           coverage: { balanced: false, unaccounted: 2 },
           budget: { providers: [] },
           judge_failed: 0,
@@ -209,18 +230,6 @@ function reviewFixture() {
           updated_at: stamp("2026-11-02"),
         },
       ],
-    },
-    dayDigest: {
-      date: "2026-11-13",
-      questions: {
-        memory: {
-          candidates: [
-            { id: "mc1", op: "ADD", subject: "TeamAgent", predicate: "仓库", value: "OmnixSI/TeamAgent", status: "candidate" },
-            { id: "mc2", op: "DELETE", subject: "陪玩店", predicate: "仓库", value: "旧仓库", status: "candidate" },
-          ],
-          count: 2,
-        },
-      },
     },
     state: {
       who: { name: "杨鸿明", role: "member" },
@@ -418,11 +427,18 @@ test("复盘面板：非管理员不渲染任何管理按钮", async () => {
   for (const card of byClass(review, "review-rule")) {
     assert.ok(!buttonLabels(card).some((label) => ["撤销", "批准试用"].includes(label)), "规则卡片不该有管理按钮");
   }
+  assert.match(makeText(review), /评判失败 1/);
+  assert.doesNotMatch(makeText(review), /judge_failed/);
   vm.runInContext("review.tab='memory';renderReview()", ui.context);
   await settle();
-  for (const card of byClass(review, "review-memory")) {
+  const memoryCards = byClass(review, "review-memory");
+  assert.equal(memoryCards.length, 3);
+  assert.match(makeText(review), /以后记住仓库是 OmnixSI\/TeamAgent/);
+  assert.match(makeText(review), /目标记忆版本：\s*2026-11-12T00:00:00Z/);
+  for (const card of memoryCards) {
     assert.ok(!buttonLabels(card).some((label) => ["批准写入", "驳回"].includes(label)), "记忆候选不该有管理按钮");
   }
+  assert.equal(ui.requests.filter((request) => request.url.includes("/review/digest?date=")).length, 0);
 });
 
 test("复盘面板：管理员看到标注、批准试用、撤销与记忆按钮", async () => {
@@ -445,10 +461,32 @@ test("复盘面板：管理员看到标注、批准试用、撤销与记忆按�
   assert.ok(ruleLabels.includes("批准试用"));
   assert.ok(makeText(rules).includes("连发最多 1 条"), "类型化规则要显示参数");
 
-  vm.runInContext("review.memory=[{id:'mc1',op:'ADD',subject:'TeamAgent',predicate:'仓库',value:'OmnixSI/TeamAgent',status:'candidate',date:'2026-11-13'}];review.tab='memory';renderReview()", ui.context);
+  vm.runInContext("review.tab='memory';renderReview()", ui.context);
   const memory = vm.runInContext('$("review")', ui.context);
-  assert.ok(byClass(memory, "review-memory").flatMap(buttonLabels).includes("批准写入"));
-  assert.ok(byClass(memory, "review-memory").flatMap(buttonLabels).includes("驳回"));
+  const memoryCards = byClass(memory, "review-memory");
+  assert.equal(memoryCards.length, 3);
+  assert.ok(memoryCards.flatMap(buttonLabels).includes("批准写入"));
+  assert.ok(memoryCards.flatMap(buttonLabels).includes("驳回"));
+  assert.ok(byClass(memory, "review-memory").some((card) => makeText(card).includes("目标记忆版本： 2026-11-12T00:00:00Z") || makeText(card).includes("目标记忆版本：2026-11-12T00:00:00Z")));
+});
+
+test("复盘面板：批准记忆候选后按钮消失", async () => {
+  const ui = makeUi();
+  await settle();
+  vm.runInContext("state.who.role='owner';selectView('memory');review.tab='memory';renderReview()", ui.context);
+  await settle();
+  let review = vm.runInContext('$("review")', ui.context);
+  const card = byClass(review, "review-memory").find((item) => makeText(item).includes("TeamAgent · 仓库"));
+  const approve = buttons(card).find((item) => item.textContent === "批准写入");
+  assert.ok(approve);
+  await approve.onclick();
+  const patch = ui.requests.filter((request) => request.method === "PATCH").at(-1);
+  assert.equal(patch.url, "https://inkboard-team-review.inkboard-server.workers.dev/review/memory/mc1");
+  assert.deepEqual(JSON.parse(patch.body), { status: "approved" });
+  review = vm.runInContext('$("review")', ui.context);
+  const updated = byClass(review, "review-memory").find((item) => makeText(item).includes("TeamAgent · 仓库"));
+  assert.ok(byClass(updated, "badge").some((item) => item.textContent === "已写入"));
+  assert.ok(!buttonLabels(updated).includes("批准写入"));
 });
 
 test("复盘面板：再次点已选中的准确会撤回标注", async () => {
@@ -486,6 +524,18 @@ test("撤销弹窗：空原因不发请求并显示错误", async () => {
   await confirm.onclick();
   assert.equal(ui.requests.filter((request) => request.method === "PATCH").length, before);
   assert.ok(makeText(detail).includes("请写一句撤销原因"));
+});
+
+test("复盘面板：health.off 与 shadow 模式文案", async () => {
+  const ui = makeUi();
+  await settle();
+  vm.runInContext("state.who.role='owner';selectView('memory')", ui.context);
+  await settle();
+  vm.runInContext("review.health.off=true;review.health.mode='shadow';renderReview()", ui.context);
+  const review = vm.runInContext('$("review")', ui.context);
+  const text = makeText(review);
+  assert.match(text, /已暂停 · off:review/);
+  assert.match(text, /现在是影子模式：只记录，不建任务、不改规则。/);
 });
 
 test("复盘服务 401 只在面板里提示，不把看板踢回登录页", async () => {

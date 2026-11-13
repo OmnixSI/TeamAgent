@@ -740,8 +740,9 @@ footer {
   .review-day > summary { grid-template-columns: 140px 1fr 140px 16px; }
 }
 @media (max-width: 650px) {
-  .review-tabs { display: flex; }
-  .review-tabs button { flex: 1; padding: 6px 8px; }
+  .review-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: visible; }
+  .review-tabs button { flex: none; min-width: 0; padding: 6px 4px; font-size: 12px; }
+  .review-count { margin-left: 3px; font-size: 11px; }
   .review-day > summary { grid-template-columns: 1fr 16px; gap: 8px 12px; }
   .review-day-tags, .review-day-mini { grid-column: 1 / 2; }
   .review-chevron { grid-column: 2; grid-row: 1; }
@@ -765,3 +766,4 @@ footer {
 @media (max-width: 650px) {
   #review-title { white-space: nowrap; }
 }
+.review .card-head > .badge { flex-shrink: 0; white-space: nowrap; }
