@@ -52,6 +52,7 @@ import {
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { handleCommand } from "./commands";
+import { dsSelfTest } from "./deepseek-tools";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
 import {
@@ -1888,6 +1889,11 @@ async function api(r: Request, e: Env) {
         502,
       );
     }
+  }
+  if (path === "/api/team/dstools/selftest" && method === "GET") {
+    if (who.role !== "owner") return json({ error: "owner only" }, 403);
+    const result = await dsSelfTest(e);
+    return json(result.body, result.status);
   }
   if (who.via === "ai" && !aiRouteAllowed(path, method))
     return json(
