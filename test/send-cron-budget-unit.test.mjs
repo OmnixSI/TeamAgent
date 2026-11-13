@@ -9,7 +9,8 @@ await build({stdin:{contents:'export {metered} from "./src/d1";export {SWITCH_KE
 const cronCounts={};
 const {metered,SWITCH_KEYS}=await import('../'+outfile);
 test('M1-R event-v2 registers exactly five supported settings after the legacy keys',()=>{
- assert.deepEqual(SWITCH_KEYS.slice(10),['off:passive_borrow','off:unknown_resend','off:forward_expand','qq:active_rejected','qq:muted_until']);
+ assert.deepEqual(SWITCH_KEYS.slice(10,15),['off:passive_borrow','off:unknown_resend','off:forward_expand','qq:active_rejected','qq:muted_until']);
+ assert.deepEqual(SWITCH_KEYS.slice(15),['off:release_note']);
 });
 for(const [name,at] of [['night-and-sticker-retry',Date.UTC(2026,10,12,16,7)],['daily-cleanup',Date.UTC(2026,10,13,0,0)]])test(`M1-S W-14 all switches enabled: ${name} stays within 48 statements`,async()=>{
  const NativeDate=Date,oldFetch=globalThis.fetch;

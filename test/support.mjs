@@ -7,6 +7,16 @@ const output = ".wrangler/test-worker-" + process.pid + ".mjs";
 const fixture = JSON.parse(
   readFileSync(new URL("../config/team.json", import.meta.url), "utf8"),
 );
+// Scenarios here describe established groups; the first-reply release note has its own test.
+const releaseVersion = (() => {
+  try {
+    return /version\s*:\s*['"]([^'"]+)['"]/.exec(
+      readFileSync(new URL("../src/release-note.ts", import.meta.url), "utf8"),
+    )?.[1];
+  } catch {
+    return undefined;
+  }
+})();
 fixture.model.name = "deepseek-flash";
 fixture.model.quick_effort = "high";
 fixture.model.important_effort = "max";
@@ -59,9 +69,10 @@ await build({
   ],
 });
 const { default: worker, signature } = await import("../" + output);
-function db() {
+function db(seed) {
   const d = new DatabaseSync(":memory:");
   d.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8"));
+  seed?.(d);
   const database = {
     executed: 0,
     prepare(sql) {
@@ -81,8 +92,13 @@ function db() {
   return database;
 }
 function env() {
+  // Established group: replies already carried this release's one-time note.
+  const DB = db((d) => {
+    if (releaseVersion)
+      d.prepare("INSERT INTO settings VALUES(?,?)").run("release_seen:GROUP000001", releaseVersion);
+  });
   return {
-    DB: db(),
+    DB,
     ADMIN_TOKEN: "owner-secret",
     RUNNER_TOKEN: "runner-secret",
     QQ_APP_SECRET: "test-only-secret",

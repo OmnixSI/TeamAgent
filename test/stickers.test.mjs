@@ -291,11 +291,11 @@ test('S18 sent sticker is absent from recentBot, conversation and duplicate-answ
 test('sticker selection and the largest sender failure path count actual D1 statements',async()=>{
  const {metered}=await load('src/d1.ts','sticker-send-meter'),v=await patched('src/voice.ts'),base=await sendingFixture();
  let before=base.DB.executed,e=metered(base);await v.enqueueVoice(e,'meter-picked','GROUP000001','sticker-source',voiceSticker);
- assert.equal(e.meter.used,base.DB.executed-before);assert.equal(e.meter.used,7);assert.ok((await all(base,'outbox')).some(o=>o.id.endsWith('~s')));
+ assert.equal(e.meter.used,base.DB.executed-before);assert.equal(e.meter.used,8);assert.ok((await all(base,'outbox')).some(o=>o.id.endsWith('~s')));
  // Worst row: upload cache write, rejected message, failure counter and fuse activity.
  const fail=await sendingFixture();await put(fail,'sticker_fail','2');await mediaRow(fail);before=fail.DB.executed;e=metered(fail);
  await deliverSticker(e,{send:()=>Response.json({code:9},{status:400})});assert.equal(e.meter.used,fail.DB.executed-before);assert.ok(e.meter.used<=48);assert.equal(e.meter.used,20);
- const {writeFileSync}=await import('node:fs');writeFileSync('.agent/p2-send-counts.json',JSON.stringify({selectionIncludingText:7,largestFailureInvocation:e.meter.used},null,2));
+ const {writeFileSync}=await import('node:fs');writeFileSync('.agent/p2-send-counts.json',JSON.stringify({selectionIncludingText:8,largestFailureInvocation:e.meter.used},null,2));
 });
 test('v2 closed sticker backlog waits below the 19-statement entry threshold',async()=>{
  const {metered}=await load('src/d1.ts','sticker-backlog-meter'),base=await sendingFixture();await put(base,'off:sticker_send','1');for(let i=0;i<5;i++)await mediaRow(base,'backlog-'+i);

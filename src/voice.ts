@@ -10,6 +10,7 @@ import settings from "../config/voice.json";
 import { model } from "./runtime";
 import { toPrompt } from "./view";
 import {replyAuthReminders} from './auth-status';
+import {replyReleaseNote} from './release-note';
 /** Independent group voice. Tool results are facts, never a change to this persona. */
 export const VOICE = settings.text;
 export type VoiceMode = "banter" | "work" | "care";
@@ -73,6 +74,16 @@ export async function enqueueVoice(
   if(parts.length && message && left(e)>=COST.tail+parts.length+3){
     const reminders=await replyAuthReminders(e,id);
     if(reminders.length){const suffix='\n'+reminders.join('\n');parts[parts.length-1]=parts[parts.length-1].slice(0,1800-suffix.length)+suffix;}
+  }
+  if(parts.length && message && left(e)>=COST.tail+parts.length+5){
+    const note=await replyReleaseNote(e,group);
+    if(note){
+      // Trim the reply body before any reminder line already appended, so both suffixes survive the cap.
+      const suffix='\n（'+note+'）',lines=parts[parts.length-1].split('\n');let k=lines.length;
+      while(k>0&&/^（[^\n]*）$/.test(lines[k-1]))k--;
+      const tail=k<lines.length?'\n'+lines.slice(k).join('\n'):'',body=lines.slice(0,k).join('\n'),room=Math.max(0,1800-suffix.length-tail.length);
+      parts[parts.length-1]=(body.length>room?body.slice(0,room):body)+tail+suffix;
+    }
   }
   await enqueueText(e,{id,group,msgId:message,body:parts.join("\n"),parts});
   if (parts.length) stage(e, message, "outbox");
