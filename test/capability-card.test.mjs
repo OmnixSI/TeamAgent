@@ -77,13 +77,15 @@ test('C1-3 real tool table: read-only boundary, corrected create-task wording, n
     assert.ok(!system.includes(bad),`false capability claim: ${bad}`);
 });
 
-test('C1-4 card stays within 1200 chars and adds nothing but the card to the system prompt',async()=>{
+test('C1-4 card stays within CARD_MAX and adds nothing but the card to the system prompt',async()=>{
   const req=await request('你都能干啥');
   const card=api.capabilityCard(req.tools,{switches:{}});
   assert.ok([...card].length<=api.CARD_MAX,`card ${[...card].length} > ${api.CARD_MAX}`);
-  assert.equal(api.CARD_MAX,1200);
+  assert.equal(api.CARD_MAX,1800);
   assert.equal(req.messages[0].role,'system');
-  assert.equal(req.messages[0].content,api.PARTICIPATION+'\n\n'+card,'system prompt is original budget plus exactly one card');
+  // SK-2 inserts the generated vendor line inside the card, so compare the frame.
+  assert.ok(req.messages[0].content.startsWith(api.PARTICIPATION+'\n\n能力卡（当前部署真实存在的工具）：'),'system prompt is original budget plus exactly one card');
+  assert.ok(req.messages[0].content.endsWith('没列出的就是不能做，不要声称能做。'),'nothing follows the card');
 });
 
 test('C2 real prompt with off:repo_tools still names the tools and marks them closed',async()=>{

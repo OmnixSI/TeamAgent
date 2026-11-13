@@ -33,6 +33,8 @@ import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
 import { capabilityCard } from "./capability-card";
+import { readLive, vendorSummary } from "./self-card";
+import { SELF_CARD } from "./self-card.generated";
 // A question about repository activity must reach the read-only repo tools even
 // in a round whose remaining D1 budget would normally hide every tool.
 const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
@@ -920,10 +922,16 @@ async function answerWithTools(e: any, context: any) {
     mentioned: context.mentioned,
     intent: context.intent,
   };
+  let selfSummary: string | undefined;
+  try {
+    selfSummary = vendorSummary(SELF_CARD, await readLive(e, e.RELEASE));
+  } catch {
+    // The card summary is an optimisation; never fail a turn because it is unreadable.
+  }
   const systemPrompt =
     (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
     "\n\n" +
-    capabilityCard(allTools, { switches: sw });
+    capabilityCard(allTools, { switches: sw, selfSummary });
   const messages: any[] = context.resume?.messages || participationMessages({
         system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (

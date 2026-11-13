@@ -57,8 +57,12 @@ export async function recordDecision(e: any, row: any): Promise<void> {
 }
 export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
-  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
+  // SK-2: off:* is loaded in the same statement so the self card sees every kill
+  // switch without spending another D1 query in the turn budget.
+  const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key LIKE 'off:%' OR key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;
   e.authStates = Object.fromEntries(rows.filter((r:any)=>r.key.startsWith('auth:')).map((r:any)=>[r.key,r.value]));
-  return Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  const switches = Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
+  e.selfSwitches = switches;
+  return switches;
 }
 export const isOn = (sw: Record<string, string | undefined>, name: string) => sw["off:" + name] !== "1";
