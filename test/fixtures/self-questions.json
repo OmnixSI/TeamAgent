@@ -12,7 +12,6 @@
         "image.tool",
         "image.vendor",
         "image.model",
-        "image.host",
         "image.files",
         "image.limit"
       ],
@@ -33,7 +32,6 @@
           "expect": [
             "image.vendor",
             "image.model",
-            "image.host",
             "image.limit"
           ]
         }
