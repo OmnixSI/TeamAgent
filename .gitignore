@@ -12,3 +12,4 @@ src/ui.generated.ts
 src/self-card.generated.ts
 
 clients/node_modules/
+.venv-runner/

@@ -168,8 +168,9 @@ test('B8 cold images run in a separate invocation without advancing cursor or de
   base.AI={async run(){visionCalls++;return {response:'{"desc":"图中有红圆","tags":[],"meme":false}'};}};
   globalThis.fetch=async(url,options)=>{
     if(String(url).endsWith('.png'))return new Response(new Uint8Array([1,2,3]),{headers:{'content-type':'image/png'}});
-    const b=JSON.parse(options.body),voice=b.messages[0].content.includes('最后的嘴替模块');
-    let content;if(b.reasoning_effort==='none'){visionCalls++;content='{"desc":"图中有红圆","text":"","tags":[],"meme":false}';}
+    const b=JSON.parse(options.body),first=b.messages?.[0]?.content,voice=typeof first==='string'&&first.includes('最后的嘴替模块');
+    const imageRequest=Array.isArray(first)&&first.some(p=>p.type==='image_url');
+    let content;if(imageRequest||b.reasoning_effort==='none'){visionCalls++;content='{"desc":"图中有红圆","text":"","tags":[],"meme":false}';}
     else if(voice)content='{"mode":"work","text":"图中有红圆。"}';
     else{decisions++;content='{"should_reply":true,"kind":"direct","brief":"红圆"}';}
     return Response.json({choices:[{message:{content}}]});
@@ -190,7 +191,8 @@ async function decide(action,run,options={}){
   globalThis.fetch=async(url,init)=>{
     if(String(url).endsWith('.png')){state.images++;return new Response(new Uint8Array([3,2,1]),{headers:{'content-type':'image/png'}});}
     const b=JSON.parse(init.body);state.seen.push(b);let message;
-    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    const imageRequest=Array.isArray(b.messages?.[0]?.content)&&b.messages[0].content.some(p=>p.type==='image_url');
+    if(imageRequest||b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
     else if(b.messages[0].content.includes('最后的嘴替模块')){state.voices++;message={content:JSON.stringify({mode:'work',text:options.text||'这是当前问题的回答。'})};}
     else{state.decisions++;message=typeof action==='function'?action(state.decisions,b):{content:JSON.stringify(action)};}
     return Response.json({choices:[{message}]});
@@ -416,7 +418,8 @@ async function budgetModel(run,{calls,voice=splitVoice}={}){
     const b=JSON.parse(init.body);
     if(!b.messages){state.sent.push(b);return Response.json({id:'qq-'+state.sent.length,ext_info:{ref_idx:'BOT-'+state.sent.length}});}
     let message;
-    if(b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
+    const imageRequest=Array.isArray(b.messages?.[0]?.content)&&b.messages[0].content.some(p=>p.type==='image_url');
+    if(imageRequest||b.reasoning_effort==='none'){state.vision++;message={content:'{"desc":"图像资料","text":"","tags":[],"meme":false}'};}
     else if(b.messages[0].content.includes('最后的嘴替模块'))message={content:voice};
     else{state.decisions++;state.requests.push(structuredClone(b));message=calls?calls(state.decisions,b):{content:'{"action":"reply","kind":"direct","target":"budget-reference","brief":"具体问题"}'};}
     return Response.json({choices:[{message}]});
@@ -456,26 +459,35 @@ test('B5 research with three tools per round withholds tools on the last model r
     assert.equal(state.requests.length,3);assert.equal(state.requests.at(-1).tools,undefined);assert.ok(count<=48,'research '+count);
   },{calls:n=>n<3?{tool_calls:[0,1,2].map(i=>({id:'status-'+n+'-'+i,type:'function',function:{name:'get_work_status',arguments:'{}'}}))}:{content:'{"action":"reply","kind":"direct","brief":"当前状态"}'},voice:'{"mode":"work","text":"当前工作状态。"}'});
 });
-test('B7 scheduled bounds an expired/ready backlog and leaves durable work for later calls',async()=>{
-  const base=await outgoing(5,false);
-  for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
-  const counts=[];
-  await budgetModel(async()=>{
-    for(let i=0;i<4;i++){
-      counts.push(await measured(base,'p1-B7-cron-'+i,e=>cron(e)));
-      if(i===0){
-        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,15);
-        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,5);
+test('B7 scheduled bounds an expired/ready backlog and leaves durable work for later calls',async(t)=>{
+  const NativeDate=globalThis.Date,at=Date.parse('2026-11-13T17:10:00Z');
+  class Clock extends NativeDate{constructor(...args){super(...(args.length?args:[at]));}static now(){return at;}}
+  globalThis.Date=Clock;
+  try{
+    const base=await outgoing(5,false);
+    for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
+    const counts=[],states=[];
+    await budgetModel(async()=>{
+      for(let i=0;i<4;i++){
+        // Measure the raw env: scheduled() installs the 200-statement background budget.
+        const before=base.DB.executed;
+        await cron(base);
+        counts.push(base.DB.executed-before);
+        states.push((await base.DB.prepare("SELECT (SELECT COUNT(*) FROM video_waits WHERE status='running' AND attempts>=3) exhausted,(SELECT COUNT(*) FROM video_waits WHERE status='waiting') waiting,(SELECT COUNT(*) FROM jobs WHERE kind='video_reply') jobs").first()));
+        // Consume the durable wakes as their separate queue invocations would.
+        const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
+        for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
       }
-      // Consume the durable wakes as their separate queue invocations would.
-      const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
-      for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
-    }
-  });
-  assert.ok(counts.every(n=>n<=48),'cron '+counts.join(','));
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,20);
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
+    });
+    t.diagnostic('backlog cron SQL: '+counts.join(','));
+    t.diagnostic('backlog state: '+JSON.stringify(states));
+    assert.ok(counts.every(n=>n<=200),'cron '+counts.join(','));
+    assert.equal(states.at(-1).exhausted,0,'every expired media lease ends in a terminal retry decision');
+    assert.equal(states.at(-1).waiting,0,'every ready wait is woken');
+    assert.equal(states.at(-1).jobs,20,'one durable wake per waiting video, no duplicates');
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,20);
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
+  }finally{globalThis.Date=NativeDate;}
 });
 test('B6 fetch report and each of three original video questioners stay below budget',async()=>{
   const base=await bound();base.QQ_APP_ID='budget-video-'+(++quoteFixture);
@@ -518,9 +530,9 @@ test('budget guards leave a low-budget send and sweep durable; reference fuse co
   const out=`.wrangler/sweep-budget-${process.pid}.mjs`;
   await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});
   const {sweepVideoWaits}=await import('../'+out),base=env();
-  for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,0,3).run();
-  // The three media sweep statements run first; one exhausted wait fits this turn.
-  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,46);
+  for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,Date.now(),3).run();
+  // Media maintenance and age retirement run first; one fresh exhausted wait still fits.
+  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,1);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,7);
   for(let i=0;i<7;i++){

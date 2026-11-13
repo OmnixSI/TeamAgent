@@ -156,3 +156,128 @@ test('MG11 successful and rejected work both cancel pending receipt timers',asyn
   await assert.rejects(()=>withMentionReceipt(e,{latest},async()=>{throw Error('model unavailable');}),/model unavailable/);
   t.mock.timers.tick(90000);await tick();assert.equal((await rows(e,'outbox')).length,0);
 });
+
+test('MG12 three-day-old addressed messages never enter recovery',async()=>{
+  const e=await fixture('ancient','旧请求',{age:3*86400000});
+  await sweepMentions(e);
+  assert.equal((await rows(e,'jobs')).length,0);
+  assert.equal((await rows(e,'outbox')).length,0);
+});
+
+test('MG13 mixed +08:00/Z timestamps are eligible and ordered by instant',async()=>{
+  const now=Date.parse('2026-11-13T14:52:14Z');
+  const e=await fixture('offset','说话');
+  await e.DB.prepare('UPDATE messages SET ts=? WHERE id=?').bind('2026-11-13T22:50:34+08:00','offset').run();
+  await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,0)').bind('utc-newer',group,'member1','补充','2026-11-13T14:50:40Z',1).run();
+  await sweepMentions(e,now);
+  assert.equal((await rows(e,'outbox'))[0]?.msg_id,'offset');
+  const fresh=await fixture('too-fresh','说话');
+  await fresh.DB.prepare('UPDATE messages SET ts=?').bind('2026-11-13T22:51:48+08:00').run();
+  await sweepMentions(fresh,now);
+  assert.equal((await rows(fresh,'jobs')).length,0);
+});
+
+test('MG14 off:mention_recovery=1 disables the sweep',async()=>{
+  const e=await fixture('paused','说话',{age:100000});
+  await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('off:mention_recovery','1').run();
+  await sweepMentions(e);
+  assert.equal((await rows(e,'jobs')).length,0);
+  assert.equal((await rows(e,'outbox')).length,0);
+});
+
+test('MG15 recovery includes 15 minutes exactly and rejects one millisecond older',async t=>{
+  const now=Date.now();t.mock.timers.enable({apis:['Date'],now});
+  for(const age of [900000,900001]){
+    const e=await fixture('boundary-'+age,'说话',{age});
+    await sweepMentions(e,now);
+    assert.equal((await rows(e,'jobs')).filter(j=>j.kind==='chat').length,age===900000?1:0);
+  }
+});
+
+test('MG16 merged reply durably marks each source and watchdog does not replay either',async()=>{
+  const e=await fixture('batch-first','说话',{age:100000});
+  await qq(e,msg('batch-tail','补充一句'));
+  await models(()=>queue(e,'chat-batch-tail'),'reply');
+  const decision=(await rows(e,'chat_decisions')).at(-1);
+  assert.deepEqual(JSON.parse(decision.batch_ids),['batch-first','batch-tail']);
+  for(const id of ['batch-first','batch-tail']){
+    const mark=await e.DB.prepare('SELECT outbox_id FROM chat_decisions d WHERE EXISTS(SELECT 1 FROM json_each(d.batch_ids) b WHERE b.value=?)').bind(id).first();
+    assert.equal(mark?.outbox_id,decision.outbox_id);
+  }
+  const n=(await rows(e,'jobs')).length;
+  await sweepMentions(e);
+  assert.equal((await rows(e,'jobs')).length,n);
+});
+
+test('MG17 sender skips stale, missing, invalid and already-answered recovery/receipt without network',async()=>{
+  for(const kind of ['mention-recovery','mention-receipt'])for(const reason of ['old','missing','invalid','answered','batch-answered']){
+    const source=kind+'-'+reason,id=kind+':'+source+(kind==='mention-recovery'?':1':'');
+    const e=await fixture(source,'说话',{age:reason==='old'?3*86400000:100000});
+    if(reason==='missing')await e.DB.prepare('DELETE FROM messages').run();
+    if(reason==='invalid')await e.DB.prepare("UPDATE messages SET ts='bad-time'").run();
+    if(reason==='answered')await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('normal-answer',group,source,'回复','sent',Date.now()).run();
+    if(reason==='batch-answered')await e.DB.prepare(`INSERT INTO chat_decisions(id,group_id,latest_id,batch_ids,mentioned,forced,waited,gate,action,created_at) VALUES(?,?,?, ?,1,1,0,'model','reply',?)`).bind('normal-decision',group,'tail',JSON.stringify([source,'tail']),Date.now()).run();
+    await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind(id,group,source,'待发送','pending',Date.now()).run();
+    e.QQ_APP_ID='gate-'+source;
+    const old=globalThis.fetch;let requests=0;
+    globalThis.fetch=async()=>{requests++;return Response.json({access_token:'fake',expires_in:300,id:'fake'});};
+    try{await worker.queue({messages:[]},e);}finally{globalThis.fetch=old;}
+    assert.equal((await e.DB.prepare('SELECT status FROM outbox WHERE id=?').bind(id).first()).status,'skipped',source);
+    assert.equal(requests,0,source);
+  }
+});
+
+test('MG18 sender permits fresh recovery own decision and receipt does not block its answer',async()=>{
+  const e=await fixture('fresh-send','说话',{age:100000});
+  await sweepMentions(e);
+  const recovery=(await rows(e,'jobs')).find(j=>j.kind==='chat');
+  await models(()=>queue(e,recovery.id),'reply');
+  e.QQ_APP_ID='positive-recovery';
+  const old=globalThis.fetch;let sends=0;
+  globalThis.fetch=async url=>String(url).includes('getAppAccessToken')?Response.json({access_token:'fake',expires_in:300}):(sends++,Response.json({id:'fake'}));
+  try{await worker.queue({messages:[]},e);}finally{globalThis.fetch=old;}
+  assert.equal(sends,1);
+  assert.equal((await e.DB.prepare('SELECT status FROM outbox WHERE id=?').bind(recovery.id).first()).status,'sent');
+  assert.equal((await e.DB.prepare('SELECT status FROM outbox WHERE id=?').bind('mention-receipt:fresh-send').first()).status,'skipped');
+});
+
+
+test('MG19 reply marker includes all sources and latest even when batch input omits the tail',async()=>{
+  const file=`.wrangler/reply-marker-${process.pid}.mjs`;
+  await build({entryPoints:['src/rhythm.ts'],bundle:true,platform:'browser',format:'esm',outfile:file});
+  const {recordDecision}=await import('../'+file);
+  const e=await fixture('source','说话',{age:100000});
+  await recordDecision(e,{id:'batch',group_id:group,latest_id:'tail',batch_ids:['source','source'],action:'reply',outbox_id:'batch-answer'});
+  const d=(await rows(e,'chat_decisions'))[0];
+  assert.deepEqual(JSON.parse(d.batch_ids),['source','tail']);
+  await sweepMentions(e);
+  assert.equal((await rows(e,'jobs')).length,0);
+});
+
+test('MG20 fresh multipart recovery sends all its segments and skips the obsolete receipt',async()=>{
+  const e=await fixture('multipart','说话',{age:100000});
+  for(const suffix of ['', '~1'])await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('mention-recovery:multipart:1'+suffix,group,'multipart','回答片段','pending',Date.now()).run();
+  await e.DB.prepare(`INSERT INTO chat_decisions(id,group_id,latest_id,batch_ids,mentioned,forced,waited,gate,action,outbox_id,created_at) VALUES(?,?,?,'["multipart"]',1,1,0,'model','reply',?,?)`).bind('mention-recovery:multipart:1',group,'multipart','mention-recovery:multipart:1',Date.now()).run();
+  await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('mention-receipt:multipart',group,'multipart','在做','pending',Date.now()).run();
+  e.QQ_APP_ID='multipart-positive';let sends=0;const old=globalThis.fetch;
+  globalThis.fetch=async url=>String(url).includes('getAppAccessToken')?Response.json({access_token:'fake',expires_in:300}):(sends++,Response.json({id:'fake'}));
+  try{await worker.queue({messages:[]},e);}finally{globalThis.fetch=old;}
+  assert.equal(sends,2);
+  assert.equal((await e.DB.prepare("SELECT status FROM outbox WHERE id='mention-receipt:multipart'").first()).status,'skipped');
+});
+
+test('MG21 sender rechecks reply status after token acquisition',async()=>{
+  const e=await fixture('token-race','说话',{age:100000}),id='mention-recovery:token-race:1';
+  await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind(id,group,'token-race','补偿','pending',Date.now()).run();
+  e.QQ_APP_ID='token-race';const old=globalThis.fetch;let sends=0;
+  globalThis.fetch=async url=>{
+    if(String(url).includes('getAppAccessToken')){
+      await e.DB.prepare('INSERT INTO outbox VALUES(?,?,?,?,?,?)').bind('normal-race-answer',group,'token-race','正常回答','sent',Date.now()).run();
+      return Response.json({access_token:'fake',expires_in:300});
+    }
+    sends++;return Response.json({id:'fake'});
+  };
+  try{await worker.queue({messages:[]},e);}finally{globalThis.fetch=old;}
+  assert.equal(sends,0);
+  assert.equal((await e.DB.prepare('SELECT status FROM outbox WHERE id=?').bind(id).first()).status,'skipped');
+});

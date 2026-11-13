@@ -156,7 +156,8 @@ test("V3 promptData leaves a large image data URL unchanged", () => {
 
 test("V4 workersAiVision sends an image to the binding and validates JSON", async () => {
   let body;
-  const e = { AI: { async run(_model, input) { body = input; return { response: JSON.stringify({desc:"红色圆形",text:"hello",tags:["red","circle"],meme:false}) }; } } };
+  const e = env(); // Workers AI calls always run through the neuron budget, which needs a DB.
+  e.AI = { async run(_model, input) { body = input; return { response: JSON.stringify({desc:"红色圆形",text:"hello",tags:["red","circle"],meme:false}) }; } };
   const result = await workersAiVision(e).describe(png,"image/png","看图",new AbortController().signal);
   assert.equal(result.desc, "红色圆形");
   assert.equal(result.text, "hello");
@@ -542,7 +543,7 @@ test("V12 daily budget allows only one of three parallel images", async () => {
   const user = JSON.parse(state.participation.messages[1].content);
   const media = user.context.batch.flatMap((x) => x.material?.media || []);
   assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 1);
-  assert.ok(media.some((x) => /图片（未分析：今日看图预算已用完/.test(String(x))));
+  assert.ok(media.some((x) => /看不了这张图（未分析：今日看图预算已用完/.test(String(x))));
 });
 
 test("V13 research reuses cached image notes without fetching or describing", async () => {

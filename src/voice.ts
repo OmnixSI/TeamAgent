@@ -1,3 +1,4 @@
+import { shouldVoice } from "./tts-policy";
 import { TEAM } from "./config";
 import { stage } from "./timing";
 import { COST, left } from "./d1";
@@ -13,13 +14,14 @@ export const VOICE = settings.text;
 export type VoiceMode = "banter" | "work" | "care";
 const spokenText = (text: string) =>
   text.trim().replace(/^(?:work|banter|care)\s*[:：]\s*/i, "");
-export function decodeVoice(raw: string): { mode: VoiceMode; text: string; sticker?: string } {
+export function decodeVoice(raw: string): { mode: VoiceMode; text: string; sticker?: string; voice?: boolean } {
   try {
     const x = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, ""));
     if (typeof x.text === "string")
       return {
         mode: ["banter", "care", "work"].includes(x.mode) ? x.mode : "work",
         text: spokenText(x.text),
+        ...(x.voice === true ? { voice: true } : {}),
         ...(typeof x.sticker === "string" && Array.from(x.sticker.trim()).length >= 2 && Array.from(x.sticker.trim()).length <= 8 ? {sticker:x.sticker.trim()} : {}),
       };
   } catch {}
@@ -62,7 +64,7 @@ export async function enqueueVoice(
   group: string,
   message: string | null,
   raw: string,
-  opts?: { reference?: string; sticker?: string },
+  opts?: { reference?: string; sticker?: string; source?: any },
 ) {
   const v = decodeVoice(raw), parts = fragments(raw, id);
   const wantsSticker=parts.length && v.mode !== 'work' && v.sticker && TEAM.stickers.send === true && left(e) >= COST.sticker + COST.tail;
@@ -71,20 +73,32 @@ export async function enqueueVoice(
     const reminders=await replyAuthReminders(e,id);
     if(reminders.length){const suffix='\n'+reminders.join('\n');parts[parts.length-1]=parts[parts.length-1].slice(0,4000-suffix.length)+suffix;}
   }
+  const source = opts?.source ?? e.voiceSource;
+  const sw = e.voiceSwitches ?? {};
+  const mode = sw["voice:mode:" + group] ?? sw["voice:mode"] ?? "auto";
+  const tts = { ...TEAM.voice?.tts, enabled: true, ...(["auto","edge","deepseek"].includes(sw["tts:provider"]) ? {provider:sw["tts:provider"]} : {}) };
+  const voice = shouldVoice(parts[0], v.mode, { ...tts, delivery: {
+    mode, sourceVoice: !!source?.meta?.media?.some((m:any)=>m.kind === "voice"),
+    requested: v.voice === true, parts: parts.length,
+  }});
+  const inserts = [];
   for (let i = 0; i < parts.length; i++)
-    await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
+    inserts.push(e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
       .bind(
         id + (i ? "~" + i : ""),
         group,
         message,
         parts[i],
-        "pending",
+        voice ? "voice" : "pending",
         Date.now() + i,
-      )
-      .run();
+      ));
+  if (parts.length && (opts?.reference || voice))
+    inserts.push(e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({
+      ...(opts?.reference ? { reference: opts.reference } : {}),
+      ...(voice ? { voice_text: parts[0], voice: tts.voice, cfg: tts, sender: source?.sender || "" } : {}),
+    })));
+  if (inserts.length) await e.DB.batch(inserts);
   if (parts.length) stage(e, message, "outbox");
-  if (parts.length && opts?.reference)
-    await e.DB.prepare("INSERT OR IGNORE INTO outbox_meta(id,json) VALUES(?,?)").bind(id, JSON.stringify({ reference: opts.reference })).run();
   if (parts.length && v.mode !== "work" && v.sticker && TEAM.stickers.send === true && left(e) >= COST.sticker + COST.tail) {
     const sw = stickerSwitches ?? await loadSwitches(e);
     if (!stickerSendOn(sw, Date.now())) return;
@@ -94,6 +108,15 @@ export async function enqueueVoice(
   }
 }
 export async function speakBrief(e: any, brief: any, context: any) {
+  e.voiceSource = context.latest;
+  let continuity = context.switches?.self_note;
+  if (!context.switches && e.DB) {
+    // Reuse the existing continuity read for delivery settings on async replies.
+    const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN ('self_note','voice:mode','tts:provider',?)").bind("voice:mode:" + context.latest?.group_id).all()).results;
+    const sw = Object.fromEntries(rows.map((r:any)=>[r.key,r.value]));
+    continuity = sw.self_note;
+    e.voiceSwitches = sw;
+  }
   const d: any = await model(
     e,
     "voice",
@@ -107,19 +130,13 @@ export async function speakBrief(e: any, brief: any, context: any) {
           role: "system",
           content:
             VOICE +
-            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。recentBot是你刚说过的话，别复读相同包袱，尤其别反复季度汇报/PPT示例。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话",sticker:"可选的2–8字情绪或梗关键词"}。sticker只在banter/care而且真的合适时才给，多数时候不给。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告；但上游事实里标了【必须保留】的要点一个都不能省，可以压缩措辞，不能删项。',
+            '\n你是最后的嘴替模块。上游材料只有已核实事实和执行结果，不含需要公开的内部推理。不要新增事实、承诺或能力，引用链接与数值保持不变。recentBot是你刚说过的话，别复读相同包袱，尤其别反复季度汇报/PPT示例。上游未接受执行任务时，不说“我去跑”“执行完再报”；要求写验收条件只写条件，不承诺执行。只输出JSON {mode:"banter"|"work"|"care",text:"群内实际说的话",voice:"仅当当前用户明确要求语音回复、用语音说或念出来时给布尔true，否则省略",sticker:"可选的2–8字情绪或梗关键词"}。sticker只在banter/care而且真的合适时才给，多数时候不给。根据当前语境选模式：查梗也可以banter，正式交付选work。只输出群里的一小段，不写报告；但上游事实里标了【必须保留】的要点一个都不能省，可以压缩措辞，不能删项。',
         },
         {
           role: "user",
           content: JSON.stringify({
             brief,
-            continuity: context.switches ? context.switches.self_note : e.DB
-              ? (
-                  await e.DB.prepare(
-                    "SELECT value FROM settings WHERE key='self_note'",
-                  ).first()
-                )?.value
-              : undefined,
+            continuity,
             latest: context.latestView?.text ?? context.latest?.body ?? context.intent,
             material: context.latestView?.material,
             recent: (context.recentViews ?? []).slice(-6).map(toPrompt),

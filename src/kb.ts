@@ -4,9 +4,10 @@
 
 export const KB_CHUNK_SIZE = 500;
 export const KB_CHUNK_OVERLAP = 100;
-export const KB_MAX_CHUNKS_PER_GROUP = 20000;
-export const KB_MAX_CHUNKS_PER_DOC = 400;
-// 160k chars is ~400 chunks of 400 net chars each, matching KB_MAX_CHUNKS_PER_DOC.
+export const KB_MAX_CHUNKS_PER_GROUP = 50000;
+export const KB_MAX_CHUNKS_PER_DOC = 1600;
+// 160k chars is ~400 chunks of 400 net chars each, well inside KB_MAX_CHUNKS_PER_DOC;
+// the per-doc cap also bounds a caller that raises KB_MAX_DOC_CHARS.
 export const KB_MAX_DOC_CHARS = 160000;
 export const KB_SEPARATORS = ["\n\n", "\n", "。", "，", ". ", ", ", " "];
 
@@ -108,9 +109,9 @@ export function chunkText(text: string, opts: ChunkOptions = {}): string[] {
   return chunks;
 }
 
-// D1 allows at most 100 bound parameters per query; keep multi-row inserts under it so one
-// 400-chunk document stays under the 50-query invocation budget (25 + 20 + 1 statements).
-function insertStatements(e: any, table: string, columns: string[], rows: any[][], maxParams = 100): any[] {
+// D1 allows at most 100 bound parameters per query; keep multi-row inserts under 90 so a
+// large document stays inside the background 200-statement budget (chunks + FTS + header).
+function insertStatements(e: any, table: string, columns: string[], rows: any[][], maxParams = 90): any[] {
   const per = Math.max(1, Math.floor(maxParams / columns.length));
   const statements: any[] = [];
   for (let i = 0; i < rows.length; i += per) {

@@ -86,20 +86,6 @@ CREATE TABLE IF NOT EXISTS repo_state(
   repo TEXT PRIMARY KEY, json TEXT NOT NULL, fingerprint TEXT NOT NULL,
   updated_at INTEGER NOT NULL, checked_at INTEGER NOT NULL);
 
-CREATE TABLE IF NOT EXISTS schedules(
-  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, owner TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK(kind IN ('digest_daily','digest_weekly','reminder','mute')),
-  tz TEXT NOT NULL DEFAULT 'Australia/Sydney', spec TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','cancelled')),
-  next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT, source_msg_id TEXT, created_at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS schedules_due ON schedules(status,next_run_at);
-CREATE INDEX IF NOT EXISTS schedules_group ON schedules(group_id,status);
-CREATE TABLE IF NOT EXISTS schedule_runs(
-  id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, due_at INTEGER NOT NULL,
-  started_at INTEGER, finished_at INTEGER, status TEXT NOT NULL DEFAULT 'pending',
-  outbox_id TEXT, error TEXT, UNIQUE(schedule_id,due_at));
-CREATE INDEX IF NOT EXISTS schedule_runs_due ON schedule_runs(schedule_id,due_at);
 CREATE TABLE IF NOT EXISTS summaries(
   id TEXT PRIMARY KEY, group_id TEXT NOT NULL, from_ts TEXT NOT NULL, to_ts TEXT NOT NULL,
   last_rowid INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -142,6 +128,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
   doc_id UNINDEXED,
   group_id UNINDEXED,
   tokenize='trigram');
+CREATE TABLE IF NOT EXISTS schedules(
+  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, owner TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('digest_daily','digest_weekly','reminder','mute')),
+  tz TEXT NOT NULL DEFAULT 'Australia/Sydney', spec TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','cancelled')),
+  next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, source_msg_id TEXT, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS schedules_due ON schedules(status,next_run_at);
+CREATE INDEX IF NOT EXISTS schedules_group ON schedules(group_id,status);
+CREATE TABLE IF NOT EXISTS schedule_runs(
+  id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, due_at INTEGER NOT NULL,
+  started_at INTEGER, finished_at INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+  outbox_id TEXT, error TEXT, UNIQUE(schedule_id,due_at));
+CREATE INDEX IF NOT EXISTS schedule_runs_due ON schedule_runs(schedule_id,due_at);
 
 CREATE TABLE IF NOT EXISTS openai_usage(
   id TEXT PRIMARY KEY,

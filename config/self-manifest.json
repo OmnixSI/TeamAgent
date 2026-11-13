@@ -378,9 +378,10 @@
       ],
       "tools": [
         "search_web",
-        "news_search"
+        "news_search",
+        "web_search"
       ],
-      "how": "search_web 调 DeepSeek /v1/tools/search 检索公开资料；news_search 先试 Google News 与 Bing News 的免费 RSS，拿不到再回退 DeepSeek 搜索，结果都按外部资料包起来，不当作指令。",
+      "how": "search_web 与 web_search 都调 DeepSeek /v1/tools/search 检索公开资料（web_search 返回 title/url/snippet/summary/date/site，回答须逐条引用 url）；news_search 先试 Google News 与 Bing News 的免费 RSS，拿不到再回退 DeepSeek 搜索，结果都按外部资料包起来，不当作指令。",
       "files": [
         {
           "path": "src/semantic.ts",
@@ -425,9 +426,10 @@
         "Jina"
       ],
       "tools": [
-        "read_web"
+        "read_web",
+        "fetch_page"
       ],
-      "how": "read_web 先用 Jina Reader 抓网页正文，失败或太短再回退 DeepSeek /v1/tools/fetch；正文按外部资料包起来，长度和超时都有上限。",
+      "how": "read_web 先用 Jina Reader 抓网页正文，失败或太短再回退 DeepSeek /v1/tools/fetch；fetch_page 直接抓单个公开网页的 Markdown（最多 6000 字，超长标 truncated），B 站/X 走专用读取，内网、localhost、带账号密码和 QQ 内部链接不抓；正文按外部资料包起来，长度和超时都有上限。",
       "files": [
         {
           "path": "src/semantic.ts",
@@ -576,20 +578,33 @@
         "OCR",
         "文字识别",
         "扫描件",
-        "图片转文字"
+        "图片转文字",
+        "read_image_text"
       ],
-      "tools": [],
-      "how": "云端 DeepSeek /v1/tools/ocr 的文字识别通道已实现（路径、价格与额度都在 deepseek-tools.ts），但还没有任何调用方或自检接入；当前扫描件仍靠本机 docread 的文本层。",
+      "tools": [
+        "read_image_text"
+      ],
+      "how": "read_image_text 从本群图片通道取图（域名校验、重定向与大小上限同看图），调云端 DeepSeek /v1/tools/ocr 做文字识别；结果异常（finish_reason=length、超过 8000 字、重复刷屏、字符多样性过低）时回退现有看图模型 vision 的描述通道；输出按外部资料处理。",
       "files": [
+        {
+          "path": "src/tools/read-image-text.ts",
+          "anchor": "export function createReadImageTextTool",
+          "role": "OCR 工具：取图、调用、失败判定与看图回退"
+        },
         {
           "path": "src/deepseek-tools.ts",
           "anchor": "ocr: \"/v1/tools/ocr\"",
           "role": "DeepSeek OCR 路径与额度"
+        },
+        {
+          "path": "src/vision.ts",
+          "anchor": "function providerOrder",
+          "role": "看图回退的 provider 链"
         }
       ],
       "providers": [
         {
-          "role": "扫描件文字识别（通道已实现，未接入文档流程）",
+          "role": "扫描件文字识别（首选）",
           "vendor": "DeepSeek",
           "file": "src/deepseek-tools.ts",
           "host_pattern": "(api\\.deepseek\\.com)"
@@ -600,7 +615,7 @@
         "DEEPSEEK_API_KEY"
       ],
       "runs_on": "cloud",
-      "default_state": "off_by_default"
+      "default_state": "on"
     },
     {
       "id": "repo_read",

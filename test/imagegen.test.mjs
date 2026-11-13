@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
 import {env} from './support.mjs';
 const output=`.wrangler/imagegen-${process.pid}.mjs`;
-await build({entryPoints:['src/imagegen.ts'],bundle:true,format:'esm',platform:'browser',outfile:output,plugins:[{name:'openai-boundary',setup(b){b.onResolve({filter:/^\.\/openai$/},()=>({path:'openai',namespace:'boundary'}));b.onLoad({filter:/.*/,namespace:'boundary'},()=>({contents:'export const callOpenAi=(e,o)=>e.testCallOpenAi(o);'}));}}]});
+await build({entryPoints:['src/imagegen.ts'],bundle:true,format:'esm',platform:'browser',outfile:output,plugins:[{name:'openai-boundary',setup(b){b.onResolve({filter:/^\.\/openai$/},()=>({path:'openai',namespace:'boundary'}));b.onLoad({filter:/.*/,namespace:'boundary'},()=>({contents:'export const callOpenAi=(e,o)=>e.testCallOpenAi(o);export const reserveQuota=async()=>({ok:true,id:"test"});export const releaseQuota=async()=>{};export const sydneyDayStart=()=>0;'}));}}]});
 const mod=await import('../'+output);
 // SOI, APP0, SOF0 with 3 components and 1024x1024 dimensions, EOI.
 const jpeg=Uint8Array.from([255,216,255,224,0,4,0,0,255,192,0,17,8,4,0,4,0,3,1,17,0,2,17,0,3,17,0,255,217]);

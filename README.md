@@ -67,7 +67,7 @@ npm run test:runner
 npm run check:ui
 ```
 
-实际团队部署配置已在 `wrangler.toml`。现有团队直接走 Actions 自动发布；新建独立环境时参考 `wrangler.toml.example` 创建 D1、三条免费档 Queues，再初始化 `schema.sql`。
+实际团队部署配置已在 `wrangler.toml`。现有团队直接走 Actions 自动发布；新建独立环境时参考 `wrangler.toml.example` 创建 D1、三条 Queues（Workers Paid 自带额度），再初始化 `schema.sql`。
 
 ```sh
 cp wrangler.toml.example wrangler.toml

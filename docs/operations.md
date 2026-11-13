@@ -6,20 +6,20 @@
 
 ## 云端
 
-Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条免费队列；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
+Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条队列（Workers Paid 自带 1M ops/月）；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
 
 服务端密钥：ADMIN_TOKEN、RUNNER_TOKEN、DEEPSEEK_API_KEY、QQ_APP_ID、QQ_APP_SECRET、GITHUB_TOKEN。GITHUB_TOKEN 用只读 fine-grained token（Contents、Metadata、Pull Requests 均 Read-only；不需要写入权限），本机把令牌文件路径放在 GITHUB_TOKEN_FILE，由 scripts/sync-runtime-secrets.py 读取并同步，脚本只打印“已加入/跳过”，不打印值；未设置时 Worker 只能读公开仓库。用 Wrangler 交互配置或权限0600文件的 secret bulk；不要写进源码、构建变量和 shell 参数。无需把本机 GitHub OAuth令牌上传云端，GITHUB_TOKEN 与 gh 的本机登录态相互独立。
 
 升级步骤：
 
-1. 在私密目录导出 D1 备份；D1免费档另有7天Time Travel。
+1. 在私密目录导出 D1 备份；Workers Paid 提供 30 天 Time Travel。
 2. npm run check、npm test、npm run test:runner、npm run check:ui。
 3. npm run db:migrate。只增表、索引和兼容的方案状态，不删除历史数据。
 4. 提交并推送源码，检查 GitHub Check。当前组织托管任务受账单/额度限制无法启动，本轮由同一套本机检查验收并提交明确的本机状态；不更改账单、不升档。
 5. npm run deploy。脚本要求工作区已提交，把准确提交号写入 /health。
 6. 检查 /health、成员登录、工作台与原有任务；需要时回滚 Worker 版本。新增表可保留，不要反向删除数据来“回滚”。
 
-保留免费档，不运行付费升级命令。D1单次调用最多50查询，批量操作使用 batch；单条参数最多100。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
+Workers Paid $5/月已购，不运行升到更高档或附加项的命令。D1 平台单次调用最多 1,000 查询，应用按入口：聊天/HTTP ≤48、后台 ≤200；批量操作使用 batch；单条参数最多100。Workers AI 仍每天 10k neurons 免费、超出计费，必须硬闸退回 DeepSeek。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
 
 ## 本机
 
@@ -107,7 +107,13 @@ fetcher 每天本机时间 09:00 检查两项登录态，重启后错过当天�
 
 `bili.media.enabled=false` 时不安装转写定时项，不影响元数据抓取。启用后 `com.inkboard.team-media` 每60秒短命启动一次，单实例、最多连续3个任务、后台低优先级；空闲即退出。
 运行库由暂存时安装，或单独执行 `python3 scripts/install-local.py --xasr-only`；仅按固定 requirements 安装运行库，模型只读引用 NextThought 已有目录。`--apply` 不安装依赖、不加载模型。
-本机验收：`node runner/media.mjs once <BV>`；只取一条 DASH 音频、转成16kHz单声道PCM后分块转写。stdout仅输出一次统计，不连云、不报群；音频和每任务目录在 finally 删除。
+本机验收：`node runner/media.mjs once <BV>`；只取一条 DASH 音频、转成16kHz单声道PCM后分块转写。默认自动选择云端 ASR，失败保留本机 X-ASR 备用；不向 Worker 回报、不报群，音频和每任务目录在 finally 删除。
+
+长音频 ASR：runner 配置的 `settings["asr:provider"]` 为 `auto`（默认）、`cloud` 或 `local`；私密 runner 配置也支持 `asr.provider`。任务若已携带 `payload.settings`，会覆盖 runner 同名设置。本包不新增 Worker 设置同步；D1 设置及日限额的读取、审核和入账需由集成层传递，不能把本机配置当作全局实时限额。`off:dstools` / `off:ds_asr` 开启，或传入的 `ds:asr:user_daily` / `ds:asr:group_daily` / `ds:daily_cap_micro_usd` 已耗尽时，直接使用本机；对应已用量字段为 `ds:asr:user_used` / `ds:asr:group_used` / `ds:daily_used_micro_usd`。
+
+密钥只从 `DEEPSEEK_API_KEY_FILE` 或私密 runner 配置 `deepseek.key_file` 交给共用客户端，不写入报告。云端每片 100 秒、相邻重叠 1 秒，最多 4 路，标准 PCM 每片约 3.2 MB（小于 8 MiB）；切片直接读取标准 WAV 的 PCM，不启动额外转码进程。单片失败顺序调用本机 X-ASR，避免同时加载多份模型；全部失败只跑一次整段本机转写。报告保留时间戳文本，并附 `provider`、`chunks`、`cloud_chunks`、`local_chunks`、`units`（成功云端上传的音频秒数，含重叠；不是客户端内部的毫秒数）和失败回退 `meta`。本包不写线上 D1。
+
+只读真实对比脚本：先将安全凭据文件路径交给 `DEEPSEEK_API_KEY_FILE`，运行 `node scripts/f9ds-1b-live.mjs`。固定取 BV1irWP6PExT 一条不超过两分钟的音频，云端/本机各一次、119 秒拼接切片及合成中英混合句验证；估算累计花费硬限 $0.05，所有音频在 `/tmp/f9ds-1b-live-*`，退出即清理。脚本不改线上 Worker/D1、不发送 QQ；DS-0 合入前可用 `F9DS_CLIENT_MODULE` 指定其现有客户端文件做集成实测。
 1300MB内存看门狗、30秒心跳、最多90分钟、磁盘/内存启动闸共同限制负载；下载不含Cookie，API仅只读复用已有登录，日志不留签名链接。
 日志为 `~/.inkboard-team/media.log` 和 `media-error.log`。启动时仅按目录项/时间清过期报告，超限日志直接截空，不读取旧日志内容、不留清扫标记。
 暂停：关闭配置并按正常暂存/apply流程移除定时项；彻底回滚运行库和临时文件用 `python3 scripts/install-local.py --remove-media`，其他运行时文件和登录数据不动。

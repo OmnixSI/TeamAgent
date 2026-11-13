@@ -4,10 +4,11 @@ import { COST, left, ResourceLimitError } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
+import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
-import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
+import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
@@ -43,6 +44,7 @@ export function isRepoActivityAsk(body: unknown): boolean {
 }
 const REPO_ASK_HINT = { role: "system", content: "用户在问仓库动态，必须先调用 repo_changes" };
 const REPO_ASK_FLOOR = 16;
+import { biliNoteText } from "./fetchjobs";
 export type Services = {
   llm: (
     kind: "chat" | "plan" | "memory",
@@ -408,8 +410,8 @@ function tweetText(html: string) {
 }
 export type { ReadReason } from './linkfail';
 import type { ReadReason } from './linkfail';
-export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
-export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research' };
+export type ReadResult = { ok: true; source: 'fx' | 'syndication' | 'oembed' | 'github' | 'jina' | 'deepseek' | 'deepseek_fetch'; text: string; id?: string; createdAt?: string } | { ok: false; reason: ReadReason };
+export type ReadOptions = { deadline?: number; purpose: 'prefetch' | 'inline' | 'research'; group?: string; sender?: string };
 /** All sources, including response bodies, spend the same absolute budget. */
 export function slot(deadline: number, cap: number, reserve = 0): AbortSignal | null {
   const milliseconds = Math.floor(Math.min(cap, deadline - Date.now() - reserve));
@@ -424,9 +426,12 @@ export function jinaOk(raw: string, source: 'jina' | 'deepseek' = 'jina'): { ok:
   const challenge = /just a moment|checking your browser|verify (?:you are|that you are) human|captcha challenge/i;
   const login = /sign in to (?:continue|read|view)|log in to (?:continue|read|view)|please (?:sign|log) in|请先登录|登录后(?:继续|查看|阅读)/i;
   const title = header.match(/^Title:\s*([^\r\n]*)/im)?.[1] || '';
+  if (/^(?:page not found|404(?:\s+(?:page\s+)?not found)?)(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'not_found'};
+  if (/^(?:sign in|log in|login|登录|登入)(?: to github)?(?:\s*[·|—-].*)?$/i.test(title)) return {ok:false,reason:'login_required'};
   if (challenge.test(title)) return {ok:false,reason:'risk'};
   if (login.test(title)) return {ok:false,reason:'login_required'};
   const body = boundary < 0 ? raw : raw.slice(boundary + marker.length);
+  if (/^\s*(?:#+\s*)?(?:sign in|log in)(?: to github)?\s*$/im.test(body.slice(0,300))&&/username or email address/i.test(body)&&/forgot (?:your )?password/i.test(body)) return {ok:false,reason:'login_required'};
   const text = body.replace(/^(?:\s*\[[^\]\n]*\]\([^\n)]*\)\s*[|·]?)+\s*$/gm, '').trim();
   if (text.length < 1500) {
     if (challenge.test(text)) return {ok:false,reason:'risk'};
@@ -505,6 +510,17 @@ export async function readUrl(e: any, url: string, opt: ReadOptions = {purpose:'
       if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
     } catch {if(Date.now()>=deadline-10)reason='timeout';}
   }
+  if (opt.purpose==='research' && deadline-Date.now()>=300) {
+    try {
+      const page=await fetchPageCore(e,url,{timeoutMs:Math.max(300,deadline-Date.now()),group:opt.group,sender:opt.sender});
+      if (page.ok===true && page.content.trim()) {
+        const checked=jinaOk(page.content,'deepseek');
+        if (checked.ok || 'reason' in checked && checked.reason==='short') return {ok:true,source:'deepseek_fetch',text:page.content};
+        if ('reason' in checked && checked.reason!=='short') reason=checked.reason;
+      }
+      if (page.ok===false && page.error_kind==='denied') reason='login_required';
+    } catch {}
+  }
   return {ok:false,reason};
 }
 export function untrustedResults(results: any) {
@@ -526,7 +542,7 @@ export async function understandLinks(e: any, p: any, s: Services) {
   if (!m) return;
   const urls: string[] = (p.urls || []).filter(publicUrl).slice(0, 3);
   const deadline = Date.now() + 20000;
-  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline })));
+  const reads = await Promise.allSettled(urls.map(url => readUrl(e, url, { purpose: "research", deadline, group: m.group_id, sender: m.sender })));
   const pages = reads.map((read, index) => {
     const url = urls[index];
     const d: ReadResult = read.status === "fulfilled" ? read.value : { ok: false, reason: "invalid" };
@@ -842,6 +858,7 @@ async function answerWithTools(e: any, context: any) {
         },
       },
     },
+    ...(await extraToolDefs(e, context)),
     {
       type: "function",
       function: {
@@ -1076,19 +1093,49 @@ async function answerWithTools(e: any, context: any) {
             ).results;
             const query = String(a.query || "").slice(0, 150),
               sourceId = String(a.source_id || "");
-            const materials = (
+            const media = (
               await e.DB.prepare(
                 "SELECT j.id,json_extract(j.payload,'$.title') AS title,json_extract(j.payload,'$.message') AS source_id,j.status,n.body AS result,d.status AS delivery_status,d.sent_count FROM jobs j LEFT JOIN media_notes n ON n.id=json_extract(j.payload,'$.message') LEFT JOIN deliveries d ON d.job_id=j.id LEFT JOIN messages m ON m.id=json_extract(j.payload,'$.message') WHERE j.kind='media' AND (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(COALESCE(m.body,''),?)>0) ORDER BY j.created_at DESC LIMIT 5",
               )
                 .bind(sourceId, sourceId, query, query, query)
                 .all()
             ).results;
+            // R8: the message -> video mapping survives cache hits, pending waits and title cards.
+            const sources = (
+              await e.DB.prepare(
+                "SELECT m.id AS source_id,r.body AS ref,a.body AS alias,n.body AS result FROM messages m JOIN media_notes r ON r.id='msgref:v1:'||m.id LEFT JOIN media_notes a ON a.id='alias:v1:bili:'||json_extract(r.body,'$.ref') LEFT JOIN media_notes n ON n.id='resource:v1:bili:'||json_extract(a.body,'$.bvid')||':p:'||json_extract(a.body,'$.page') WHERE (?='' OR m.id=?) AND (?='' OR instr(COALESCE(n.body,''),?)>0 OR instr(m.body,?)>0) ORDER BY m.rowid DESC LIMIT 5",
+              )
+                .bind(sourceId, sourceId, query, query, query)
+                .all()
+            ).results;
+            const materials: any[] = media.map((r: any) => ({
+              ...r,
+              result: utilityText(r.result).slice(0, 6000),
+            }));
+            for (const row of sources) {
+              if (materials.length >= 5 || !row.result) continue;
+              let note: string, fetchedAt = now();
+              try {
+                const value = JSON.parse(row.result);
+                note = biliNoteText(value);
+                if (typeof value.fetched_at === "string") fetchedAt = value.fetched_at;
+              } catch {
+                continue;
+              }
+              let ref: any = {};
+              try { ref = JSON.parse(row.ref); } catch {}
+              const prefix = ref.match === "title" ? "（按标题匹配，未必是同一视频）\n" : "";
+              materials.push({
+                id: "msgref:v1:" + row.source_id,
+                source_id: row.source_id,
+                ref: ref.ref ?? null,
+                match: ref.match === "title" ? "title" : "id",
+                result: prefix + untrusted("bilibili", note, fetchedAt),
+              });
+            }
             result = {
               tasks,
-              materials: materials.map((r: any) => ({
-                ...r,
-                result: utilityText(r.result).slice(0, 6000),
-              })),
+              materials,
               board: "https://inkboard-team.inkboard-server.workers.dev",
             };
             break;
@@ -1284,7 +1331,7 @@ async function answerWithTools(e: any, context: any) {
             );
             break;
           case "read_web": {
-            const d = await readUrl(e, a.url, { purpose: "research" });
+            const d = await readUrl(e, a.url, { purpose: "research", group: context.latest?.group_id, sender: context.latest?.sender });
             result = d.ok
               ? {
                   source: d.source,

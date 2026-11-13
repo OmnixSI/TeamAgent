@@ -43,7 +43,7 @@ function addMessage(d, group, id, i = 1) {
 function addSticker(d, sha, { source = null, desc = "", tags = [], state = 2, uses = 0, created = 0 } = {}) {
   d.prepare(
     "INSERT INTO stickers(sha,mime,bytes,data,desc,tags,state,senders,source_message,created_at,uses) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-  ).run(sha, "image/gif", 1, new Uint8Array([1]).buffer, desc, JSON.stringify(tags), state, "[]", source, created, uses);
+  ).run(sha, "image/gif", 1, new Uint8Array([1]), desc, JSON.stringify(tags), state, "[]", source, created, uses);
 }
 function ctxFor(group) {
   return {

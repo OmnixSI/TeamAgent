@@ -1,6 +1,8 @@
-import { addressedMessages, sweepMentions } from './mention-guard';
+import { AUTO_REPLY_MAX_AGE_MS, AUTO_REPLY_KINDS_SQL, outboxExpirySql } from './recovery-policy';
+import { addressedMessages, sweepMentions, mentionSendAllowed } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
+import { isOrgRepo } from "./repo-discovery";
 import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
 import { looksLikeSticker } from "./vision";
@@ -8,13 +10,16 @@ import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
-import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
+import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
-import { metered, COST, left } from "./d1";
+import { metered, COST, left, D1_BUDGET, queueLimit } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
-import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { gateCheck, parseGateMode } from "./gate-wire";
+import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
+import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
+import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { SELF_CARD } from "./self-card.generated";
 import { parseInbound, extractBili } from "./inbound";
@@ -29,7 +34,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
-import { runSchedules } from "./schedules";
+import { runSchedules, planSchedule, createSchedule, publicSchedule, sydneyText } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -53,6 +58,7 @@ import {
 import { imagegenSelftest } from "./imagegen-selftest";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
 import { handleCommand } from "./commands";
 import { dsSelfTest } from "./deepseek-tools";
 import { HTML } from "./ui";
@@ -386,6 +392,9 @@ async function receive(r: Request, e: Env) {
       .filter(v => v.name)
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
+  // Voice only: this block issues no statement for text, image or file messages.
+  if (inserted && ib.media.some((x: any) => x.kind === "voice"))
+    await enqueueVoiceJobs(e, ib.media, { message: m.id, group: m.group_openid, sender: ib.senderId });
   if (TEAM.stickers.enabled && TEAM.stickers.collect) {
     const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text))).slice(0,2);
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
@@ -442,10 +451,11 @@ async function receive(r: Request, e: Env) {
   return json({ op: 12, d: 0 });
 }
 async function repoContext(e: Env, repo: string) {
-  if (!REPOS.includes(repo)) throw Error("repository not allowed");
   const cached = await e.DB.prepare("SELECT * FROM repo_cache WHERE repo=?")
     .bind(repo)
     .first();
+  if (!REPOS.includes(repo) && !(cached && isOrgRepo(repo)))
+    throw Error("repository not allowed");
   if (cached && Date.now() - cached.updated_at < 300000)
     return JSON.parse(cached.json);
   if (!e.GITHUB_TOKEN)
@@ -551,12 +561,19 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 }
 async function processJob(e: Env, id: string) {
   const now = Date.now();
+  const expired = `(kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<?3)`;
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    `UPDATE jobs SET status=CASE WHEN ${expired} THEN 'failed' ELSE 'running' END,
+      lease_until=CASE WHEN ${expired} THEN lease_until ELSE ?1 END,
+      attempts=CASE WHEN ${expired} THEN attempts ELSE attempts+1 END,
+      error=CASE WHEN ${expired} THEN 'expired' ELSE error END
+      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner')
+      AND (status='pending' OR (status='running' AND lease_until<?4))
+      AND (${expired} OR (attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=?4)) RETURNING *`,
   )
-    .bind(now + 660000, id, now, now)
+    .bind(now + 660000, id, now - AUTO_REPLY_MAX_AGE_MS, now)
     .first();
-  if (!claim) return;
+  if (!claim || claim.status !== 'running') return;
   try {
     const p = JSON.parse(claim.payload);
     (e as any).timingTurn = p.latestId || p.message || (claim.kind === "video_reply" ? p.wait?.slice(3) : undefined);
@@ -716,8 +733,10 @@ async function processJob(e: Env, id: string) {
         await enqueueVoice(e, id, m.group_id, m.id, answer);
       }
     }
+    if (claim.kind === "voice_asr") await runVoiceCloudJob(e, p);
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
+    if (claim.kind === "video_deadline") await wakeVideoWait(e, p.wait);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
       const claimedAt = Date.now();
@@ -733,11 +752,15 @@ async function processJob(e: Env, id: string) {
       ).bind(m.group_id, cursor).first();
       const newest = head.newest_id ? { id: head.newest_id } : null;
       const oldestAt = Date.parse(head.oldest_ts) || 0;
-      if (!p.mentionRecovery && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
+      if (!p.mentionRecovery && !p.voiceResume && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
         await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
-      const preloaded = p.mentionRecovery ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
+      let preloaded = p.mentionRecovery || p.voiceResume && m.ordinal <= cursor ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
+      if (p.voiceResume) preloaded = preloaded.filter((row: any) => row.ordinal <= m.ordinal);
+      const voiceBatch = await gateVoiceChat(e, id, p, preloaded);
+      if (!voiceBatch) return;
+      preloaded = voiceBatch;
       if (!preloaded.length) return;
       const latestPre = preloaded[preloaded.length - 1];
       (e as any).timingTurn = latestPre.id;
@@ -751,6 +774,16 @@ async function processJob(e: Env, id: string) {
           .bind(refId, m.group_id)
           .first();
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
+      }
+      const failedVoice = (latestPre.meta?.media || []).find((media: any) => media.kind === "voice" && media.asrError && !usableVoiceText(media.asr));
+      if (failedVoice && (latestPre.mentioned || latestPre.meta?.replyTo?.kind === 'bot')) {
+        await enqueueVoice(e, id, latestPre.group_id, latestPre.id, JSON.stringify({ mode: "work",
+          text: "这条语音没听清：" + failedVoice.asrError.reason_text + "。" + failedVoice.asrError.next_action + "。" }), { source: latestPre });
+        await recordDecision(e, { id, group_id: latestPre.group_id, latest_id: latestPre.id,
+          batch_ids: preloaded.map((r: any) => r.id), mentioned: true, gate: "voice_failed", action: "reply", forced: true, outbox_id: id });
+        await advanceCursor(e, m.group_id, cursor, preloaded);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
       }
       const sw = await loadSwitches(e);
       const hardStop = !addressedMessages({batch:preloaded}).length && !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
@@ -767,7 +800,7 @@ async function processJob(e: Env, id: string) {
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
         const imageOutcomes = await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
-        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true, imageOutcomes });
+        await job(e, p.voiceResume ? id + ":vision" : "chat-v-" + m.id, "chat", { ...(p.voiceResume ? p : {}), message: m.id, annotated: true, imageOutcomes });
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
       }
@@ -784,6 +817,10 @@ async function processJob(e: Env, id: string) {
       const mentioned = batch.some((r: any) => r.mentioned);
       const transferred = await videoWaitExists(e, m.group_id, batch.map((r: any) => r.id));
       const target = transferred ? null : videoTarget(batch, latest, context.recent, TEAM), ref = target?.ref ?? null;
+      if (!transferred) await prefetchTurn(e, { latest, recent: context.recent, target, cfg: TEAM });
+      if(target)(e as any).tail?.cache.push(['msgref:v1:'+target.target.sourceId,JSON.stringify({ref:target.ref,match:target.target.kind==='title'?'title':'id'}),iso()]);
+      // R8: map the message to the video it asked about, even when the fetch is already cached or still waiting.
+      if (target && (e as any).tail) (e as any).tail.cache.push(["msgref:v1:" + latest.id, JSON.stringify({ ref: target.ref, match: isTitleRef(target.ref) ? "title" : "id" }), iso()]);
       const cached = ref ? await biliCached(e, ref) : null;
       const decisionRow = { id, group_id: m.group_id, latest_id: latest.id, batch_ids: batch.map((r: any) => r.id), mentioned, waited: !!p.waited };
       const videoPlan=cached&&ref&&!transferred?await planVideo(e,cached,ref,'light',Date.now()):null;
@@ -821,12 +858,14 @@ async function processJob(e: Env, id: string) {
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
-        allowWait: allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
+        allowWait: !p.voiceResume && allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
         ...(cached ? { materials: videoPlan?.materials ?? [solo!.material], rules: videoPlan?.rules ?? (solo!.rule ? [solo!.rule] : []) } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
+      // A slow model must not renew a voice recovery beyond its source window.
+      if (p.voiceResume && !await gateVoiceChat(e, id, p, [latest])) return;
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
         await recordDecision(e, { ...decisionRow, gate: "model", action: "wait", forced: !!decision.forced, wait_seconds: decision.waitSeconds, reason: decision.reason });
@@ -834,9 +873,19 @@ async function processJob(e: Env, id: string) {
         return;
       }
       const spoken = decodeVoice(answer).text !== "[[SILENT]]";
-      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
+      const forcedPath = mentioned || !!decision.forced || isDirectRequest(latest, { batch });
+      const gateMode = parseGateMode(sw["gate:mode"]);
+      const gate = spoken && gateMode !== "off" && !forcedPath ? await gateCheck(e, { groupId: latest.group_id, latest, mentioned, forced: forcedPath, now: Date.now(), settings: sw }) : null;
+      if (gate && !gate.speak && gateMode === "on") {
+        await recordDecision(e, { ...decisionRow, gate: "gate", action: "stop", forced: false, reason: "gate:" + gate.reason, model_ms: Date.now() - modelStarted });
+        await advanceCursor(e, m.group_id, cursor, batch);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
+      }
+      const shadowReason = gate && !gate.speak ? "gate_shadow:" + gate.reason : "";
+      if (spoken) await enqueueVoice(e, id, latest.group_id, latest.id, answer, { source: latest, reference: await quoteRef(e, decision, { ...context, mentioned, groupNewestId: newest?.id }, sw) });
       await recordDecision(e, { ...decisionRow, gate: "model", action: decision.action ?? (spoken ? "reply" : "stop"), forced: !!decision.forced,
-        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: decision.reason, model_ms: Date.now() - modelStarted });
+        spoken_kind: spoken ? decision.kind : null, outbox_id: spoken ? id : null, target_id: decision.target, reason: [shadowReason, decision.reason].filter(Boolean).join(" ") || undefined, model_ms: Date.now() - modelStarted });
       await advanceCursor(e, m.group_id, cursor, batch);
       await set(
         e,
@@ -1004,13 +1053,28 @@ async function processJob(e: Env, id: string) {
   }
 }
 let qqToken: { app: string; value: string; expires: number } | undefined;
-async function sendOutbox(e: Env) {
+async function sendOutbox(e: Env, limit = 5) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   let rows = (
     await e.DB.prepare(
-      "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
-    ).all()
+      `SELECT o.*,om.json AS meta,${outboxExpirySql("o")} AS expires_at FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT ?2`,
+    ).bind(Date.now(), limit).all()
   ).results;
+  if (!rows.length) return;
+  const expired = rows.filter((o: any) => o.expires_at !== null && o.expires_at < Date.now());
+  if (expired.length) {
+    if (left(e) < 1) return;
+    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE status='pending' AND id IN ("+expired.map(()=>"?").join(',')+")")
+      .bind(...expired.map((o: any) => o.id)).run();
+    rows = rows.filter((o: any) => !expired.includes(o));
+  }
+  for (const o of rows.filter((r: any) => /^mention-(recovery|receipt):/.test(r.id))) {
+    if (left(e) < 2) return;
+    if (!await mentionSendAllowed(e, o)) {
+      await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+      rows = rows.filter((r: any) => r.id !== o.id);
+    }
+  }
   if (!rows.length) return;
   let switches: Record<string, string | undefined> | undefined;
   const stickerSources = new Map<string, any>();
@@ -1081,12 +1145,21 @@ async function sendOutbox(e: Env) {
       continue;
     }
     const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
+    if (/^mention-(recovery|receipt):/.test(o.id)) {
+      if (left(e) < COST.send_row + 2) break;
+      if (!await mentionSendAllowed(e, o)) {
+        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+        continue;
+      }
+    }
     const locked = await e.DB.prepare(
-      "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
+      `WITH validity AS (SELECT ${outboxExpirySql('o')} AS expires_at FROM outbox o WHERE o.id=?2)
+        UPDATE outbox SET status=CASE WHEN COALESCE((SELECT expires_at FROM validity),?1)>=?1 THEN 'sending' ELSE 'skipped' END
+        WHERE id=?2 AND status='pending' RETURNING id,status`,
     )
-      .bind(o.id)
+      .bind(Date.now(), o.id)
       .first();
-    if (!locked) continue;
+    if (!locked || locked.status !== 'sending') continue;
     await e.DB.prepare(
       "INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)",
     )
@@ -1164,8 +1237,16 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   if (left(e) < cost + COST.tail) return;
   await fn();
 }
-async function scheduled(e: Env) {
-  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
+const VIDEO_CRON = "*/5 * * * *";
+async function scheduled(e: Env, cron = "") {
+  // The dedicated five-minute trigger runs only the video fallback. The main
+  // one-minute trigger keeps chat delivery and leaves video rescans to it.
+  if (cron === VIDEO_CRON) {
+    await sweepVideoWaits(e, 15);
+    await flushTail(e);
+    return;
+  }
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 200 次 D1 预算，
   // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
   await runSchedules(e);
   await sweepMentions(e);
@@ -1233,10 +1314,15 @@ async function scheduled(e: Env) {
       await set(e, "dream_batches_" + date, String(batches + 1));
     }
   }
-  await sweepVideoWaits(e);
+  // Manual and test invocations keep the sweep; the deployed main trigger
+  // leaves video fallback to the dedicated five-minute trigger.
+  if (cron !== "* * * * *") await sweepVideoWaits(e, 15);
+  // Old reply-producing queue backlog must not become a deployment-time replay.
+  await e.DB.prepare(`UPDATE jobs SET status='failed',error='expired' WHERE kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<? AND (status='pending' OR (status='running' AND lease_until<?))`)
+    .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1272,21 +1358,25 @@ async function scheduled(e: Env) {
       counts.failed || 0,
     )
     .run();
-  await e.DB.prepare("DELETE FROM health_samples WHERE at<?")
-    .bind(Date.now() - 7 * 86400000)
-    .run();
-  await e.DB.prepare("DELETE FROM model_usage WHERE hour<?")
-    .bind(Date.now() - 30 * 86400000)
-    .run();
-  await e.DB.prepare("DELETE FROM model_runs WHERE created_at<?")
-    .bind(Date.now() - 30 * 86400000)
-    .run();
-  await e.DB.prepare(
-    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout') AND created_at<?",
-  )
-    .bind(Date.now() - 7 * 86400000)
-    .run();
-  if ((await setting(e, "budget_cleanup_day")) !== date) {
+  // Retention can wait a minute under backlog. Keep ten statements for the
+  // cleanup-day check/update, sessions/tasks, hourly prune, scan and sender.
+  if (left(e) >= 4 + 10) {
+    await e.DB.prepare("DELETE FROM health_samples WHERE at<?")
+      .bind(Date.now() - 7 * 86400000)
+      .run();
+    await e.DB.prepare("DELETE FROM model_usage WHERE hour<?")
+      .bind(Date.now() - 30 * 86400000)
+      .run();
+    await e.DB.prepare("DELETE FROM model_runs WHERE created_at<?")
+      .bind(Date.now() - 30 * 86400000)
+      .run();
+    await e.DB.prepare(
+      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
+    )
+      .bind(Date.now() - 7 * 86400000)
+      .run();
+  }
+  if ((await setting(e, "budget_cleanup_day")) !== date && left(e) >= 2 + 6) {
     await cleanupBudget(e);
     await set(e, "budget_cleanup_day", date);
   }
@@ -1303,12 +1393,18 @@ async function scheduled(e: Env) {
     .run();
   if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
-  await retryStickerTags(e);
-  await optionalCron(e, () => runCronExtras(e), 2);
+
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
-  // Finish mandatory maintenance before the sender spends its remaining budget.
-  await sendOutbox(e);
+  // Guarantee cheap discovery before the sender and optional extras spend the
+  // remaining budget. Schedules and daily repo pruning have already run.
+  const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
+  await sendOutbox(e, 10);
+  // Give scheduled replies first use of the sending budget, then fit each
+  // retry/failure to the actual remainder. New notices go out next tick.
+  await sweepStuckDeliveries(e, Date.now(), 1, stuckDeliveries);
+  await retryStickerTags(e);
+  await optionalCron(e, () => runCronExtras(e), 2);
   await flushTail(e);
 }
 function requestBodyLimit(r: Request) {
@@ -1455,7 +1551,7 @@ async function api(r: Request, e: Env) {
         await set(e, "runner_pause_until", String(Date.now() + 60000));
       if (b.resume) await set(e, "runner_pause_until", "0");
       const busy = await e.DB.prepare(
-        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status='sending')+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
+        "SELECT (SELECT COUNT(*) FROM jobs WHERE status='running')+(SELECT COUNT(*) FROM tasks WHERE status='running')+(SELECT COUNT(*) FROM outbox WHERE status IN ('sending','voice_sending'))+(SELECT COUNT(*) FROM settings WHERE key IN ('login-flow:bili','login-flow:x') AND json_extract(value,'$.claimed_at') IS NOT NULL AND json_extract(value,'$.expires_at')>? AND json_extract(value,'$.phase') IN ('waiting','scanned')) AS n",
       )
         .bind(Date.now())
         .first();
@@ -1470,7 +1566,11 @@ async function api(r: Request, e: Env) {
 
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
+    if (path.startsWith("/api/runner/voice/") && method === "POST")
+      return voiceRoute(e, path, await r.json());
 
+    if (path === "/api/runner/voice-outbox" && method === "POST") return json(await pullVoiceOutbox(e));
+    if (path === "/api/runner/voice-outbox/report" && method === "POST") return reportVoice(e, await r.json());
     if (path.endsWith("/gateway-status") && method === "POST") {
       const b: any = await r.json();
       await set(
@@ -1482,7 +1582,7 @@ async function api(r: Request, e: Env) {
           blocked: String(b.blocked || "").slice(0, 150),
         }),
       );
-      return json({ ok: true });
+      return json({ ok: true, voice: await voiceAvailable(e) });
     }
     if (path.endsWith("/delivery-target") && method === "POST") {
       const b: any = await r.json();
@@ -1539,6 +1639,28 @@ async function api(r: Request, e: Env) {
         if (!d) return json({ error: "unknown delivery" }, 404);
         if (["sent", "failed", "unknown", "needs_attention"].includes(d.status))
           return json({ ok: true, already: true });
+        if (b.status === "failed" && b.exhausted !== true) {
+          const now = Date.now();
+          const retry = await recordDeliveryRetry(e, b, { now });
+          if (!retry.expired)
+            return json({ ok: true, retry: true, attempts: retry.attempts });
+          const attempts = Math.max(1, Math.min(MAX_DELIVERY_ATTEMPTS, Number(b.attempts) || 1));
+          const attention = await recordDeliveryFailure(
+            e,
+            { ...b, attempts, error: attempts >= MAX_DELIVERY_ATTEMPTS ? b.error : "retry_expired" },
+            { now },
+          );
+          if (attention.recorded)
+            await activity(
+              e,
+              "delivery.needs_attention",
+              d.job_id,
+              "QQ网关",
+              "附件重试超出时限，已停止自动重发并在群里说明",
+              b.id + "-result",
+            );
+          return json({ ok: true, needs_attention: true });
+        }
         if (b.status === "failed" && b.exhausted === true) {
           const attention = await recordDeliveryFailure(e, b, { now: Date.now() });
           if (attention.recorded)
@@ -1570,6 +1692,10 @@ async function api(r: Request, e: Env) {
           .bind(b.status, count, iso(), b.id)
           .first();
         if (updated) {
+          if (b.status === "sent")
+            await e.DB.prepare(
+              "UPDATE delivery_retries SET needs_attention=0,updated_at=? WHERE delivery_id=?",
+            ).bind(iso(), b.id).run();
           await activity(
             e,
             "delivery." + b.status,
@@ -1858,6 +1984,37 @@ async function api(r: Request, e: Env) {
   }
   const who = await identity(r, e);
   if (!who) return json({ error: "请登录" }, 401);
+  if (path === "/api/team/outbox/resend" && method === "POST") {
+    if (who.role !== "owner") return json({ error: "owner only" }, 403);
+    const b: any = await r.json().catch(() => null);
+    const id = typeof b?.id === "string" ? b.id : "";
+    if (!id || id.length > 300) return json({ error: "无效的 outbox id" }, 400);
+    const row = await e.DB.prepare("SELECT * FROM outbox WHERE id=?").bind(id).first();
+    if (!row) return json({ error: "群消息不存在" }, 404);
+    const now = Date.now();
+    const age = Math.max(0, now - Number(row.created_at || 0));
+    const plan = {
+      id: row.id,
+      status: row.status,
+      created_at: row.created_at,
+      age_ms: age,
+      stale: age > 15 * 60_000,
+      group_id: row.group_id,
+      msg_id: row.msg_id,
+      body: row.body,
+      body_bytes: new TextEncoder().encode(String(row.body || "")).length,
+      expected: "1 条群文本消息；无附件",
+      eligible: ["failed", "unknown", "skipped"].includes(String(row.status)),
+    };
+    if (b.confirm !== true) return json({ dry_run: true, ...plan });
+    if (!plan.eligible) return json({ error: "这条消息已发送、正在发送或已在待发队列" }, 409);
+    const updated = await e.DB.prepare(
+      "UPDATE outbox SET status='pending' WHERE id=? AND status IN ('failed','unknown','skipped') RETURNING id",
+    ).bind(id).first();
+    if (!updated) return json({ error: "这条消息当前不能重发" }, 409);
+    await activity(e, "outbox.manual_resend", id, who.name, "人工把失败群消息重新入队：" + id.slice(0, 120));
+    return json({ ok: true, queued: true, ...plan, status: "pending" });
+  }
   if(path==='/api/team/service-login'){
     if(who.role!=='owner')return json({error:'owner only'},403);
     if(method==='GET')return loginState(e);
@@ -1874,7 +2031,7 @@ async function api(r: Request, e: Env) {
       return json({ error: "owner only" }, 403);
     const started = Date.now();
     try {
-      const provider = visionProvider({ ...e, DB: undefined }); // Smoke must not mutate production D1.
+      const provider = visionProvider({ ...e, DB: undefined, aiBudgetDB: e.DB }); // Smoke writes no business data; only the AI spend counter is shared.
       if (!provider)
         return json({ ok: false, error: "vision disabled" }, 503);
       const bytes = Uint8Array.from(atob(SELFTEST_PNG), (c) =>
@@ -2256,6 +2413,53 @@ async function api(r: Request, e: Env) {
   if (path.startsWith("/api/admin/")) {
     if (who.role !== "owner") return json({ error: "owner only" }, 403);
     const b: any = await r.json();
+    if (path === "/api/admin/daily-push" && method === "POST") {
+      // 只为 owner 创建；群和 owner 从原始请求消息取，不接受调用方另填。
+      const sourceId = String(b.source_msg_id || "").trim();
+      if (!sourceId) return json({ error: "source_msg_id required" }, 400);
+      const source = await e.DB.prepare(
+        "SELECT id,group_id,sender,ts,body FROM messages WHERE id=?",
+      )
+        .bind(sourceId)
+        .first();
+      if (!source) return json({ error: "source message not found" }, 404);
+      const input = {
+        group_id: source.group_id,
+        owner: source.sender,
+        kind: "digest_daily" as const,
+        spec: { time: String(b.time || "08:00") },
+        source_msg_id: source.id,
+      };
+      try {
+        if (b.dry_run) {
+          const plan = planSchedule(input);
+          return json({
+            ok: true,
+            dry_run: true,
+            would_write: true,
+            schedule: {
+              ...plan,
+              spec: JSON.stringify(plan.spec),
+              next_run_text: sydneyText(plan.next_run_at, plan.tz),
+            },
+            source: {
+              id: source.id,
+              ts: source.ts,
+              body: String(source.body || "").slice(0, 160),
+            },
+          });
+        }
+        const row = await createSchedule(e, input);
+        return json({
+          ok: true,
+          dry_run: false,
+          would_write: false,
+          schedule: publicSchedule(row),
+        });
+      } catch (error: any) {
+        return json({ ok: false, error: String(error?.message || error) }, 400);
+      }
+    }
     if (path.endsWith("/name-members") && method === "POST")
       return provisionNames(e, b);
     if (path.endsWith("/retry-job")) {
@@ -2497,10 +2701,11 @@ export default {
   },
   async queue(batch: any, e: Env) {
     const base = e;
-    e = metered(base);
+    const limit = queueLimit(batch?.queue);
+    e = metered(base, limit);
     for (let i = 0; i < batch.messages.length; i++) {
       const m = batch.messages[i];
-      e = metered(base);
+      e = metered(base, limit);
       await processJob(e, m.body.id);
       if (i < batch.messages.length - 1) await flushTail(e);
       m.ack();
@@ -2508,8 +2713,8 @@ export default {
     await sendOutbox(e);
     await flushTail(e);
   },
-  async scheduled(_c: any, e: Env, ctx: any) {
-    e = metered(e);
-    ctx.waitUntil(scheduled(e));
+  async scheduled(c: any, e: Env, ctx: any) {
+    e = metered(e, D1_BUDGET.background);
+    ctx.waitUntil(scheduled(e, c?.cron || ""));
   },
 };

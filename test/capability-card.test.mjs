@@ -135,7 +135,7 @@ test('C4-1 extra tools merge into one 还能 line; base rows keep full wording',
 
 test('C4-2 real tool table card keeps base rows whole with generate_image squeezed in',async()=>{
   const req=await request('你都能干啥');
-  const extraNames=['calc','search_emoji','forget_profile','get_profile','news_search','read_document','recall_episode','search_code','search_pr_issue','search_history','search_kb','summarize_chat','generate_image'];
+  const extraNames=['calc','search_emoji','forget_profile','get_profile','news_search','read_document','recall_episode','search_code','search_pr_issue','search_history','search_kb','summarize_chat','generate_image','web_search','fetch_page','read_image_text'];
   const table=[...req.tools,tool('generate_image','按提示词生成图片。')];
   const card=api.capabilityCard(table,{switches:{},extraNames});
   assert.ok([...card].length<=api.CARD_MAX,`card ${[...card].length} > ${api.CARD_MAX}`);

@@ -87,13 +87,16 @@ function clip(text: string, max: number): string {
 
 type Entry = { name: string; desc: string; limit: string; off: boolean };
 
-function row(e: Entry, descMax: number): string {
+/** Wording the bot must repeat verbatim: never clipped, however many tools the card lists. */
+const KEEP_WHOLE = new Set(["prepare_project_task"]);
+
+function row(e: Entry, descMax: number, compact = false): string {
   return (
     "- " +
     e.name +
     "：" +
-    clip(e.desc, descMax) +
-    (e.limit ? " / " + e.limit : "") +
+    clip(e.desc, KEEP_WHOLE.has(e.name) ? Number.POSITIVE_INFINITY : descMax) +
+    (e.limit && !(compact && e.limit === DEFAULT_LIMIT) ? " / " + e.limit : "") +
     (e.off ? "（当前已关闭）" : "")
   );
 }
@@ -123,11 +126,12 @@ function compose(
   rows: Entry[],
   extras: Entry[],
   descMax: number,
+  compact = false,
   selfSummary?: string,
 ): string {
   return [
     CARD_HEADER,
-    ...rows.map((e) => row(e, descMax)),
+    ...rows.map((e) => row(e, descMax, compact)),
     ...(extras.length ? [extraLine(extras)] : []),
     CARD_BOUNDARY,
     ...(selfSummary ? [selfSummary] : []),
@@ -167,11 +171,13 @@ export function capabilityCard(
   }
   const rows = entries.filter((e) => !extraNames.has(e.name));
   const extras = entries.filter((e) => extraNames.has(e.name));
-  const full = compose(rows, extras, Number.POSITIVE_INFINITY, opts?.selfSummary);
+  const full = compose(rows, extras, Number.POSITIVE_INFINITY, false, opts?.selfSummary);
   if ([...full].length <= CARD_MAX) return full;
-  for (const max of [40, 28, 20, 14, 10, 6, 3]) {
-    const shortened = compose(rows, extras, max, opts?.selfSummary);
+  // Many tools: drop the generic tail before cutting descriptions to nothing.
+  const tiers: Array<[number, boolean]> = [[40, false], [28, false], [20, false], [40, true], [28, true], [20, true], [14, true], [10, true], [6, true], [3, true]];
+  for (const [max, compact] of tiers) {
+    const shortened = compose(rows, extras, max, compact, opts?.selfSummary);
     if ([...shortened].length <= CARD_MAX) return shortened;
   }
-  return [...compose(rows, extras, 1, opts?.selfSummary)].slice(0, CARD_MAX).join("");
+  return [...compose(rows, extras, 1, true, opts?.selfSummary)].slice(0, CARD_MAX).join("");
 }

@@ -24,7 +24,12 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
-      - run: npm run test:runner
+      - name: Install runner test dependencies
+        run: |
+          python3 -m venv .venv-runner
+          .venv-runner/bin/python -m pip install --quiet -r runner/requirements.txt
+      - name: Run Python runner tests
+        run: PATH="$PWD/.venv-runner/bin:$PATH" npm run test:runner
       - run: npm run check:ui
       - run: npm ci --prefix clients
       - run: npm test --prefix clients
