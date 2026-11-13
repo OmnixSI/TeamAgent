@@ -7,10 +7,17 @@ async function load() {
   return import("data:text/javascript;base64," + Buffer.from(out.outputFiles[0].text).toString("base64"));
 }
 
-test("empty registry: no extra defs, unknown tool is an error", async () => {
+// The registry is no longer empty once F7 tools land; keep this test about the
+// extension-point contract instead of assuming zero registrations.
+test("registry defs resolve via findExtraTool and unknown tool is an error", async () => {
   const k = await load();
-  assert.deepEqual(k.extraToolDefs(), []);
+  const defs = k.extraToolDefs();
+  assert.ok(Array.isArray(defs));
+  for (const def of defs) assert.equal(k.findExtraTool(def.function.name)?.name, def.function.name);
+  assert.deepEqual(
+    k.extraUntrustedNames().sort(),
+    defs.filter((d) => k.findExtraTool(d.function.name).untrusted).map((d) => d.function.name).sort(),
+  );
   assert.equal(k.findExtraTool("nope"), undefined);
-  assert.deepEqual(k.extraUntrustedNames(), []);
   assert.deepEqual(await k.runExtraTool({ DB: {} }, "nope", {}, { context: {}, messages: [], isTainted: () => false }), { error: "unknown tool" });
 });
