@@ -1,7 +1,7 @@
 import { TEAM } from "./config";
 import { REPOS } from "./policy";
 
-export type CommandName = "help" | "status" | "stop" | "recall";
+export type CommandName = "help" | "status" | "stop" | "recall" | "voice";
 
 export type CommandInput = {
   groupId: string;
@@ -14,6 +14,7 @@ const HELP = `命令
 /help 这张说明
 /status 版本、开关、令牌、索引、任务、定时
 /stop 停掉本群正在跑的长任务
+/voice [on|off|auto] 查看或设置本群语音回复（管理员）
 /方案 <仓库> <目标> 整理方案
 /开工 <仓库> <目标> 交给本机执行
 @我 + 帮我画/生成一张……的图
@@ -65,6 +66,7 @@ export function parseCommand(text: string): CommandName | null {
     .replace(/[。！!？?，,、；;：:]+$/u, "")
     .trim();
   if (!t) return null;
+  if (/^\/voice(?:\s|$)/i.test(t)) return "voice";
   if (/^\/help(?:@\S+)?$/i.test(t) || /^(?:help|帮助|指令|命令)$/i.test(t))
     return "help";
   if (
@@ -301,14 +303,16 @@ export async function handleCommand(
 ): Promise<boolean> {
   const cmd = parseCommand(input.text);
   if (!cmd) return false;
+  let role: string | undefined;
   if (input.memberId) {
-    const member = await e.DB.prepare("SELECT revoked FROM members WHERE id=?")
+    const member = await e.DB.prepare("SELECT revoked,role FROM members WHERE id=?")
       .bind(input.memberId)
       .first();
     if (member?.revoked) return true;
+    role = member?.role;
   }
   const bodies =
-    cmd === "help"
+    cmd === "voice" ? [await voiceCommand(e, input, role)] : cmd === "help"
       ? [HELP]
       : cmd === "status"
         ? [await statusReport(e)]
@@ -329,4 +333,19 @@ export async function handleCommand(
     ),
   );
   return true;
+}
+
+async function voiceCommand(e:any, input:CommandInput, role?:string):Promise<string> {
+  const arg = input.text.trim().split(/\s+/).slice(1);
+  const key = "voice:mode:" + input.groupId;
+  if (!arg.length) {
+    const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (?, 'voice:mode')").bind(key).all()).results;
+    const sw = Object.fromEntries(rows.map((r:any)=>[r.key,r.value]));
+    return "本群语音回复：" + (sw[key] ?? sw["voice:mode"] ?? "auto") + "（auto：语音消息或明确要求时使用）";
+  }
+  if (arg.length !== 1 || !["on","off","auto"].includes(arg[0])) return "用法：/voice on|off|auto";
+  if (!["owner","admin"].includes(role || "")) return "只有管理员或群主可以修改语音回复模式。";
+  const mode = arg[0] === "on" ? "always" : arg[0];
+  await e.DB.prepare("INSERT OR REPLACE INTO settings VALUES(?,?)").bind(key,mode).run();
+  return "本群语音回复已设为 " + mode + "。";
 }
