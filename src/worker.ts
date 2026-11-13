@@ -24,6 +24,7 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
+import { runSchedules } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -1270,6 +1271,8 @@ async function scheduled(e: Env) {
   await retryStickerTags(e);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先入 outbox，再由本 tick 的发送器发出。
+  await runSchedules(e);
   // Finish mandatory maintenance before the sender spends its remaining budget.
   await sendOutbox(e);
   await flushTail(e);
