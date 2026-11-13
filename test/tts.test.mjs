@@ -17,6 +17,8 @@ const { synthesize, voiceReply, pruneCache, ttsKey, edgeTtsCommand, EDGE_VOICE }
   await import("../runner/tts.mjs");
 
 const cfg = { enabled: true, max_chars: 300, voice: EDGE_VOICE, rate: "+0%" };
+const FAKE_SILK = Buffer.concat([Buffer.from([0x02]), Buffer.from("#!SILK_V3"), Buffer.alloc(16, 5)]);
+const fakeSilk = async () => ({ ok: true, data: FAKE_SILK, duration_ms: 1000, sample_rate: 24000 });
 const scratch = (prefix = "tts-test-") => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   return { dir, cacheDir: path.join(dir, "cache"), clean: () => fs.rmSync(dir, { recursive: true, force: true }) };
@@ -43,7 +45,7 @@ async function gatewayReplay({ text, mode = "care", settings = cfg, bot, deps = 
     await bot.sendText(target, text);
     return { via: "text", reason: "policy" };
   }
-  return voiceReply({ bot, group: "g1", text, cfg: settings, deps });
+  return voiceReply({ bot, group: "g1", text, cfg: settings, deps: { wavToSilk: fakeSilk, ...deps } });
 }
 const audioFixture = (dir) => {
   const file = path.join(dir, "reply.wav");
@@ -64,7 +66,8 @@ test("fake gateway replay: a care reply goes out as voice, not text", async () =
     assert.equal(result.via, "voice");
     assert.deepEqual(bot.calls.map((c) => c.kind), ["voice"]);
     assert.deepEqual(bot.calls[0].target, { scope: "group", targetId: "g1" });
-    assert.deepEqual(bot.calls[0].source, { localPath: file });
+    assert.ok(bot.calls[0].source.buffer.equals(FAKE_SILK));
+    assert.equal(result.silk_bytes, FAKE_SILK.length);
   } finally {
     s.clean();
   }
@@ -259,7 +262,7 @@ test("cache keys separate text, voice and rate; pruning drops expired and excess
   assert.equal(ttsKey("你好", "v1", "+0%").length, 64);
   assert.equal(
     ttsKey("你好", "v1", "+0%"),
-    crypto.createHash("sha256").update("v1|+0%|你好").digest("hex"),
+    crypto.createHash("sha256").update("edge|v1|+0%|你好").digest("hex"),
   );
   const s = scratch();
   try {
