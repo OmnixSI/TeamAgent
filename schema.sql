@@ -70,3 +70,27 @@ CREATE INDEX IF NOT EXISTS repo_commits_at ON repo_commits(repo, at DESC);
 CREATE TABLE IF NOT EXISTS repo_state(
   repo TEXT PRIMARY KEY, json TEXT NOT NULL, fingerprint TEXT NOT NULL,
   updated_at INTEGER NOT NULL, checked_at INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS kb_docs(
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS kb_docs_group ON kb_docs(group_id, created_at);
+CREATE TABLE IF NOT EXISTS kb_chunks(
+  id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS kb_chunks_group_doc ON kb_chunks(group_id, doc_id, idx);
+CREATE INDEX IF NOT EXISTS kb_chunks_doc ON kb_chunks(doc_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
+  text,
+  title,
+  chunk_id UNINDEXED,
+  doc_id UNINDEXED,
+  group_id UNINDEXED,
+  tokenize='trigram');

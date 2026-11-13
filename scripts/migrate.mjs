@@ -21,7 +21,7 @@ function execute(command) {
     throw Error("Migration failed");
   return result;
 }
-for (const file of ["schema.sql", "migrations/0002_plan_authority.sql", "migrations/0003_stage_timings.sql", "migrations/0004_repo_index.sql"]) {
+for (const file of ["schema.sql", "migrations/0002_plan_authority.sql", "migrations/0003_stage_timings.sql", "migrations/0004_repo_index.sql", "migrations/0026_kb.sql"]) {
   const result = execute(readFileSync(file, "utf8"));
   if (file === "schema.sql") { ensureVideoWaitAttempts(execute); ensureVideoWaitPhase(execute); }
   console.log(file + ": " + result.length + " statements applied");
