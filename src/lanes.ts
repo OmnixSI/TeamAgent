@@ -1,6 +1,6 @@
 /** Chat, tool work and deep reasoning have separate queue consumers. */
 export function queueFor(e: any, kind: string, payload: any = {}) {
-  if (kind === "fetch") return null;
+  if (["fetch","bili_media"].includes(kind)) return null;
   if (["video_reply", "chat", "voice_notice", "claim_notice"].includes(kind))
     return e.CHAT || e.WORK;
   if (
