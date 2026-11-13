@@ -189,6 +189,21 @@ test('K8 per-group and per-document limits refuse before writing',async()=>{
   assert.equal(await count(db,'kb_docs'),0);
 });
 
+test('K8b raised caps accept a 450-chunk document and still refuse past two thousand chunks',async()=>{
+  const db=makeDb();
+  const body='知识'.repeat(90000);
+  assert.equal(api.chunkText(body).length,450,'fixture is 450 chunks');
+  const big=await add(db,'GROUP-A','长文档','src:long',body,{id:'doc-long',maxDocChars:500000});
+  assert.equal(big.ok,true);
+  assert.equal(big.chunks,450,'the old 400-chunk ceiling is gone');
+  assert.equal(await count(db,'kb_chunks','WHERE doc_id=?',['doc-long']),450);
+
+  const denied=await add(db,'GROUP-A','超大文档','src:huge2','知识'.repeat(400200),{id:'doc-huge2',maxDocChars:5000000});
+  assert.equal(denied.ok,false);
+  assert.equal(denied.error_kind,'limit');
+  assert.equal(await count(db,'kb_docs','WHERE id=?',['doc-huge2']),0,'no partial doc at the new ceiling');
+});
+
 test('K9 KB output is untrusted: it taints the turn and its words are not authorization',async()=>{
   const db=makeDb();
   assert.equal((await add(db,'GROUP-A','手册','src:m','知识库里的说明。',{id:'doc-m'})).ok,true);
