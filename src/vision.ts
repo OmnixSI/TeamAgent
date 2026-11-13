@@ -1,4 +1,5 @@
 import { chunks } from "./d1";
+import { getCached, primeImageCache, sourceSha } from "./imagecache";
 import { TEAM } from "./config";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
@@ -28,6 +29,7 @@ export interface VisionProvider {
 }
 export type ImagePick = {
   messageId: string;
+  groupId?: string;
   idx: number;
   media: Media;
   hint: string;
@@ -44,6 +46,7 @@ export type VisionEvent = {
   bytes?: number;
   hop?: number;
   detail?: "url" | "redirect_host" | "redirect_location";
+  cached?: true;
   elapsedMs?: number;
   traceId?: string;
 };
@@ -121,6 +124,7 @@ export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: Image
       + (outcome.reason === "http" && Number.isInteger(outcome.http) ? "，HTTP " + outcome.http : "")
       + (outcome.reason === "mime" && outcome.mime ? "，MIME " + outcome.mime : "")
       + "；reason=" + outcome.reason + position + (download ? "；请重发图片" : "；请稍后重试")
+      + (outcome.cached ? (outcome.reason === "http" ? "；原图已过期且收到时没能保存" : "；收到消息时没能保存原图") : "")
       + "；toolFailure=" + JSON.stringify(visionFailure(outcome)) + "）";
     notes.set(outcome.messageId, list);
   }
@@ -309,7 +313,7 @@ export function pickImages(
     const key = row.id + ":" + idx;
     if (seen.has(key)) return;
     seen.add(key);
-    picks.push({ messageId: row.id, idx, media, hint });
+    picks.push({ messageId: row.id, ...(row.group_id ? { groupId: String(row.group_id) } : {}), idx, media, hint });
   };
   const images = (row: any) => {
     let imageIdx = -1;
@@ -433,12 +437,26 @@ export async function describeImage(
   signal: AbortSignal,
   version = VISION_VERSION,
   report: Report = reportVision,
+  groupId?: string,
 ): Promise<ImageNote | null> {
   try {
     aborted(signal);
     if (!img.url) throw new VisionFault("blocked");
-    const fetched = await fetchImage(img.url, signal, 5_000_000, report);
-    if (!fetched) return null;
+    let cached: any = null;
+    try { cached = await getCached(e, await sourceSha(img.url), groupId); } catch { cached = null; }
+    if (cached?.data) return await describeBytes(e, cached.data, cached.mime || "image/jpeg", hint, signal, version, report);
+    let lastHttp = 0;
+    const fetched = await fetchImage(img.url, signal, 5_000_000, (event) => {
+      if (event.status === "failed" && Number.isInteger(event.http)) lastHttp = event.http!;
+      report(event);
+    });
+    if (!fetched) {
+      if (cached?.error_kind) {
+        const reason = ({ too_large: "oversize", denied: "blocked", timeout: "timeout" } as Record<string, VisionReason>)[cached.error_kind] || "http";
+        report({ stage: "fetch", status: "failed", reason, cached: true, ...(lastHttp ? { http: lastHttp } : {}) });
+      }
+      return null;
+    }
     return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version, report);
   } catch (error) {
     failed(report, "fetch", error, signal, "network");
@@ -533,17 +551,21 @@ async function describeBytesOnce(e: any, bytes: Uint8Array, mime: string, hint: 
 export async function coldPicks(e: any, picks: ImagePick[]): Promise<ImagePick[]> {
   if (!picks.length) return [];
   const ids = [...new Set(picks.map((p) => p.messageId))];
-  const existing = new Set(
-    (
-      await e.DB.prepare(
-        "SELECT message_id,idx FROM message_images WHERE message_id IN (" +
-          ids.map(() => "?").join(",") +
-          ")",
-      )
-        .bind(...ids)
-        .all()
-    ).results.map((r: any) => r.message_id + ":" + r.idx),
-  );
+  const shas = await Promise.all(picks.map((p) => (p.media?.url ? sourceSha(p.media.url) : Promise.resolve(""))));
+  const wanted = [...new Set(shas.filter(Boolean))];
+  const blank = "NULL AS sha,NULL AS group_id,NULL AS mime,NULL AS data,NULL AS skipped_reason,NULL AS error_kind,NULL AS expires_at,NULL AS bytes,NULL AS created_at,NULL AS source_msg,NULL AS source_idx,NULL AS error_stage";
+  const note = "SELECT 'note' AS row_kind,message_id,idx," + blank + " FROM message_images WHERE message_id IN (";
+  const cache = " UNION ALL SELECT 'cache',NULL,NULL,sha,group_id,mime,data,skipped_reason,error_kind,expires_at,bytes,created_at,source_msg,source_idx,error_stage FROM image_cache WHERE sha IN (";
+  const rows = (
+    await e.DB.prepare(
+      note + ids.map(() => "?").join(",") + ")" + (wanted.length ? cache + wanted.map(() => "?").join(",") + ") AND expires_at>?" : ""),
+    )
+      .bind(...ids, ...wanted, ...(wanted.length ? [Date.now()] : []))
+      .all()
+  ).results;
+  // F8-V2: the same statement prefetches cached bytes, so a vision turn pays no extra D1 query.
+  primeImageCache(e, rows.filter((r: any) => r.row_kind === "cache"), wanted);
+  const existing = new Set(rows.filter((r: any) => r.row_kind === "note").map((r: any) => r.message_id + ":" + r.idx));
   return picks.filter(p => !existing.has(p.messageId + ":" + p.idx));
 }
 
@@ -572,6 +594,7 @@ export async function annotateTurn(
             controller.signal,
             VISION_VERSION,
             report,
+            p.groupId,
           );
           if (!note) return failureOutcome(outcome);
           try {
