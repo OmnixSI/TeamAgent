@@ -6,7 +6,7 @@ import {build} from 'esbuild';
 import {env,qq,req} from './support.mjs';
 
 const outfile=`.wrangler/event-replay-${process.pid}.mjs`;
-await build({stdin:{contents:'export {normalize} from "./src/event/normalize";export {toInbound} from "./src/inbound";export {renderEvidence} from "./src/view";',resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'browser',format:'esm',outfile});
+await build({stdin:{contents:'export {normalize} from "./src/event/normalize";export {toInbound} from "./src/inbound";export {renderEvidence} from "./src/view";export {biliNoteText} from "./src/fetchjobs";',resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'browser',format:'esm',outfile});
 const api=await import('../'+outfile);
 const legacyOut=`.wrangler/event-replay-legacy-${process.pid}.mjs`;
 await build({entryPoints:['test/fixtures/legacy/inbound-68ef1c3.ts'],bundle:true,platform:'browser',format:'esm',outfile:legacyOut});
@@ -31,6 +31,12 @@ test('event fixture manifest matches the acceptance table (88 fixtures)',()=>{
 });
 
 for(const item of fixtures){
+ if(item.kind==='bili'){
+  test(`${item.id} ${item.note}`,()=>{
+   assert.equal(api.biliNoteText(item.bili,item.opts||{}),item.expect.noteText,item.id+' note text');
+  });
+  continue;
+ }
  if(item.kind==='todo'){test.todo(`${item.id} ${item.note} — ${item.skip}`);continue;}
  if(item.kind==='evidence'){
   test(`${item.id} ${item.note}`,()=>{

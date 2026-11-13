@@ -48,7 +48,7 @@ test('F-T1b research injects cached Bili material for short and BV refs, without
       const joined = JSON.stringify(prompt.materials);
       assert.match(joined, /10月鸿蒙智行销量暴跌/, id);
       assert.match(joined, /BV1GN4p6pEEP/, id);
-      assert.match(joined, /本条没有字幕；画面和音轨目前读不了/, id);
+      assert.match(joined, /没拿到字幕，以下基于标题与评论/, id);
     });
   }
   const e = await setup();
@@ -80,7 +80,7 @@ test('F-T1c research resume path receives cached Bili material after tool handof
     const all = JSON.stringify(seen);
     assert.match(all, /10月鸿蒙智行销量暴跌/);
     assert.match(all, /BV1GN4p6pEEP/);
-    assert.match(all, /本条没有字幕；画面和音轨目前读不了/);
+    assert.match(all, /没拿到字幕，以下基于标题与评论/);
   });
 });
 

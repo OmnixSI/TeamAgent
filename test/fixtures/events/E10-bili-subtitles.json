@@ -4,31 +4,148 @@
   "group": "G10",
   "source": "doc",
   "note": "有字幕直接读",
-  "kind": "todo",
-  "skip": "bili v2 门控未进本版（有字幕直接读）"
+  "kind": "bili",
+  "bili": {
+   "bvid": "BV1xx411c7mD",
+   "title": "测试视频标题",
+   "desc": "视频简介",
+   "owner": "UP 主",
+   "tname": "科技",
+   "duration": 60,
+   "pubdate": 1,
+   "stat": {
+    "view": 20,
+    "like": 3,
+    "coin": 1,
+    "favorite": 2,
+    "reply": 2
+   },
+   "comments": [
+    {
+     "uname": "观众",
+     "message": "热评"
+    }
+   ],
+   "tier": "light",
+   "fetched_at": "2026-11-13T00:00:00.000Z",
+   "subtitle": "字幕正文",
+   "subtitle_lang": "zh-CN",
+   "subtitle_status": "ok"
+  },
+  "opts": {},
+  "expect": {
+   "noteText": "BV号：BV1xx411c7mD\n标题：测试视频标题\nUP主：UP 主\n时长：60秒\n热评：观众：热评\n【已取得字幕】\n分区：科技\n简介：视频简介\n字幕（zh-CN）：字幕正文"
+  }
  },
  {
   "id": "EV10-2",
   "group": "G10",
   "source": "doc",
   "note": "无字幕只下音频走本机 X-ASR",
-  "kind": "todo",
-  "skip": "bili v2 门控未进本版（无字幕只下音频走本机 X-ASR）"
+  "kind": "bili",
+  "bili": {
+   "bvid": "BV1xx411c7mD",
+   "title": "测试视频标题",
+   "desc": "视频简介",
+   "owner": "UP 主",
+   "tname": "科技",
+   "duration": 60,
+   "pubdate": 1,
+   "stat": {
+    "view": 20,
+    "like": 3,
+    "coin": 1,
+    "favorite": 2,
+    "reply": 2
+   },
+   "comments": [
+    {
+     "uname": "观众",
+     "message": "热评"
+    }
+   ],
+   "tier": "light",
+   "fetched_at": "2026-11-13T00:00:00.000Z",
+   "subtitle": null,
+   "subtitle_lang": null,
+   "subtitle_status": "none"
+  },
+  "opts": {
+   "asr": true
+  },
+  "expect": {
+   "noteText": "BV号：BV1xx411c7mD\n标题：测试视频标题\nUP主：UP 主\n时长：60秒\n热评：观众：热评\n【已读元数据/热评】\n分区：科技\n简介：视频简介\n无 CC 字幕。没拿到字幕；已用本机语音转写读取音轨，转写见【bilibili-asr】素材。未查看画面。"
+  }
  },
  {
   "id": "EV10-3",
   "group": "G10",
   "source": "doc",
   "note": "ASR 失败如实告知",
-  "kind": "todo",
-  "skip": "bili v2 门控未进本版（ASR 失败如实告知）"
+  "kind": "bili",
+  "bili": {
+   "bvid": "BV1xx411c7mD",
+   "title": "测试视频标题",
+   "desc": "视频简介",
+   "owner": "UP 主",
+   "tname": "科技",
+   "duration": 60,
+   "pubdate": 1,
+   "stat": {
+    "view": 20,
+    "like": 3,
+    "coin": 1,
+    "favorite": 2,
+    "reply": 2
+   },
+   "comments": [
+    {
+     "uname": "观众",
+     "message": "热评"
+    }
+   ],
+   "tier": "light",
+   "fetched_at": "2026-11-13T00:00:00.000Z",
+   "subtitle": null,
+   "subtitle_lang": null,
+   "subtitle_status": "none"
+  },
+  "opts": {},
+  "expect": {
+   "noteText": "BV号：BV1xx411c7mD\n标题：测试视频标题\nUP主：UP 主\n时长：60秒\n热评：观众：热评\n【已读元数据/热评】\n分区：科技\n简介：视频简介\n无 CC 字幕。没拿到字幕，以下基于标题与评论。未查看画面或听取音轨。"
+  }
  },
  {
   "id": "EV10-4",
   "group": "G10",
   "source": "doc",
   "note": "B站视频总结",
-  "kind": "todo",
-  "skip": "bili v2 门控未进本版（B站视频总结）"
+  "kind": "bili",
+  "bili": {
+   "bvid": "BV1xx411c7mD",
+   "title": "测试视频标题",
+   "desc": "视频简介",
+   "owner": "UP 主",
+   "tname": "科技",
+   "duration": 60,
+   "pubdate": 1,
+   "stat": {
+    "view": 20,
+    "like": 3,
+    "coin": 1,
+    "favorite": 2,
+    "reply": 2
+   },
+   "comments": [],
+   "tier": "light",
+   "fetched_at": "2026-11-13T00:00:00.000Z",
+   "subtitle": "第一句字幕。\n第二句字幕。",
+   "subtitle_lang": "zh-CN",
+   "subtitle_status": "ok"
+  },
+  "opts": {},
+  "expect": {
+   "noteText": "BV号：BV1xx411c7mD\n标题：测试视频标题\nUP主：UP 主\n时长：60秒\n热评：未读到\n【已取得字幕】\n分区：科技\n简介：视频简介\n字幕（zh-CN）：第一句字幕。\n第二句字幕。"
+  }
  }
 ]
