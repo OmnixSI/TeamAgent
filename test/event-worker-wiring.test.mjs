@@ -65,7 +65,7 @@ test('M1-R own and parallel images persist normalized owner/origin/animation in 
   await qq(e,{...msg('image-meta','看图'),message_type:101,msg_elements:[{attachments:[{url,content_type:'image/gif'}]}]});
   const r=await row(e,'image-meta');
   assert.deepEqual(r.meta.images,[{url,owner:'member1',origin:'own',animated:true}]);
-  assert.match(view(r).material.media[0],/member1发的动图/);
+  assert.equal(view(r).material.media[0],'成员ber1发的动图');
 });
 
 for(const [type,kind] of [['GROUP_ADD_ROBOT','bot_added'],['GROUP_DEL_ROBOT','bot_removed']])
