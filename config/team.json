@@ -134,6 +134,19 @@
       "send": 20
     }
   },
+  "feature_requests": {
+    "enabled": true,
+    "auto_senders": [],
+    "daily_auto_cap": 5,
+    "daily_cap_per_sender": 10,
+    "group_daily_cap": 30,
+    "max_developing": 2,
+    "lease_hours": 6,
+    "stale_hours": 72,
+    "quote_max": 600,
+    "title_max": 80,
+    "detail_max": 2000
+  },
   "voice": {
     "tts": {
       "enabled": false,

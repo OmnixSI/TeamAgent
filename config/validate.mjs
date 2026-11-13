@@ -121,6 +121,14 @@ export function validateTeamConfig(c) {
   // send is deliberately fail-closed at runtime: only literal true enables it.
   for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
   for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
+  if (c?.feature_requests !== undefined) {
+    const fr = c.feature_requests;
+    const ok = fr && typeof fr === 'object' && !Array.isArray(fr);
+    check(ok && typeof fr.enabled === 'boolean', 'feature_requests.enabled');
+    check(ok && Array.isArray(fr.auto_senders) && fr.auto_senders.every(x => typeof x === 'string' && x.trim().length > 0), 'feature_requests.auto_senders');
+    for (const key of ['daily_auto_cap','daily_cap_per_sender','group_daily_cap','max_developing','lease_hours','stale_hours','quote_max','title_max','detail_max'])
+      check(ok && integer(fr[key], 1, Number.MAX_SAFE_INTEGER), 'feature_requests.'+key);
+  }
   errors.push(...validateMcpServers(c?.mcp_servers));
   return errors;
 }
