@@ -21,6 +21,7 @@ import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVo
 import { runCronExtras } from "./cron-extra";
 import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
+import { SELF_CARD } from "./self-card.generated";
 import { parseInbound, extractBili } from "./inbound";
 import { loadBatch, loadChatContext } from "./context";
 import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
@@ -1392,6 +1393,7 @@ async function scheduled(e: Env, cron = "") {
     .run();
   if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
+
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
   // Guarantee cheap discovery before the sender and optional extras spend the
@@ -1522,6 +1524,7 @@ async function api(r: Request, e: Env) {
       ok: true,
       service: "team-agent",
       release: e.RELEASE || "development",
+      selfCard: { commit: SELF_CARD.commit, built_at: SELF_CARD.built_at },
     });
   if (path === "/api/qq/events" && method === "POST") return receive(r, e);
   if (path === "/api/team/join" && method === "POST") {

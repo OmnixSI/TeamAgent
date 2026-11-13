@@ -1,6 +1,7 @@
 // One line per F7 tool: import { xxxTool } from "./xxx"; then add it to EXTRA_TOOLS (keep one per line, alphabetical).
 import type { BotTool } from "../toolkit";
 import { calcTool } from "./calc";
+import { describeSelfTool } from "./describe-self";
 import { emojiSearchTool } from "./emoji-search";
 import { fetchPageTool } from "./fetch-page";
 import { generateImageTool } from "./generate-image";
@@ -17,6 +18,7 @@ import { webSearchTool } from "./web-search";
 
 export const EXTRA_TOOLS: BotTool[] = [
   calcTool,
+  describeSelfTool,
   emojiSearchTool,
   fetchPageTool,
   forgetProfileTool,
