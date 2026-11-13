@@ -21,6 +21,8 @@ const TABLES = [
   "members",
   "messages",
   "message_meta",
+  "image_notes",
+  "message_images",
   "settings",
   "outbox",
   "outbox_meta",
@@ -131,6 +133,13 @@ for (const table of TABLES) {
   if (table === "repo_cache") {
     // D-1 exports only repo + updated_at; schema still requires a JSON blob.
     rows = rows.map((row) => ({ ...row, json: "{}" }));
+  }
+  if (table === "image_notes") {
+    // v2 exports only sha/desc/tags/text; schema keeps legacy defaults.
+    rows = rows.map((row) => ({ sticker_like: 0, created_at: 0, ...row }));
+  }
+  if (maxRowid && table === "message_images" && keptMessageIds) {
+    rows = rows.filter((row) => keptMessageIds.has(row.message_id));
   }
   if (maxRowid && table === "messages") {
     rows = rows.filter((row) => Number(row.rid) <= maxRowid);

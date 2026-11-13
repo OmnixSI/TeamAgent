@@ -124,9 +124,19 @@ QUERIES = [
         "SELECT rowid AS rid, repo, updated_at FROM repo_cache ORDER BY repo",
     ),
     (
-        # Never export token_hash.
+        # v2: image metadata only; never image bytes.
+        "message_images",
+        "SELECT rowid AS rid, message_id, idx, sha FROM message_images ORDER BY message_id, idx",
+    ),
+    (
+        # v2: image OCR/description only, no sticker_like/bytes.
+        "image_notes",
+        "SELECT rowid AS rid, sha, desc, tags, text FROM image_notes ORDER BY sha",
+    ),
+    (
+        # Never export token_hash.  v2 adds revoked for provenance membership checks.
         "members",
-        "SELECT rowid AS rid, id, name, role FROM members ORDER BY id",
+        "SELECT rowid AS rid, id, name, role, revoked FROM members ORDER BY id",
     ),
     (
         # Whitelist only.  auth:* and any other credential-bearing key stays online.
@@ -136,6 +146,8 @@ QUERIES = [
         "OR key LIKE 'chat_cursor:%' OR key LIKE 'off:%' ORDER BY key",
     ),
 ]
+
+OPTIONAL_TABLES = {"message_images", "image_notes", "outbox_meta"}
 
 COUNT_QUERIES = [
     ("count-messages", f"SELECT COUNT(*) AS n FROM messages WHERE {MESSAGE_WINDOW}"),
@@ -194,12 +206,16 @@ def post(sql, token):
         return json.load(response)
 
 
-def run_query(name, sql, token, audit):
+def run_query(name, sql, token, audit, optional=False):
     if not sql.lstrip().upper().startswith("SELECT"):
         raise SystemExit(f"refusing non-SELECT query: {name}")
     payload = post(sql, token)
     if not payload.get("success"):
-        raise SystemExit(f"{name}: D1 error {payload.get('errors')}")
+        errors = payload.get("errors") or []
+        message = json.dumps(errors, ensure_ascii=False)
+        if optional and "no such table" in message.lower():
+            return None
+        raise SystemExit(f"{name}: D1 error {errors}")
     result = payload["result"][0]
     meta = result["meta"]
     if meta.get("rows_written") != 0 or meta.get("changes") != 0:
@@ -243,7 +259,11 @@ def main():
     counts = {}
     try:
         for name, sql in QUERIES:
-            rows = run_query(name, sql, token, audit)
+            rows = run_query(name, sql, token, audit, optional=name in OPTIONAL_TABLES)
+            if rows is None:
+                rows = []
+                print(name, "MISSING table online; wrote empty placeholder")
+                log.write(f"{name} MISSING_TABLE rows_written=0 placeholder=[]\n")
             target = out / f"{name}.json"
             target.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
             target.chmod(0o600)

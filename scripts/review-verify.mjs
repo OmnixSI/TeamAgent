@@ -10,7 +10,7 @@
  * Read-only: opens SQLite with { readOnly: true } and never writes.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 function arg(name, fallback = "") {
@@ -36,6 +36,8 @@ const negativesPath = resolve(arg("negatives"));
 const exportDir = resolve(arg("export"));
 const nightsPath = resolve(arg("sim-nights"));
 const maxRowid = Number(arg("max-rowid", "0")) || 0;
+const standalonePath = resolve(arg("standalone", join(dirname(goldenPath), "standalone-outbox.jsonl")));
+const provenancePath = resolve(arg("provenance", join(dirname(goldenPath), "provenance.jsonl")));
 const failures = [];
 const lines = [];
 
@@ -85,6 +87,97 @@ for (const item of negatives) {
   if (!ok) failures.push(`${item.case}: missing ${missing.join(", ")}`);
   lines.push(`${item.case} ${ok ? "PASS" : "FAIL"}`);
 }
+
+// 1b. v2 golden schema: expect_kind / root-cause keys / disputed labels / #13 rule.
+const kinds = new Set(["response_fault", "capability_gap", "system_fault", "none"]);
+const numbered = golden.filter((item) => typeof item.case === "number");
+const m4 = golden.find((item) => item.case === "M4");
+if (numbered.length !== 20) failures.push(`golden numbered cases=${numbered.length}, expected 20`);
+if (!m4) failures.push("golden M4 missing");
+for (const item of golden) {
+  if (!kinds.has(item.expect_kind)) failures.push(`case ${item.case}: bad expect_kind`);
+  if (!Array.isArray(item.expect_root_cause_keys) || !item.expect_root_cause_keys.length) {
+    failures.push(`case ${item.case}: empty expect_root_cause_keys`);
+  }
+  if (typeof item.disputed_label !== "boolean") failures.push(`case ${item.case}: disputed_label not bool`);
+}
+const g13 = golden.find((item) => item.case === 13);
+if (!g13?.expect_rule || g13.expect_rule.kind !== "burst_max" || g13.expect_rule.params?.max !== 1) {
+  failures.push("#13 expect_rule is not burst_max max=1");
+}
+if (m4 && !m4.expect_points.some((point) => String(point).includes("149") && String(point).includes("不得"))) {
+  failures.push("M4 does not state 149 must not be penalized");
+}
+lines.push(
+  `golden v2 records=${golden.length} numbered=${numbered.length} disputed=${golden.filter((item) => item.disputed_label).length} m4=${m4 ? "present" : "MISSING"} g13=burst_max/1`,
+);
+
+// 1c. Standalone outbox list: every row must be msg_id NULL in the seed.
+if (!existsSync(standalonePath)) {
+  failures.push(`missing ${standalonePath}`);
+} else {
+  const standalone = jsonl(standalonePath);
+  if (standalone.length !== 24) failures.push(`standalone=${standalone.length}, expected 24`);
+  if (!standalone.some((row) => row.rid === 233 && row.msg_id === null)) failures.push("standalone rid 233 missing");
+  for (const row of standalone) {
+    const source = one(db, "SELECT msg_id, created_at FROM outbox WHERE rowid = ?", [row.rid]);
+    if (!source) failures.push(`standalone outbox ${row.rid} missing from seed`);
+    else if (source.msg_id !== null) failures.push(`standalone outbox ${row.rid} has msg_id`);
+    else if (Number(source.created_at) !== Number(row.created_at)) {
+      failures.push(`standalone outbox ${row.rid} created_at mismatch`);
+    }
+  }
+  lines.push(`standalone=${standalone.length} rid233=${standalone.some((row) => row.rid === 233) ? "present" : "MISSING"}`);
+}
+
+// 1d. Provenance fixture: five blocked origins plus one bound-direct control.
+if (!existsSync(provenancePath)) {
+  failures.push(`missing ${provenancePath}`);
+} else {
+  const provenance = jsonl(provenancePath);
+  const categories = new Set(provenance.map((row) => row.category));
+  for (const wanted of ["quoted", "card", "image_text", "unbound", "revoked"]) {
+    if (!categories.has(wanted)) failures.push(`provenance category ${wanted} missing`);
+  }
+  const blocked = provenance.filter((row) => row.category !== "control");
+  for (const row of blocked) {
+    if (row.expected?.requirement_candidates !== 0 || row.expected?.memory_candidates !== 0) {
+      failures.push(`provenance ${row.case}: expected no candidates`);
+    }
+  }
+  const control = provenance.find((row) => row.category === "control");
+  if (!control || control.expected?.requirement_candidates !== 1) failures.push("provenance control missing or not 1 candidate");
+  for (const row of provenance.filter((item) => item.input?.message?.rowid)) {
+    const source = one(db, "SELECT id FROM messages WHERE rowid = ?", [row.input.message.rowid]);
+    if (!source) failures.push(`provenance ${row.case}: message rowid missing`);
+  }
+  lines.push(`provenance=${provenance.length} categories=${[...categories].sort().join(",")} control=${control ? "ok" : "MISSING"}`);
+}
+
+// 1e. v2 seed tables must be present and match the export.
+const extraTables = [
+  ["outbox_meta", "outbox_meta"],
+  ["image_notes", "image_notes"],
+  ["message_images", "message_images"],
+];
+for (const [table, file] of extraTables) {
+  const exportPath = join(exportDir, `${file}.json`);
+  if (!existsSync(exportPath)) continue;
+  const exported = JSON.parse(readFileSync(exportPath, "utf8")).length;
+  let local = null;
+  try {
+    local = one(db, `SELECT COUNT(*) AS n FROM ${table}`).n;
+  } catch {
+    failures.push(`seed table ${table} missing`);
+    continue;
+  }
+  if (local !== exported) failures.push(`seed ${table}=${local}, export=${exported}`);
+  lines.push(`seed ${table}=${local}/${exported}`);
+}
+const memberRows = JSON.parse(readFileSync(join(exportDir, "members.json"), "utf8"));
+const revoked = memberRows.filter((row) => Number(row.revoked) === 1).length;
+if (one(db, "SELECT COUNT(*) AS n FROM members WHERE revoked=1").n !== revoked) failures.push("member revoked mismatch");
+lines.push(`members revoked=${revoked}`);
 
 // 2. Export audit: no writes, counts agree, no credential markers.
 if (existsSync(exportDir)) {
