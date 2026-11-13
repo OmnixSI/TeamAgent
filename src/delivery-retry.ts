@@ -1,3 +1,5 @@
+import { left } from "./d1";
+
 // Delivery failure handling. The gateway owns the files, so the retry clock
 // itself runs in runner/delivery.mjs (1 min, then 5 min, at most 3 attempts).
 // This module owns what the cloud records and says once a delivery is exhausted.
@@ -212,29 +214,44 @@ export async function recordDeliveryFailure(
   return { recorded: !existing || Number(existing.needs_attention) !== 1, status: historical ? "needs_attention" : "failed", attempts };
 }
 
-/**
- * New deliveries must not disappear into a pending row when the runner never
- * reports: a stuck row enters delivery_retries after 15 minutes, and fails
- * with one explanation after the one-hour deadline. Only the cloud row is
- * touched; the runner still owns any file that remains on disk.
- */
-export async function sweepStuckDeliveries(
+/** Cheap discovery is separate so the sender can use its budget before row work. */
+export async function readStuckDeliveries(
   e: any,
   now = Date.now(),
   limit = 3,
-): Promise<number> {
+): Promise<any[]> {
+  if (left(e) < 1) return [];
   const before = new Date(now - DELIVERY_RETRY_WINDOW_MS).toISOString();
-  const rows = (
+  return (
     await e.DB.prepare(
       "SELECT id,job_id,message_id,status,files,sent_count,updated_at FROM deliveries WHERE status='pending' AND updated_at < ? ORDER BY updated_at LIMIT ?",
     )
       .bind(before, Math.max(1, Math.min(10, Number(limit) || 3)))
       .all()
   ).results as any[];
+}
+
+/**
+ * A stuck row enters delivery_retries after 15 minutes and fails with one
+ * explanation after an hour. Only cloud rows are touched; the runner owns
+ * any file on disk. Deferred rows remain pending for the next cron tick.
+ */
+export async function sweepStuckDeliveries(
+  e: any,
+  now = Date.now(),
+  limit = 3,
+  candidates?: any[],
+): Promise<number> {
+  const rows = candidates ?? (await readStuckDeliveries(e, now, limit));
+  let processed = 0;
   for (const delivery of rows) {
+    const created = Date.parse(String(delivery.updated_at || "")) || now;
+    const terminal = now - created > DELIVERY_RETRY_DEADLINE_MS;
+    // Failure: 2 reads + job + message + fallback group + 4 batch writes.
+    // Retry: 2 reads + 1 upsert. Recheck the actual meter between rows.
+    if (left(e) < (terminal ? 9 : 3)) break;
     try {
-      const created = Date.parse(String(delivery.updated_at || "")) || now;
-      if (now - created > DELIVERY_RETRY_DEADLINE_MS)
+      if (terminal)
         await recordDeliveryFailure(
           e,
           {
@@ -252,7 +269,8 @@ export async function sweepStuckDeliveries(
           { id: delivery.id, status: "failed", attempts: 1, exhausted: false, error: "no_progress" },
           { now },
         );
+      processed++;
     } catch {}
   }
-  return rows.length;
+  return processed;
 }

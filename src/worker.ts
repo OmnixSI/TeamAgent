@@ -10,7 +10,7 @@ import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
-import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
+import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
@@ -1331,21 +1331,25 @@ async function scheduled(e: Env) {
       counts.failed || 0,
     )
     .run();
-  await e.DB.prepare("DELETE FROM health_samples WHERE at<?")
-    .bind(Date.now() - 7 * 86400000)
-    .run();
-  await e.DB.prepare("DELETE FROM model_usage WHERE hour<?")
-    .bind(Date.now() - 30 * 86400000)
-    .run();
-  await e.DB.prepare("DELETE FROM model_runs WHERE created_at<?")
-    .bind(Date.now() - 30 * 86400000)
-    .run();
-  await e.DB.prepare(
-    "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
-  )
-    .bind(Date.now() - 7 * 86400000)
-    .run();
-  if ((await setting(e, "budget_cleanup_day")) !== date) {
+  // Retention can wait a minute under backlog. Keep ten statements for the
+  // cleanup-day check/update, sessions/tasks, hourly prune, scan and sender.
+  if (left(e) >= 4 + 10) {
+    await e.DB.prepare("DELETE FROM health_samples WHERE at<?")
+      .bind(Date.now() - 7 * 86400000)
+      .run();
+    await e.DB.prepare("DELETE FROM model_usage WHERE hour<?")
+      .bind(Date.now() - 30 * 86400000)
+      .run();
+    await e.DB.prepare("DELETE FROM model_runs WHERE created_at<?")
+      .bind(Date.now() - 30 * 86400000)
+      .run();
+    await e.DB.prepare(
+      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
+    )
+      .bind(Date.now() - 7 * 86400000)
+      .run();
+  }
+  if ((await setting(e, "budget_cleanup_day")) !== date && left(e) >= 2 + 6) {
     await cleanupBudget(e);
     await set(e, "budget_cleanup_day", date);
   }
@@ -1362,14 +1366,17 @@ async function scheduled(e: Env) {
     .run();
   if (new Date().getUTCHours() === 0 && new Date().getUTCMinutes() === 0)
     await optionalCron(e, () => cleanupRepoIndex(e), 2);
-  await retryStickerTags(e);
-  await optionalCron(e, () => runCronExtras(e), 2);
-  // Optional delivery sweep runs last: the daily repo prune and cron extras must not be starved by its 12-query reserve.
-  await optionalCron(e, () => sweepStuckDeliveries(e, Date.now(), 1), 12);
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
-  // Finish mandatory maintenance before the sender spends its remaining budget.
+  // Guarantee cheap discovery before the sender and optional extras spend the
+  // remaining budget. Schedules and daily repo pruning have already run.
+  const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
   await sendOutbox(e);
+  // Give scheduled replies first use of the sending budget, then fit each
+  // retry/failure to the actual remainder. New notices go out next tick.
+  await sweepStuckDeliveries(e, Date.now(), 1, stuckDeliveries);
+  await retryStickerTags(e);
+  await optionalCron(e, () => runCronExtras(e), 2);
   await flushTail(e);
 }
 function requestBodyLimit(r: Request) {

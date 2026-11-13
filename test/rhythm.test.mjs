@@ -459,26 +459,32 @@ test('B5 research with three tools per round withholds tools on the last model r
     assert.equal(state.requests.length,3);assert.equal(state.requests.at(-1).tools,undefined);assert.ok(count<=48,'research '+count);
   },{calls:n=>n<3?{tool_calls:[0,1,2].map(i=>({id:'status-'+n+'-'+i,type:'function',function:{name:'get_work_status',arguments:'{}'}}))}:{content:'{"action":"reply","kind":"direct","brief":"当前状态"}'},voice:'{"mode":"work","text":"当前工作状态。"}'});
 });
-test('B7 scheduled bounds an expired/ready backlog and leaves durable work for later calls',async()=>{
-  const base=await outgoing(5,false);
-  for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
-  const counts=[];
-  await budgetModel(async()=>{
-    for(let i=0;i<4;i++){
-      counts.push(await measured(base,'p1-B7-cron-'+i,e=>cron(e)));
-      if(i===0){
-        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,15);
-        assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,5);
+test('B7 scheduled bounds an expired/ready backlog and leaves durable work for later calls',async(t)=>{
+  const NativeDate=globalThis.Date,at=Date.parse('2026-11-13T17:10:00Z');
+  class Clock extends NativeDate{constructor(...args){super(...(args.length?args:[at]));}static now(){return at;}}
+  globalThis.Date=Clock;
+  try{
+    const base=await outgoing(5,false);
+    for(const status of ['running','waiting'])for(let i=0;i<20;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(status+i,'GROUP000001','BV1xx411c7mD','source','["source"]',0,status,Date.now()-1,1,Date.now()-1,Date.now(),status==='running'?3:0).run();
+    const counts=[];
+    await budgetModel(async()=>{
+      for(let i=0;i<4;i++){
+        counts.push(await measured(base,'p1-B7-cron-'+i,e=>cron(e)));
+        if(i===0){
+          assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,15);
+          assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,5);
+        }
+        // Consume the durable wakes as their separate queue invocations would.
+        const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
+        for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
       }
-      // Consume the durable wakes as their separate queue invocations would.
-      const jobs=(await base.DB.prepare("SELECT id FROM jobs WHERE kind='video_reply' AND status='pending'").all()).results;
-      for(const j of jobs)assert.ok(await measured(base,'p1-B7-wake-'+i+'-'+j.id,e=>queue(e,j.id))<=48);
-    }
-  });
-  assert.ok(counts.every(n=>n<=48),'cron '+counts.join(','));
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,20);
-  assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
+    });
+    t.diagnostic('backlog cron SQL: '+counts.join(','));
+    assert.ok(counts.every(n=>n<=48),'cron '+counts.join(','));
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='video_reply'").first()).n,20);
+    assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM outbox WHERE id LIKE 'out-%' AND status='sent'").first()).n,5);
+  }finally{globalThis.Date=NativeDate;}
 });
 test('B6 fetch report and each of three original video questioners stay below budget',async()=>{
   const base=await bound();base.QQ_APP_ID='budget-video-'+(++quoteFixture);
