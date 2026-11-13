@@ -19,6 +19,18 @@ CREATE TABLE IF NOT EXISTS expressions(phrase TEXT PRIMARY KEY,meaning TEXT NOT 
 CREATE INDEX IF NOT EXISTS messages_group_time ON messages(group_id,ts);
 CREATE INDEX IF NOT EXISTS jobs_status_kind ON jobs(status,kind,created_at);
 CREATE INDEX IF NOT EXISTS facts_scope ON facts(repo,valid_to,valid_from);
+CREATE TABLE IF NOT EXISTS episodes(
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  source_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  superseded_by TEXT
+);
+CREATE INDEX IF NOT EXISTS episodes_group_time ON episodes(group_id, created_at);
+CREATE INDEX IF NOT EXISTS episodes_live ON episodes(group_id, superseded_by, expires_at);
 CREATE INDEX IF NOT EXISTS outbox_status_time ON outbox(status,created_at);
 CREATE TABLE IF NOT EXISTS activity(id TEXT PRIMARY KEY,kind TEXT NOT NULL,entity TEXT NOT NULL,actor TEXT NOT NULL,summary TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS activity_entity ON activity(entity,created_at);

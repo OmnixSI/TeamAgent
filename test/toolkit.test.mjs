@@ -7,10 +7,23 @@ async function load() {
   return import("data:text/javascript;base64," + Buffer.from(out.outputFiles[0].text).toString("base64"));
 }
 
-test("empty registry: no extra defs, unknown tool is an error", async () => {
+test("registry is well-formed and unknown tools are an error", async () => {
   const k = await load();
-  assert.deepEqual(k.extraToolDefs(), []);
+  const names = k.extraToolDefs().map((d) => d.function.name);
+  assert.equal(new Set(names).size, names.length, "tool names are unique");
+  for (const def of k.extraToolDefs()) {
+    const tool = k.findExtraTool(def.function.name);
+    assert.ok(tool, def.function.name + " has a runnable entry");
+    assert.equal(tool.def, def);
+    assert.equal(typeof tool.run, "function");
+  }
+  assert.deepEqual(
+    k.extraUntrustedNames().sort(),
+    k.extraToolDefs()
+      .map((d) => d.function.name)
+      .filter((name) => k.findExtraTool(name).untrusted)
+      .sort(),
+  );
   assert.equal(k.findExtraTool("nope"), undefined);
-  assert.deepEqual(k.extraUntrustedNames(), []);
   assert.deepEqual(await k.runExtraTool({ DB: {} }, "nope", {}, { context: {}, messages: [], isTainted: () => false }), { error: "unknown tool" });
 });
