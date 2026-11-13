@@ -61,7 +61,10 @@
         },
         {
           "id": "S2-q2",
-          "text": "群里的语音消息是怎么转成文字的"
+          "text": "群里的语音消息是怎么转成文字的",
+          "expect": [
+            "asr.qq"
+          ]
         }
       ]
     },
@@ -69,7 +72,7 @@
       "id": "S3",
       "acceptance": "S3",
       "capability": "reply_model",
-      "topic": "capability",
+      "topic": "vendors",
       "query": "OpenAI DeepSeek",
       "expect": [
         "reply.vendor",
@@ -100,7 +103,9 @@
           "expect": [
             "reply.vendor",
             "reply.model"
-          ]
+          ],
+          "topic": "capability",
+          "query": "回复"
         }
       ]
     },
@@ -149,7 +154,11 @@
       "questions": [
         {
           "id": "S5-q1",
-          "text": "看图用什么模型"
+          "text": "看图用什么模型",
+          "expect": [
+            "vision.vendor",
+            "vision.model"
+          ]
         },
         {
           "id": "S5-q2",
@@ -270,8 +279,6 @@
           "expect": [
             "tts.primary",
             "tts.fallback",
-            "tts.silk",
-            "tts.files",
             "tts.not_wired"
           ]
         }

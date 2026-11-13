@@ -224,6 +224,7 @@ if (MODE === "b" || MODE === "all") {
         if (LIMIT && index >= LIMIT) break;
         if (state.live === false) continue;
         const blocked = [];
+        const trace = [];
         let modelCalls = 0;
         try {
           const e = await prepareEnv(support.env(), {
@@ -259,9 +260,26 @@ if (MODE === "b" || MODE === "all") {
             const target = String(url);
             if (target === "https://api.deepseek.com/chat/completions") {
               modelCalls++;
+              let body = null;
+              try { body = JSON.parse(options.body); } catch {}
+              const lastTool = [...(body?.messages || [])].reverse().find((m) => m?.role === "tool");
               const headers = new Headers(options.headers || {});
               headers.set("Authorization", "Bearer " + key);
-              return realFetch(target, { ...options, headers });
+              const response = await realFetch(target, { ...options, headers });
+              try {
+                const data = await response.clone().json();
+                const message = data?.choices?.[0]?.message;
+                trace.push({
+                  request: modelCalls,
+                  tool_calls: (message?.tool_calls || []).map((t) => ({
+                    name: t.function?.name,
+                    args: String(t.function?.arguments || "").slice(0, 160),
+                  })),
+                  tool_result: String(lastTool?.content || "").slice(0, 320),
+                  content: String(message?.content || "").slice(0, 240),
+                });
+              } catch {}
+              return response;
             }
             blocked.push(target.replace(/^https?:\/\//, "").split("/")[0]);
             return new Response(JSON.stringify({ error: "blocked by SK-3 replay" }), {
@@ -295,6 +313,7 @@ if (MODE === "b" || MODE === "all") {
               online_d1_writes: 0,
               outbox_sent_rows: Number(sent?.n || 0),
               secret_leak: leaked,
+              tool_trace: redactSecrets(JSON.stringify(trace.slice(-8)), [key]).slice(0, 3000),
               secrets: [key],
             },
           });

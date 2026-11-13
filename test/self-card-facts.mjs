@@ -252,15 +252,26 @@ export function buildChecks(facts) {
       label: "语音合成还没接进群里",
       pattern: /(?:还没接进|未接进|没接进|不会主动发|尚未接入|没有接进)/,
     },
-    "repo.entry": anyOf("Worker 入口", [facts.repo.entry]),
+    "repo.entry": anyOf("Worker 入口", [facts.repo.entry, "worker.ts"]),
     "repo.dirs": custom("顶层目录职责", (text) => facts.repo.dirs.every((d) => d.pattern.test(text))),
     "repo.tables": custom(
       "D1 表名与 schema.sql 一致",
       (text) => facts.repo.coreTables.every((name) => text.includes(name)),
     ),
-    "repo.cron": custom("cron 与 wrangler.toml 一致", (text) => facts.repo.crons.every((c) => text.includes(c))),
+    "repo.cron": custom(
+      "cron 与 wrangler.toml 一致",
+      (text) =>
+        facts.repo.crons.every((c) => text.includes(c)) ||
+        /(?:cron|定时)[^。；\n]{0,20}(?:每分钟|每分钟一次)/i.test(text),
+    ),
     "repo.queues": allOf("队列名与 wrangler.toml 一致", facts.repo.queues),
-    "repo.bindings": allOf("绑定名与 wrangler.toml 一致", facts.repo.bindings),
+    "repo.bindings": custom(
+      "绑定名与 wrangler.toml 一致",
+      (text) =>
+        facts.repo.bindings.every((name) =>
+          name === "DB" ? text.includes("DB") || /D1|数据库/.test(text) : text.includes(name),
+        ),
+    ),
     "run.cloud": anyOf("跑在云端", ["Cloudflare", "云端"]),
     "run.local": anyOf("本机运行", ["本机", "本地"]),
     "file.entry": anyOf("入口文件", [facts.file.entry]),

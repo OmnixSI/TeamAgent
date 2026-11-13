@@ -98,7 +98,14 @@ export function contextFor(question) {
 }
 
 export function outputText(out) {
-  if (typeof out === "string") return out;
+  if (typeof out === "string") {
+    // agentAnswer returns a JSON string: {"mode":"work","text":"群里说的话"}.
+    try {
+      const parsed = JSON.parse(out);
+      if (parsed && typeof parsed.text === "string") return parsed.text;
+    } catch {}
+    return out;
+  }
   if (out && typeof out.text === "string") return out.text;
   if (out && typeof out.content === "string") return out.content;
   return JSON.stringify(out);
