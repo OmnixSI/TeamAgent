@@ -95,9 +95,10 @@ test("VD-R3-COVER keeps canonical outbox ownership across batch traces", { skip:
   assert.match(result.detail, /batch/);
 });
 
-test("VD-SNAP-SW documents the snapshot/validator switch encoding mismatch", { skip: skipReplay }, async () => {
+test("VD-SNAP-SW rewrites a historically disabled tool to switch_or_policy_off", { skip: skipReplay }, async () => {
   const { vdSnapSw } = await import("../scripts/review-accept/checks/trace.mjs");
-  await assert.rejects(() => run("VD-SNAP-SW", vdSnapSw), /off:repo_tools=1/);
+  const result = await run("VD-SNAP-SW", vdSnapSw);
+  assert.match(result.detail, /switch_or_policy_off/);
 });
 
 test("blocked items stay blocked and preflight the golden trace", { skip: skipReplay }, async () => {

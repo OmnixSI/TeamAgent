@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, rmSync } from 'node:fs';
 import { build } from 'esbuild';
 const file = `.wrangler/review-shell-${process.pid}.mjs`;
-await build({entryPoints:['src/review/worker.ts'],bundle:true,format:'esm',platform:'browser',outfile:file,metafile:true}).then(result=>{
+await build({stdin:{contents:"export {default} from './src/review/worker.ts'; export * from './src/review/worker.ts'; export { signalsOf } from './src/review/signals.ts';",resolveDir:process.cwd()},bundle:true,format:'esm',platform:'browser',outfile:file,metafile:true}).then(result=>{
   for(const name of Object.entries(Object.values(result.metafile.outputs)[0].inputs).filter(([,v])=>v.bytesInOutput>0).map(([name])=>name)) if(/^src\/(worker|semantic|tasks|lanes)\.ts$/.test(name)) throw Error('forbidden import: '+name);
 });
 export const api = await import('../'+file);

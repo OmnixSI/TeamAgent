@@ -125,13 +125,14 @@ test('VD-R4-IDEM a retried p0 gap plan retains exactly one occurrence per findin
   let interrupted=false;
   for(let i=0;i<150;i++){
     const run=db.prepare('SELECT step,stats FROM review_runs').get();
-    if(run?.step==='apply'&&JSON.parse(run.stats).plan&&!interrupted){
+    if(run?.step==='apply'&&!interrupted){
       let once=true;e.DB.setBefore(sql=>{if(once&&/UPDATE review_runs SET step/.test(sql)){once=false;throw Error('power loss')}});
       await tick(e,night+i*1000,{fetch});e.DB.setBefore(null);interrupted=true;
     } else await tick(e,night+i*1000,{fetch});
     if(db.prepare('SELECT step FROM review_runs').get()?.step==='done')break;
   }
   assert.equal(db.prepare('SELECT step FROM review_runs').get().step,'done');
+  assert.ok(interrupted);
   assert.equal(db.prepare('SELECT count(*) n FROM review_findings').get().n,4);
   assert.equal(db.prepare('SELECT occurrences FROM capability_gaps').get().occurrences,4);
   assert.equal(db.prepare("SELECT count(*) n FROM review_consumed WHERE kind='gap_occurrence'").get().n,4);
@@ -188,7 +189,7 @@ test('API empty workspace, AI readonly identity, health migration and hostile CO
 test('stolen generation fences every apply page mutation inside its atomic batch',async()=>{
   const {e,db}=setup('propose');seed(db,2);
   for(let i=0;i<40;i++){
-    const run=db.prepare('SELECT step,stats FROM review_runs').get();if(run?.step==='apply'&&JSON.parse(run.stats).plan)break;
+    const run=db.prepare('SELECT step,stats FROM review_runs').get();if(run?.step==='apply')break;
     await tick(e,night+i*1000);
   }
   let once=true;e.DB.setBefore(sql=>{if(once&&/^INSERT OR IGNORE INTO review_findings/.test(sql)){once=false;db.exec('UPDATE review_runs SET gen=gen+1,lease_until=NULL')}});

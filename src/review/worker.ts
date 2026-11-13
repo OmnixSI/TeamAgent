@@ -3,6 +3,7 @@ import { metered, left } from '../d1';
 import { reviewRead, reviewWrite, reviewBatch, reviewRedact, applyMemoryCandidate, type ReviewStatement } from './db';
 import { capabilitySnapshot } from './snapshot';
 import { buildTraces } from './trace';
+import { priorityOf } from './signals';
 import { buildJudgeInput } from './prompt';
 import { judgeModel, estimateReservation, type JudgeOptions, type JudgePrice } from './judge-model';
 import { parseJudgeReply, validateResult } from './validate';
@@ -17,6 +18,7 @@ type Row = Record<string, any>;
 // Test injection is an explicit JS argument, never a deployed variable or HTTP input.
 export type TickOptions = { now?: () => number; fetch?: typeof fetch };
 const DAY = 86400000;
+const MAX_NIGHT_TRACES = 60;
 const parse = (s: any, fallback: any = {}) => { try { return typeof s === 'string' ? JSON.parse(s) : s ?? fallback; } catch { return fallback; } };
 const changes = (r: any) => Number(r?.meta?.changes ?? r?.changes ?? 0);
 const clean = (x: unknown) => reviewRedact(String(x));
@@ -27,6 +29,20 @@ export function sydneyTime(now: number) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now).map(x => [x.type, x.value]));
   const minute = Number(p.hour) * 60 + Number(p.minute);
   return { date: `${p.year}-${p.month}-${p.day}`, inWindow: minute >= 240 && minute < 450 };
+}
+function sampleKey(value: string) {
+  let key = 2166136261;
+  for (const ch of value) key = Math.imul(key ^ ch.codePointAt(0)!,16777619);
+  return key >>> 0;
+}
+function sydneyStart(date: string) {
+  const nominal = Date.parse(date); let at = nominal;
+  for (let i=0;i<2;i++) {
+    const offset = new Intl.DateTimeFormat('en',{timeZone:'Australia/Sydney',timeZoneName:'longOffset'}).formatToParts(at).find(p=>p.type==='timeZoneName')!.value;
+    const match = offset.match(/GMT([+-])(\d{2}):(\d{2})/)!;
+    at = nominal - (match[1]==='+'?1:-1)*(Number(match[2])*60+Number(match[3]))*60000;
+  }
+  return at;
 }
 class LostLease extends Error {}
 class TickBudget extends Error {}
@@ -102,6 +118,12 @@ async function advance(e: Env, run: Row, stats: Row, step: string, now: number, 
 async function planTick(e: Env, run: Row, stats: Row, now: number, prepare: () => Promise<ReviewStatement[]>, next: string) {
   if (!stats.plan) {
     const statements = allowedPlan(await prepare(), run.mode);
+    // Small plans can commit alongside the CAS in this tick. A failed batch
+    // rolls back both effects and progress; larger plans retain durable paging.
+    if (statements.length <= Math.min(28, left(e) - 6)) {
+      stats.phase = next;
+      await advance(e, run, stats, run.step, now, statements); return;
+    }
     stats.plan = { statements, offset: 0, next };
     await advance(e, run, stats, run.step, now); return;
   }
@@ -120,16 +142,24 @@ export async function reviewTick(env: Env, options: TickOptions = {}) {
   const mode = settings['review:mode'] ?? env.REVIEW_MODE ?? 'shadow';
   if (!['shadow', 'propose', 'full'].includes(mode)) return { status: 'invalid_mode', used: e.meter.used };
   const end = new Date(now).toISOString(), start = new Date(now - 3 * DAY).toISOString();
-  const [group] = await reviewRead(e, `SELECT g.group_id FROM (
+  // An unfinished run owns its original window and journal across nights.
+  // Prefer it to creating today's run, so judgments and counters are not replayed.
+  const [unfinished] = await reviewRead(e, "SELECT id,group_id FROM review_runs WHERE date<=? AND step NOT IN ('done','failed','skipped') ORDER BY date,updated_at,id LIMIT 1", [time.date]);
+  let id: string;
+  if (unfinished) id = unfinished.id;
+  else {
+    const [group] = await reviewRead(e, `SELECT g.group_id FROM (
       SELECT DISTINCT group_id FROM messages WHERE julianday(ts)>=julianday(?) AND julianday(ts)<julianday(?)
       UNION SELECT DISTINCT group_id FROM outbox WHERE created_at>=? AND created_at<?
       UNION SELECT group_id FROM review_traces WHERE state='pending'
       UNION SELECT group_id FROM review_runs WHERE date=?
     ) g LEFT JOIN review_runs r ON r.group_id=g.group_id AND r.date=?
     WHERE r.id IS NULL OR r.step NOT IN ('done','failed','skipped') ORDER BY COALESCE(r.updated_at,0),g.group_id LIMIT 1`, [start, end, now - 3 * DAY, now, time.date, time.date]);
-  if (!group) return { status: 'idle', used: e.meter.used };
-  const id = `${group.group_id}:${time.date}`, owner = crypto.randomUUID();
-  await reviewWrite(e, `INSERT OR IGNORE INTO review_runs(id,group_id,date,step,window_start,window_end,mode,updated_at) VALUES(?,?,?,'snapshot',?,?,?,?)`, [id, group.group_id, time.date, start, end, mode, now]);
+    if (!group) return { status: 'idle', used: e.meter.used };
+    id = `${group.group_id}:${time.date}`;
+    await reviewWrite(e, `INSERT OR IGNORE INTO review_runs(id,group_id,date,step,window_start,window_end,mode,updated_at) VALUES(?,?,?,'snapshot',?,?,?,?)`, [id, group.group_id, time.date, start, end, mode, now]);
+  }
+  const owner = crypto.randomUUID();
   const claim = await reviewWrite(e, 'UPDATE review_runs SET lease_owner=?,lease_until=?,gen=gen+1 WHERE id=? AND step NOT IN (\'done\',\'failed\',\'skipped\') AND (lease_until IS NULL OR lease_until<?)', [owner, now + 300000, id, now]);
   if (changes(claim) !== 1) return { status: 'leased', used: e.meter.used };
   const [run] = await reviewRead(e, 'SELECT * FROM review_runs WHERE id=?', [id]);
@@ -138,19 +168,48 @@ export async function reviewTick(env: Env, options: TickOptions = {}) {
     if (run.step !== 'snapshot' && run.step !== 'trace' && !balanced(stats.coverage)) {
       await fail(ctx, run, stats, 'coverage_unbalanced', now, true); return { status: 'failed', used: e.meter.used };
     }
+    const thirdNight = Date.parse(time.date) - Date.parse(run.date) >= 2 * DAY;
+    if (thirdNight && ['judge','second','apply','publish'].includes(run.step)) {
+      stats.forced_publish = true;
+      if (run.step === 'judge' || run.step === 'second') {
+        // Apply all already validated judgments; no new vote or paid call.
+        // Missing second votes retain D-5a's single/disputed promotion guards.
+        stats.primary_retry = null; stats.second_retry = null;
+        await advance(ctx, run, stats, 'apply', now);
+        return { status: 'progress', used: e.meter.used };
+      }
+    }
     if (run.step === 'snapshot') {
       const snapshot = await capabilitySnapshot(ctx); snapshot.at = now;
       await advance(ctx, run, stats, 'trace', now, [{ sql: 'INSERT OR IGNORE INTO review_snapshots(run_id,json,created_at) VALUES(?,?,?)', params: [id, JSON.stringify(snapshot), now] }]);
     } else if (run.step === 'trace') {
       const page = await buildTraces(ctx, { group_id: run.group_id, window_start: run.window_start, window_end: run.window_end });
-      stats.coverage = page.coverage;
       if (!balanced(page.coverage)) { await fail(ctx, run, stats, 'coverage_unbalanced', now, true); return { status: 'failed', used: e.meter.used }; }
-      const offset = stats.trace_offset ?? 0, portion = page.traces.slice(offset, offset + 200);
+      if (!stats.review_selection) {
+        const oldTraces = await reviewRead(ctx, 'SELECT id,state,trace_json,created_at FROM review_traces WHERE group_id=?', [run.group_id]);
+        const known = new Map(oldTraces.map(t => [t.id,t]));
+        const unseen = (t: Trace) => !known.has(t.id) || known.get(t.id)!.state === 'pending';
+        const samples = page.traces.filter(t => !t.signals.length && t.inbound?.mentioned === 1 && unseen(t))
+          .map(t => ({ t, key: sampleKey(run.id + '|' + t.id) })).sort((a,b) => a.key - b.key || a.t.id.localeCompare(b.t.id)).slice(0,2).map(x => x.t.id);
+        stats.sampled_ids = samples;
+        const pool = new Map<string,Trace>(oldTraces.filter(t => t.state === 'pending' && t.created_at >= now - 3*DAY).map(t => [t.id,parse(t.trace_json)]));
+        for (const t of page.traces) if (unseen(t)) pool.set(t.id,t);
+        stats.review_targets = [...pool.values()].filter(t => t.signals.length || samples.includes(t.id))
+          .sort((a,b) => priorityOf(b.signals) - priorityOf(a.signals) || a.id.localeCompare(b.id)).slice(0,MAX_NIGHT_TRACES).map(t => t.id);
+        stats.review_selection = true;
+      }
+      const eligible = (t: Trace) => t.signals.length > 0 || stats.sampled_ids.includes(t.id);
+      const skipped = page.traces.filter(t => !eligible(t) && t.kind === 'inbound').length;
+      stats.coverage = { ...page.coverage, inbound_traces: page.coverage.inbound_traces - skipped,
+        skipped_by_rule: page.coverage.skipped_by_rule + skipped,
+        skipped_outbound: page.traces.filter(t => !eligible(t) && t.kind === 'outbound').length };
+      const offset = stats.trace_offset ?? 0, portion = page.traces.slice(offset, offset + 200).map(t => ({ ...t, priority: priorityOf(t.signals), review_state: eligible(t) ? 'pending' : 'skipped' }));
       const statements: ReviewStatement[] = [];
-      for (let i = 0; i < portion.length; i += 20) statements.push({ sql: `INSERT OR IGNORE INTO review_traces(id,run_id,group_id,kind,inbound_id,outbound_id,signals,priority,has_image,trace_json,created_at)
-        SELECT json_extract(value,'$.id'),?,?,json_extract(value,'$.kind'),json_extract(value,'$.inbound.id'),CASE WHEN json_extract(value,'$.kind')='outbound' THEN json_extract(value,'$.replies[0].outbox_id') ELSE NULL END,json_extract(value,'$.signals'),COALESCE(json_extract(value,'$.priority'),0),json_extract(value,'$.has_image'),value,? FROM json_each(?)`, params: [id, run.group_id, now, JSON.stringify(portion.slice(i, i + 20))] });
+      for (let i = 0; i < portion.length; i += 20) statements.push({ sql: `INSERT OR IGNORE INTO review_traces(id,run_id,group_id,kind,inbound_id,outbound_id,signals,priority,has_image,state,trace_json,created_at)
+        SELECT json_extract(value,'$.id'),?,?,json_extract(value,'$.kind'),json_extract(value,'$.inbound.id'),CASE WHEN json_extract(value,'$.kind')='outbound' THEN json_extract(value,'$.replies[0].outbox_id') ELSE NULL END,json_extract(value,'$.signals'),COALESCE(json_extract(value,'$.priority'),0),json_extract(value,'$.has_image'),json_extract(value,'$.review_state'),value,? FROM json_each(?)`, params: [id, run.group_id, now, JSON.stringify(portion.slice(i, i + 20))] });
       stats.trace_offset = offset + portion.length;
       const done = stats.trace_offset >= page.traces.length;
+      if (done) statements.push({ sql: "UPDATE review_traces SET state='skipped' WHERE group_id=? AND state='pending' AND json_array_length(signals)=0 AND id NOT IN(SELECT value FROM json_each(?))", params: [run.group_id, JSON.stringify(stats.sampled_ids)] });
       if (done) statements.push({ sql: "UPDATE review_traces SET state='expired' WHERE group_id=? AND state='pending' AND created_at<?", params: [run.group_id, now - 3 * DAY] });
       if (done) for (const [stream, at, cursorId] of [['messages', page.cursor.ts, page.cursor.id], ['outbox', String(page.outbox_cursor.at), page.outbox_cursor.id]]) statements.push({ sql: `INSERT INTO review_cursors(group_id,stream,built_at,built_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(group_id,stream) DO UPDATE SET built_at=excluded.built_at,built_id=excluded.built_id,updated_at=excluded.updated_at`, params: [run.group_id, stream, at, cursorId, now] });
       await advance(ctx, run, stats, done ? 'judge' : 'trace', now, statements);
@@ -191,8 +250,9 @@ async function judgeTick(ctx: Env, unguarded: Env, run: Row, stats: Row, now: nu
   const [snap] = await reviewRead(ctx, 'SELECT json FROM review_snapshots WHERE run_id=?', [run.id]);
   const snapshot: Snapshot = parse(snap.json);
   const rows = await reviewRead(ctx, `SELECT t.* FROM review_traces t WHERE t.group_id=? AND t.state='pending'
+    AND (? IS NULL OR t.id IN(SELECT value FROM json_each(?)))
     AND NOT EXISTS(SELECT 1 FROM review_judgments j,json_each(j.trace_ids) x WHERE j.run_id=? AND j.role=? AND j.state='ok' AND x.value=t.id)
-    ORDER BY t.attempts,t.priority DESC,t.created_at,t.id LIMIT 8`, [run.group_id, run.id, role]);
+    ORDER BY t.priority DESC,t.attempts,t.created_at,t.id LIMIT 8`, [run.group_id, stats.review_targets ? JSON.stringify(stats.review_targets) : null, stats.review_targets ? JSON.stringify(stats.review_targets) : null, run.id, role]);
   let traces: Trace[] = rows.map((r: any) => parse(r.trace_json));
   if (!primary) {
     const judgments = await reviewRead(ctx, "SELECT raw FROM review_judgments WHERE run_id=? AND role='primary' AND state='ok'", [run.id]);
@@ -203,6 +263,13 @@ async function judgeTick(ctx: Env, unguarded: Env, run: Row, stats: Row, now: nu
     const selected = new Set(selectForSecond(allRows.map(r => parse(r.trace_json)), all, { random: () => 0.5, taskTraceIds: all.verdicts.filter(v => v.gap_type).map(v => v.trace_id) }).map(t => t.id));
     const done = new Set((await reviewRead(ctx, "SELECT x.value AS id FROM review_judgments j,json_each(j.trace_ids) x WHERE j.run_id=? AND j.role='second' AND (j.state='ok' OR j.state IN ('error','timeout','invalid'))", [run.id])).map(r => r.id));
     traces = allRows.map(r => parse(r.trace_json)).filter(t => selected.has(t.id) && !done.has(t.id));
+  }
+  if (primary && traces.length) {
+    const date = sydneyTime(now).date, nextDate = new Date(Date.parse(date) + DAY).toISOString().slice(0,10);
+    const attempted = new Set((await reviewRead(ctx, "SELECT DISTINCT x.value AS id FROM review_judgments j,json_each(j.trace_ids) x WHERE role='primary' AND reserved>0 AND created_at>=? AND created_at<?", [sydneyStart(date),sydneyStart(nextDate)])).map(r => r.id));
+    let remaining = Math.max(0,MAX_NIGHT_TRACES - attempted.size);
+    traces = traces.filter(t => attempted.has(t.id) || remaining-- > 0);
+    if (!traces.length) stats.quota_deferred = true;
   }
   if (!traces.length) { await advance(ctx, run, stats, primary ? 'second' : 'apply', now); return; }
   // One provider call per tick, including bounded split retries on following ticks.
@@ -303,6 +370,8 @@ async function publishTick(e: Env, run: Row, stats: Row, now: number) {
   } else if (stats.phase === 'rules') {
     await planTick(e, run, stats, now, () => run.mode === 'full' ? capture(e, ctx => advanceRules(ctx, { id: run.id, group_id: run.group_id, now })) : Promise.resolve([]), 'done');
   } else {
+    const [unfinished] = await reviewRead(e, "SELECT COUNT(*) AS n FROM review_traces WHERE state='pending' AND (run_id=? OR id IN(SELECT value FROM json_each(?)))", [run.id,JSON.stringify(stats.review_targets ?? [])]);
+    stats.unreviewed = Number(unfinished.n);
     const spend = await reviewRead(e, 'SELECT provider,SUM(used) AS used FROM review_judgments WHERE run_id=? GROUP BY provider', [run.id]);
     const spendJson = Object.fromEntries(spend.map(r => [r.provider, r.used ?? 0]));
     await advance(e, run, stats, 'done', now, [{ sql: 'UPDATE review_runs SET spend_json=? WHERE id=? AND step=? AND gen=?', params: [JSON.stringify(spendJson), run.id, run.step, run.gen] }, { sql: `UPDATE review_cursors SET judged_at=built_at,judged_id=built_id,updated_at=? WHERE group_id=? AND NOT EXISTS(SELECT 1 FROM review_traces WHERE group_id=? AND state NOT IN ('judged','skipped','expired'))`, params: [now, run.group_id, run.group_id] }]);
@@ -358,8 +427,8 @@ async function boardDigest(e: Env, dates: string[]) {
     const dailyPromises = promises.filter(p => sydneyTime(p.checked_at ?? p.created_at).date === date);
     const first = dailyRuns[0], errors = rejects.filter(r => runIds.has(r.run_id)).reduce((a, r) => a + r.n, 0);
     return { date, group_id: first.group_id, group_label: first.group_id, groups: dailyRuns.map(r => ({ group_id: r.group_id, run_id: r.id, step: r.step, mode: r.mode })),
-      run: { step: first.step, mode: first.mode, model: first.model, second_model: first.second_model, same_family: first.same_family, judge_calls: first.judge_calls, error: first.error, updated_at: first.updated_at, spend: parse(first.spend_json) },
-      answers: { failures: list.map(f => f.what_happened).join('；').slice(0, 120), requirements: dailyRules.map(r => r.rule).join('；').slice(0,120), memory: dailyMemory.map(m => (m.op === 'DELETE' ? '不再记住：' : '待记住：') + m.subject + m.value).join('；').slice(0,120), unanswered: unanswered.length ? `${unanswered.length} 条待回答` : '', changes: gaps.map(g => g.proposed_action).join('；').slice(0, 120) },
+      run: { step: first.step, mode: first.mode, model: first.model, second_model: first.second_model, same_family: first.same_family, judge_calls: first.judge_calls, unreviewed: Number(parse(first.stats).unreviewed ?? 0), completion_note: parse(first.stats).unreviewed ? `未评完 ${parse(first.stats).unreviewed} 条` : '', error: first.error, updated_at: first.updated_at, spend: parse(first.spend_json) },
+      answers: { failures: list.map(f => f.what_happened).join('；').slice(0, 120), requirements: dailyRules.map(r => r.rule).join('；').slice(0,120), memory: dailyMemory.map(m => (m.op === 'DELETE' ? '不再记住：' : '待记住：') + m.subject + m.value).join('；').slice(0,120), unanswered: [unanswered.length ? `${unanswered.length} 条待回答` : '', parse(first.stats).unreviewed ? `未评完 ${parse(first.stats).unreviewed} 条` : ''].filter(Boolean).join('；'), changes: gaps.map(g => g.proposed_action).join('；').slice(0, 120) },
       precision: { accepted: list.filter(f => f.status === 'accepted').length, rejected: list.filter(f => f.status === 'rejected').length, open: list.filter(f => ['open','disputed'].includes(f.status)).length, rejects: errors },
       findings: list, new_gaps: gaps.filter(g => sydneyTime(g.first_seen).date === date).length, promises_broken: dailyPromises,
       coverage: { balanced: cover.every(balanced), runs: cover, unaccounted: cover.reduce((sum, c) => sum + Number(c.unaccounted ?? 0), 0) }, budget: { providers: budget.filter(b => b.day_utc <= date && b.day_utc >= new Date(Date.parse(date) - DAY).toISOString().slice(0,10)), monthly_usd_micros: monthly[0]?.used ?? 0, month_cap_usd_micros: Number(e.REVIEW_MONTH_CAP_USD_MICROS ?? 10000000) }, agreement,

@@ -9,7 +9,7 @@ database_id = "42e95fb2-16f8-46d9-bf32-34f3e88a4443"
 [ai]
 binding = "AI"
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
 # Secrets (configured separately): OPENAI_API_KEY, DEEPSEEK_API_KEY.
 # Prices are usd_micros per token; empty prices disable the provider.
 [vars]
