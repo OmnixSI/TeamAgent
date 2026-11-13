@@ -407,7 +407,7 @@ async function boardDigest(e: Env, dates: string[]) {
   const failed = await reviewRead(e, "SELECT run_id,COUNT(*) AS n FROM review_traces WHERE run_id IN(SELECT value FROM json_each(?)) AND state='judge_failed' GROUP BY run_id", [ids]);
   const budget = await reviewRead(e, 'SELECT * FROM review_budget WHERE day_utc>=? ORDER BY day_utc DESC,provider', [dates.at(-1) ?? sydneyTime(Date.now()).date]);
   const gaps = await gapsFor(e), rules = await reviewRead(e, "SELECT * FROM behavior_rules WHERE status!='retired' OR updated_at>=? ORDER BY updated_at DESC,id", [Date.now() - 30 * DAY]);
-  const memories = await reviewRead(e, 'SELECT * FROM review_memory_candidates WHERE run_id IN(SELECT value FROM json_each(?))', [ids]);
+  const memories = await reviewRead(e, 'SELECT * FROM review_memory_candidates WHERE run_id IN(SELECT value FROM json_each(?)) ORDER BY created_at,id', [ids]);
   const traces = await reviewRead(e, 'SELECT id,run_id,signals FROM review_traces WHERE run_id IN(SELECT value FROM json_each(?))', [ids]);
   const promises = await reviewRead(e, "SELECT * FROM promises WHERE group_id IN(SELECT group_id FROM review_runs WHERE id IN(SELECT value FROM json_each(?))) AND status IN ('broken','cannot','expired')", [ids]);
   const monthly = await reviewRead(e, "SELECT COALESCE(SUM(used),0) AS used FROM review_budget WHERE unit='usd_micros' AND substr(day_utc,1,7)=?", [(dates[0] ?? sydneyTime(Date.now()).date).slice(0,7)]);
@@ -424,6 +424,14 @@ async function boardDigest(e: Env, dates: string[]) {
     if (agreement.agree + agreement.disagree) agreement.rate = agreement.agree / (agreement.agree + agreement.disagree);
     const cover = dailyRuns.map(r => ({ run_id: r.id, group_id: r.group_id, ...parse(r.stats).coverage }));
     const dailyMemory = memories.filter(m => runIds.has(m.run_id));
+    const memoryCandidates = dailyMemory.map(m => ({
+      id: m.id, op: m.op, repo: clean(m.repo), subject: clean(m.subject), predicate: clean(m.predicate), value: clean(m.value),
+      state: m.status, status: m.status, target_version: m.target_version, created_at: m.created_at,
+      evidence: parse(m.evidence_json, []).map((v: any) => ({
+        source: v.source, id: v.id, quote: clean(v.quote), ...(v.origin ? { origin: v.origin } : {}),
+        ...(v.image ? { image: { message_id: v.image.message_id, idx: v.image.idx, sha: v.image.sha } } : {}),
+      })),
+    }));
     const dailyRules = rules.filter(r => sydneyTime(r.created_at).date === date);
     const unanswered = traces.filter(t => runIds.has(t.run_id) && parse(t.signals, []).includes('S1'));
     const dailyPromises = promises.filter(p => sydneyTime(p.checked_at ?? p.created_at).date === date);
@@ -432,7 +440,7 @@ async function boardDigest(e: Env, dates: string[]) {
       run: { step: first.step, mode: first.mode, model: first.model, second_model: first.second_model, same_family: first.same_family, judge_calls: first.judge_calls, unreviewed: Number(parse(first.stats).unreviewed ?? 0), completion_note: parse(first.stats).unreviewed ? `未评完 ${parse(first.stats).unreviewed} 条` : '', error: first.error, updated_at: first.updated_at, spend: parse(first.spend_json) },
       answers: { failures: list.map(f => f.what_happened).join('；').slice(0, 120), requirements: dailyRules.map(r => r.rule).join('；').slice(0,120), memory: dailyMemory.map(m => (m.op === 'DELETE' ? '不再记住：' : '待记住：') + m.subject + m.value).join('；').slice(0,120), unanswered: [unanswered.length ? `${unanswered.length} 条待回答` : '', parse(first.stats).unreviewed ? `未评完 ${parse(first.stats).unreviewed} 条` : ''].filter(Boolean).join('；'), changes: gaps.map(g => g.proposed_action).join('；').slice(0, 120) },
       precision: { accepted: list.filter(f => f.status === 'accepted').length, rejected: list.filter(f => f.status === 'rejected').length, open: list.filter(f => ['open','disputed'].includes(f.status)).length, rejects: errors },
-      findings: list, new_gaps: gaps.filter(g => sydneyTime(g.first_seen).date === date).length, promises_broken: dailyPromises,
+      findings: list, memory_candidates: memoryCandidates, new_gaps: gaps.filter(g => sydneyTime(g.first_seen).date === date).length, promises_broken: dailyPromises,
       coverage: { balanced: cover.every(balanced), runs: cover, unaccounted: cover.reduce((sum, c) => sum + Number(c.unaccounted ?? 0), 0) }, budget: { providers: budget.filter(b => b.day_utc <= date && b.day_utc >= new Date(Date.parse(date) - DAY).toISOString().slice(0,10)), monthly_usd_micros: monthly[0]?.used ?? 0, month_cap_usd_micros: Number(e.REVIEW_MONTH_CAP_USD_MICROS ?? 10000000) }, agreement,
       judge_failed: failed.filter(r => runIds.has(r.run_id)).reduce((sum, r) => sum + r.n, 0), disputed: list.filter(f => f.status === 'disputed').length };
   });
@@ -453,7 +461,9 @@ async function fetchReview(request: Request, env: Env): Promise<Response> {
         if (request.method === 'GET' && path === '/review/health') {
           const tables = await reviewRead(e, "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('turn_tools','turn_offers','review_runs','review_cursors','review_snapshots','review_traces','review_judgments','review_budget','review_findings','review_rejects','review_consumed','capability_gaps','behavior_rules','review_memory_candidates','promises','review_probes')");
           const [last] = await reviewRead(e, 'SELECT date,step,updated_at FROM review_runs ORDER BY updated_at DESC LIMIT 1');
-          response = json({ ok: tables.length === 16, release: env.RELEASE ?? 'development', migration: tables.length === 16 ? '0008' : null, last_run: last ?? null }, tables.length === 16 ? 200 : 503);
+          const settings = Object.fromEntries((await reviewRead(e, "SELECT key,value FROM settings WHERE key IN ('off:review','review:mode')")).map(r => [r.key, r.value]));
+          response = json({ ok: tables.length === 16, release: env.RELEASE ?? 'development', migration: tables.length === 16 ? '0008' : null, last_run: last ?? null,
+            mode: settings['review:mode'] ?? env.REVIEW_MODE ?? 'shadow', off: settings['off:review'] === '1' }, tables.length === 16 ? 200 : 503);
         } else if (request.method === 'GET' && (path === '/review/digest' || path === '/review/backlog.md')) {
           const date = url.searchParams.get('date') ?? sydneyTime(Date.now()).date, days = url.searchParams.get('days');
           if (!validDate(date) || (days !== null && (!/^[1-7]$/.test(days)))) response = json({ error: 'invalid_date_or_days' }, 400);
@@ -464,7 +474,11 @@ async function fetchReview(request: Request, env: Env): Promise<Response> {
             const dates = days ? (await reviewRead(e, 'SELECT DISTINCT date FROM review_runs WHERE date<=? ORDER BY date DESC LIMIT ?', [date, Number(days)])).map(r => r.date) : [date];
             const board = await boardDigest(e, dates);
             // Preserve D-5a's detailed single-day digest and add the board fields.
-            if (!days) { const detail = await renderDigest(e, date); response = json({ ...detail, ...board.days[0], gaps: board.gaps, rules: board.rules, date, findings: board.days[0]?.findings ?? [] }); }
+            if (!days) {
+              const detail = await renderDigest(e, date), memoryCandidates = board.days[0]?.memory_candidates ?? [];
+              response = json({ ...detail, ...board.days[0], gaps: board.gaps, rules: board.rules, date, findings: board.days[0]?.findings ?? [],
+                memory_candidates: memoryCandidates, questions: { ...detail.questions, memory: { ...detail.questions.memory, candidates: memoryCandidates } } });
+            }
             else response = json(board);
           }
         } else if (request.method === 'PATCH' && /^\/review\/(finding|rule|memory)\/[^/]+$/.test(path)) {
