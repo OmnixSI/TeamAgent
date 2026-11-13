@@ -84,7 +84,7 @@ test("F5 仓库事实：入口、目录、D1 表、cron、队列、绑定都来�
     assert.ok(FACTS.repo.schemaTables.includes(table), table);
   const schemaCount = (readRepo("schema.sql").match(/CREATE\s+(?:VIRTUAL\s+)?TABLE\s+IF\s+NOT\s+EXISTS/gi) || []).length;
   assert.equal(FACTS.repo.schemaTables.length, schemaCount);
-  assert.deepEqual(FACTS.repo.crons, ["* * * * *"]);
+  assert.deepEqual(FACTS.repo.crons, ["* * * * *", "*/5 * * * *"]);
   assert.deepEqual(FACTS.repo.queues.sort(), ["inkboard-team", "inkboard-team-chat", "team-agent-tools"].sort());
   for (const binding of ["DB", "WORK", "CHAT", "TOOLS", "AI"])
     assert.ok(FACTS.repo.bindings.includes(binding), binding);

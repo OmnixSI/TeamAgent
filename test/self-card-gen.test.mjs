@@ -168,7 +168,7 @@ test("S6 repo_map matches schema.sql, migrations and wrangler.toml independently
   const bindings = [...wrangler.matchAll(/binding = "([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(map.bindings, bindings);
   assert.ok(map.bindings.includes("DB"));
-  assert.deepEqual(map.crons, ["* * * * *"]);
+  assert.deepEqual(map.crons, ["* * * * *", "*/5 * * * *"]);
 
   for (const point of map.entrypoints.filter((e) => e.path === "src/worker.ts")) {
     const line = read("src/worker.ts").split("\n")[point.line - 1];

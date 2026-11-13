@@ -110,7 +110,7 @@ export function readFacts() {
   const asrLocal = asrProviders.some((p) => p.vendor === "X-ASR" && p.where === "本机");
   const asrFiles = firstExisting([...new Set(asrProviders.map((p) => p.file))]);
 
-  const visionModelId = need(/e\.AI\.run\(\s*["']([^"']+)["']/, runtime, "vision model", "src/runtime.ts");
+  const visionModelId = need(/(?:e\.AI\.run|runWorkersAi)\(\s*(?:e\s*,\s*)?["']([^"']+)["']/, runtime, "vision model", "src/runtime.ts");
   const visionVendor = visionModelId.startsWith("@cf/")
     ? "Cloudflare Workers AI"
     : /api\.openai\.com/.test(vision)
