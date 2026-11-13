@@ -12,8 +12,8 @@ const acceptance = `${root}/.agent/releases/V-D-reflection-loop/acceptance.json`
 test("registry covers all 76 acceptance ids exactly once", () => {
   assert.equal(ITEMS.length, 76);
   assert.equal(new Set(ITEMS.map((item) => item.id)).size, 76);
-  assert.equal(RUNNABLE.length, 18);
-  assert.equal(BLOCKED.length, 58);
+  assert.equal(RUNNABLE.length, 29);
+  assert.equal(BLOCKED.length, 47);
   assert.equal(RUNNABLE.length + BLOCKED.length, 76);
   for (const item of ITEMS) {
     assert.ok(item.id && item.scenario && item.packages && item.script, item.id);
@@ -34,7 +34,7 @@ test("accept-matrix renders one row per item", () => {
   const markdown = renderMatrix(fake, new Date("2026-11-14T00:00:00Z"));
   assert.equal(matrixRows(markdown), 76);
   for (const item of ITEMS) assert.ok(markdown.includes(`| ${item.id} |`), item.id);
-  assert.match(markdown, /PASS 18 · FAIL 0 · BLOCKED 58/);
+  assert.match(markdown, /PASS 29 · FAIL 0 · BLOCKED 47/);
 });
 
 test("cli --list prints 76 items without running checks", () => {
@@ -42,5 +42,5 @@ test("cli --list prints 76 items without running checks", () => {
   assert.equal(out.status, 0, out.stderr);
   const lines = out.stdout.trim().split("\n");
   assert.equal(lines.length, 77);
-  assert.match(lines.at(-1), /^TOTAL 76 RUNNABLE 18 BLOCKED 58$/);
+  assert.match(lines.at(-1), /^TOTAL 76 RUNNABLE 29 BLOCKED 47$/);
 });

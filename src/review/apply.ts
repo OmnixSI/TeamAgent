@@ -8,7 +8,7 @@ import { TOOLS_CATALOG } from './catalog';
 import type { Agreement, Evidence, JudgePromise } from './types';
 
 export type ApplyRun = { id: string; group_id: string; gen: number; now?: number };
-export type ApplyResult = { consumed: boolean; findings: number; tasks: number };
+export type ApplyResult = { consumed: boolean; findings: number; tasks: number; plan?: ReviewStatement[] };
 export type PromiseCheck = { checked: number; kept: number; broken: number; cannot: number };
 export type GapTaskInput = {
   fingerprint: string; gap_type: string; capability: string; severity: string; fix_layer: string;
@@ -233,7 +233,7 @@ async function promiseStatements(e: ReviewEnv, run: ApplyRun, promises: any[], n
 const schedulingTool = () => TOOLS_CATALOG.some(tool => /sched|remind|calendar|cron/i.test(tool.name));
 
 /** Parse one validated judgment. Kept small and fail-closed: malformed rows stay unconsumed. */
-export async function applyJudgment(e: ReviewEnv, run: ApplyRun, judgmentId: string): Promise<ApplyResult> {
+export async function applyJudgment(e: ReviewEnv, run: ApplyRun, judgmentId: string, options: { prepareOnly?: boolean } = {}): Promise<ApplyResult> {
   const ctx = metered(e), now = nowOf(run);
   const [judgment] = await reviewRead<Row>(ctx, 'SELECT * FROM review_judgments WHERE id=?', [judgmentId]);
   if (!judgment || judgment.state !== 'ok' || judgment.consumed_at != null) return { consumed: false, findings: 0, tasks: 0 };
@@ -366,6 +366,10 @@ export async function applyJudgment(e: ReviewEnv, run: ApplyRun, judgmentId: str
     sql: "UPDATE review_judgments SET consumed_at=? WHERE id=? AND state='ok' AND consumed_at IS NULL",
     params: [now, judgment.id],
   });
+
+  // D-6 persists the immutable plan before executing bounded pages on later ticks.
+  // The default D-5a call retains its original execution contract.
+  if (options.prepareOnly) return { consumed: false, findings: 0, tasks: 0, plan: statements };
 
   const donePages = new Set((await reviewRead<Row>(ctx,
     "SELECT event FROM review_consumed WHERE kind='apply_page' AND subject=?", [judgment.id]))

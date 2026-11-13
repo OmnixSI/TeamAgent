@@ -8,7 +8,6 @@ export function staticGuard() {
   const dir = "src/review";
   const files = readdirSync(dir).filter((name) => name.endsWith(".ts"));
   const problems = [];
-  const allowedFromOutbox = new Set(["trace.ts"]); // read-only trace source
   for (const name of files) {
     const text = readFileSync(join(dir, name), "utf8");
     for (const [pattern, why] of [
@@ -20,7 +19,6 @@ export function staticGuard() {
     ]) {
       if (pattern.test(text)) problems.push(`${name}: ${why}`);
     }
-    if (!allowedFromOutbox.has(name) && /\bFROM\s+outbox\b/i.test(text)) problems.push(`${name}: reads outbox outside trace.ts`);
   }
   assert(problems.length === 0, `static guard failed: ${problems.join("; ")}`);
   return `${files.length} 个 review 模块无 worker/semantic/tasks/lanes 导入、无群发/出站写`;

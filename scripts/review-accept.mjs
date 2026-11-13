@@ -17,7 +17,20 @@ import { vdR3Cover, vdSnapSw, vdSnapRun } from "./review-accept/checks/trace.mjs
 import { vdRIso, vdIso, vdRGolden, vdRBudget, vdRTrunc, vdRCap, vdRInj, vdRDual } from "./review-accept/checks/judge.mjs";
 import { vdBlocked } from "./review-accept/checks/blocked.mjs";
 
+import { vdWorker } from './review-accept/checks/worker.mjs';
+
 const CHECK = {
+  "VD-M2": vdWorker,
+  "VD-NIGHT": vdWorker,
+  "VD-SAFE": vdWorker,
+  "VD-BUDGET": vdWorker,
+  "VD-SWITCH": vdWorker,
+  "VD-DST": vdWorker,
+  "VD-API": vdWorker,
+  "VD-R4-IDEM": vdWorker,
+  "VD-R-KEY": vdWorker,
+  "VD-R-GUARD": vdWorker,
+  "VD-R-SHADOW-LOCAL": vdWorker,
   "VD-GATE": vdGate,
   "VD-R-MIG": vdRMig,
   "VD-D0": vdD0,
