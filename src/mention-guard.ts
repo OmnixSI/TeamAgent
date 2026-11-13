@@ -1,6 +1,8 @@
 import { queueFor } from './lanes';
 import type { Decision } from './rhythm';
 
+export const RECOVERY_MAX_AGE_MS = 15 * 60 * 1000;
+
 export function addressedMessages(context: any): any[] {
   const rows = [...(context.batch || []), ...(context.latest ? [context.latest] : [])];
   const explicit = rows.filter((m: any) => m.mentioned || m.meta?.replyTo?.kind === 'bot');
@@ -58,16 +60,17 @@ export async function withMentionReceipt<T>(e: any, context: any, run: () => Pro
 
 /** Called first in scheduled(), before maintenance can consume the D1 statement budget. */
 export async function sweepMentions(e: any, now = Date.now()): Promise<void> {
+  if ((await e.DB.prepare("SELECT value FROM settings WHERE key='off:mention_recovery'").first())?.value === '1') return;
   const rows = (await e.DB.prepare(`WITH candidates AS (SELECT m.*,
     EXISTS (SELECT 1 FROM jobs j WHERE j.status IN ('pending','running') AND
       (json_extract(j.payload,'$.message')=m.id OR json_extract(j.payload,'$.latestId')=m.id
         OR json_extract(j.payload,'$.source_id')=m.id)) AS active
     FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id
-    WHERE ${addressed} AND m.ts<=? AND ${noOutbox} AND ${noTerminal}
+    WHERE ${addressed} AND julianday(m.ts)>=julianday(?) AND julianday(m.ts)<=julianday(?) AND ${noOutbox} AND ${noTerminal}
       AND COALESCE((SELECT CAST(json_extract(value,'$.attempts') AS INTEGER) FROM settings WHERE key='mention-recovery:'||m.id),0)<2
       AND COALESCE((SELECT CAST(json_extract(value,'$.at') AS INTEGER) FROM settings WHERE key='mention-recovery:'||m.id),0)<=?
-    ) SELECT * FROM candidates WHERE ts<=? OR active ORDER BY ts LIMIT 1`)
-    .bind(new Date(now-45000).toISOString(), now-90000, new Date(now-90000).toISOString()).all()).results;
+    ) SELECT * FROM candidates WHERE julianday(ts)<=julianday(?) OR active ORDER BY julianday(ts),id LIMIT 1`)
+    .bind(new Date(now-RECOVERY_MAX_AGE_MS).toISOString(), new Date(now-45000).toISOString(), now-90000, new Date(now-90000).toISOString()).all()).results;
   for (const source of rows) {
     if (now - Date.parse(source.ts) >= 90000) {
       const key = 'mention-recovery:' + source.id;
@@ -93,4 +96,21 @@ export async function sweepMentions(e: any, now = Date.now()): Promise<void> {
       await mentionReceipt(e, source, now);
     } else if (source.active) await mentionReceipt(e, source, now);
   }
+}
+
+/** The sender checks again: queued recoveries can age out or lose a race to a normal reply.
+ * Ignore this recovery's own decision and receipts; neither is a competing answer. */
+export async function mentionSendAllowed(e: any, outbox: any, now = Date.now()): Promise<boolean> {
+  const source = await e.DB.prepare(`SELECT m.ts FROM messages m WHERE m.id=?1 AND m.group_id=?2
+    AND NOT EXISTS (SELECT 1 FROM chat_decisions d WHERE d.group_id=m.group_id
+      AND d.action IN ('reply','dup') AND d.id<>?3 AND COALESCE(d.outbox_id,'')<>?3
+      AND (d.latest_id=m.id OR EXISTS (SELECT 1 FROM json_each(d.batch_ids) b WHERE b.value=m.id)))
+    AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.group_id=m.group_id AND o.id<>?3
+      AND substr(o.id,1,length(?3)+1)<>?3||'~'
+      AND o.id NOT LIKE 'mention-receipt:%' AND o.status IN ('pending','sending','sent','unknown')
+      AND (o.msg_id=m.id OR o.id IN (SELECT d.outbox_id FROM chat_decisions d WHERE d.group_id=m.group_id
+        AND (d.latest_id=m.id OR EXISTS (SELECT 1 FROM json_each(d.batch_ids) b WHERE b.value=m.id)))))`)
+    .bind(outbox.msg_id ?? null, outbox.group_id, outbox.id.replace(/~(?:[0-9]+|s)$/, '')).first();
+  const age = now - Date.parse(source?.ts);
+  return age >= 0 && age <= RECOVERY_MAX_AGE_MS;
 }

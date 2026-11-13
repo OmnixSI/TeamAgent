@@ -129,6 +129,18 @@ export async function deliverFiles({ dir, root, target, sendFile, report, now = 
       else park(file);
       continue;
     }
+    // Pin the original age before any retry rewrites the manifest's mtime.
+    const created = typeof d.created_at === 'number' ? d.created_at : Date.parse(d.created_at);
+    d.created_at = Number.isFinite(created) ? created : fs.statSync(file).mtimeMs;
+    if (!['sent','unknown'].includes(d.status) && now - d.created_at > RETENTION_MS) {
+      d.status = 'failed';
+      d.error = 'expired';
+      d.attempts = MAX_ATTEMPTS;
+      delete d.next_attempt;
+      write(file, d);
+      await finishDelivery(file, d, root, report);
+      continue;
+    }
     if (d.status === "unknown" || d.status === "failed" && d.reported) {
       d.attempts = Math.min(MAX_ATTEMPTS, Math.max(1, d.attempts) + 1);
       write(file, d);

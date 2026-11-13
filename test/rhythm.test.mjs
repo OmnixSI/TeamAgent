@@ -518,9 +518,9 @@ test('budget guards leave a low-budget send and sweep durable; reference fuse co
   const out=`.wrangler/sweep-budget-${process.pid}.mjs`;
   await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:out});
   const {sweepVideoWaits}=await import('../'+out),base=env();
-  for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,0,3).run();
-  // The three media sweep statements run first; one exhausted wait fits this turn.
-  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,46);
+  for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,Date.now(),3).run();
+  // Media maintenance and age retirement run first; one fresh exhausted wait still fits.
+  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,1);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,7);
   for(let i=0;i<7;i++){

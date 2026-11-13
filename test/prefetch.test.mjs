@@ -123,3 +123,23 @@ test('P6 replay: a bare @ five seconds after the short link inherits that link',
   assert.deepEqual(JSON.parse(job.payload).waiters, [waits[0].id]);
   assert.equal((await rows(e, 'outbox')).length, 0);
 });
+
+test('P7 a bare @ never inherits a link older than two minutes', async () => {
+  const e = env(); await bind(e);
+  await silentModel(async () => {
+    await qq(e, { ...msg('old-link', 'https://b23.tv/' + short), timestamp: new Date(Date.now() - 8 * 86400000).toISOString() });
+    await qq(e, msg('at-late', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), 'GROUP_AT_MESSAGE_CREATE');
+    await queue(e, 'chat-at-late');
+  });
+  assert.equal((await rows(e, 'video_waits')).length, 0);
+});
+
+test('P8 a bare @ never inherits a link posted after it', async () => {
+  const e = env(); await bind(e);
+  await silentModel(async () => {
+    await qq(e, { ...msg('at-first', '<@204AE67DE34A4448CEE8EA52208A2BB0>'), timestamp: new Date(Date.now() - 5000).toISOString() }, 'GROUP_AT_MESSAGE_CREATE');
+    await qq(e, msg('link-after', 'https://b23.tv/' + short));
+    await queue(e, 'chat-at-first');
+  });
+  assert.equal((await rows(e, 'video_waits')).length, 0);
+});

@@ -1,4 +1,5 @@
-import { addressedMessages, sweepMentions } from './mention-guard';
+import { AUTO_REPLY_MAX_AGE_MS, AUTO_REPLY_KINDS_SQL, outboxExpirySql } from './recovery-policy';
+import { addressedMessages, sweepMentions, mentionSendAllowed } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import { isOrgRepo } from "./repo-discovery";
@@ -550,12 +551,19 @@ async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any
 }
 async function processJob(e: Env, id: string) {
   const now = Date.now();
+  const expired = `(kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<?3)`;
   const claim = await e.DB.prepare(
-    "UPDATE jobs SET status='running',lease_until=?,attempts=attempts+1 WHERE id=? AND kind NOT IN ('fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) RETURNING *",
+    `UPDATE jobs SET status=CASE WHEN ${expired} THEN 'failed' ELSE 'running' END,
+      lease_until=CASE WHEN ${expired} THEN lease_until ELSE ?1 END,
+      attempts=CASE WHEN ${expired} THEN attempts ELSE attempts+1 END,
+      error=CASE WHEN ${expired} THEN 'expired' ELSE error END
+      WHERE id=?2 AND kind NOT IN ('fetch','bili_media')
+      AND (status='pending' OR (status='running' AND lease_until<?4))
+      AND (${expired} OR (attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=?4)) RETURNING *`,
   )
-    .bind(now + 660000, id, now, now)
+    .bind(now + 660000, id, now - AUTO_REPLY_MAX_AGE_MS, now)
     .first();
-  if (!claim) return;
+  if (!claim || claim.status !== 'running') return;
   try {
     const p = JSON.parse(claim.payload);
     (e as any).timingTurn = p.latestId || p.message || (claim.kind === "video_reply" ? p.wait?.slice(3) : undefined);
@@ -1018,9 +1026,24 @@ async function sendOutbox(e: Env) {
   if (!e.QQ_APP_ID || !e.QQ_APP_SECRET) return;
   let rows = (
     await e.DB.prepare(
-      "SELECT o.*,om.json AS meta FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5",
-    ).all()
+      `SELECT o.*,om.json AS meta,${outboxExpirySql("o")} AS expires_at FROM outbox o LEFT JOIN outbox_meta om ON om.id=o.id WHERE o.status='pending' ORDER BY o.created_at,o.id LIMIT 5`,
+    ).bind(Date.now()).all()
   ).results;
+  if (!rows.length) return;
+  const expired = rows.filter((o: any) => o.expires_at !== null && o.expires_at < Date.now());
+  if (expired.length) {
+    if (left(e) < 1) return;
+    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE status='pending' AND id IN ("+expired.map(()=>"?").join(',')+")")
+      .bind(...expired.map((o: any) => o.id)).run();
+    rows = rows.filter((o: any) => !expired.includes(o));
+  }
+  for (const o of rows.filter((r: any) => /^mention-(recovery|receipt):/.test(r.id))) {
+    if (left(e) < 2) return;
+    if (!await mentionSendAllowed(e, o)) {
+      await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+      rows = rows.filter((r: any) => r.id !== o.id);
+    }
+  }
   if (!rows.length) return;
   let switches: Record<string, string | undefined> | undefined;
   const stickerSources = new Map<string, any>();
@@ -1084,12 +1107,21 @@ async function sendOutbox(e: Env) {
       switches ??= await loadSwitches(e);
     }
     const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
+    if (/^mention-(recovery|receipt):/.test(o.id)) {
+      if (left(e) < COST.send_row + 2) break;
+      if (!await mentionSendAllowed(e, o)) {
+        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+        continue;
+      }
+    }
     const locked = await e.DB.prepare(
-      "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
+      `WITH validity AS (SELECT ${outboxExpirySql('o')} AS expires_at FROM outbox o WHERE o.id=?2)
+        UPDATE outbox SET status=CASE WHEN COALESCE((SELECT expires_at FROM validity),?1)>=?1 THEN 'sending' ELSE 'skipped' END
+        WHERE id=?2 AND status='pending' RETURNING id,status`,
     )
-      .bind(o.id)
+      .bind(Date.now(), o.id)
       .first();
-    if (!locked) continue;
+    if (!locked || locked.status !== 'sending') continue;
     await e.DB.prepare(
       "INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)",
     )
@@ -1237,6 +1269,9 @@ async function scheduled(e: Env) {
     }
   }
   await sweepVideoWaits(e);
+  // Old reply-producing queue backlog must not become a deployment-time replay.
+  await e.DB.prepare(`UPDATE jobs SET status='failed',error='expired' WHERE kind IN ${AUTO_REPLY_KINDS_SQL} AND created_at<? AND (status='pending' OR (status='running' AND lease_until<?))`)
+    .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
       "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",

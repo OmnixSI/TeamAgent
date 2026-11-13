@@ -23,6 +23,7 @@ export type NewSchedule = {
 
 const MINUTE = 60000;
 const LATE_AFTER = 5 * MINUTE;
+const MAX_MISSED_AGE_MS = 2 * 60 * MINUTE;
 const RETRY_AFTER = 5 * MINUTE;
 const DEFAULT_TZ = "Australia/Sydney";
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -357,6 +358,15 @@ export async function runSchedules(e: any, now = Date.now()) {
     if (!claim) continue;
     const spec = specOf(schedule);
     let outboxId: string | null = null;
+    if (schedule.kind !== 'mute' && now - dueAt > MAX_MISSED_AGE_MS) {
+      const next = nextRun(spec, now, schedule.tz || DEFAULT_TZ);
+      await e.DB.batch([
+        e.DB.prepare("UPDATE schedule_runs SET finished_at=?,status='skipped',error='expired' WHERE id=?").bind(now, runId),
+        e.DB.prepare("UPDATE schedules SET next_run_at=?,status=?,fail_count=0,last_error='expired' WHERE id=?")
+          .bind(next, next === null ? 'done' : 'active', schedule.id),
+      ]);
+      continue;
+    }
     try {
       const body = schedule.kind === "mute"
         ? null

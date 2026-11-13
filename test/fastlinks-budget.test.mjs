@@ -92,7 +92,7 @@ test('R8-4 P0a dropped msgref leaves the existing get_work_status media query us
 });
 test('P0a thrown processJob failure does not flush or acknowledge',async()=>{
  const base=env(),e=metered(base),prepare=e.DB.prepare.bind(e.DB);let acked=0;stage(e,'failed','chat_claimed');
- e.DB.prepare=sql=>{if(sql.startsWith("UPDATE jobs SET status='running'"))throw Error('synthetic claim failure');return prepare(sql);};
+ e.DB.prepare=sql=>{if(sql.startsWith("UPDATE jobs SET status=") && sql.includes("RETURNING *"))throw Error('synthetic claim failure');return prepare(sql);};
  await assert.rejects(()=>worker.queue({messages:[{body:{id:'fail'},ack(){acked++;}}]},e),/synthetic claim failure/);assert.equal(acked,0);assert.equal(e.tail.timing.length,1);assert.equal((await stages(base)).length,0);
 });
 test('P0a fetcherSeen still counts one query but only updates after thirty seconds',async()=>{
@@ -113,7 +113,7 @@ test('P0a research handoff stays durable and records its source turn',async()=>{
 test('P0a a multi-message delivery flushes each source buffer without losing earlier stages',async()=>{
  const base=env();await req(base,'/api/admin/bind',{groupId:'GROUP000001'});
  for(const id of ['notice-one','notice-two']){await qq(base,msg(id,'实际状态'));await base.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind(id,'voice_notice',JSON.stringify({message:id,status:'只说实际结果'}),Date.now()).run();}
- const prepare=base.DB.prepare.bind(base.DB),events=[];base.DB.prepare=sql=>{if(sql.startsWith("UPDATE jobs SET status='running'"))events.push('claim');if(sql.startsWith('INSERT INTO stage_timings'))events.push('tail');return prepare(sql);};
+ const prepare=base.DB.prepare.bind(base.DB),events=[];base.DB.prepare=sql=>{if(sql.startsWith("UPDATE jobs SET status=") && sql.includes("RETURNING *"))events.push('claim');if(sql.startsWith('INSERT INTO stage_timings'))events.push('tail');return prepare(sql);};
  await modelFixture(()=>worker.queue({messages:['notice-one','notice-two'].map(id=>({body:{id},ack(){events.push('ack');}}))},base));
  assert.deepEqual(events,['claim','tail','ack','claim','ack','tail']);const points=await stages(base);
  for(const id of ['notice-one','notice-two'])for(const name of ['model_start','model_end','outbox'])assert.ok(points.some(r=>r.turn_id===id&&r.stage===name),id+' '+name);

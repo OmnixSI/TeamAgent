@@ -495,3 +495,18 @@ test("S14 run_at without a timezone is read as Sydney wall time", async () => {
   assert.equal(created.next_run_at, at("2026-11-14T09:00:00+11:00"));
   assert.equal(new Date(created.next_run_at).toISOString(), "2026-11-13T22:00:00.000Z");
 });
+
+test('S15 schedules missed by more than two hours are skipped without model or outbox and recurring advances',async()=>{
+  for(const kind of ['digest_daily','digest_weekly','reminder']){
+    const e=env(),now=at('2026-11-13T07:59:00+11:00');
+    const s=await api.createSchedule(e,{group_id:GROUP,owner:'U1',kind,spec:kind==='reminder'?{minutes:1,text:'提醒'}:{time:'08:00',weekdays:[5]},source_msg_id:'old-'+kind},now);
+    const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('no network');};
+    try{await api.runSchedules(e,s.next_run_at+2*3600000+1);}finally{globalThis.fetch=old;}
+    assert.equal((await rows(e,'SELECT * FROM outbox')).length,0,kind);
+    assert.equal((await rows(e,'SELECT * FROM schedule_runs'))[0].status,'skipped',kind);
+    const after=await row(e,'SELECT * FROM schedules WHERE id=?',s.id);
+    assert.equal(after.status,kind==='reminder'?'done':'active');
+    if(kind!=='reminder')assert.ok(after.next_run_at>s.next_run_at+2*3600000);
+    assert.equal(calls,0);
+  }
+});
