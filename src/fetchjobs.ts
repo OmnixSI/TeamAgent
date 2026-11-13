@@ -275,6 +275,9 @@ export async function sweepVideoWaits(e: any): Promise<void> {
   await sweepMedia(e);
   const now = Date.now();
   await e.DB.prepare("UPDATE jobs SET status='failed',error='timeout' WHERE kind='fetch' AND status='running' AND attempts>=2 AND lease_until<?").bind(now).run();
+  // Keep retry/fallback scans from resurrecting waits from an earlier deployment.
+  await e.DB.prepare("UPDATE video_waits SET status='skipped' WHERE created_at<? AND (status='waiting' OR (status='running' AND lease_until<?))")
+    .bind(now - 24 * 3600000, now).run();
   const exhausted = (await e.DB.prepare("SELECT * FROM video_waits WHERE status='running' AND attempts>=3 AND lease_until<? LIMIT 5").bind(now).all()).results;
   for (const w of exhausted) {
     if (left(e) < 4) break;

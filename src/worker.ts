@@ -1,4 +1,4 @@
-import { addressedMessages, sweepMentions } from './mention-guard';
+import { addressedMessages, sweepMentions, mentionSendAllowed } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import { isOrgRepo } from "./repo-discovery";
@@ -1009,6 +1009,14 @@ async function sendOutbox(e: Env) {
     ).all()
   ).results;
   if (!rows.length) return;
+  for (const o of rows.filter((r: any) => /^mention-(recovery|receipt):/.test(r.id))) {
+    if (left(e) < 2) return;
+    if (!await mentionSendAllowed(e, o)) {
+      await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+      rows = rows.filter((r: any) => r.id !== o.id);
+    }
+  }
+  if (!rows.length) return;
   let switches: Record<string, string | undefined> | undefined;
   const stickerSources = new Map<string, any>();
   const stickerRows = rows.filter((o: any) => o.id.endsWith("~s"));
@@ -1071,6 +1079,13 @@ async function sendOutbox(e: Env) {
       switches ??= await loadSwitches(e);
     }
     const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
+    if (/^mention-(recovery|receipt):/.test(o.id)) {
+      if (left(e) < COST.send_row + 2) break;
+      if (!await mentionSendAllowed(e, o)) {
+        await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();
+        continue;
+      }
+    }
     const locked = await e.DB.prepare(
       "UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id",
     )
@@ -1224,6 +1239,9 @@ async function scheduled(e: Env) {
     }
   }
   await sweepVideoWaits(e);
+  // Old reply-producing queue backlog must not become a deployment-time replay.
+  await e.DB.prepare("UPDATE jobs SET status='failed',error='expired' WHERE kind IN ('chat','research','voice_notice','scout','video_reply','mention_receipt','semantic_reply','links','claim_notice','ci_triage') AND created_at<? AND (status='pending' OR (status='running' AND lease_until<?))")
+    .bind(Date.now() - 24 * 3600000, Date.now()).run();
   const pending = (
     await e.DB.prepare(
       "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 9",

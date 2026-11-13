@@ -49,12 +49,18 @@ export async function unansweredProactive(e: any, groupId: string, now = Date.no
   return hardRuleHit(row, now, r);
 }
 export async function recordDecision(e: any, row: any): Promise<void> {
+  // chat_decisions is the durable reply marker for every merged source, not just
+  // outbox.msg_id (the tail). Preserve latest_id even for a partial batch input.
+  const batchIds = Array.isArray(row.batch_ids) ? row.batch_ids : JSON.parse(row.batch_ids || '[]');
+  const ids = [...new Set([...batchIds, row.latest_id].filter(Boolean))];
+  const covered = ids.length <= 60 ? ids : [...ids.filter(id => id !== row.latest_id).slice(0, 59), row.latest_id];
   await e.DB.prepare(`INSERT OR REPLACE INTO chat_decisions(id,group_id,latest_id,batch_ids,mentioned,forced,waited,gate,action,spoken_kind,target_id,wait_seconds,reason,outbox_id,policy,model_ms,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(row.id, row.group_id, row.latest_id, Array.isArray(row.batch_ids) ? JSON.stringify(row.batch_ids.slice(0, 60)) : row.batch_ids || "[]",
+    .bind(row.id, row.group_id, row.latest_id, JSON.stringify(covered),
       row.mentioned ? 1 : 0, row.forced ? 1 : 0, row.waited ? 1 : 0, row.gate || "model", row.action || "stop", row.spoken_kind || null,
       row.target_id || null, row.wait_seconds ?? null, row.reason || null, row.outbox_id || null, row.policy || "live", row.model_ms ?? null, row.created_at ?? Date.now()).run();
 }
+
 export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
   const rows = (await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (" + SWITCH_KEYS.map(() => "?").join(",") + ")").bind(...SWITCH_KEYS).all()).results;

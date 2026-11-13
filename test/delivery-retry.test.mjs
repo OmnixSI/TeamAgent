@@ -284,3 +284,34 @@ test("a completed file task with zero files tells the reply writer not to claim 
   assert.doesNotMatch(payload.result, /已生成文件|文件已生成|生成好/);
   assert.match(payload.result, /未生成可交付文件/);
 });
+
+test('delivery older than 24h never retries even with a future retry clock or legacy manifest',async()=>{
+  for(const legacy of [false,true]){
+    const f=runnerFixture(),base=Date.now()-25*3600000;
+    const d=JSON.parse(fs.readFileSync(f.manifest));
+    Object.assign(d,{status:'failed',attempts:1,next_attempt:Date.now()+3600000,...(!legacy?{created_at:base}:{})});
+    fs.writeFileSync(f.manifest,JSON.stringify(d));fs.utimesSync(f.manifest,new Date(base),new Date(base));
+    let targets=0,sends=0;const reports=[];
+    try{
+      await deliverFiles({dir:f.queue,root:f.root,now:base+24*3600000+1,target:async()=>{targets++;return {group_id:GROUP};},sendFile:async()=>{sends++;},report:async r=>reports.push(r)});
+      assert.equal(targets,0);assert.equal(sends,0);
+      assert.equal(reports.length,1);assert.equal(reports[0].exhausted,true);assert.equal(reports[0].error,'expired');
+      assert.deepEqual(fs.readdirSync(f.queue),[]);
+    }finally{f.clean();}
+  }
+});
+
+test('expired failure records needs_attention locally without a historical group notice',async()=>{
+  const e=deliveryEnv();await seedDelivery(e);
+  await e.DB.prepare('UPDATE deliveries SET updated_at=?').bind(new Date(Date.now()-25*3600000).toISOString()).run();
+  const result=await policy.recordDeliveryFailure(e,{id:'delivery-file-1',attempts:1,error:'target_unavailable'});
+  assert.equal(result.status,'needs_attention');
+  assert.equal((await e.DB.prepare('SELECT * FROM outbox').all()).results.length,0);
+});
+
+test('explicitly expired runner receipt stays silent even when cloud delivery metadata is recent',async()=>{
+  const e=deliveryEnv();await seedDelivery(e);
+  const result=await policy.recordDeliveryFailure(e,{id:'delivery-file-1',attempts:1,error:'expired'});
+  assert.equal(result.status,'needs_attention');
+  assert.equal((await e.DB.prepare('SELECT * FROM outbox').all()).results.length,0);
+});

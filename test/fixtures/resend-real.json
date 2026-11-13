@@ -1,0 +1,42 @@
+{
+  "source": "F7-2 read-only production export 2026-11-13T14:57:58Z",
+  "sha256": "6df7610ebf3b4e7e9f393d453ab36fe05f296e81137ea39309a695d99dae063f",
+  "messages": [
+    {
+      "rid": 131,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbkS08eu4PfP.KtOYCVNpdXm8LfAI6eqRt5NmqkZb698IG0uBL0RIHvY.O0tXeTo9X2DpK1cXUIouEmqSogN8g1kNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "这是面试软件的 logo",
+      "ts": "2026-11-11T18:06:11+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 132,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTyGwztbKfL8I7vO7nkhlnQ2PZXSNmd2aHeYrWv6Xn3XFX00EAkamPtwE-D00ICMcflAvh-KGeBVRMtgN7zj0VtkNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "你别管这个logo，我让你去搜MAUS bot的那个东西，你就去给我干，干完了再回别的消息，不干完不许回",
+      "ts": "2026-11-11T18:06:19+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 153,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce5hpEh-T5yAFoAEdv8ZejkeNRdn3neUSJk0aujg6fgp96ld6FbvInJGG6oe7.eLK9giN.CgvAi1gd422p-ZDZhYNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "",
+      "ts": "2026-11-11T18:47:07+08:00",
+      "mentioned": 1
+    },
+    {
+      "rid": 348,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTzmV4jDkkWYxwGHZ.Ld-z-rFpM0meAmTjpA.5S-hxix9YEe5EwVkjoHzdOxxWbTILRWHuhCmI3jVYWHzLcp87XUNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "把今天群里的对话和讨论的内容给我总结一个日报。",
+      "ts": "2026-11-13T01:08:38+08:00",
+      "mentioned": 1
+    }
+  ]
+}

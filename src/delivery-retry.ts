@@ -5,6 +5,7 @@ export const DELIVERY_RETRY_DELAYS_MS = [60_000, 300_000] as const;
 export const MAX_DELIVERY_ATTEMPTS = 3;
 
 const FAILURE_REASONS: Record<string, string> = {
+  expired: "交付已超过 24 小时有效期",
   target_unavailable: "没拿到交付目标（QQ 网关或云端不可用）",
   file_denied: "本机文件校验没过（不在允许目录或超过 50 MiB）",
   invalid_files: "文件数量或格式不合规",
@@ -100,7 +101,7 @@ export async function recordDeliveryFailure(
     .first();
 
   let notice: { group: string; body: string } | null = null;
-  if (!existing) {
+  if (!existing && error !== "expired" && now - Date.parse(delivery.updated_at) <= 24 * 3600000) {
     const job = await e.DB.prepare("SELECT payload FROM jobs WHERE id=?")
       .bind(delivery.job_id)
       .first();
