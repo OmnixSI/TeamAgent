@@ -95,18 +95,21 @@ export async function enqueueSticker(e: any, x:{id:string;group:string;message:s
       .bind(now,x.sha,old,id),
   ]);
 }
-/** Rich media is attempted once. No retry, including ambiguous network outcomes. */
-export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<string,string|undefined>,sequence:number):Promise<number|null> {
+/** One-shot QQ rich media transport shared by stickers and generated JPEGs.
+ * A claimed row is never retried, including ambiguous network outcomes. */
+export async function sendRichMedia(e:any,o:any,token:string,source:any,sequence:number,options:{
+  failureStatus:'skipped'|'failed'; load:()=>Promise<any>; cache:(row:any,info:string,expires:number)=>Promise<void>;
+  acceptMessage?:(data:any)=>boolean; finish?:(ok:boolean)=>any[];
+}):Promise<{http:number|null;ok:boolean;attempted:boolean;finalized?:any[]}> {
   const passive=()=>source&&o.msg_id&&Date.now()-Date.parse(source.ts)<240000;
-  if(!stickerSendOn(sw,Date.now())||!passive()){
-    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();return null;
+  if(!passive()){
+    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();return {http:null,ok:false,attempted:false};
   }
-  const locked=await e.DB.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id").bind(o.id).first();if(!locked)return null;
+  const locked=await e.DB.prepare("UPDATE outbox SET status='sending' WHERE id=? AND status='pending' RETURNING id").bind(o.id).first();if(!locked)return {http:null,ok:false,attempted:false};
   await e.DB.prepare('INSERT OR REPLACE INTO outbox_attempts(id,started_at) VALUES(?,?)').bind(o.id,Date.now()).run();
   let http:number|null=null,code='',ok=false;
   try{
-    const meta=JSON.parse(o.meta||'{}'),row=await e.DB.prepare('SELECT * FROM stickers WHERE sha=? AND state=2').bind(meta.sticker).first();
-    if(!row)throw Error('sticker unavailable');
+    const row=await options.load();if(!row)throw Error('image unavailable');
     let fileInfo=row.file_info_expires>Date.now()+60000?row.file_info:null;
     const post=async(path:string,body:any)=>{
       const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'manual'});
@@ -118,21 +121,36 @@ export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<
       if(!r.ok||typeof d?.file_info!=='string'||!d.file_info||(d.code!==undefined&&d.code!==0))throw Error('upload not accepted');
       fileInfo=d.file_info;
       const ttl=Number(d.ttl)>0&&Number.isFinite(Number(d.ttl))?Number(d.ttl):3600;
-      await e.DB.prepare('UPDATE stickers SET file_info=?,file_info_expires=? WHERE sha=?').bind(fileInfo,Date.now()+ttl*1000,row.sha).run();
+      await options.cache(row,fileInfo,Date.now()+ttl*1000);
     }
     if(!passive()){
-      await e.DB.batch([e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=?").bind(o.id),e.DB.prepare('UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?').bind(http,code,o.id)]);return http;
+      await e.DB.batch([e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=?").bind(o.id),e.DB.prepare('UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?').bind(http,code,o.id)]);return {http,ok:false,attempted:false};
     }
     const {r,d}=await post('/messages',{msg_type:7,media:{file_info:fileInfo},msg_id:o.msg_id,msg_seq:sequence});
-    ok=r.ok&&!!(d?.id||d?.code===0);
+    ok=r.ok&&(options.acceptMessage?options.acceptMessage(d):!!(d?.id||d?.code===0)&&(d?.code===undefined||d.code===0));
   }catch{}
-  const result=await e.DB.batch([
-    e.DB.prepare('UPDATE outbox SET status=? WHERE id=?').bind(ok?'sent':'skipped',o.id),
+  const finalized=await e.DB.batch([
+    e.DB.prepare('UPDATE outbox SET status=? WHERE id=?').bind(ok?'sent':options.failureStatus,o.id),
     e.DB.prepare('UPDATE outbox_attempts SET http_status=?,code=? WHERE id=?').bind(http,code,o.id),
-    ok?e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail'"):
-      e.DB.prepare("INSERT INTO settings VALUES('sticker_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value"),
+    ...(options.finish?.(ok)||[]),
   ]);
-  if(!ok&&Number(result[2]?.results?.[0]?.value)>=3){
+  return {http,ok,attempted:true,finalized};
+}
+export async function sendSticker(e:any,o:any,token:string,source:any,sw:Record<string,string|undefined>,sequence:number):Promise<number|null> {
+  if(!stickerSendOn(sw,Date.now())){
+    await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='pending'").bind(o.id).run();return null;
+  }
+  const {http,ok,attempted,finalized}=await sendRichMedia(e,o,token,source,sequence,{
+    failureStatus:'skipped',
+    // Preserve legacy sticker acceptance and atomically update its failure fuse.
+    acceptMessage:d=>!!(d?.id||d?.code===0),
+    finish:ok=>[ok?e.DB.prepare("UPDATE settings SET value='0' WHERE key='sticker_fail'"):
+      e.DB.prepare("INSERT INTO settings VALUES('sticker_fail','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value")],
+    load:async()=>{const meta=JSON.parse(o.meta||'{}');return e.DB.prepare('SELECT * FROM stickers WHERE sha=? AND state=2').bind(meta.sticker).first();},
+    cache:async(row,info,expires)=>{await e.DB.prepare('UPDATE stickers SET file_info=?,file_info_expires=? WHERE sha=?').bind(info,expires,row.sha).run();},
+  });
+  if(!attempted)return http;
+  if(!ok&&Number(finalized?.[2]?.results?.[0]?.value)>=3){
     const until=String(Date.now()+86400000);
     await e.DB.batch([
       e.DB.prepare("INSERT INTO settings VALUES('sticker_paused_until',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(until),
