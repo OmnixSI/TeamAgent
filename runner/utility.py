@@ -529,6 +529,21 @@ def execute(job, work, inputs, outputs, completion):
     finish(completion, report)
 
 
+def clean_utility_root():
+    # A single process runs one task at a time, so any leftover task directory at
+    # startup belongs to a killed run. The delivery spool has its own retention.
+    root = H / "utility"
+    if not root.is_dir():
+        return
+    for child in root.iterdir():
+        if child.name == "_deliveries":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+
+
 def stop(signum, frame):
     raise SystemExit(0)
 
@@ -536,6 +551,7 @@ def stop(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    clean_utility_root()
     while True:
         try:
             once()

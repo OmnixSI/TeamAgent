@@ -232,6 +232,27 @@ process.stdout.write(JSON.stringify(sent));
             self.assertFalse((h / 'utility/_deliveries' / KEY).exists())
             self.assertFalse(list((h / 'file-deliveries').glob('*.json')))
 
+    def test_startup_cleanup_removes_orphan_tasks_but_keeps_deliveries(self):
+        with self.fixture() as (u, h):
+            u.clean_utility_root()  # Missing root is a no-op.
+            utility = h / 'utility'
+            (utility / 'task-one' / 'outputs').mkdir(parents=True)
+            (utility / 'task-one' / 'outputs' / 'partial.csv').write_text(CSV)
+            (utility / 'task-two').mkdir()
+            (utility / 'stray.txt').write_text('synthetic')
+            kept = utility / '_deliveries' / 'kept' / 'outputs'
+            kept.mkdir(parents=True)
+            (kept / 'ready.csv').write_text(CSV)
+            outside = h / 'outside'
+            outside.mkdir()
+            (outside / 'sentinel.txt').write_text('keep')
+            (utility / 'linked').symlink_to(outside, target_is_directory=True)
+            u.clean_utility_root()
+            self.assertEqual(sorted(p.name for p in utility.iterdir()), ['_deliveries'])
+            self.assertEqual((kept / 'ready.csv').read_text(), CSV)
+            self.assertFalse((utility / 'linked').exists(), 'only the symlink itself is removed')
+            self.assertEqual((outside / 'sentinel.txt').read_text(), 'keep', 'cleanup must not follow symlinks')
+
     def test_link_downloader_selects_only_audio_and_blocks_later_audio_attachments(self):
         sources = [{'urls': ['https://b23.tv/synthetic', 'https://youtu.be/second']},
                    {'attachments': [{'filename': 'voice.wav', 'content_type': 'audio/wav', 'url': 'https://example.invalid/voice'}]}]
