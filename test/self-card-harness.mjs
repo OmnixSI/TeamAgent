@@ -57,7 +57,7 @@ export function readCardCommit() {
   const file = repoPath("src/self-card.generated.ts");
   if (!fs.existsSync(file)) return null;
   const text = fs.readFileSync(file, "utf8");
-  const match = text.match(/commit\s*:\s*["']([0-9a-f]{7,40})["']/i);
+  const match = text.match(/["']?commit["']?\s*:\s*["']([0-9a-f]{7,40})["']/i);
   return match ? match[1] : null;
 }
 

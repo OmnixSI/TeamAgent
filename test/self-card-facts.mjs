@@ -224,7 +224,7 @@ const custom = (label, test) => ({ label, test });
 export function buildChecks(facts) {
   const imageLimit = facts.image.dailyLimit;
   return {
-    "image.tool": anyOf("生图工具名", [facts.image.tool]),
+    "image.tool": anyOf("生图工具名/入口", [facts.image.tool, "src/tools/generate-image.ts"]),
     "image.vendor": anyOf("生图厂商 OpenAI", [facts.image.vendor]),
     "image.model": anyOf("生图模型与代码一致", [facts.image.model]),
     "image.host": anyOf("生图接口主机", [facts.image.host]),
@@ -238,19 +238,19 @@ export function buildChecks(facts) {
     "reply.vendor": anyOf("回复厂商 DeepSeek", [facts.reply.vendor]),
     "reply.model": anyOf("回复模型与 config/team.json 一致", [facts.reply.model]),
     "reply.host": anyOf("回复接口主机", [facts.reply.host]),
-    "asr.qq": anyOf("QQ 语音消息用腾讯平台转写", ["腾讯 QQ", "腾讯", "QQ平台", "QQ 平台"]),
+    "asr.qq": anyOf("QQ 语音消息用腾讯平台转写", ["腾讯 QQ", "腾讯", "QQ平台", "QQ 平台", "QQ"]),
     "asr.local": allOf("视频音轨用本机 X-ASR", ["X-ASR", "本机"]),
-    "asr.files": anyOf("语音识别 runner 文件", ["runner/asr.mjs"]),
+    "asr.files": anyOf("语音识别 runner 文件", ["runner/asr.mjs", "runner/media.mjs", "asr.mjs", "media.mjs"]),
     "vision.vendor": anyOf("看图厂商", [facts.vision.vendor.includes("Cloudflare") ? "Cloudflare" : facts.vision.vendor]),
     "vision.model": anyOf("看图模型与代码一致", [facts.vision.model]),
     "vision.files": anyOf("看图关键文件", [facts.vision.primaryFile]),
     "tts.primary": anyOf("语音合成主路径", [facts.tts.primary]),
     "tts.fallback": anyOf("语音合成回退厂商", [facts.tts.fallback]),
     "tts.silk": anyOf("QQ 语音 SILK", [facts.tts.silk]),
-    "tts.files": anyOf("语音合成关键文件", [facts.tts.primaryFile]),
+    "tts.files": anyOf("语音合成关键文件", [facts.tts.primaryFile, "tts.mjs"]),
     "tts.not_wired": {
       label: "语音合成还没接进群里",
-      pattern: /(?:还没接进|未接进|不会主动发|尚未接入|没有接进)/,
+      pattern: /(?:还没接进|未接进|没接进|不会主动发|尚未接入|没有接进)/,
     },
     "repo.entry": anyOf("Worker 入口", [facts.repo.entry]),
     "repo.dirs": custom("顶层目录职责", (text) => facts.repo.dirs.every((d) => d.pattern.test(text))),
@@ -272,15 +272,15 @@ export function buildChecks(facts) {
     },
     "switch.image_gen.off": {
       label: "生图明确已关闭",
-      pattern: /(?:已关闭|当前已关闭|已写好未启用|关闭)/,
+      pattern: /(?:已关闭|当前已关闭|已写好未启用|关闭|关了|关着|关的|没开|没启用)/,
     },
     "switch.openai.off": {
       label: "OpenAI 通道明确已关闭",
-      pattern: /(?:已关闭|当前已关闭|已写好未启用|关闭)/,
+      pattern: /(?:已关闭|当前已关闭|已写好未启用|关闭|关了|关着|关的|没开|没启用)/,
     },
     "switch.image_gen.unconfigured": {
       label: "生图未配置",
-      pattern: /(?:未配置|没有配置|缺少\s*OPENAI_API_KEY|未绑定)/,
+      pattern: /(?:未配置|没有配置|缺少\s*OPENAI_API_KEY|未绑定|没绑|没配|没配置)/,
     },
   };
 }

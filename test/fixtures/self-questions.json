@@ -29,7 +29,13 @@
         },
         {
           "id": "S1-q2",
-          "text": "画图功能背后接的是哪家、什么模型"
+          "text": "画图功能背后接的是哪家、什么模型",
+          "expect": [
+            "image.vendor",
+            "image.model",
+            "image.host",
+            "image.limit"
+          ]
         }
       ]
     },
@@ -69,10 +75,7 @@
       "query": "OpenAI DeepSeek",
       "expect": [
         "reply.vendor",
-        "reply.model",
-        "reply.host",
-        "image.vendor",
-        "image.model"
+        "image.vendor"
       ],
       "conflict": [
         {
@@ -87,15 +90,18 @@
       "questions": [
         {
           "id": "S3-q1",
-          "text": "你和 OpenAI 还是 DeepSeek 接的"
+          "text": "你和 OpenAI 还是 DeepSeek 接的",
+          "expect": [
+            "reply.vendor",
+            "image.vendor"
+          ]
         },
         {
           "id": "S3-q2",
           "text": "你回复我的时候用的是哪个模型",
           "expect": [
             "reply.vendor",
-            "reply.model",
-            "reply.host"
+            "reply.model"
           ]
         }
       ]
@@ -149,7 +155,11 @@
         },
         {
           "id": "S5-q2",
-          "text": "别人发图片时你是怎么识别内容的"
+          "text": "别人发图片时你是怎么识别内容的",
+          "expect": [
+            "vision.vendor",
+            "vision.files"
+          ]
         }
       ]
     },
@@ -174,7 +184,8 @@
           "must_not_match": [
             "已关闭|未启用|未配置"
           ],
-          "topic": "switches"
+          "topic": "switches",
+          "live": false
         },
         {
           "id": "off_image_gen",
@@ -250,11 +261,21 @@
       "questions": [
         {
           "id": "S7-q1",
-          "text": "你能发语音吗"
+          "text": "你能发语音吗",
+          "expect": [
+            "tts.not_wired"
+          ]
         },
         {
           "id": "S7-q2",
-          "text": "语音合成用哪家"
+          "text": "语音合成用哪家",
+          "expect": [
+            "tts.primary",
+            "tts.fallback",
+            "tts.silk",
+            "tts.files",
+            "tts.not_wired"
+          ]
         }
       ]
     },

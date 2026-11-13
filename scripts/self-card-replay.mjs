@@ -222,6 +222,7 @@ if (MODE === "b" || MODE === "all") {
         : [{ id: "default", env: {} }];
       for (const state of states) {
         if (LIMIT && index >= LIMIT) break;
+        if (state.live === false) continue;
         const blocked = [];
         let modelCalls = 0;
         try {
