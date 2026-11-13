@@ -4,6 +4,9 @@
 // review 代码不得 import worker.ts / semantic.ts / tasks.ts / lanes.ts，所以这里不引用它们。
 import type { Snapshot } from "./types";
 
+// 目录内容变了就递增；快照和 turn_offers 都写它（amendments-v2 D-2）。
+export const CATALOG_VERSION = "cat-v1";
+
 export type CatalogTool = Snapshot["tools_catalog"][number];
 export type ToolNeed = CatalogTool["needs"][number];
 

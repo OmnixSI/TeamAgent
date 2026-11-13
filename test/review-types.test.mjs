@@ -135,3 +135,14 @@ test('signal defaults and deny words match the design lists', () => {
   assert.deepEqual(constants.DENY_WORDS,
     ['权限', '授权', 'token', '密钥', '开关', '部署', '上线', '关闭', '删除', '管理员']);
 });
+
+test('v2 enum snapshots, CATALOG_VERSION and migrate.mjs list include 0008', () => {
+  assert.deepEqual([...types.ORIGINS], ['direct','quoted','forwarded','card','attachment_text','image_text','bot']);
+  assert.deepEqual([...types.RULE_KINDS], ['reply_max_chars','burst_max','mention_only_window','language','format_pref','free']);
+  assert.deepEqual([...types.PROVIDERS], ['deepseek','workers-ai','openai','codex-offline']);
+  assert.deepEqual([...types.AGREEMENT], ['agree','disagree','single','pending']);
+  assert.deepEqual([...types.FINDING_STATUS], ['open','disputed','accepted','rejected','fixed','wontfix','regression']);
+  assert.deepEqual([...types.MEMORY_CANDIDATE_STATUS], ['candidate','approved','applied','rejected','blocked','conflict','superseded']);
+  assert.equal(catalog.CATALOG_VERSION, 'cat-v1');
+  assert.match(readFileSync(new URL('../scripts/migrate.mjs', import.meta.url), 'utf8'), /migrations\/0008_review\.sql/);
+});
