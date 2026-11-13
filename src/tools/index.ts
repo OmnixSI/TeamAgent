@@ -2,6 +2,7 @@
 import type { BotTool } from "../toolkit";
 import { calcTool } from "./calc";
 import { recallEpisodeTool } from "./episodes";
+import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
 import { readDocumentTool } from "./read-document";
 import { searchHistoryTool } from "./search-history";
@@ -14,5 +15,6 @@ export const EXTRA_TOOLS: BotTool[] = [
   readDocumentTool,
   recallEpisodeTool,
   searchHistoryTool,
+  searchKbTool,
   summarizeChatTool,
 ];
