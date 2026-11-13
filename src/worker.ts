@@ -5,6 +5,7 @@ import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
 import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
+import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
 import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
@@ -1068,6 +1069,13 @@ async function sendOutbox(e: Env) {
     if (o.meta) {
       try { meta = JSON.parse(o.meta); } catch {}
       switches ??= await loadSwitches(e);
+    }
+    if (typeof meta?.gen_image === "string" || o.id.endsWith("~g")) {
+      if (left(e) < COST.send_row) break;
+      const source = o.msg_id ? await e.DB.prepare("SELECT ts FROM messages WHERE id=? AND group_id=?").bind(o.msg_id,o.group_id).first() : null;
+      const status = await sendGeneratedImage(e,o,accessToken,source,messageSequence(o.id));
+      if (status === 401) qqToken = undefined;
+      continue;
     }
     const reference = typeof meta.reference === "string" && switches && isOn(switches, "quote") ? meta.reference : undefined;
     const locked = await e.DB.prepare(
