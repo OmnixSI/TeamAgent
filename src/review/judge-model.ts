@@ -1,153 +1,119 @@
-import type { JudgeResult } from "./types";
-import type { JudgeMessage } from "./prompt";
-
-type Usage = { neurons?: number; prompt_tokens?: number; completion_tokens?: number; input_tokens?: number; output_tokens?: number };
-export type JudgeUsage = { neurons: number; prompt_tokens: number; completion_tokens: number; attempts: number };
-export type JudgeProvider = "deepseek" | "workers-ai" | "openai-luna" | "codex-offline";
-export type JudgeReservation = { account: string; utcDay: string; neurons: number; cap: number; provider: JudgeProvider; model: string };
-export type JudgeLedger = {
-  /** Implement atomically in the orchestrator's account/day ledger. This module never writes storage. */
-  reserve(request: JudgeReservation): Promise<boolean>;
-  settle(request: JudgeReservation & { used: number; uncertain: boolean }): Promise<void>;
-};
-export type JudgeModelOptions = {
-  cap: number; spentNeurons?: number; model?: string; deepseekModel?: string;
-  maxTokens?: number; timeoutMs?: number; fetch?: typeof fetch;
-  provider?: JudgeProvider; fallbackProvider?: JudgeProvider | null;
-  offline?: (input: { messages: JudgeMessage[]; model: string; max_tokens: number }) => Promise<unknown>;
-  account?: string; ledger?: JudgeLedger; now?: () => number;
-  /** D-0 may override the conservative per-token rates for a different model. */
-  neuronRates?: { input: number; output: number };
-};
-type JudgeEnv = { AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
-  DEEPSEEK_API_KEY?: string; OPENAI_API_KEY?: string; OPENAI_MODEL?: string; REVIEW_JUDGE_PROVIDER?: JudgeProvider };
-const RATES = { input: 0.031818, output: 0.068182 }; // gpt-oss-120b; Cloudflare pricing, 2026-11-14.
-function nonnegative(n: unknown): number {
-  if (typeof n !== "number" || !Number.isFinite(n) || n < 0) throw Error("invalid neuron accounting");
-  return n;
+import { PROVIDERS,type Provider,type JudgeCall,type JudgeReply } from './types';
+import { redact } from './redact';
+import { parseJudgeReply } from './validate';
+export type JudgePrice={unit:'usd_micros'|'neurons';input:number;output:number};
+export type JudgeOptions={price?:JudgePrice;prices?:Partial<Record<Provider,JudgePrice>>;dayCap?:number;monthCapUsdMicros?:number;
+  workersAiEnabled?:boolean;mode?:'nightly'|'replay';chargeFullReservation?:boolean;now?:()=>number;fetch?:typeof fetch;offline?:(call:JudgeCall)=>Promise<JudgeReply>};
+export type JudgeEnv={DB?:any;AI?:{run(model:string,input:Record<string,unknown>):Promise<any>};DEEPSEEK_API_KEY?:string;OPENAI_API_KEY?:string;
+  OPENAI_MODEL?:string;REVIEW_MONTH_CAP_USD_MICROS?:string|number;REVIEW_WORKERS_AI_ENABLED?:string};
+const errorReply=(error_kind:string,finish_reason:JudgeReply['finish_reason']='error'):JudgeReply=>({ok:false,text:'',finish_reason,usage:null,error_kind});
+const validPrice=(p:JudgePrice|undefined):p is JudgePrice=>!!p&&['neurons','usd_micros'].includes(p.unit)&&[p.input,p.output].every(v=>Number.isFinite(v)&&v>=0)&&(p.input>0||p.output>0);
+export function validateProviders(primary:Provider='deepseek',second:Provider='openai',mode:'nightly'|'replay'='nightly',workersAiEnabled=false){
+  if(!PROVIDERS.includes(primary)||!PROVIDERS.includes(second))throw Error('invalid provider');
+  if(mode==='nightly'&&[primary,second].includes('codex-offline'))throw Error('codex-offline is unavailable nightly');
+  if([primary,second].includes('workers-ai')&&!workersAiEnabled)throw Error('workers-ai is not qualified');
+  return{primary,second};
 }
-/** Explicit neurons win; otherwise tokens, then a conservative one-char/one-token estimate. */
-export function neuronsOf(usage: Usage | number, rates = RATES): number {
-  if (typeof usage === "number") return Math.ceil(nonnegative(usage) * Math.max(nonnegative(rates.input), nonnegative(rates.output)));
-  if (usage.neurons !== undefined) return nonnegative(usage.neurons);
-  return Math.ceil(nonnegative(usage.prompt_tokens ?? usage.input_tokens ?? 0) * nonnegative(rates.input) +
-    nonnegative(usage.completion_tokens ?? usage.output_tokens ?? 0) * nonnegative(rates.output));
+/** UTF-8 byte input bound plus framing; image bound is deliberately conservative and never logged. */
+export function estimateReservation(call:JudgeCall,price:JudgePrice):number {
+  if(!validPrice(price))throw Error('price_unavailable');
+  const bytes=new TextEncoder().encode(redact(call.system)+redact(call.user)).length+128+
+    (call.images??[]).reduce((n,image)=>n+image.b64.length+32768,0);
+  const amount=Math.ceil(bytes*price.input+call.max_tokens*price.output);
+  if(!Number.isSafeInteger(amount)||amount<1)throw Error('invalid_budget_amount');return amount;
 }
-function resultObject(value: unknown): value is JudgeResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const r = value as Record<string, unknown>;
-  return r.schema === "ta.review.result.v1" && [r.verdicts, r.requirements, r.memory_updates, r.promises, r.no_action].every(Array.isArray);
+function changed(r:any):number{return Number(r?.meta?.changes??r?.changes??0);}
+function defaultCap(provider:Provider):number{return provider==='workers-ai'?6000:provider==='openai'?500000:100000;}
+async function reserve(e:JudgeEnv,call:JudgeCall,price:JudgePrice,amount:number,opts:JudgeOptions){
+  const at=(opts.now??Date.now)(),day=new Date(at).toISOString().slice(0,10),month=day.slice(0,7);
+  const cap=opts.dayCap??defaultCap(call.provider),monthCap=opts.monthCapUsdMicros??Number(e.REVIEW_MONTH_CAP_USD_MICROS??10000000);
+  if(!e.DB||![cap,monthCap].every(n=>Number.isSafeInteger(n)&&n>0))return null;
+  await e.DB.prepare('INSERT OR IGNORE INTO review_budget(day_utc,provider,unit,cap,reserved,used,calls,updated_at) VALUES(?,?,?,?,0,0,0,?)')
+    .bind(day,redact(call.provider),price.unit,cap,at).run();
+  // One conditional write serializes both daily and cross-provider monthly reservations in D1.
+  const r=await e.DB.prepare(`UPDATE review_budget SET reserved=reserved+?,calls=calls+1,updated_at=?
+    WHERE day_utc=? AND provider=? AND unit=? AND used+reserved+?<=cap
+    AND (?!='usd_micros' OR (SELECT COALESCE(SUM(used+reserved),0) FROM review_budget
+      WHERE unit='usd_micros' AND substr(day_utc,1,7)=?)+?<=?)`)
+    .bind(amount,at,day,call.provider,price.unit,amount,price.unit,month,amount,monthCap).run();
+  if(changed(r)!==1)return null;
+  let settled=false;
+  return{async settle(used:number){
+    if(settled)return;settled=true;
+    await e.DB.prepare('UPDATE review_budget SET reserved=reserved-?,used=used+?,updated_at=? WHERE day_utc=? AND provider=? AND unit=? AND reserved>=?')
+      .bind(amount,used,(opts.now??Date.now)(),day,call.provider,price.unit,amount).run();
+  }};
 }
-export class JudgeModelError extends Error {
-  constructor(public code: "judge_failed" | "judge_budget", public usage: JudgeUsage) { super(code); }
+function usageOf(raw:any):{input:number;output:number;neurons?:number}|null {
+  const input=raw?.prompt_tokens??raw?.input_tokens??raw?.input,output=raw?.completion_tokens??raw?.output_tokens??raw?.output;
+  if(![input,output].every(x=>typeof x==='number'&&Number.isFinite(x)&&x>=0))return null;
+  return{input,output,...(typeof raw?.neurons==='number'&&Number.isFinite(raw.neurons)&&raw.neurons>=0?{neurons:raw.neurons}:{})};
 }
-
-/** Independent model boundary. Only the two review messages cross it; never import chat runtime. */
-export async function judgeModel(e: JudgeEnv, messages: readonly JudgeMessage[], opts: JudgeModelOptions): Promise<{
-  json: JudgeResult; usage: JudgeUsage; model: string; same_family: 0 | 1;
-}> {
-  if (!Number.isFinite(opts.cap) || opts.cap <= 0 || opts.cap > 7000) throw Error("invalid review cap");
-  const spent = nonnegative(opts.spentNeurons ?? 0), rates = opts.neuronRates ?? RATES;
-  const maxTokens = opts.maxTokens ?? 4096;
-  if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 8192) throw Error("invalid review maxTokens");
-  const timeoutMs = opts.timeoutMs ?? 90000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 180000) throw Error("invalid review timeoutMs");
-  // Copy a strict two-message envelope: no inherited extra fields, tools or prior conversation.
-  if (messages.length !== 2 || messages[0].role !== "system" || messages[1].role !== "user" ||
-    messages.some(m => typeof m.content !== "string") || messages.reduce((n, m) => n + m.content.length, 0) > 24000) throw Error("invalid review messages");
-  const isolated = messages.map(({ role, content }) => ({ role, content }));
-  const inputEstimate = new TextEncoder().encode(JSON.stringify(isolated)).length;
-  const reserve = neuronsOf({ prompt_tokens: inputEstimate, completion_tokens: maxTokens }, rates);
-  const usage: JudgeUsage = { neurons: 0, prompt_tokens: 0, completion_tokens: 0, attempts: 0 };
-  const fail = (code: "judge_failed" | "judge_budget"): never => { throw new JudgeModelError(code, { ...usage }); };
-  const selected = opts.provider ?? e.REVIEW_JUDGE_PROVIDER ?? "workers-ai";
-  const providers: JudgeProvider[] = [selected];
-  const fallback = opts.fallbackProvider === undefined ? selected === "workers-ai" && e.DEEPSEEK_API_KEY ? "deepseek" : null : opts.fallbackProvider;
-  if (fallback && fallback !== selected) providers.push(fallback);
-  if (providers.some(p => !["deepseek", "workers-ai", "openai-luna", "codex-offline"].includes(p))) throw Error("invalid review provider");
-  const modelFor = (p: JudgeProvider) => p === "workers-ai" ? (selected === p ? opts.model : undefined) ?? "@cf/openai/gpt-oss-120b" :
-    p === "deepseek" ? opts.deepseekModel ?? (selected === p ? opts.model : undefined) ?? "deepseek-flash" :
-    p === "openai-luna" ? opts.model ?? e.OPENAI_MODEL ?? "" : opts.model ?? "codex-offline";
-  const budget = async (provider: JudgeProvider, model: string): Promise<JudgeReservation> => {
-    if (spent + usage.neurons + reserve > opts.cap) fail("judge_budget");
-    const request = { account: opts.account ?? provider, utcDay: new Date((opts.now ?? Date.now)()).toISOString().slice(0, 10),
-      neurons: reserve, cap: opts.cap, provider, model };
-    if (opts.ledger && !await opts.ledger.reserve(request)) fail("judge_budget");
-    return request;
-  };
-  const account = async (request: JudgeReservation, raw?: Usage, uncertain = false) => {
-    usage.attempts++;
-    let used = reserve;
-    try {
-      // Missing fields may hide reasoning tokens. Reserve the full requested output, not just visible JSON.
-      used = neuronsOf(raw?.neurons !== undefined ? raw : {
-        prompt_tokens: raw?.prompt_tokens ?? raw?.input_tokens ?? inputEstimate,
-        completion_tokens: raw?.completion_tokens ?? raw?.output_tokens ?? maxTokens }, rates);
-      usage.neurons += used;
-      usage.prompt_tokens += nonnegative(raw?.prompt_tokens ?? raw?.input_tokens ?? 0);
-      usage.completion_tokens += nonnegative(raw?.completion_tokens ?? raw?.output_tokens ?? 0);
-    } catch {
-      usage.neurons += reserve; uncertain = true;
-      if (opts.ledger) await opts.ledger.settle({ ...request, used: reserve, uncertain: true });
-      fail("judge_failed");
-    }
-    if (opts.ledger) await opts.ledger.settle({ ...request, used, uncertain });
-  };
-  const bounded = async <T>(call: () => Promise<T>): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([Promise.resolve().then(call), new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(Error("review_model_timeout")), timeoutMs);
-      })]);
-    } finally { clearTimeout(timer); }
-  };
-  const parse = (content: unknown): JudgeResult | undefined => {
-    try { const value = typeof content === "string" ? JSON.parse(content) : content; return resultObject(value) ? value : undefined; }
-    catch { return undefined; }
-  };
-  const call = async (provider: JudgeProvider, model: string, structured: boolean): Promise<any> => {
-    if (provider === "workers-ai") {
-      if (!e.AI) throw Error("review_provider_unavailable");
-      return e.AI.run(model, { messages: isolated, max_tokens: maxTokens,
-        ...(structured ? { response_format: { type: "json_object" } } : {}) });
-    }
-    if (provider === "codex-offline") {
-      if (!opts.offline) throw Error("review_offline_adapter_required");
-      return opts.offline({ messages: isolated, model, max_tokens: maxTokens });
-    }
-    const key = provider === "deepseek" ? e.DEEPSEEK_API_KEY : e.OPENAI_API_KEY;
-    if (!key || !model) throw Error("review_provider_unavailable");
-    const r = await (opts.fetch ?? fetch)(provider === "deepseek" ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions", {
-      method: "POST", headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages: isolated, stream: false,
-        ...(structured ? { response_format: { type: "json_object" } } : {}),
-        ...(provider === "deepseek" ? { max_tokens: maxTokens } : { max_completion_tokens: maxTokens }) }),
-      signal: AbortSignal.timeout(timeoutMs) });
-    if (!r.ok) throw Error("review_provider_http_" + r.status);
-    return r.json();
-  };
-  let malformed = 0;
-  for (const provider of providers) {
-    let structured = true;
-    const model = modelFor(provider);
-    for (;;) {
-      const reservation = await budget(provider, model);
-      let response: any;
-      try {
-        response = await bounded(() => call(provider, model, structured));
-      } catch (error) {
-        await account(reservation, undefined, true); // Unknown timeout/service errors retain the full reservation.
-        const unsupported = /response_format/i.test(String(error)) && /not support|unsupported|not allowed|unknown (field|parameter)/i.test(String(error));
-        if (structured && unsupported) { structured = false; continue; }
-        break;
-      }
-      const content = response?.response ?? response?.choices?.[0]?.message?.content ?? response;
-      await account(reservation, response?.usage);
-      if (response?.finish_reason === "length" || Array.isArray(response?.choices) && response.choices.some((c: any) => c?.finish_reason === "length") || response?.status === "incomplete") fail("judge_failed");
-      const json = parse(content);
-      if (json) return { json, usage, model, same_family: provider === "deepseek" || /deepseek/i.test(model) ? 1 : 0 };
-      if (malformed++ >= 1) fail("judge_failed");
-    }
+/** Exactly one provider attempt. Persistence of the judgment and split/retry policy are separate from the wire adapter. */
+export async function judgeModel(e:JudgeEnv,call:JudgeCall,opts:JudgeOptions={}):Promise<JudgeReply> {
+  if(!PROVIDERS.includes(call.provider)||!call.model||!Number.isInteger(call.max_tokens)||call.max_tokens<1||call.max_tokens>32768||
+    !Number.isFinite(call.timeout_ms)||call.timeout_ms<1||call.timeout_ms>180000||typeof call.system!=='string'||typeof call.user!=='string'||
+    call.system.length+call.user.length>24000)return errorReply('invalid_call');
+  if(call.provider==='codex-offline'){
+    if(opts.mode!=='replay'||!opts.offline)return errorReply('offline_nightly_forbidden');
+    try{const r=await opts.offline({...call,system:redact(call.system),user:redact(call.user)});return{...r,text:redact(r.text)};}catch{return errorReply('offline_failed');}
   }
-  return fail("judge_failed");
+  if(call.provider==='workers-ai'&&!(opts.workersAiEnabled||e.REVIEW_WORKERS_AI_ENABLED==='1'))return errorReply('provider_unavailable');
+  if(call.provider==='workers-ai'&&/gpt-oss/.test(call.model)&&call.max_tokens<4096)return errorReply('invalid_max_tokens');
+  if((call.images?.length??0)>0&&call.provider!=='openai')return errorReply('image_provider_required');
+  if(call.images?.some(im=>!['image/jpeg','image/png','image/gif','image/webp'].includes(im.mime)||
+    typeof im.b64!=='string'||!im.b64.length||im.b64.length>6700000||im.b64.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(im.b64)))return errorReply('invalid_image');
+  const price=opts.price??opts.prices?.[call.provider];
+  if(!validPrice(price)||price.unit!==(call.provider==='workers-ai'?'neurons':'usd_micros'))return errorReply('price_unavailable');
+  if(call.provider==='workers-ai'?!e.AI:!e[call.provider==='deepseek'?'DEEPSEEK_API_KEY':'OPENAI_API_KEY'])return errorReply('provider_unavailable');
+  let amount:number;try{amount=estimateReservation(call,price);}catch{return errorReply('price_unavailable');}
+  let reservation:Awaited<ReturnType<typeof reserve>>;
+  try{reservation=await reserve(e,call,price,amount,opts);}catch{return errorReply('budget_store');}
+  if(!reservation)return errorReply('budget');
+  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
+  let reply:JudgeReply,errorKind='upstream';
+  try{
+    const timeout=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('review_timeout'));},call.timeout_ms);});
+    const wire=async()=>{
+      const system=redact(call.system),user=redact(call.user);
+      const userContent=call.images?.length?[{type:'text',text:user},...call.images.map(im=>({type:'image_url',image_url:{url:`data:${im.mime};base64,${im.b64}`}}))]:user;
+      const messages=[{role:'system',content:system},{role:'user',content:userContent}];
+      if(call.provider==='workers-ai')return e.AI!.run(call.model,{messages,max_tokens:call.max_tokens,response_format:{type:'json_object'},
+        ...(/gpt-oss/.test(call.model)?{reasoning_effort:'low'}:{})});
+      const r=await (opts.fetch??fetch)(call.provider==='deepseek'?'https://api.deepseek.com/chat/completions':'https://api.openai.com/v1/chat/completions',{
+        method:'POST',headers:{Authorization:'Bearer '+e[call.provider==='deepseek'?'DEEPSEEK_API_KEY':'OPENAI_API_KEY'],'Content-Type':'application/json'},
+        body:JSON.stringify({model:call.model,messages,max_tokens:call.max_tokens,response_format:{type:'json_object'},stream:false}),signal:controller.signal});
+      if(!r.ok){errorKind='http_'+r.status;throw Error('review_http');}return r.json();
+    };
+    const raw=await Promise.race([wire(),timeout]);
+    const value=raw?.response??raw?.choices?.[0]?.message?.content;
+    const finish=raw?.finish_reason??raw?.choices?.[0]?.finish_reason;
+    reply={ok:true,text:redact(typeof value==='string'?value:JSON.stringify(value??'')),finish_reason:finish==='length'||raw?.status==='incomplete'?'length':'stop',usage:null};
+    const parsed=parseJudgeReply(reply,call.system.includes('只判不提，输出 ta.review.second.v1')?'ta.review.second.v1':'ta.review.result.v2');
+    if(parsed.state==='truncated')reply.finish_reason='length';
+    const usage=usageOf(raw?.usage);
+    let used=amount;
+    if(parsed.state==='ok'&&reply.finish_reason==='stop'&&usage){
+      used=opts.chargeFullReservation?amount:price.unit==='neurons'&&usage.neurons!==undefined?usage.neurons:Math.ceil(usage.input*price.input+usage.output*price.output);
+      reply.usage={...usage,...(price.unit==='neurons'?{neurons:used}:{usd_micros:used})};
+    }
+    await reservation.settle(used);
+  }catch{
+    reply=errorReply(controller.signal.aborted?'timeout':errorKind,controller.signal.aborted?'timeout':'error');
+    try{await reservation.settle(amount);}catch{return errorReply('budget_store');}
+  }finally{clearTimeout(timer);controller.abort();}
+  return reply;
+}
+export type BatchJudgment={trace_ids:string[];reply:JudgeReply;state:ReturnType<typeof parseJudgeReply>['state'];json?:any};
+/** A truncated batch splits once; each child is a fresh budgeted request. No bot finding is invented. */
+export async function judgeBatches(e:JudgeEnv,traceIds:readonly string[],makeCall:(ids:string[])=>JudgeCall,opts:JudgeOptions={}){
+  const judgments:BatchJudgment[]=[],failedTraceIds:string[]=[];
+  async function run(ids:string[],retry:boolean,isRetry=false){
+    const call=makeCall(ids),reply=await judgeModel(e,call,{...opts,chargeFullReservation:opts.chargeFullReservation||isRetry}),parsed=parseJudgeReply(reply,call.system.includes('只判不提，输出 ta.review.second.v1')?'ta.review.second.v1':'ta.review.result.v2');
+    judgments.push({trace_ids:ids,reply,...parsed});
+    if(parsed.state==='truncated'&&retry&&ids.length>1){const half=Math.ceil(ids.length/2);await run(ids.slice(0,half),false,true);await run(ids.slice(half),false,true);}
+    else if(parsed.state==='invalid'&&retry)await run(ids,false,true);
+    else if(parsed.state!=='ok')failedTraceIds.push(...ids);
+  }
+  if(traceIds.length)await run([...traceIds],true);return{judgments,failedTraceIds};
 }
