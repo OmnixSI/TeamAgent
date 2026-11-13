@@ -8,7 +8,9 @@
 // arguments cannot name another group. The log stores at most 500 characters of
 // the prompt and never stores a key.
 import type { BotTool, ToolCtx } from "../toolkit";
-import { generateImage as realGenerateImage, enqueueGeneratedImage as realEnqueueGeneratedImage } from "../imagegen";
+// imagegen pulls stickers→vision→…→toolkit; import lazily to avoid a cycle with tools/index (EXTRA_TOOLS TDZ).
+const realGenerateImage = async (...a: any[]) => (await import("../imagegen")).generateImage(...(a as [any, any]));
+const realEnqueueGeneratedImage = async (...a: any[]) => (await import("../imagegen")).enqueueGeneratedImage(...(a as [any, any]));
 import { releaseQuota as realReleaseQuota, reserveQuota as realReserveQuota } from "../openai";
 
 const SIZE_MAP = { square: "1024x1024", portrait: "1024x1536", landscape: "1536x1024" } as const;
