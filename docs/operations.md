@@ -6,20 +6,20 @@
 
 ## 云端
 
-Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条免费队列；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
+Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条队列（Workers Paid 自带 1M ops/月）；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
 
 服务端密钥：ADMIN_TOKEN、RUNNER_TOKEN、DEEPSEEK_API_KEY、QQ_APP_ID、QQ_APP_SECRET、GITHUB_TOKEN。GITHUB_TOKEN 用只读 fine-grained token（Contents、Metadata、Pull Requests 均 Read-only；不需要写入权限），本机把令牌文件路径放在 GITHUB_TOKEN_FILE，由 scripts/sync-runtime-secrets.py 读取并同步，脚本只打印“已加入/跳过”，不打印值；未设置时 Worker 只能读公开仓库。用 Wrangler 交互配置或权限0600文件的 secret bulk；不要写进源码、构建变量和 shell 参数。无需把本机 GitHub OAuth令牌上传云端，GITHUB_TOKEN 与 gh 的本机登录态相互独立。
 
 升级步骤：
 
-1. 在私密目录导出 D1 备份；D1免费档另有7天Time Travel。
+1. 在私密目录导出 D1 备份；Workers Paid 提供 30 天 Time Travel。
 2. npm run check、npm test、npm run test:runner、npm run check:ui。
 3. npm run db:migrate。只增表、索引和兼容的方案状态，不删除历史数据。
 4. 提交并推送源码，检查 GitHub Check。当前组织托管任务受账单/额度限制无法启动，本轮由同一套本机检查验收并提交明确的本机状态；不更改账单、不升档。
 5. npm run deploy。脚本要求工作区已提交，把准确提交号写入 /health。
 6. 检查 /health、成员登录、工作台与原有任务；需要时回滚 Worker 版本。新增表可保留，不要反向删除数据来“回滚”。
 
-保留免费档，不运行付费升级命令。D1单次调用最多50查询，批量操作使用 batch；单条参数最多100。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
+Workers Paid $5/月已购，不运行升到更高档或附加项的命令。D1 平台单次调用最多 1,000 查询，应用按入口：聊天/HTTP ≤48、后台 ≤200；批量操作使用 batch；单条参数最多100。Workers AI 仍每天 10k neurons 免费、超出计费，必须硬闸退回 DeepSeek。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
 
 ## 本机
 
