@@ -264,3 +264,10 @@ test('round4 polite questions remain requests while third-person and commentary 
     const s={id:'current',body,meta:{direct:true}};assert.equal(az.authorize(tool,body,s,{batch:[s]},[]).ok,ok,tool+' / '+body);
   }
 });
+test('A13 list_repos results taint a later project write',async()=>{
+  const e=env(),context=await source(e,'帮我建个任务修登录');
+  await mocked([call('list_repos',{}),project('帮我建个任务修登录')],()=>agentAnswer(e,context));
+  const task=(await rows(e,'tasks'))[0];
+  assert.ok(task,'仓库清单来自 GitHub 外部文本，后续交办仍应保留');
+  assert.equal(task.status,'proposal','外部仓库清单进入本轮后，交办只能提案不能直接开工');
+});
