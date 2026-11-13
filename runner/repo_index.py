@@ -46,7 +46,7 @@ _fetch_at = {}
 _offset = 0
 _backlog = False
 _clone_at = {}
-_cloned_round = False
+_clone_error = {}
 CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'accesstoken', 'refreshtoken',
                               'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
                               'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0',
@@ -314,33 +314,51 @@ def worktrees(roots, repo):
     return result
 
 
+def _record(state, repo, ok, error, now, known_values=()):
+    """Persist per-repository health without moving index progress."""
+    entry = state.setdefault(repo, {})
+    entry['ok'] = bool(ok)
+    if ok:
+        entry['last_error'] = None
+        entry['last_success_at'] = int(now)
+    else:
+        entry['last_error'] = redact(str(error or 'unknown failure'), known_values)[:300]
+        entry.setdefault('last_success_at', None)
+
+
 def _clone_once(repo):
-    """Try one bounded `gh repo clone`; failures back off per repository."""
-    global _cloned_round
+    """Try one bounded `gh repo clone`; only this repository backs off on failure."""
     now = time.monotonic()
-    if _cloned_round or now - _clone_at.get(repo, float('-inf')) < CLONE_BACKOFF:
-        return
-    _cloned_round = True
+    if now - _clone_at.get(repo, float('-inf')) < CLONE_BACKOFF:
+        return 'backoff', _clone_error.get(repo)
     _clone_at[repo] = now
     target = H / 'repos' / repo.split('/')[1]
     try:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         result = subprocess.run(['gh', 'repo', 'clone', repo, str(target), '--', '--quiet'],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=CLONE_TIMEOUT, env=dict(os.environ, GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1'))
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                text=True, timeout=CLONE_TIMEOUT,
+                                env=dict(os.environ, GIT_TERMINAL_PROMPT='0', GH_PROMPT_DISABLED='1'))
     except (OSError, subprocess.SubprocessError) as error:
+        reason = 'clone failed: ' + type(error).__name__
+        _clone_error[repo] = reason
         print(f'repo index: clone failed {repo} {type(error).__name__}', flush=True)
-        return
+        return 'failed', reason
     if result.returncode:
+        lines = (result.stderr or '').strip().splitlines()
+        detail = (': ' + lines[-1].strip()[:200]) if lines else ''
+        reason = f'clone failed: exit {result.returncode}' + detail
+        _clone_error[repo] = reason
         print(f'repo index: clone failed {repo} exit {result.returncode}', flush=True)
-        return
+        return 'failed', reason
+    _clone_error.pop(repo, None)
     print(f'repo index: cloned {repo}', flush=True)
+    return 'cloned', None
 
 
 def build(repo, st, budget, known_values=()):
     root = repo_root(repo)
     if not root.is_dir():
-        _clone_once(repo)
         return None
     if not _matches_remote(root, repo):
         return None
@@ -376,8 +394,7 @@ def _save(state):
 
 
 def sync_once(now, known_values=()):
-    global _offset, _backlog, _cloned_round
-    _cloned_round = False
+    global _offset, _backlog
     config = _config()
     if config.get('index', {}).get('enabled', True) is False:
         return
@@ -389,18 +406,39 @@ def sync_once(now, known_values=()):
     start = _offset % len(repositories)
     repositories = (repositories[start:]+repositories[:start])[:8]
     body = {'repos':[]}; built = {}; remaining = 30; _backlog = False
+    status_changed = False
     with gitsafe.time_budget(120):
         for repo in repositories:
+            action = 'repository check'
             try:
                 root = repo_root(repo)
+                if not root.is_dir():
+                    outcome, reason = _clone_once(repo)
+                    if outcome == 'failed':
+                        _record(state, repo, False, reason, now, known_values)
+                        status_changed = True
+                        continue
+                    if outcome == 'backoff':
+                        if state.get(repo, {}).get('ok') is not False:
+                            _record(state, repo, False, reason or 'clone retry after backoff', now, known_values)
+                            status_changed = True
+                        continue
                 if root.is_dir() and _matches_remote(root, repo) and (repo not in _fetch_at or now-_fetch_at[repo] >= 120):
+                    action = 'fetch'
                     gitsafe.run(root,'lifecycle','fetch','--prune','origin'); _fetch_at[repo] = now
                 st = state.get(repo, {})
+                action = 'index'
                 data = build(repo,st,remaining,known_values)
             except (gitsafe.GitFailed, TimeoutError, OSError) as error:
                 print('repo index: repository unavailable',repo,type(error).__name__,flush=True)
+                _record(state, repo, False, action + ' failed: ' + type(error).__name__, now, known_values)
+                status_changed = True
                 continue
             if not data:
+                _record(state, repo, False,
+                        'index unavailable: clone missing, remote mismatch, or no pushed refs',
+                        now, known_values)
+                status_changed = True
                 continue
             pending = data['_pending']; _backlog |= bool(pending)
             if not pending and data['fingerprint'] == st.get('fingerprint'):
@@ -426,6 +464,8 @@ def sync_once(now, known_values=()):
             if full:
                 break
         if not body['repos']:
+            if status_changed:
+                _save(state)
             _offset += 1  # Rotate anyway, so a missing clone cannot starve the others.
             return
         try:
@@ -438,8 +478,10 @@ def sync_once(now, known_values=()):
             repo = item['repo']; data = built[repo]; old = state.get(repo,{})
             acked = list(dict.fromkeys(old.get('acked',[]) + [c['sha'] for c in item.get('commits',[])]))
             outstanding = set(data['_pending'])-set(acked)
-            state[repo] = {'frontier':old.get('frontier',{}) if outstanding else data['_heads'],
-                           'acked':acked if outstanding else [], 'fingerprint':data['fingerprint'],'sent_at':now}
+            state[repo] = {**old,
+                           'frontier':old.get('frontier',{}) if outstanding else data['_heads'],
+                           'acked':acked if outstanding else [], 'fingerprint':data['fingerprint'],'sent_at':now,
+                           'ok':True, 'last_error':None, 'last_success_at':int(now)}
         _backlog = any(set(data['_pending'])-set(state[repo]['acked']) for repo,data in built.items() if state[repo]['frontier'] != data['_heads'])
         _save(state); _offset += 1
 
