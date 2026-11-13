@@ -9,6 +9,7 @@ import { newsSearchTool } from "./news-search";
 import { readDocumentTool } from "./read-document";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
+import { stockQuoteTool } from "./stock-quote";
 import { summarizeChatTool } from "./summarize-chat";
 
 export const EXTRA_TOOLS: BotTool[] = [
@@ -22,5 +23,6 @@ export const EXTRA_TOOLS: BotTool[] = [
   ...repoSearchTools,
   searchHistoryTool,
   searchKbTool,
+  stockQuoteTool,
   summarizeChatTool,
 ];
