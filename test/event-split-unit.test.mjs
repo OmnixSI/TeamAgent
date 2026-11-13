@@ -34,12 +34,6 @@ test('P6 default limit is three 1800-unit segments with the complete truncation 
  const result=splitForQQ('长'.repeat(8000));assert.equal(result.length,3);
  assert.ok(result.every(s=>s.length<=1800));assert.ok(result[2].endsWith(marker));
 });
-test('P6 an indivisible oversized URL or code block is omitted whole at truncation',()=>{
- for(const atom of ['https://example.com/'+'x'.repeat(200),'```js\n'+'x'.repeat(200)+'\n```','```js\n'+'x'.repeat(200)]){
-  const result=splitForQQ('前言 '+atom,{max:50,parts:3});assert.ok(result.at(-1).endsWith(marker));
-  assert.ok(result.every(s=>s.length<=50));assert.doesNotMatch(result.join(''),/https:|```/);
- }
-});
 test('P6 hard cuts and truncation never split a Unicode surrogate pair',()=>{
  const text='😀'.repeat(100),result=splitForQQ(text,{max:51,parts:5});
  assert.equal(result.join(''),text);assert.ok(result.every(s=>s.isWellFormed()&&s.length<=51));
@@ -49,4 +43,32 @@ test('P6 truncated last segment still does not split a URL or a fenced block',()
  const atom='https://example.com/'+'u'.repeat(15),text='x'.repeat(90)+' '+atom+' '+'y'.repeat(100);
  const result=splitForQQ(text,{max:60,parts:2});assert.equal(result.length,2);assert.ok(result[1].endsWith(marker));
  assert.equal(result.some(s=>s.includes('https:')&&!s.includes(atom)),false);
+});
+
+const unfence=part=>part.replace(/^(```|~~~)[^\n]*\n/,'').replace(/\n?(```|~~~)$/,'');
+for(const prefix of ['', '代码如下：\n'])test('rework 2400-character fenced code is retained '+JSON.stringify(prefix),()=>{
+ const code=('const 值 = "😀";\n').repeat(150),result=splitForQQ(prefix+'```js\n'+code+'```');
+ assert.ok(result.every(s=>s.length<=1800&&s.isWellFormed()));
+ const blocks=prefix?result.slice(1):result;
+ if(prefix)assert.equal(result[0],prefix);
+ assert.ok(blocks.every(s=>/^```js\n[\s\S]*\n```$/.test(s)));
+ assert.equal(blocks.map(unfence).join(''),code);
+});
+test('rework oversized URLs retain all characters and Unicode pairs',()=>{
+ const text='https://example.com/'+('a😀'.repeat(800)),result=splitForQQ(text);
+ assert.equal(result.join(''),text);assert.ok(result.every(s=>s.length<=1800&&s.isWellFormed()));
+});
+for(const fence of ['```','~~~'])for(const closed of [false,true])
+ test(`rework long unbroken code is hard cut with balanced fences (${fence}, ${closed})`,()=>{
+  const code='😀'.repeat(1200),result=splitForQQ(fence+'js\n'+code+(closed?'\n'+fence:''));
+  assert.equal(result.map(unfence).join(''),code+(closed?'\n':''));
+  assert.ok(result.every(s=>s.startsWith(fence+'js\n')&&s.endsWith('\n'+fence)&&s.length<=1800&&s.isWellFormed()));
+ });
+test('rework oversized atoms exceeding three parts retain a prefix with a truncation marker',()=>{
+ for(const text of ['https://example.com/'+'😀'.repeat(5000),'```js\n'+'😀'.repeat(5000)+'\n```']){
+  const result=splitForQQ(text);assert.equal(result.length,3);
+  assert.ok(result.join('').includes('😀'));assert.match(result.at(-1),/太长，已截断/);
+  assert.ok(result.every(s=>s.length<=1800&&s.isWellFormed()));
+  if(text.startsWith('```'))assert.ok(result.every(s=>s.startsWith('```js\n')&&s.endsWith('\n```')));
+ }
 });

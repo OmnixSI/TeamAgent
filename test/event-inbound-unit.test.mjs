@@ -34,12 +34,12 @@ test('P2 normalized media override raw while unrepresented voice and image field
  assert.deepEqual(out.media[0],{kind:'image',url:image+'/new',contentType:'image/gif',width:40,height:50,size:60,filename:'old.png'});
  assert.deepEqual(out.media[1],{kind:'voice',url:image+'/new-voice',contentType:'audio/ogg',width:undefined,height:undefined,size:123,filename:'v.ogg',asr:'新语音'});
 });
-test('P2 normalized mention identity, display name and self flag override the raw mention',()=>{
+test('P2 normalized mention display name and self flag override the raw mention',()=>{
  const raw={content:'<@old> 原话',mentions:[{id:'old',username:'旧'}]};
  const ne=api.normalize('GROUP_MESSAGE_CREATE',raw);
- Object.assign(ne.segments[0],{id:'new',name:'新',self:true});ne.mentionsBot=true;
+ Object.assign(ne.segments[0],{name:'新',self:true});ne.mentionsBot=true;
  const out=api.toInbound(ne,raw);
- assert.deepEqual(out.mentions,[{id:'new',name:'新',isBot:true}]);assert.equal(out.mentionsBot,true);
+ assert.deepEqual(out.mentions,[{id:'old',name:'新',isBot:true}]);assert.equal(out.mentionsBot,true);
 });
 test('P2 normalized card fields and links take precedence over the raw card',()=>{
  const raw={ark_data:{ark_type:'miniapp',fields:{title:'旧卡片',jump_url:'https://old.example/a'}}};
@@ -69,4 +69,12 @@ test('P2 normalize and bridge do not mutate raw input or the shared event',()=>{
  const raw={content:'原话',ark_data:{fields:{title:'B站标题',source:'B站'}},attachments:[{url:image,content_type:'image/png'}]};
  const before=snapshot(raw),ne=api.normalize('GROUP_MESSAGE_CREATE',raw),event=snapshot(ne);
  api.toInbound(ne,raw);assert.deepEqual(snapshot(raw),before);assert.deepEqual(snapshot(ne),event);
+});
+
+test('rework unmatched mention tokens never replace real mention identities',()=>{
+ const raw={content:'<@u2> 当前正文',mentions:[{id:'u1',username:'真实成员',is_you:true}],
+  msg_elements:[{message_type:103,content:'素材 <@u2>'}]};
+ const out=api.parseInbound('GROUP_MESSAGE_CREATE',raw);
+ assert.deepEqual(out.mentions,[{id:'u1',name:'真实成员',isBot:true}]);
+ assert.equal(out.mentionsBot,true);
 });
