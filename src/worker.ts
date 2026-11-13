@@ -17,7 +17,7 @@ import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
-import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute } from "./voice-asr";
+import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
 import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
@@ -751,11 +751,15 @@ async function processJob(e: Env, id: string) {
       ).bind(m.group_id, cursor).first();
       const newest = head.newest_id ? { id: head.newest_id } : null;
       const oldestAt = Date.parse(head.oldest_ts) || 0;
-      if (!p.mentionRecovery && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
+      if (!p.mentionRecovery && !p.voiceResume && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
         await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
-      const preloaded = p.mentionRecovery ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
+      let preloaded = p.mentionRecovery || p.voiceResume && m.ordinal <= cursor ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
+      if (p.voiceResume) preloaded = preloaded.filter((row: any) => row.ordinal <= m.ordinal);
+      const voiceBatch = await gateVoiceChat(e, id, p, preloaded);
+      if (!voiceBatch) return;
+      preloaded = voiceBatch;
       if (!preloaded.length) return;
       const latestPre = preloaded[preloaded.length - 1];
       (e as any).timingTurn = latestPre.id;
@@ -769,6 +773,16 @@ async function processJob(e: Env, id: string) {
           .bind(refId, m.group_id)
           .first();
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
+      }
+      const failedVoice = (latestPre.meta?.media || []).find((media: any) => media.kind === "voice" && media.asrError && !usableVoiceText(media.asr));
+      if (failedVoice && (latestPre.mentioned || latestPre.meta?.replyTo?.kind === 'bot')) {
+        await enqueueVoice(e, id, latestPre.group_id, latestPre.id, JSON.stringify({ mode: "work",
+          text: "这条语音没听清：" + failedVoice.asrError.reason_text + "。" + failedVoice.asrError.next_action + "。" }), { source: latestPre });
+        await recordDecision(e, { id, group_id: latestPre.group_id, latest_id: latestPre.id,
+          batch_ids: preloaded.map((r: any) => r.id), mentioned: true, gate: "voice_failed", action: "reply", forced: true, outbox_id: id });
+        await advanceCursor(e, m.group_id, cursor, preloaded);
+        await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+        return;
       }
       const sw = await loadSwitches(e);
       const hardStop = !addressedMessages({batch:preloaded}).length && !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
@@ -785,7 +799,7 @@ async function processJob(e: Env, id: string) {
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
         const imageOutcomes = await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
-        await job(e, "chat-v-" + m.id, "chat", { message: m.id, annotated: true, imageOutcomes });
+        await job(e, p.voiceResume ? id + ":vision" : "chat-v-" + m.id, "chat", { ...(p.voiceResume ? p : {}), message: m.id, annotated: true, imageOutcomes });
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
       }
@@ -843,12 +857,14 @@ async function processJob(e: Env, id: string) {
       const answer = await agentAnswer(e, {
         ...context,
         mentioned,
-        allowWait: allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
+        allowWait: !p.voiceResume && allowWait({ waited: !!p.waited, oldestPendingAt: oldestAt, now: Date.now(), off: !isOn(sw, "wait") }),
         switches: sw,
         decisionOut: decision,
         ...(ref ? { videoWaited: true } : {}),
         ...(cached ? { materials: videoPlan?.materials ?? [solo!.material], rules: videoPlan?.rules ?? (solo!.rule ? [solo!.rule] : []) } : failure ? {materials:[biliFailMaterial(failure,{title:isTitleRef(ref!),titleFallback:TITLE_FALLBACK})]} : {}),
       });
+      // A slow model must not renew a voice recovery beyond its source window.
+      if (p.voiceResume && !await gateVoiceChat(e, id, p, [latest])) return;
       if (decision.action === "wait") {
         await job(e, "chat-wait-" + latest.id, "chat", { message: latest.id, waited: true }, { delaySeconds: decision.waitSeconds });
         await recordDecision(e, { ...decisionRow, gate: "model", action: "wait", forced: !!decision.forced, wait_seconds: decision.waitSeconds, reason: decision.reason });

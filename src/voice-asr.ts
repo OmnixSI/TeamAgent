@@ -8,6 +8,8 @@
  * Nothing here runs for ordinary text messages: the queue statement exists
  * only after a voice attachment actually needs transcription.
  */
+import { queueFor } from "./lanes";
+import { RECOVERY_MAX_AGE_MS } from "./mention-guard";
 import {
   callDsTool,
   dsGuard,
@@ -263,15 +265,20 @@ async function patchMedia(
   const list = Array.isArray(meta.media) ? meta.media : [];
   const item = list[idx];
   if (!item || item.kind !== "voice") return false;
+  if (usableVoiceText(item.asr) || item.asrError) {
+    await wakeVoiceChat(e, messageId);
+    return false;
+  }
   const next = { ...item, ...patch, asrAt: new Date().toISOString() };
-  if ("asr" in patch && !patch.asr) delete next.asr;
+  if (("asr" in patch && !patch.asr) || patch.asrError) delete next.asr;
   if (patch.asrError === undefined && "asrError" in patch) delete next.asrError;
-  list[idx] = next;
-  meta.media = list;
-  await e.DB.prepare("UPDATE message_meta SET json=? WHERE id=?")
-    .bind(JSON.stringify(meta), messageId)
+  // Establish the continuation owner before publishing a terminal result.
+  await ensureVoiceChat(e, messageId, true);
+  const result = await e.DB.prepare("UPDATE message_meta SET json=json_set(json,?,json(?)) WHERE id=? AND json_extract(json,?)=json(?)")
+    .bind("$.media[" + idx + "]", JSON.stringify(next), messageId, "$.media[" + idx + "]", JSON.stringify(item))
     .run();
-  return true;
+  await wakeVoiceChat(e, messageId);
+  return changesOf(result) > 0;
 }
 
 export async function recordVoiceTranscript(
@@ -385,7 +392,119 @@ export async function enqueueVoiceJobs(
       await guard.release();
     }
   }
+  if (enqueued) await ensureVoiceChat(e, message.message);
   return { enqueued, skipped };
+}
+
+
+/** A separate durable chat identity owns the wait and the eventual answer. The
+ * original debounce/recovery jobs may finish, but never consume an empty voice.
+ * A delayed Queue wake and the existing pending-job sweep both cover timeouts. */
+const VOICE_WAIT_MS = 180000;
+// Reuse the sender's 15-minute recovery recheck for queued replies as well.
+export const voiceChatId = (messageId: string) => "mention-recovery:voice:" + messageId;
+async function sendVoiceChat(e: any, id: string, notBefore = 0) {
+  try {
+    await queueFor(e, "chat")?.send({ id }, {
+      delaySeconds: Math.max(0, Math.ceil((notBefore - Date.now()) / 1000)),
+    });
+  } catch { /* The durable pending job is rediscovered by the existing sweep. */ }
+}
+async function ensureVoiceChat(e: any, messageId: string, ready = false) {
+  const now = Date.now(), id = voiceChatId(messageId);
+  const result = await e.DB.prepare(`INSERT OR IGNORE INTO jobs(id,kind,payload,created_at)
+    SELECT ?1,'chat',json_object('message',m.id,'voiceResume',json('true'),
+      'voiceDeadline',ROUND((julianday(m.ts)-2440587.5)*86400000)+?2,
+      'notBefore',CASE WHEN ?3 THEN 0 ELSE ROUND((julianday(m.ts)-2440587.5)*86400000)+?2 END),?4
+    FROM messages m WHERE m.id=?5
+      AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.msg_id=m.id AND o.id NOT LIKE 'mention-receipt:%')
+      AND NOT EXISTS (SELECT 1 FROM chat_decisions d WHERE d.group_id=m.group_id AND d.action IN ('reply','dup')
+        AND (d.latest_id=m.id OR EXISTS(SELECT 1 FROM json_each(d.batch_ids) b WHERE b.value=m.id))) RETURNING id`)
+    .bind(id, VOICE_WAIT_MS, ready ? 1 : 0, now, messageId).first();
+  if (result) await sendVoiceChat(e, id, ready ? 0 : now + VOICE_WAIT_MS);
+}
+async function wakeVoiceChat(e: any, messageId: string) {
+  await ensureVoiceChat(e, messageId, true);
+  const row = await e.DB.prepare(`UPDATE jobs SET payload=json_set(payload,'$.notBefore',0)
+    WHERE id=? AND status='pending' RETURNING id`).bind(voiceChatId(messageId)).first();
+  if (row) await sendVoiceChat(e, row.id);
+}
+const voiceMedia = (row: any): any[] => (row.meta?.media || []).filter((m: any) => m.kind === "voice");
+const pendingVoice = (row: any): boolean => voiceMedia(row).some(m => !usableVoiceText(m.asr) && !m.asrError);
+async function parkVoiceChat(e: any, id: string, at: number, waiting: any) {
+  const blockedBy = typeof waiting === "string" ? waiting : null;
+  const indices = blockedBy ? [] : (waiting.meta?.media || []).flatMap((media: any, idx: number) =>
+    media.kind === "voice" && !usableVoiceText(media.asr) && !media.asrError ? [idx] : []);
+  const row = await e.DB.prepare(`UPDATE jobs SET status='pending',attempts=0,lease_until=NULL,
+    payload=json_set(payload,'$.notBefore',CASE WHEN ? OR EXISTS (
+      SELECT 1 FROM message_meta mm,json_each(mm.json,'$.media') media
+      WHERE mm.id=? AND media.key IN (SELECT value FROM json_each(?))
+        AND json_extract(media.value,'$.asrAt') IS NULL AND json_extract(media.value,'$.asrError') IS NULL
+    ) THEN ? ELSE 0 END) WHERE id=? RETURNING payload`)
+    .bind(blockedBy ? 1 : 0, blockedBy || waiting.id, JSON.stringify(indices), at, id).first();
+  if (row) await sendVoiceChat(e, id, Number(JSON.parse(row.payload).notBefore));
+}
+
+/** Called before context/model work, including recovery jobs beyond the cursor.
+ * Normal batches stop before the waiting source. The resume uses only rows up to
+ * its original source so newer chat cannot move its target or hide its request. */
+export async function gateVoiceChat(e: any, id: string, payload: any, batch: any[]): Promise<any[] | null> {
+  if (!payload.voiceResume && !batch.some(row => voiceMedia(row).length)) return batch;
+  const now = Date.now();
+  if (payload.voiceResume) {
+    const source = batch.find(row => row.id === payload.message);
+    if (!source) {
+      // loadBatch is bounded: let the original/drain jobs consume the preceding
+      // rows before this continuation, rather than retiring a live source.
+      await parkVoiceChat(e, id, now + 5000, payload.message); return null;
+    }
+    const age = now - Date.parse(source.ts);
+    if (!Number.isFinite(age) || age < 0 || age > RECOVERY_MAX_AGE_MS) {
+      await e.DB.prepare("UPDATE jobs SET status='done',error='voice_expired' WHERE id=?").bind(id).run();
+      return null;
+    }
+    if (pendingVoice(source)) {
+      const deadline = Number(payload.voiceDeadline) || Date.parse(source.ts) + VOICE_WAIT_MS;
+      if (now < deadline) { await parkVoiceChat(e, id, deadline, source); return null; }
+      for (const [idx, media] of (source.meta.media || []).entries()) {
+        if (media.kind !== 'voice' || usableVoiceText(media.asr) || media.asrError) continue;
+        const failure = voiceFailure('timeout');
+        await recordVoiceFailure(e, source.id, idx, failure);
+      }
+      // Read the winning result after timeout/result races; never fabricate a
+      // failure from the stale snapshot if a successful callback won the CAS.
+      const saved = await e.DB.prepare("SELECT json FROM message_meta WHERE id=?").bind(source.id).first();
+      if (saved) source.meta = JSON.parse(saved.json);
+      if (pendingVoice(source)) {
+        await parkVoiceChat(e, id, now + 1000, source); return null;
+      }
+    }
+  }
+  for (let i = 0; i < batch.length; i++) {
+    const row = batch[i];
+    if (!voiceMedia(row).length || (payload.voiceResume && row.id === payload.message)) continue;
+    if (pendingVoice(row)) await ensureVoiceChat(e, row.id);
+    const owner = await e.DB.prepare("SELECT status,payload FROM jobs WHERE id=?").bind(voiceChatId(row.id)).first();
+    if (!owner) continue; // QQ's immediate transcript needs no separate wait.
+    if (owner.status === 'done') {
+      if (!payload.voiceResume) batch.splice(i--, 1);
+      continue;
+    }
+    if (payload.voiceResume) {
+      // An older voice still owns the cursor. Retry independently of the
+      // original chat id, without spending the model's retry allowance.
+      await parkVoiceChat(e, id, now + 5000, row.id);
+      return null;
+    }
+    if (i) return batch.slice(0, i);
+    await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+    return null;
+  }
+  if (!batch.length) {
+    await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
+    return null;
+  }
+  return batch;
 }
 
 async function readBodyLimited(response: Response, limit: number): Promise<Uint8Array> {
