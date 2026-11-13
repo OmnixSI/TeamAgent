@@ -70,9 +70,11 @@ class UtilityCleanupTests(unittest.TestCase):
                 proc.communicate.return_value = completed
             return proc
 
-        def download(url, target):
+        def download(url, target, limit=None):
             state['downloads'].append(url)
-            target.write_bytes(b'synthetic audio or document')
+            data = b'synthetic audio or document'
+            target.write_bytes(data)
+            return len(data)
 
         with patch.object(u, 'cloud', side_effect=cloud), patch.object(u, 'api_key', return_value='synthetic'), \
              patch.object(u, 'dsh_program', return_value='synthetic-dsh'), patch.object(u, 'safe', side_effect=lambda url: url), \
@@ -405,7 +407,7 @@ u.clean_utility_root();u.flush_reports()
     def test_interrupt_during_input_download_cleans_the_entire_task(self):
         with self.fixture() as (u, h):
             with self.execution(u, h, sources=[{'attachments': [{'filename': 'voice.ogg', 'url': 'https://example.invalid/one'}]}]):
-                def interrupted_download(url, target):
+                def interrupted_download(url, target, limit=None):
                     target.write_bytes(b'partial audio')
                     (target.parent / 'cookies.txt').write_text('synthetic')
                     raise KeyboardInterrupt()
