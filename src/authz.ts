@@ -64,6 +64,9 @@ function ownClauses(text: string): string[] {
 // free of quotation, report and past-time markers, and a negated or quoted
 // tail stays in one piece, so "他说：请…" and "注意：请勿…" remain rejected.
 const LABEL_MAX = 16;
+// Only a head that names the work item may open a request; any other head
+// (a person, "没有授权", ...) keeps the whole clause so it is judged as reported speech.
+const TASK_LABEL = /(?:任务|小活|需求|工单|待办|事项)$/;
 const REPORTED_LABEL = /说|讲|问|写道|回复|提到|表示|称|转述|引用|贴|粘贴|转发|上次|昨天|之前|曾经|已经|刚才/;
 const NEGATED_LABEL = /^(?:别|不要|不用|不必|无需|勿|请勿|禁止)/;
 const NEGATED_REQUEST = /^(?:请|麻烦)?(?:你)?\s*(?:勿|不要|别|不用|不必|无需|不想|不需要)/;
@@ -76,7 +79,7 @@ function splitLabel(clause: string): string[] {
     // A half-width colon only counts in front of a request ("任务: 请…"), so
     // times, ratios and URLs keep their clause whole.
     if (mark === ":" && !HALF_COLON_REQUEST.test(rawTail)) continue;
-    if (!head || [...head].length > LABEL_MAX || REPORTED_LABEL.test(head) || NEGATED_LABEL.test(head) || NEGATED_REQUEST.test(tail)) return [clause];
+    if (!head || [...head].length > LABEL_MAX || !TASK_LABEL.test(head) || REPORTED_LABEL.test(head) || NEGATED_LABEL.test(head) || NEGATED_REQUEST.test(tail)) return [clause];
     return [head, tail];
   }
   return [clause];

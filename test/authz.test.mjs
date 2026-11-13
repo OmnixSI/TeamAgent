@@ -299,9 +299,17 @@ test('label colon splits a work request without opening reported, quoted or nega
     '注意：请不要把数据整理成文档',
     '刚才：请把数据整理成文档',
     '别动：帮我整理成文档',
+    '群友: 请把数据整理成文档',
+    '没有授权：请把数据整理成文档',
+    '没有授权: 请把数据整理成文档',
     '任务说明过于冗长已经超过十六个字：请把数据整理成文档',
   ];
   for(const body of reject)assert.equal(az.authorize('create_file_task',body,source(body),{batch:[source(body)]},[]).ok,false,body);
+  // A person's name before a colon never opens a request, clean or dirty.
+  for(const body of ['小王：帮我建个任务修登录','群友: 请把数据整理成文档']){
+    const row=source(body);
+    for(const tool of ['prepare_project_task','create_file_task'])for(const extra of [{batch:[row]},{batch:[row],materials:['web']}])assert.equal(az.authorize(tool,body,row,extra,[]).ok,false,tool+' '+body);
+  }
   // Tainted turns still use STRONG alone: a bare "整理一下" never qualifies there.
   for(const [body,ok] of [['任务：请整理一下 README 发回群里',false],['任务：请写份总结发回群里',true]]){
     const row=source(body);
