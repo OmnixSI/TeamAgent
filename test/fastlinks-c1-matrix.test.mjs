@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {EventEmitter} from 'node:events';
+import {twoPages} from './fixtures/bili-pages.mjs';
 import {build} from 'esbuild';
 import {env} from './support.mjs';
-import {createFetchClient,runJob,runFetchLoop} from '../runner/fetcher.mjs';
+import {runJob,runFetchLoop} from '../runner/fetcher.mjs';
 
 // Bundle the exact legacy source while resolving its unchanged imports in src/.
 const output=`.wrangler/c1-legacy-${process.pid}.mjs`;
@@ -12,28 +12,6 @@ await build({entryPoints:['test/fixtures/legacy/fetchjobs-0f67b28.ts'],bundle:tr
 const legacy=await import('../'+output);
 const BV='BV1xx411c7mD';
 
-function twoPages({fallback=false,searchMiss=false}={}){
-  let time=10000;const calls=[];
-  const request=(options,callback)=>{
-    const req=new EventEmitter();
-    req.end=()=>{
-      calls.push(options);
-      const url=new URL('https://'+options.host+options.path);
-      let status=200,headers={},body={code:0,data:{}};
-      if(options.host==='b23.tv'){status=fallback&&options.method==='HEAD'?405:302;headers.location='https://www.bilibili.com/video/'+BV+'?p=2';}
-      else if(url.pathname.endsWith('/spi'))body={code:0,data:{b_3:'fixture-device'}};
-      else if(url.pathname.endsWith('/nav'))body={code:0,data:{wbi_img:{img_url:'https://i0.hdslb.com/'+ 'a'.repeat(32)+'.png',sub_url:'https://i0.hdslb.com/'+ 'b'.repeat(32)+'.png'}}};
-      else if(url.pathname.endsWith('/search/type'))body={code:0,data:{result:searchMiss?[]:[{type:'video',bvid:BV,title:'第一页标题'}]}};
-      else if(url.pathname.endsWith('/view'))body={code:0,data:{bvid:BV,aid:170001,title:'第一页标题',cid:202,pages:[{cid:101,part:'第一页标题'},{cid:202,part:'第二页标题'}]}};
-      else if(url.pathname.endsWith('/v2'))body={code:0,data:{subtitle:{subtitles:[{lan:'zh-CN',subtitle_url:'https://a.hdslb.com/sub-'+url.searchParams.get('cid')}]}}};
-      else if(options.host==='a.hdslb.com')body={body:[{content:url.pathname==='/sub-101'?'第一页字幕':'第二页字幕'}]};
-      const res=new EventEmitter();res.statusCode=status;res.headers=headers;callback(res);
-      queueMicrotask(()=>{res.emit('data',Buffer.from(JSON.stringify(body)));res.emit('end');});
-    };
-    req.destroy=()=>{};return req;
-  };
-  return {calls,client:createFetchClient({request,lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),now:()=>time,sleep:async ms=>{time+=ms;},random:()=>0})};
-}
 
 test('C1-L1 new runner and actual old Worker cache page one after a short redirect to p=2',async()=>{
   const e=env(),f=twoPages(),payload={type:'bili',tier:'light',ref:'AbCd12',lease:'fixture-lease',waiters:[]};
@@ -97,4 +75,10 @@ test('C1 handshake is forwarded per claim and never retained after rollback',asy
   await runFetchLoop({signal:controller.signal,claim:async()=>++count===1?{job:{id:'new'},proto:2}:{job:{id:'old'}},
     work:async(job,proto)=>{seen.push([job.id,proto]);if(seen.length===2)controller.abort();},login:()=>{},wait:async()=>false});
   assert.deepEqual(seen,[['new',2],['old',undefined]]);
+});
+
+test('C1 no handshake ignores even an invalid redirect page and reads page one',async()=>{
+  const f=twoPages({redirectPage:'invalid'}),reports=[];
+  await runJob({id:'old-short',payload:{type:'bili',tier:'light',ref:'AbCd12'}},f.client,async(_p,b)=>reports.push(b));
+  assert.equal(reports[0].success,true);assert.equal(reports[0].result.page,1);assert.equal(reports[0].result.subtitle,'第一页字幕');
 });

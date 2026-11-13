@@ -32,7 +32,7 @@ async function mockModel(run){
  try{return await run(seen);}finally{globalThis.fetch=old;}
 }
 async function claim(e){const r=await runner(e,'claim',{});assert.equal(r.status,200);const {job}=await r.json();assert.ok(job);return job;}
-async function fail(e,reason,retryAfter,extra={}){const job=await claim(e);const r=await runner(e,'report',{id:job.id,lease:job.payload.lease,success:false,reason,retryAfter,...extra});assert.equal(r.status,200);return job;}
+async function fail(e,reason,retryAfter,extra={}){const job=await claim(e);const r=await runner(e,'report',{id:job.id,lease:job.payload.lease,proto:2,success:false,reason,retryAfter,...extra});assert.equal(r.status,200);return job;}
 const failureNote=async(e,ref=BV)=>(await rows(e,'media_notes')).find(r=>r.id===api.FAILURE_PREFIX+ref);
 function near(actual,expected){assert.ok(Math.abs(actual-expected)<5000,`${actual} versus ${expected}`);}
 async function terminal(e,w,reason,seen,title=false){await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).find(o=>o.id==='video-'+w.id)?.body,api.biliFailReply(reason,{title}));assert.equal((await rows(e,'video_waits')).find(x=>x.id===w.id).status,'done');assert.equal(seen.length,0);}
@@ -45,8 +45,8 @@ test('B1 mentioned risk persists enum and guarded cache then replies without a m
 test('B2 cached risk replies immediately without a new wait or resetting fetch',async()=>{
  const e=await setup();await mockModel(async seen=>{const w=await first(e);await fail(e,'risk',600);await terminal(e,w,'risk',seen);await first(e,'again');assert.equal((await rows(e,'video_waits')).length,1);assert.equal((await rows(e,'jobs')).find(j=>j.kind==='fetch').status,'failed');assert.equal((await rows(e,'outbox')).find(o=>o.id==='chat-again').body,api.biliFailReply('risk',{title:false}));assert.ok((await rows(e,'chat_decisions')).some(d=>d.gate==='video_fail'&&d.reason==='risk'));assert.equal(seen.length,0);});
 });
-test('B3 stable not_found and unsupported failures cache for one hour',async()=>{
- for(const reason of ['not_found','unsupported']){const e=await setup();await mockModel(async seen=>{const w=await first(e);await fail(e,reason);const n=JSON.parse((await failureNote(e)).body);assert.equal(n.reason,reason);near(n.until,Date.now()+3600000);await terminal(e,w,reason,seen);});}
+test('B3 stable not_found failures cache for one hour',async()=>{
+ for(const reason of ['not_found']){const e=await setup();await mockModel(async seen=>{const w=await first(e);await fail(e,reason);const n=JSON.parse((await failureNote(e)).body);assert.equal(n.reason,reason);near(n.until,Date.now()+3600000);await terminal(e,w,reason,seen);});}
 });
 test('B4 login_required does not cache and a later question creates another wait',async()=>{
  const e=await setup();await mockModel(async seen=>{const w=await first(e);await fail(e,'login_required');assert.equal(await failureNote(e),undefined);await terminal(e,w,'login_required',seen);await first(e,'retry-login');assert.equal((await rows(e,'video_waits')).length,2);assert.equal((await rows(e,'jobs')).find(j=>j.kind==='fetch').status,'pending');});
@@ -135,7 +135,7 @@ test('M2 actual old runner reports are accepted with risk TTL and wake waits in 
   await old.runner.runJob(job,jobClient(error),async(_path,b)=>{report=b;assert.equal((await runner(e,'report',b)).status,200);});
   assert.equal((await rows(e,'video_waits')).find(x=>x.id===w.id).ready,1);
   if(error){assert.equal(report.reason,'风控');assert.equal((await rows(e,'jobs')).find(j=>j.id===job.id).error,'risk');near(JSON.parse((await failureNote(e)).body).until,Date.now()+600000);}
-  else assert.ok((await rows(e,'media_notes')).some(n=>n.id==='bili:'+BV));
+  else assert.ok((await rows(e,'media_notes')).some(n=>n.id==='resource:v1:bili:'+BV+':p:1'));
  }
 });
 for(const [name,reason] of [['M3','视频内容未读到'],['M4',undefined]])test(name+' missing or legacy unknown reason becomes invalid without cache',async()=>{

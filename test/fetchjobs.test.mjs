@@ -6,7 +6,7 @@ import { worker, env, req, qq, msg } from './support.mjs';
 await build({entryPoints:['src/fetchjobs.ts'],bundle:true,format:'esm',platform:'browser',outfile:`.wrangler/fetchjobs-${process.pid}.mjs`});
 const f = await import(`../.wrangler/fetchjobs-${process.pid}.mjs`);
 const BV='BV1xx411c7mD', group='GROUP000001', now=()=>Date.now();
-const result={bvid:BV,title:'测试视频标题',desc:'视频简介',owner:'UP 主',tname:'科技',duration:60,pubdate:1,stat:{view:20,like:3,coin:1,favorite:2,reply:2},subtitle:'字幕正文',subtitle_lang:'zh-CN',comments:[{uname:'观众',message:'热评'}],tier:'light',fetched_at:new Date().toISOString()};
+const result={bvid:BV,page:1,pages:1,aid:170001,title:'测试视频标题',desc:'视频简介',owner:'UP 主',tname:'科技',duration:60,pubdate:1,stat:{view:20,like:3,coin:1,favorite:2,reply:2},subtitle:'字幕正文',subtitle_lang:'zh-CN',comments:[{uname:'观众',message:'热评'}],tier:'light',fetched_at:new Date().toISOString()};
 const queue=(e,id)=>worker.queue({messages:[{body:{id},ack(){}}]},e);
 const cron=async e=>{let p; await worker.scheduled({},e,{waitUntil(x){p=x;}}); await p;};
 const rows=(e,table)=>e.DB.prepare('SELECT * FROM '+table).all().then(x=>x.results);
@@ -15,7 +15,7 @@ const runner=(e,path,b)=>req(e,'/api/runner/fetch/'+path,b,'runner-secret');
 async function setup(){const e=env(); await req(e,'/api/admin/bind',{groupId:group}); return e;}
 async function first(e,id='question'){await qq(e,msg(id,'视频讲了啥 https://www.bilibili.com/video/'+BV),'GROUP_AT_MESSAGE_CREATE'); await queue(e,'chat-'+id); return (await rows(e,'video_waits'))[0];}
 async function mockModel(run,fail=false){const old=globalThis.fetch,seen=[]; globalThis.fetch=async(_url,o)=>{const b=JSON.parse(o.body);seen.push(b);if(fail)throw Error('model interrupted');return Response.json({choices:[{message:{content:b.messages[0].content.includes('最后的嘴替模块')?'{"mode":"work","text":"UP 主介绍了新方法。"}':'{"should_reply":false,"kind":"proactive","brief":"测试视频标题"}'}}]});};try{return await run(seen);}finally{globalThis.fetch=old;}}
-async function report(e,videoResult=result){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:videoResult});}
+async function report(e,videoResult=result){const {job}=await (await runner(e,'claim',{})).json(); assert.ok(job);return runner(e,'report',{id:job.id,lease:job.payload.lease,proto:2,success:true,result:videoResult});}
 
 test('F-T1 recursive card BV, short and ordinary links transfer to the existing video fetch chain',async()=>{
  for(const [value,ref] of [[BV,BV],['https://b23.tv/AbCd12','AbCd12'],['https://bili2233.cn/Ab-Cd_12','Ab-Cd_12'],['https://www.bilibili.com/video/'+BV,BV]]){
@@ -25,8 +25,8 @@ test('F-T1 recursive card BV, short and ordinary links transfer to the existing 
   });
   const wait=(await rows(e,'video_waits'))[0];assert.equal(wait?.ref,ref);
   assert.equal(JSON.parse((await rows(e,'jobs')).find(j=>j.kind==='fetch').payload).ref,ref);
-  const {runJob}=await import('../runner/fetcher.mjs'),claimed=(await(await runner(e,'claim',{})).json()).job;
-  await runJob(claimed,{sanitize:x=>x,biliLight:async value=>{assert.equal(value,ref);return {...result,subtitle:null,subtitle_status:'none'};}},async(path,body)=>{assert.equal((await runner(e,path,body)).status,200);});
+  const {runJob}=await import('../runner/fetcher.mjs'),claim=await(await runner(e,'claim',{})).json(),claimed=claim.job;
+  await runJob(claimed,{sanitize:x=>x,resolveShort:async value=>{assert.equal(value,ref);return {bvid:BV,page:1};},biliLight:async value=>{assert.equal(value,BV);return {...result,subtitle:null,subtitle_status:'none'};}},async(path,body)=>{assert.equal((await runner(e,path,body)).status,200);},()=>{},async()=>{},claim.proto);
   await mockModel(async seen=>{await queue(e,'video-'+wait.id);assert.match(JSON.stringify(seen),/已读元数据\/热评/);assert.match(JSON.stringify(seen),/无 CC 字幕/);});
  }
 });
@@ -34,12 +34,13 @@ test('F-T1 recursive card BV, short and ordinary links transfer to the existing 
 test('F-T1b research injects cached Bili material for short and BV refs, without inventing when absent', async () => {
   const material = {...result,bvid:'BV1GN4p6pEEP',title:'10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了',owner:'超哥超车',duration:695,subtitle:null,subtitle_lang:null,subtitle_status:'none'};
   for (const [id, body, note] of [
-    ['research-short', '总结 https://b23.tv/MV29F7r', 'bili:MV29F7r'],
+    ['research-short', '总结 https://b23.tv/MV29F7r', 'resource:v1:bili:BV1GN4p6pEEP:p:1'],
     ['research-bv', '总结 https://www.bilibili.com/video/' + BV, 'bili:' + BV],
   ]) {
     const e = await setup();
     await qq(e, msg(id, body), 'GROUP_AT_MESSAGE_CREATE');
     await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind(note, JSON.stringify(material), new Date().toISOString()).run();
+    if(id==='research-short')await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('alias:v1:bili:MV29F7r',JSON.stringify({bvid:material.bvid,page:1}),new Date().toISOString()).run();
     await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-' + id, 'research', JSON.stringify({latestId:id,batchIds:[id],mentioned:true,background:true}), now()).run();
     await mockModel(async seen => {
       await queue(e, 'research-' + id);
@@ -73,7 +74,8 @@ test('F-T1c research resume path receives cached Bili material after tool handof
   const e = await setup();
   await qq(e, msg('research-resume', '总结 https://b23.tv/MV29F7r'), 'GROUP_AT_MESSAGE_CREATE');
   const material = {...result,bvid:'BV1GN4p6pEEP',title:'10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了',owner:'超哥超车',duration:695,subtitle:null,subtitle_lang:null,subtitle_status:'none'};
-  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:MV29F7r', JSON.stringify(material), new Date().toISOString()).run();
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('resource:v1:bili:'+material.bvid+':p:1', JSON.stringify(material), new Date().toISOString()).run();
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('alias:v1:bili:MV29F7r',JSON.stringify({bvid:material.bvid,page:1}),new Date().toISOString()).run();
   await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-research-resume', 'research', JSON.stringify({latestId:'research-resume',batchIds:['research-resume'],mentioned:true,background:true,resume:{messages:[{role:'user',content:'历史'}],pending:null,turn:0}}), now()).run();
   await mockModel(async seen => {
     await queue(e, 'research-research-resume');
@@ -150,7 +152,8 @@ test('F-T1f research resume appends no duplicate material before a tool handoff'
   const e = await setup();
   const material = { ...result, bvid: 'BV1GN4p6pEEP', title: '10月鸿蒙智行销量暴跌?理想MEGA只卖四十多万?看完就懂了', owner: '超哥超车', duration: 695, subtitle: '字'.repeat(6000), subtitle_lang: 'zh-CN', subtitle_status: 'ok' };
   await qq(e, msg('research-resume-dup', '总结 https://b23.tv/MV29F7r'), 'GROUP_AT_MESSAGE_CREATE');
-  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:MV29F7r', JSON.stringify(material), new Date().toISOString()).run();
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('resource:v1:bili:'+material.bvid+':p:1', JSON.stringify(material), new Date().toISOString()).run();
+  await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('alias:v1:bili:MV29F7r',JSON.stringify({bvid:material.bvid,page:1}),new Date().toISOString()).run();
   const note = f.videoMaterial(material, 'MV29F7r');
   const resume = { messages: [
     { role: 'system', content: '系统提示' },
@@ -172,7 +175,7 @@ test('F-T1g terminal fetch failure is reported as that reason, not invented cont
   await qq(e, msg('research-failed', '总结 https://b23.tv/MV29F7r'), 'GROUP_AT_MESSAGE_CREATE');
   await mockModel(async () => { await queue(e, 'chat-research-failed'); });
   const { job } = await (await runner(e, 'claim', {})).json();
-  await runner(e, 'report', { id: job.id, lease: job.payload.lease, success: false, reason: 'not_found' });
+  await runner(e, 'report', { id: job.id, lease: job.payload.lease, proto:2, success: false, reason: 'not_found' });
   assert.equal((await rows(e, 'video_waits'))[0].ready, 1, 'report wakes the waiting video');
   assert.ok((await rows(e, 'jobs')).some(j => j.kind === 'video_reply'));
   await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('research-research-failed', 'research', JSON.stringify({ latestId: 'research-failed', batchIds: ['research-failed'], mentioned: true, background: true }), now()).run();
@@ -194,13 +197,13 @@ test('F-T2 inferred no-link card selects a title target only under the existing 
  const target=f.videoTarget([],{id:'q',body:'这个',meta:{quoted:{biliCard:{title:'引用标题'}}}},[],{bili:{enabled:true}});
  assert.equal(target.title,'引用标题');assert.match(target.ref,/^t-/);
 });
-test('F-T3 title successes retain source uncertainty and subtitle truth; success and miss caches last 24 hours',async()=>{
+test('F-T3 title results retain uncertainty and subtitle truth; success and miss caches expire',async()=>{
  const ref=f.videoTarget([],{mentioned:1,meta:{biliCard:{title:'标题'}}},[],{bili:{enabled:true}}).ref;
  for(const miss of [null,'none','near','multiple']){
   const e=await setup();await qq(e,{...msg('title-ask','这个视频讲啥'),ark_data:{fields:{source:'哔哩哔哩',title:'标题'}}},'GROUP_AT_MESSAGE_CREATE');
   await mockModel(()=>queue(e,'chat-title-ask'));assert.equal((await rows(e,'video_waits'))[0].ref,ref);
   const response=await report(e,miss?{miss}:{...result,subtitle:null,subtitle_status:'none'});assert.equal(response.status,200);
-  const notes=await rows(e,'media_notes');assert.equal(notes.length,miss?1:2);
+  const notes=await rows(e,'media_notes');assert.equal(notes.filter(n=>!n.id.startsWith('msgref:')).length,miss?1:3);
   const cached=await f.biliCached(e,ref);const material=f.videoMaterial(cached,ref);
   if(miss){assert.match(material,/仅卡片.*未读取视频内容/);assert.match(material,/请在 B 站点“复制链接”发来/);if(miss==='multiple')assert.match(material,/多个同名/);}
   else {assert.match(material,/按标题检索匹配，非链接直达/);assert.match(material,/UP 主.*BV1xx411c7mD/);assert.match(material,/可能不是/);assert.match(material,/已读元数据\/热评/);}
@@ -210,7 +213,8 @@ test('F-T3 title successes retain source uncertainty and subtitle truth; success
    await queue(e,'chat-cache-ask');assert.ok(JSON.stringify(seen).includes(miss?'仅卡片':'非链接直达'));
   });
   assert.equal((await rows(e,'jobs')).filter(j=>j.kind==='fetch').length,1);assert.equal((await rows(e,'video_waits')).length,1);
-  await e.DB.prepare('UPDATE media_notes SET created_at=? WHERE id=?').bind(new Date(now()-25*3600000).toISOString(),'bili:'+ref).run();
+  if(miss)await e.DB.prepare("UPDATE media_notes SET body=json_set(body,'$.until',?) WHERE id=?").bind(now()-1,'failure:v1:bili:'+ref).run();
+  else await e.DB.prepare('UPDATE media_notes SET created_at=? WHERE id=?').bind(new Date(now()-25*3600000).toISOString(),'alias:v1:bili:'+ref).run();
   assert.equal(await f.biliCached(e,ref),null);
   await mockModel(async()=>{await qq(e,{...msg('stale-ask','这个视频讲啥'),ark_data:{fields:{source:'哔哩哔哩',title:'标题'}}},'GROUP_AT_MESSAGE_CREATE');await queue(e,'chat-stale-ask');});
   assert.equal((await rows(e,'jobs')).find(j=>j.kind==='fetch').status,'pending');
@@ -312,9 +316,9 @@ test('W6e joining a leased fetch adds both waiters before report',async()=>{
 });
 test('W7 interrupted wait reopens done wake job after video lease expires; mentions force reply',async()=>{const e=await setup(),w=await first(e);await report(e);await mockModel(()=>queue(e,'video-'+w.id),true);await mockModel(()=>queue(e,'video-'+w.id));assert.equal((await rows(e,'jobs')).find(x=>x.kind==='video_reply').status,'done');await e.DB.prepare('UPDATE video_waits SET lease_until=?').bind(now()-1).run();await cron(e);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);assert.equal((await rows(e,'video_waits'))[0].status,'done');});});
 test('W8 cached material answers immediately; eight-day cache expires',async()=>{const e=await setup();await e.DB.prepare('INSERT INTO media_notes VALUES(?,?,?)').bind('bili:'+BV,JSON.stringify(result),new Date().toISOString()).run();await mockModel(async seen=>{await first(e);assert.equal((await rows(e,'video_waits')).length,0);assert.match(JSON.stringify(seen),/测试视频标题/);});await e.DB.prepare('UPDATE media_notes SET created_at=?').bind(new Date(now()-8*86400000).toISOString()).run();assert.equal(await f.biliCached(e,BV),null);});
-test('R1 needsVideo handles mentions, references, quoted URLs, recency, av and disable',()=>{const cfg={bili:{enabled:true}},b={id:'b',body:'',meta:{bili:[{bvid:BV}]}},ask={id:'a',body:'这个视频讲啥',meta:{}};assert.equal(f.needsVideo([], {...b,mentioned:1},[],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{replyTo:{targetId:'b'}}},[b],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{quotedUrls:['https://b23.tv/abcd']}},[],cfg),'abcd');assert.equal(f.needsVideo([],ask,[b,ask],cfg),BV);assert.equal(f.needsVideo([],ask,[b,...Array.from({length:10},(_,i)=>({...ask,id:''+i}))],cfg),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{aid:'av1'}]}},[],cfg),null);assert.equal(f.needsVideo([],{...b,mentioned:1},[],{bili:{enabled:false}}),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{short:'abcd'},{bvid:BV}]}},[],cfg),BV);});
+test('R1 needsVideo handles mentions, references, quoted URLs, recency, av and disable',()=>{const cfg={bili:{enabled:true}},b={id:'b',body:'',meta:{bili:[{bvid:BV}]}},ask={id:'a',body:'这个视频讲啥',meta:{}};assert.equal(f.needsVideo([], {...b,mentioned:1},[],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{replyTo:{targetId:'b'}}},[b],cfg),BV);assert.equal(f.needsVideo([],{...ask,body:'这个',meta:{quotedUrls:['https://b23.tv/abcd']}},[],cfg),'abcd');assert.equal(f.needsVideo([],ask,[b,ask],cfg),BV);assert.equal(f.needsVideo([],ask,[b,...Array.from({length:10},(_,i)=>({...ask,id:''+i}))],cfg),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{aid:'av1'}]}},[],cfg),'av1');assert.equal(f.needsVideo([],{...b,mentioned:1},[],{bili:{enabled:false}}),null);assert.equal(f.needsVideo([],{...b,mentioned:1,meta:{bili:[{short:'abcd'},{bvid:BV}]}},[],cfg),BV);});
 test('R2 requestBili upserts waiters and reopens terminal fetch',async()=>{const e=env();await f.requestBili(e,BV,'light','a');await f.requestBili(e,BV,'light','b');let jobs=await rows(e,'jobs');assert.equal(jobs.length,1);assert.deepEqual(JSON.parse(jobs[0].payload).waiters,['a','b']);await e.DB.prepare("UPDATE jobs SET status='done',attempts=2").run();await f.requestBili(e,BV,'light','c');jobs=await rows(e,'jobs');assert.equal(jobs[0].status,'pending');assert.equal(jobs[0].attempts,0);assert.deepEqual(JSON.parse(jobs[0].payload).waiters,['c']);});
-test('R3 lease conflicts and bounded report fields with both cache keys',async()=>{const e=env();await f.requestBili(e,'abcd','light','a');const {job}=await (await runner(e,'claim',{})).json();assert.equal((await runner(e,'heartbeat',{id:job.id,lease:'wrong'})).status,409);assert.equal((await runner(e,'report',{id:job.id,lease:'wrong',success:true,result})).status,409);assert.equal((await runner(e,'heartbeat',{id:job.id,lease:job.payload.lease})).status,200);assert.equal((await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result:{...result,extra:'DROP',title:'t'.repeat(999),stat:{...result.stat,extra:1},comments:[{uname:'u',message:'m',extra:1}]}})).status,200);const notes=await rows(e,'media_notes');assert.equal(notes.length,2);assert.ok(notes.every(x=>!x.body.includes('extra')&&!x.body.includes('DROP')));assert.ok(JSON.parse(notes[0].body).title.length<=300);await insertJob(e,'exhausted','fetch','running',2,now()-1);assert.equal((await (await runner(e,'claim',{})).json()).job,null);});
+test('R3 lease conflicts and bounded report fields with both cache keys',async()=>{const e=env();await f.requestBili(e,'abcd','light','a');const {job}=await (await runner(e,'claim',{})).json();assert.equal((await runner(e,'heartbeat',{id:job.id,lease:'wrong'})).status,409);assert.equal((await runner(e,'report',{id:job.id,lease:'wrong',success:true,result})).status,409);assert.equal((await runner(e,'heartbeat',{id:job.id,lease:job.payload.lease})).status,200);assert.equal((await runner(e,'report',{id:job.id,lease:job.payload.lease,proto:2,success:true,result:{...result,extra:'DROP',title:'t'.repeat(999),stat:{...result.stat,extra:1},comments:[{uname:'u',message:'m',extra:1}]}})).status,200);const notes=await rows(e,'media_notes');assert.equal(notes.length,3);assert.ok(notes.every(x=>!x.body.includes('extra')&&!x.body.includes('DROP')));assert.ok(JSON.parse(notes.find(n=>n.id.startsWith('resource:')).body).title.length<=300);await insertJob(e,'exhausted','fetch','running',2,now()-1);assert.equal((await (await runner(e,'claim',{})).json()).job,null);});
 test('R4 all fetch routes require runner authentication',async()=>{for(const route of ['claim','heartbeat','report','auth-status'])assert.equal((await req(env(),'/api/runner/fetch/'+route,{},'')).status,401);});
 test('L1 pause gate blocks fetch claims',async()=>{const e=env();await f.requestBili(e,BV,'light','w');await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('runner_pause_until',String(now()+60000)).run();assert.equal((await (await runner(e,'claim',{})).json()).job,null);assert.equal((await rows(e,'jobs'))[0].attempts,0);});
 test('auth-status records only allowed state fields without claiming reminders', async () => {
@@ -330,7 +334,7 @@ test('auth-status records only allowed state fields without claiming reminders',
 test('expired running video wakes even when outer job still has its longer lease',async()=>{const e=await setup(),w=await first(e);await report(e);await e.DB.prepare("UPDATE video_waits SET status='running',lease_until=?").bind(now()-1).run();await e.DB.prepare("UPDATE jobs SET status='running',lease_until=?,attempts=2 WHERE kind='video_reply'").bind(now()+600000).run();await cron(e);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});});
 test('early wake and concurrent starts do not duplicate or prematurely answer',async()=>{const e=await setup();await qq(e,msg('one','hello'));const x={groupId:group,ref:BV,latest:{id:'one'},batchIds:['one'],mentioned:true};const started=await Promise.all([f.startVideoWait(e,x),f.startVideoWait(e,{...x,latest:{id:'two'}})]);assert.equal(started.filter(Boolean).length,2);assert.equal((await rows(e,'video_waits')).length,2);const w=(await rows(e,'video_waits'))[0];await f.wakeVideoWait(e,w.id);await f.runVideoWait(e,w.id);assert.ok(!(await rows(e,'jobs')).some(x=>x.kind==='video_reply'));assert.equal((await rows(e,'outbox')).length,0);});
 test('duplicate fetch reports are idempotent and expired leases cannot publish',async()=>{const e=await setup(),w=await first(e);const {job}=await(await runner(e,'claim',{})).json();const b={id:job.id,lease:job.payload.lease,success:true,result};assert.equal((await runner(e,'report',b)).status,200);assert.equal((await runner(e,'report',b)).status,200);await mockModel(async()=>{await queue(e,'video-'+w.id);assert.equal((await rows(e,'outbox')).length,1);});await f.requestBili(e,BV,'light','new');assert.equal((await runner(e,'report',b)).status,409);const next=(await(await runner(e,'claim',{})).json()).job;await e.DB.prepare('UPDATE jobs SET lease_until=? WHERE id=?').bind(now()-1,next.id).run();assert.equal((await runner(e,'report',{...b,lease:next.payload.lease})).status,409);});
-test('R3 superseding a fetch lease during report cannot publish stale cache or wake waiters',async()=>{const e=await setup();await first(e);const {job}=await(await runner(e,'claim',{})).json();const batch=e.DB.batch.bind(e.DB);let replaced=false;e.DB.batch=async statements=>{if(!replaced){replaced=true;await e.DB.prepare('UPDATE jobs SET lease_until=? WHERE id=?').bind(now()-1,job.id).run();await f.claimFetch(e);}return batch(statements);};const response=await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result});assert.equal(response.status,409);assert.equal((await rows(e,'media_notes')).length,0);assert.equal((await rows(e,'video_waits'))[0].ready,0);});
+test('R3 superseding a fetch lease during report cannot publish stale cache or wake waiters',async()=>{const e=await setup();await first(e);const {job}=await(await runner(e,'claim',{})).json();const batch=e.DB.batch.bind(e.DB);let replaced=false;e.DB.batch=async statements=>{if(!replaced){replaced=true;await e.DB.prepare('UPDATE jobs SET lease_until=? WHERE id=?').bind(now()-1,job.id).run();await f.claimFetch(e);}return batch(statements);};const response=await runner(e,'report',{id:job.id,lease:job.payload.lease,success:true,result});assert.equal(response.status,409);assert.equal((await rows(e,'media_notes')).filter(n=>!n.id.startsWith('msgref:')).length,0);assert.equal((await rows(e,'video_waits'))[0].ready,0);});
 
 // Review regressions use the real receive/processJob path and an injected crash.
 test('P1-1 chat retry after wait commit never answers the transferred question twice', async () => {
