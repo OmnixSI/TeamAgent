@@ -95,6 +95,36 @@ async function set(e: Env, k: string, v: string) {
     .bind(k, v)
     .run();
 }
+async function getChatCursor(e: Env, groupId: string) {
+  const key = "chat_cursor:" + groupId;
+  const legacyKey = "chat_cursor";
+  // One read covers both keys so the chat turn keeps its D1 statement budget.
+  const stored = (
+    await e.DB.prepare("SELECT key,value FROM settings WHERE key IN (?,?)")
+      .bind(key, legacyKey)
+      .all()
+  ).results as any[];
+  const current = stored.find((r: any) => r.key === key)?.value;
+  if (current != null) return Number(current);
+  // One-time migration from the legacy global key. Clamp to rows that still
+  // exist so a cursor inflated by a deleted replay batch cannot skip live rows.
+  const legacy = Number(stored.find((r: any) => r.key === legacyKey)?.value || 0);
+  // A zero legacy cursor initializes to zero whatever the table holds; skip the
+  // MAX(rowid) read on that path to keep the chat turn inside its D1 budget.
+  const maxRow =
+    legacy > 0
+      ? Number(
+          (await e.DB.prepare("SELECT MAX(rowid) AS max FROM messages").first())
+            ?.max ?? 0,
+        )
+      : 0;
+  const init = Math.min(legacy, maxRow);
+  await set(e, key, String(init));
+  return init;
+}
+async function setChatCursor(e: Env, groupId: string, n: number) {
+  await set(e, "chat_cursor:" + groupId, String(n));
+}
 async function identity(r: Request, e: Env) {
   const t = r.headers.get("Authorization")?.replace(/^Bearer /, "") || "";
   if (!t) return null;
@@ -484,7 +514,7 @@ function semanticServices(e: Env) {
 }
 async function advanceCursor(e: Env, groupId: string, cursor: number, batch: any[]) {
   const newCursor = Math.max(cursor, ...batch.map((r: any) => r.ordinal));
-  await set(e, "chat_cursor", String(newCursor));
+  await setChatCursor(e, groupId, newCursor);
   const remaining = await e.DB.prepare(
     "SELECT id FROM messages WHERE group_id=? AND rowid>? ORDER BY rowid DESC LIMIT 1",
   )
@@ -673,7 +703,7 @@ async function processJob(e: Env, id: string) {
         .bind(p.message)
         .first();
       if (!m) return;
-      const cursor = Number((await setting(e, "chat_cursor")) || 0);
+      const cursor = await getChatCursor(e, m.group_id);
       const head = await e.DB.prepare(
         "SELECT (SELECT id FROM messages WHERE group_id=?1 ORDER BY rowid DESC LIMIT 1) AS newest_id,(SELECT ts FROM messages WHERE group_id=?1 AND rowid>?2 ORDER BY rowid LIMIT 1) AS oldest_ts",
       ).bind(m.group_id, cursor).first();
