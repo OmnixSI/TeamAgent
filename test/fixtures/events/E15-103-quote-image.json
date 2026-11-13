@@ -1,0 +1,69 @@
+{
+  "id": "E15-103-quote-image",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：message_type=103，顶层 content 为正文，msg_elements 只有 content/msg_idx/attachments。真实 103 元素不带 author，故 quoted 的作者与 media.owner 为空；作者归属由 worker 用 refMsgIdx 查 message_refs 补。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_22",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T07:50:13+08:00",
+    "content": "这黄仁勋怎么回事 怎么这么多出轨对象",
+    "message_scene": {
+      "ext": [
+        "msg_idx=REFIDX_SAMPLE_03",
+        "ref_msg_idx=REFIDX_SAMPLE_02"
+      ]
+    },
+    "mentions": [
+      {
+        "member_openid": "OPENID_SAMPLE_03",
+        "nickname": "成员丙",
+        "is_you": true
+      }
+    ],
+    "msg_elements": [
+      {
+        "attachments": [
+          {
+            "content": "",
+            "content_type": "image/jpeg",
+            "filename": "FILE_SAMPLE_01",
+            "height": 3200,
+            "size": 679176,
+            "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=FILEID_SAMPLE_01&rkey=RKEY_SAMPLE_01&spec=0",
+            "width": 1440
+          }
+        ],
+        "content": "",
+        "message_type": 103,
+        "msg_idx": "REFIDX_SAMPLE_02"
+      }
+    ]
+  },
+  "expect": {
+    "body": "这黄仁勋怎么回事 怎么这么多出轨对象",
+    "refIdx": "REFIDX_SAMPLE_02",
+    "segmentTypes": [
+      "text",
+      "reply"
+    ],
+    "quoted": {
+      "text": "",
+      "media": [
+        {
+          "kind": "image",
+          "origin": "quote",
+          "owner": ""
+        }
+      ]
+    }
+  }
+}

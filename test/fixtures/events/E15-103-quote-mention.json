@@ -1,0 +1,59 @@
+{
+  "id": "E15-103-quote-mention",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：message_type=103，content 为顶层正文，msg_elements 为被引用消息。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_25",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T15:42:27+08:00",
+    "content": "这个没和你说，我是和<@OPENID_SAMPLE_04> 说的",
+    "message_scene": {
+      "ext": [
+        "msg_idx=REFIDX_SAMPLE_05",
+        "ref_msg_idx=REFIDX_SAMPLE_04"
+      ]
+    },
+    "mentions": [
+      {
+        "member_openid": "OPENID_SAMPLE_03",
+        "nickname": "成员丙",
+        "is_you": true
+      },
+      {
+        "member_openid": "OPENID_SAMPLE_04",
+        "nickname": "成员丁",
+        "is_you": false
+      }
+    ],
+    "msg_elements": [
+      {
+        "content": "收到，我接。但“之前发的”这条消息里没带附件也没链接，你说的到底是哪份——群消息、issue，还是仓库里的文件？\n\n给个出处或路径，我先把 OpenAI API、Codex、DeepSeek 三家分别接在哪列成清单发你确认，确认后再动。现在还没跑通，先别算它已经能用了。",
+        "message_type": 103,
+        "msg_idx": "REFIDX_SAMPLE_04"
+      }
+    ]
+  },
+  "expect": {
+    "body": "这个没和你说，我是和<@OPENID_SAMPLE_04> 说的",
+    "refIdx": "REFIDX_SAMPLE_04",
+    "segmentTypes": [
+      "text",
+      "mention",
+      "text",
+      "reply"
+    ],
+    "quoted": {
+      "text": "收到，我接。但“之前发的”这条消息里没带附件也没链接，你说的到底是哪份——群消息、issue，还是仓库里的文件？\n\n给个出处或路径，我先把 OpenAI API、Codex、DeepSeek 三家分别接在哪列成清单发你确认，确认后再动。现在还没跑通，先别算它已经能用了。",
+      "media": []
+    }
+  }
+}

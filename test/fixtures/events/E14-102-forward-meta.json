@@ -1,0 +1,62 @@
+{
+  "id": "E14-102-forward-meta",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "synth",
+    "where": "plan-event-layer-v2.md §事件验收表 第 8 组 E14（adapter 文档结构）",
+    "collected": "2026-11-13",
+    "note": "线上无 102 样本。本夹具按 adapter 字段结构合成，只用于锁定「102 转发的 meta.forward 保留每个节点的内容与作者」。"
+  },
+  "raw": {
+    "id": "MSG_SYNTH_102A",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T20:02:00+08:00",
+    "message_type": 102,
+    "content": "",
+    "msg_elements": [
+      {
+        "author": {
+          "member_openid": "OPENID_SAMPLE_03",
+          "username": "成员丙"
+        },
+        "content": "第一条转发原话"
+      },
+      {
+        "author": {
+          "member_openid": "OPENID_SAMPLE_04",
+          "username": "成员丁"
+        },
+        "content": "第二条转发原话",
+        "attachments": [
+          {
+            "content_type": "image/png",
+            "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=FILEID_SAMPLE_01&rkey=RKEY_SAMPLE_01&spec=0"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "body": "",
+    "segmentTypes": [
+      "forward"
+    ],
+    "forward": {
+      "nodes": [
+        {
+          "authorName": "成员丙",
+          "text": "第一条转发原话"
+        },
+        {
+          "authorName": "成员丁",
+          "text": "第二条转发原话[图片]"
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

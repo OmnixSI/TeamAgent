@@ -1,0 +1,36 @@
+{
+  "id": "E15-legacy-merged-forward-b",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：msg_elements 无 message_type，内容为合并转发的文本渲染。当前实现当作引用，见差异说明。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_15",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_02",
+      "username": "成员乙"
+    },
+    "timestamp": "2026-11-11T21:02:57+08:00",
+    "content": "那是因为输出太长了吧，输出稍微限制一下",
+    "msg_elements": [
+      {
+        "content": "=== 消息 1 ===\n[消息内容]   这实在是太垃圾\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 这还是我昨天做端侧agent研究出来的\n    [消息类型] 引用消息\n"
+      }
+    ]
+  },
+  "expect": {
+    "body": "那是因为输出太长了吧，输出稍微限制一下",
+    "segmentTypes": [
+      "text",
+      "reply"
+    ],
+    "quoted": {
+      "text": "=== 消息 1 ===\n[消息内容]   这实在是太垃圾\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 这还是我昨天做端侧agent研究出来的\n    [消息类型] 引用消息\n",
+      "media": []
+    }
+  }
+}

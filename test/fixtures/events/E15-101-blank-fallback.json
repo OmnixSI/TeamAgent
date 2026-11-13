@@ -1,0 +1,41 @@
+{
+  "id": "E15-101-blank-fallback",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "synth",
+    "where": "plan-event-layer-v2.md §事件验收表 第 8 组 E15（adapter 文档结构）",
+    "collected": "2026-11-13",
+    "note": "线上无 101 样本。本夹具按 adapter 字段结构合成，只用于锁定「空白 content 按 trim 回退元素正文」。"
+  },
+  "raw": {
+    "id": "MSG_SYNTH_101B",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-13T20:01:00+08:00",
+    "message_type": 101,
+    "content": "  \n ",
+    "msg_elements": [
+      {
+        "message_type": 101,
+        "content": "元素正文回退",
+        "attachments": [
+          {
+            "content_type": "image/png",
+            "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=FILEID_SAMPLE_01&rkey=RKEY_SAMPLE_01&spec=0"
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "body": "元素正文回退",
+    "segmentTypes": [
+      "text",
+      "text",
+      "image"
+    ]
+  }
+}
