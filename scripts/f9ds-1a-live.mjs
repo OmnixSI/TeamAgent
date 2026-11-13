@@ -15,10 +15,14 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SAMPLE = process.env.F9DS_SILK_SAMPLE || "/Users/yanghongming/Projects/TeamAgent-deepseek-suite-probe-20261114-tts-A.silk";
+const SAMPLE = process.env.F9DS_SILK_SAMPLE;
 const keyFile = process.env.DEEPSEEK_API_KEY_FILE;
 if (!keyFile) {
   console.error("DEEPSEEK_API_KEY_FILE is not set");
+  process.exit(2);
+}
+if (!SAMPLE) {
+  console.error("F9DS_SILK_SAMPLE is not set (path to a real .silk file)");
   process.exit(2);
 }
 if (!fs.existsSync(SAMPLE)) {
