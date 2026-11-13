@@ -37,7 +37,7 @@ class RepoIndexTests(unittest.TestCase):
         for p in self.patches: p.start(); self.addCleanup(p.stop)
         (self.h / 'config.json').write_text(json.dumps({'url':'https://cloud.invalid','runnerToken':'synthetic-runner'}))
         index._fetch_at = {}; index._offset = 0; index._backlog = False
-        index._clone_at = {}; index._cloned_round = False
+        index._clone_at = {}; index._clone_error = {}
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'user.name', 'Index Test'); self.git('config', 'user.email', 'index@example.invalid')
         self.git('remote', 'add', 'origin', 'https://github.com/' + REPO + '.git')
@@ -285,7 +285,13 @@ class RepoIndexTests(unittest.TestCase):
                 index._offset = 0
                 with self.subTest(failure=type(failure).__name__), patch.object(index.gitsafe, 'run', side_effect=fetch), patch('builtins.print') as log:
                     index.sync_once(1120)
-                    self.assertEqual(self.state()[repos[1]], before[repos[1]])
+                    after = self.state()[repos[1]]
+                    for key in ('frontier', 'acked', 'fingerprint', 'sent_at'):
+                        self.assertEqual(after[key], before[repos[1]][key])
+                    self.assertEqual(after['ok'], False)
+                    self.assertIn('fetch failed', after['last_error'])
+                    self.assertIn(type(failure).__name__, after['last_error'])
+                    self.assertNotIn('private diagnostic', json.dumps(after))
                     self.assertNotIn(repos[1], [r['repo'] for r in self.batches[-1]['repos']])
                     for repo in (repos[0], repos[2]):
                         self.assertEqual(self.state()[repo]['frontier']['refs/remotes/origin/main'], pending[repo])
@@ -498,7 +504,10 @@ class RepoIndexTests(unittest.TestCase):
                     with patch.object(index, 'settings', return_value={'repositories':repos}), patch.object(index, 'repo_root', return_value=self.root), patch.object(index, '_matches_remote', side_effect=matches), patch.object(index, 'build', side_effect=build), patch('builtins.print') as log:
                         index.sync_once(1000)
                     self.assertEqual([r['repo'] for r in self.batches[-1]['repos']], [repos[1]])
-                    self.assertNotIn(REPO, self.state())
+                    failed = self.state()[REPO]
+                    self.assertEqual(failed['ok'], False)
+                    self.assertIn(type(failure).__name__, failed['last_error'])
+                    self.assertNotIn('frontier', failed)
                     self.assertNotIn('private diagnostic', str(log.call_args_list))
 
     def test_review_json_and_yaml_session_values_never_reach_sync_payload(self):
@@ -548,27 +557,85 @@ class RepoIndexTests(unittest.TestCase):
         self.assertEqual([w['label'] for w in data['worktrees']], ['pkg-a'])
         self.assertEqual([f['path'] for f in data['worktrees'][0]['files']], ['code.txt'])
 
-    def test_clone_missing_attempts_once_and_backs_off(self):
-        other = 'OmnixSI/NextThought'
-        with patch.object(index, 'settings', return_value={'repositories':[REPO, other]}), \
-             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0)) as run, \
+    def test_clone_every_missing_repository_in_one_round(self):
+        self.commit('base')
+        repos = [REPO, 'OmnixSI/First', 'OmnixSI/Second']
+        with patch.object(index, 'settings', return_value={'repositories':repos}), \
+             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0, stderr='')) as run, \
              patch('builtins.print'):
-            self.assertIsNone(index.build(other, {}, 30))
-            self.assertIsNone(index.build(other, {}, 30))
-            self.assertEqual(run.call_count, 1)
-            command = run.call_args.args[0]
-            self.assertEqual(command[:3], ['gh', 'repo', 'clone'])
-            self.assertEqual(command[3], other)
-            self.assertEqual(Path(command[4]), self.h / 'repos' / 'NextThought')
-            self.assertLessEqual(run.call_args.kwargs['timeout'], 120)
-            index._cloned_round = False
-            index._clone_at[other] = time.monotonic() - 1800
-            index.build(other, {}, 30)
-            self.assertEqual(run.call_count, 2)
+            index.sync_once(1000)
+        self.assertEqual([call.args[0][3] for call in run.call_args_list], repos[1:])
+        command = run.call_args_list[0].args[0]
+        self.assertEqual(command[:3], ['gh', 'repo', 'clone'])
+        self.assertEqual(Path(command[4]), self.h / 'repos' / 'First')
+        self.assertLessEqual(run.call_args_list[0].kwargs['timeout'], 120)
+        self.assertEqual(self.state()[REPO]['ok'], True)
+        self.assertEqual(self.state()[REPO]['last_success_at'], 1000)
+        self.assertIsNone(self.state()[REPO]['last_error'])
+        for repo in repos[1:]:
+            self.assertEqual(self.state()[repo]['ok'], False)
+            self.assertIn('index unavailable', self.state()[repo]['last_error'])
+
+    def test_all_missing_repositories_still_persist_failure_state(self):
+        repos = ['OmnixSI/First', 'OmnixSI/Second']
+        with patch.object(index, 'settings', return_value={'repositories':repos}), \
+             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1, stderr='')), \
+             patch('builtins.print'):
+            index.sync_once(1000)
+        self.assertEqual(self.batches, [])
+        state = self.state()
+        for repo in repos:
+            self.assertEqual(state[repo]['ok'], False)
+            self.assertIn('clone failed: exit 1', state[repo]['last_error'])
+            self.assertIsNone(state[repo]['last_success_at'])
+
+    def test_clone_failure_is_recorded_redacted_and_does_not_block_others(self):
+        self.commit('base')
+        broken = 'OmnixSI/Broken'
+        token = 'gho_' + 'a' * 36
+        failure = types.SimpleNamespace(
+            returncode=1,
+            stderr='fatal: https://x-access-token:' + token + '@github.com/' + broken + '.git: authentication failed')
+        with patch.object(index, 'settings', return_value={'repositories':[REPO, broken]}), \
+             patch.object(index.subprocess, 'run', return_value=failure), patch('builtins.print'):
+            index.sync_once(1000)
+        self.assertEqual([row['repo'] for row in self.batches[-1]['repos']], [REPO])
+        entry = self.state()[broken]
+        self.assertEqual(entry['ok'], False)
+        self.assertIn('clone failed: exit 1', entry['last_error'])
+        self.assertIn('[REDACTED]', entry['last_error'])
+        self.assertNotIn(token, entry['last_error'])
+        self.assertIsNone(entry['last_success_at'])
+
+    def test_successful_clone_is_indexed_in_the_same_round(self):
+        other = 'OmnixSI/NextThought'
+        sha = self.commit('base')
+        real_run = subprocess.run
+        def clone(command, **options):
+            target = Path(command[4])
+            real_run(['git', 'clone', '-q', str(self.root), str(target)], check=True, capture_output=True, text=True)
+            real_run(['git', '-C', str(target), 'remote', 'set-url', 'origin', 'https://github.com/' + other + '.git'],
+                     check=True)
+            return types.SimpleNamespace(returncode=0, stderr='')
         with patch.object(index, 'settings', return_value={'repositories':[REPO, other]}), \
-             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1)) as run, \
+             patch.object(index.subprocess, 'run', side_effect=clone), patch('builtins.print'):
+            index.sync_once(1000)
+        rows = {row['repo']:row for row in self.batches[-1]['repos']}
+        self.assertEqual(rows[other]['head']['sha'], sha)
+        self.assertEqual(self.state()[other]['ok'], True)
+
+    def test_clone_backoff_is_per_repository(self):
+        first, second = 'OmnixSI/First', 'OmnixSI/Second'
+        with patch.object(index, 'settings', return_value={'repositories':[REPO, first, second]}), \
+             patch.object(index.subprocess, 'run', return_value=types.SimpleNamespace(returncode=1, stderr='')) as run, \
              patch('builtins.print') as log:
-            index._cloned_round = False; index._clone_at.pop(other, None)
-            index.build(other, {}, 30)
-        self.assertEqual(run.call_count, 1)
-        self.assertIn('repo index: clone failed ' + other, str(log.call_args_list))
+            index.sync_once(1000)
+            self.assertEqual([call.args[0][3] for call in run.call_args_list], [first, second])
+            index.sync_once(1010)
+            self.assertEqual(run.call_count, 2)
+            self.assertIn('clone failed: exit 1', self.state()[first]['last_error'])
+            index._clone_at[first] = time.monotonic() - 1800
+            index.sync_once(1020)
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(run.call_args_list[-1].args[0][3], first)
+        self.assertIn('repo index: clone failed OmnixSI/First', str(log.call_args_list))

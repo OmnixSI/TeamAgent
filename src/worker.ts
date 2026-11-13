@@ -1,3 +1,4 @@
+import { addressedMessages, sweepMentions } from './mention-guard';
 import {planVideo,mediaFailMaterial} from "./mediajobs";
 import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import {biliFailReply,biliFailMaterial} from './linkfail';
@@ -6,7 +7,8 @@ import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
 import { isDirectRequest } from "./engagement";
-import { stage, flushTail } from "./timing";
+import { recordDeliveryFailure, utilityResultText, utilityStatusText } from "./delivery-retry";
+import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
@@ -26,9 +28,11 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
+import { runSchedules } from "./schedules";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
+import { notifyJobFailure, flushAuditedTail as flushTail } from "./tool-audit";
 import {
   enqueueVoice,
   messageSequence,
@@ -42,10 +46,12 @@ import {
   applyImageOutcomes,
   pickImages,
   visionProvider,
+  visionErrorFailure,
   SELFTEST_PNG,
 } from "./vision";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
+import { handleCommand } from "./commands";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
 import {
@@ -56,6 +62,7 @@ import {
   agentAnswer,
 } from "./semantic";
 type Env = {
+  AI?: { run(model: string, input: any): Promise<any> };
   DB: any;
   WORK?: any;
   CHAT?: any;
@@ -303,6 +310,18 @@ async function receive(r: Request, e: Env) {
   const text = ib.body;
   const direct =
     !m.msg_elements?.length && (!m.message_type || m.message_type === 0);
+  if (
+    direct &&
+    (await handleCommand(e, {
+      groupId: m.group_openid,
+      messageId: m.id,
+      memberId: "qq:" + String(m.author.member_openid || m.author.id),
+      text,
+    }))
+  ) {
+    await sendOutbox(e);
+    return json({ op: 12, d: 0 });
+  }
   const c = direct ? command(text) : null;
   const ref = ib.refMsgIdx
     ? await e.DB.prepare(
@@ -711,11 +730,11 @@ async function processJob(e: Env, id: string) {
       ).bind(m.group_id, cursor).first();
       const newest = head.newest_id ? { id: head.newest_id } : null;
       const oldestAt = Date.parse(head.oldest_ts) || 0;
-      if (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() })) {
+      if (!p.mentionRecovery && (m.ordinal <= cursor || !shouldProcessNow({ isNewest: newest?.id === m.id, mentioned: !!m.mentioned, oldestPendingAt: oldestAt, now: Date.now() }))) {
         await e.DB.prepare("UPDATE jobs SET status='done' WHERE id=?").bind(id).run();
         return;
       }
-      const preloaded = await loadBatch(e, m.group_id, cursor);
+      const preloaded = p.mentionRecovery ? [{ ...m, meta: metaOf(await e.DB.prepare("SELECT json AS metadata FROM message_meta WHERE id=?").bind(m.id).first() || {}) }] : await loadBatch(e, m.group_id, cursor);
       if (!preloaded.length) return;
       const latestPre = preloaded[preloaded.length - 1];
       (e as any).timingTurn = latestPre.id;
@@ -731,7 +750,7 @@ async function processJob(e: Env, id: string) {
         if (row) refRows.set(refId, { ...row, meta: metaOf(row) });
       }
       const sw = await loadSwitches(e);
-      const hardStop = !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
+      const hardStop = !addressedMessages({batch:preloaded}).length && !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
         && !preloaded.some((row: any) => isDirectRequest(row, { batch: preloaded }))
         && await unansweredProactive(e, m.group_id);
       const picks = !hardStop && visionProvider(e)
@@ -942,6 +961,7 @@ async function processJob(e: Env, id: string) {
       .bind(id)
       .run();
   } catch (err) {
+    await notifyJobFailure(e, claim, err);
     if (claim.kind === "dream" && claim.attempts >= 3) {
       const payload = JSON.parse(claim.payload);
       const ids =
@@ -1145,6 +1165,10 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   await fn();
 }
 async function scheduled(e: Env) {
+  // F6-6 用户日程（日推/提醒/闭嘴到期）先跑：维护查询会花掉 48 次 D1 预算，
+  // 放到末尾会永远轮不到；出站仍由本 tick 末尾的 sendOutbox 发出。
+  await runSchedules(e);
+  await sweepMentions(e);
   const local = new Intl.DateTimeFormat("en-CA", {
     timeZone: TEAM.memory.timezone,
     year: "numeric",
@@ -1512,8 +1536,21 @@ async function api(r: Request, e: Env) {
           .bind(b.id)
           .first();
         if (!d) return json({ error: "unknown delivery" }, 404);
-        if (["sent", "failed", "unknown"].includes(d.status))
+        if (["sent", "failed", "unknown", "needs_attention"].includes(d.status))
           return json({ ok: true, already: true });
+        if (b.status === "failed" && b.exhausted === true) {
+          const attention = await recordDeliveryFailure(e, b, { now: Date.now() });
+          if (attention.recorded)
+            await activity(
+              e,
+              "delivery.needs_attention",
+              d.job_id,
+              "QQ网关",
+              "附件连续 " + attention.attempts + " 次发送失败，已停止自动重发并在群里说明",
+              b.id + "-result",
+            );
+          return json({ ok: true, needs_attention: true });
+        }
         const count = Math.min(
           JSON.parse(d.files).length,
           Math.max(0, Number(b.sent_count) || 0),
@@ -1682,7 +1719,11 @@ async function api(r: Request, e: Env) {
         } else if (!files.length)
           await job(e, "media-result-" + p.message, "voice_notice", {
             message: p.message,
-            result: body.slice(0, 8000),
+            status: utilityStatusText({
+              files: files.length,
+              wantFiles: p.want_files === true,
+            }),
+            result: utilityResultText(body, files.length).slice(0, 8000),
           });
       }
       return json({ ok: true });
@@ -1832,7 +1873,7 @@ async function api(r: Request, e: Env) {
       return json({ error: "owner only" }, 403);
     const started = Date.now();
     try {
-      const provider = visionProvider(e);
+      const provider = visionProvider({ ...e, DB: undefined }); // Smoke must not mutate production D1.
       if (!provider)
         return json({ ok: false, error: "vision disabled" }, 503);
       const bytes = Uint8Array.from(atob(SELFTEST_PNG), (c) =>
@@ -1847,7 +1888,7 @@ async function api(r: Request, e: Env) {
       return json({ ok: true, desc: note.desc, ms: Date.now() - started });
     } catch (error) {
       return json(
-        { ok: false, error: String(error).slice(0, 200) },
+        visionErrorFailure(error),
         502,
       );
     }

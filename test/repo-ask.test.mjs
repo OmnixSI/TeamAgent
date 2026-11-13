@@ -74,7 +74,10 @@ test('A3 system prompt and help copy are read-only and never claim write access'
   const walk=dir=>{for(const ent of readdirSync(dir,{withFileTypes:true})){const p=join(dir,ent.name);if(ent.isDirectory()){if(ent.name!=='node_modules')walk(p);}else if(/\.(ts|tsx|js|mjs|json|html|css|md)$/.test(ent.name))files.push(p);}};
   for(const dir of ['src','config','web'])walk(dir);
   assert.ok(files.length>10,'expected to scan source and prompt copy');
-  for(const file of files)assert.doesNotMatch(readFileSync(file,'utf8'),/改文件|提变更/,file);
+  // F6-4 requires this exact read-only boundary in src/capability-card.ts;
+  // only that sentence may contain 改文件, any other write claim stays forbidden.
+  const boundary='我对代码仓库只读，不能直接改文件、提交或合并；要改代码我会建开发任务交给团队。';
+  for(const file of files)assert.doesNotMatch(readFileSync(file,'utf8').replaceAll(boundary,''),/改文件|提变更/,file);
   assert.match(readFileSync('src/guide.ts','utf8'),/只读/);
 });
 

@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,repo TEXT NOT NULL,title TE
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,created_at);
 CREATE TABLE IF NOT EXISTS facts(id TEXT PRIMARY KEY,repo TEXT NOT NULL,subject TEXT NOT NULL,predicate TEXT NOT NULL,value TEXT NOT NULL,evidence TEXT NOT NULL,source_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'proposal',valid_from TEXT NOT NULL,valid_to TEXT);
 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,error TEXT,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS turn_tools(id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, group_id TEXT, name TEXT NOT NULL, args TEXT NOT NULL DEFAULT '{}', ok INTEGER NOT NULL, error_kind TEXT, ms INTEGER NOT NULL, offered INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS turn_tools_turn ON turn_tools(turn_id);
 CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,msg_id TEXT,body TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS repo_cache(repo TEXT PRIMARY KEY,json TEXT NOT NULL,updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS login_tickets(code TEXT PRIMARY KEY,secret_hash TEXT NOT NULL,expires INTEGER NOT NULL,member_id TEXT,name TEXT,used INTEGER NOT NULL DEFAULT 0);
@@ -37,6 +39,7 @@ CREATE INDEX IF NOT EXISTS activity_entity ON activity(entity,created_at);
 CREATE TABLE IF NOT EXISTS model_runs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,effort TEXT NOT NULL,status TEXT NOT NULL,duration_ms INTEGER NOT NULL,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS task_plans(task_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',draft TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,job_id TEXT NOT NULL,message_id TEXT NOT NULL,status TEXT NOT NULL,files TEXT NOT NULL DEFAULT '[]',sent_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS delivery_retries(delivery_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,needs_attention INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS discoveries(id TEXT PRIMARY KEY,repo TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,urls TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'new',created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS memory_blocks(source_id TEXT NOT NULL,subject TEXT NOT NULL,predicate TEXT NOT NULL,PRIMARY KEY(source_id,subject,predicate));
 CREATE TABLE IF NOT EXISTS health_samples(at INTEGER PRIMARY KEY,gateway_ok INTEGER NOT NULL,runner_ok INTEGER NOT NULL,pending INTEGER NOT NULL,failed INTEGER NOT NULL);
@@ -125,3 +128,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(
   doc_id UNINDEXED,
   group_id UNINDEXED,
   tokenize='trigram');
+CREATE TABLE IF NOT EXISTS schedules(
+  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, owner TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('digest_daily','digest_weekly','reminder','mute')),
+  tz TEXT NOT NULL DEFAULT 'Australia/Sydney', spec TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','cancelled')),
+  next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, source_msg_id TEXT, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS schedules_due ON schedules(status,next_run_at);
+CREATE INDEX IF NOT EXISTS schedules_group ON schedules(group_id,status);
+CREATE TABLE IF NOT EXISTS schedule_runs(
+  id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, due_at INTEGER NOT NULL,
+  started_at INTEGER, finished_at INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+  outbox_id TEXT, error TEXT, UNIQUE(schedule_id,due_at));
+CREATE INDEX IF NOT EXISTS schedule_runs_due ON schedule_runs(schedule_id,due_at);
