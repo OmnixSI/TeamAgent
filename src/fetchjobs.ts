@@ -19,7 +19,7 @@ import {isTitleRef,titleRef,titleMissOf,titleMaterial,titleMissMaterial,TITLE_FA
 
 type Row = Record<string, any>;
 export type BiliResult = {
-  bvid: string; page: number; pages: number; aid: number; title: string; desc: string; owner: string; tname: string;
+  bvid: string; cid?: number; page: number; pages: number; aid: number; title: string; desc: string; owner: string; tname: string;
   duration: number; pubdate: number; stat: Record<string, number>;
   subtitle: string | null; subtitle_lang: string | null;
   subtitle_status: "ok" | "none" | "login_required" | "unavailable";
@@ -339,7 +339,7 @@ function cleanResult(r: any,strict=false): BiliResult {
   if (!r || !BV.test(r.bvid)) throw Error("invalid video result");
   const text = (s: any, max: number) => redact(typeof s === "string" ? s : "").slice(0, max);
   const number = (n: any) => Number.isFinite(n) && n >= 0 ? n : 0;
-  return { bvid: r.bvid, page, pages, aid, title: text(r.title, 300), desc: text(r.desc, 1500), owner: text(r.owner, 100), tname: text(r.tname, 100), duration: number(r.duration), pubdate: number(r.pubdate),
+  return { bvid: r.bvid, ...(Number.isSafeInteger(r.cid)&&r.cid>0?{cid:r.cid}:{}), page, pages, aid, title: text(r.title, 300), desc: text(r.desc, 1500), owner: text(r.owner, 100), tname: text(r.tname, 100), duration: number(r.duration), pubdate: number(r.pubdate),
     stat: Object.fromEntries(["view", "like", "coin", "favorite", "reply"].map(k => [k, number(r.stat?.[k])])),
     subtitle: typeof r.subtitle === "string" ? text(r.subtitle, 6000) : null, subtitle_lang: typeof r.subtitle_lang === "string" ? text(r.subtitle_lang, 30) : null,
     subtitle_status: ["ok", "none", "login_required", "unavailable"].includes(r.subtitle_status)

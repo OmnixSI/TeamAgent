@@ -9,6 +9,7 @@ import {createFetchClient,createSafeLookup,sanitize,classifyMedia} from './fetch
 import {loadBiliCookies} from './browser-auth.mjs';
 import {runAsr,runCommand,expandHome,fault} from './asr.mjs';
 const DAY=86400000,MAX_TMP=2048*1024**2,BV=/^BV[0-9A-Za-z]{10}$/;
+const MEDIA_JOB=/^bmedia-BV[0-9A-Za-z]{10}(?:-p(?:[2-9]|[1-9]\d{1,2}))?$/;
 const DEFAULT={enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048};
 const DEFAULT_MODEL=join(homedir(),'Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03');
 const homes=()=>join(homedir(),'.inkboard-team');
@@ -118,9 +119,10 @@ function cleanReport(report,client){
 }
 export async function runMediaJob(job,deps={}){
  const home=deps.home||homes(),cfg={...DEFAULT,...deps.settings},controller=new AbortController(),payload=job.payload||{},bvid=payload.bvid;
- if(!BV.test(bvid)||job.kind!=='bili_media'||job.id!=='bmedia-'+bvid)throw fault('not_found');
+ const page=payload.page??1,paged=deps.proto===2&&payload.v===2;
+ if(!BV.test(bvid)||!Number.isInteger(page)||page<1||page>999||payload.cid!==undefined&&(!Number.isSafeInteger(payload.cid)||payload.cid<=0)||job.kind!=='bili_media'||job.id!=='bmedia-'+bvid+(page>1?'-p'+page:''))throw fault('not_found');
  const dir=join(home,'media-tmp',job.id),pidFile=join(home,'media-child.pid'),m4a=join(dir,'a.m4a'),wav=join(dir,'a.wav');
- privateDir(dir);const files=new Set(),started=Date.now();let report,untilTimer,heartbeat,busy=false,conflict=false,stage='download_failed',asrResult;
+ privateDir(dir);const files=new Set(),started=Date.now();let report,untilTimer,heartbeat,busy=false,conflict=false,stage='download_failed',asrResult,info;
  const observe=()=>{for(const file of names(dir)){files.add(file);deps.onFile?.(file,fs.lstatSync(join(dir,file)).size)}};
  const stop=reason=>{if(!controller.signal.aborted)controller.abort(fault(reason))};
  const onAbort=()=>stop('cancelled'),onTerm=()=>stop('media_timeout');deps.signal?.addEventListener('abort',onAbort,{once:true});process.once('SIGTERM',onTerm);
@@ -135,10 +137,12 @@ export async function runMediaJob(job,deps={}){
   }catch{}finally{busy=false}
  };
  try{
+  if(page>1&&!paged)throw fault('runner_outdated');
   untilTimer=setTimeout(()=>stop('media_timeout'),Math.max(0,Math.min(2147483647,payload.until-Date.now())));heartbeat=(deps.setInterval||setInterval)(beat,30000);
   if(deps.signal?.aborted)onAbort();if(Date.now()>=payload.until)throw fault('media_timeout');
   const client=deps.client||await makeClient(home,deps);if(client.isPaused())throw fault('risk');
-  const info=await client.biliAudio(bvid);if(controller.signal.aborted)throw controller.signal.reason;
+  info=await client.biliAudio(bvid,page,payload.cid);if(controller.signal.aborted)throw controller.signal.reason;
+  if(paged&&(!Number.isSafeInteger(info.cid)||info.cid<=0||payload.cid!==undefined&&info.cid!==payload.cid))throw fault('audio_unavailable');
   const candidates=pickAudio(info.urls);const duration=Number(payload.duration||info.duration),covered=Math.min(duration,Math.min(90,cfg.max_minutes)*60);
   for(let i=0;i<candidates.length;i++){
    try{
@@ -155,10 +159,10 @@ export async function runMediaJob(job,deps={}){
   asrResult=await (deps.asr||runAsr)(wav,{python:expandHome(asrConfig.python),modelDir:expandHome(asrConfig.model_dir),memCapMb:Math.min(1300,cfg.mem_cap_mb),timeoutMs:60000+covered*cfg.rtf*4000,signal:controller.signal,onChild,onProgress:p=>{deps.progress='转写 '+p.done+'/'+p.total}});
   fs.rmSync(wav,{force:true});if(controller.signal.aborted)throw controller.signal.reason;
   const text=asrResult.segments.map(s=>'['+timestamp(s.start)+'] '+s.text).join('\n');
-  report={id:job.id,lease:payload.lease,success:true,result:{bvid,text,covered:Math.min(covered,asrResult.audio_s),duration,partial:duration>Math.min(covered,asrResult.audio_s),chunks:asrResult.segments.length}};
+  report={id:job.id,lease:payload.lease,success:true,...(paged?{proto:2}:{}),result:{bvid,...(paged?{page,cid:info.cid}:{}),text,covered:Math.min(covered,asrResult.audio_s),duration,partial:duration>Math.min(covered,asrResult.audio_s),chunks:asrResult.segments.length}};
  }catch(error){
   const reason=controller.signal.aborted?controller.signal.reason?.reason:error.reason||(['风控'].includes(error.message)||[403,412].includes(error.status)||[-352,-412].includes(error.code)?'risk':stage);
-  report=conflict?null:{id:job.id,lease:payload.lease,success:false,reason:reason==='cancelled'?'media_timeout':reason};
+  report=conflict?null:{id:job.id,lease:payload.lease,success:false,...(paged?{proto:2}:{}),reason:reason==='cancelled'?'media_timeout':reason};
  }finally{
   clearTimeout(untilTimer);if(heartbeat)(deps.clearInterval||clearInterval)(heartbeat);deps.signal?.removeEventListener('abort',onAbort);process.removeListener('SIGTERM',onTerm);
   observe();try{fs.rmSync(dir,{recursive:true,force:true})}catch{}try{fs.rmSync(pidFile,{force:true})}catch{}
@@ -167,7 +171,7 @@ export async function runMediaJob(job,deps={}){
  deps.log?.('已清理，残留 '+cleanup.residue);
  return {report,cleanup,files_seen:[...files],max_rss_mb:asrResult?.max_rss_mb||0,nice:asrResult?.nice??0,wall_s:Math.round((Date.now()-started)/100)/10};
 }
-function reportPath(home,id){if(!/^bmedia-BV[0-9A-Za-z]{10}$/.test(id))throw fault('asr_failed');return join(home,'media-reports',id+'.json')}
+function reportPath(home,id){if(!MEDIA_JOB.test(id))throw fault('asr_failed');return join(home,'media-reports',id+'.json')}
 export async function sendReport(report,deps){
  const home=deps.home||homes(),path=reportPath(home,report.id),safe=cleanReport(report,deps.client);let delivered=false;
  for(let i=0;i<3;i++){
@@ -178,7 +182,7 @@ export async function sendReport(report,deps){
  privateDir(join(home,'media-reports'));const tmp=path+'.tmp';try{fs.writeFileSync(tmp,JSON.stringify(safe),{mode:0o600});fs.chmodSync(tmp,0o600);fs.renameSync(tmp,path)}finally{fs.rmSync(tmp,{force:true})}return false;
 }
 export async function flushReports(deps){
- const home=deps.home||homes();for(const file of names(join(home,'media-reports'))){if(!/^bmedia-BV[0-9A-Za-z]{10}\.json$/.test(file))continue;const path=join(home,'media-reports',file);if(Date.now()-fs.statSync(path).mtimeMs>DAY){fs.rmSync(path);continue;}try{await sendReport(JSON.parse(fs.readFileSync(path,'utf8')),deps)}catch{}}
+ const home=deps.home||homes();for(const file of names(join(home,'media-reports'))){if(!file.endsWith('.json')||!MEDIA_JOB.test(file.slice(0,-5)))continue;const path=join(home,'media-reports',file);if(Date.now()-fs.statSync(path).mtimeMs>DAY){fs.rmSync(path);continue;}try{await sendReport(JSON.parse(fs.readFileSync(path,'utf8')),deps)}catch{}}
 }
 export async function runCycle(deps){
  const home=deps.home||homes(),release=acquireLock(home);if(!release)return;
@@ -186,11 +190,18 @@ export async function runCycle(deps){
   if(!await sweepLocal(home,Date.now(),deps))return;await flushReports(deps);
   for(let count=0;count<3;count++){
    if(deps.signal?.aborted||!(deps.gate||(()=>startupGate(home)) )().ok)return;
-   const job=deps.claim?await deps.claim():(await deps.cloud('claim',{})).data?.job;
+   const claimed=deps.claim?{job:await deps.claim(),proto:deps.proto}:(await deps.cloud('claim',{proto:2})).data;
+   const job=claimed?.job;
    if(!job||job.kind!=='bili_media')return;
    const path=reportPath(home,job.id);
-   if(exists(path)){const report=JSON.parse(fs.readFileSync(path,'utf8'));await sendReport({...report,id:job.id,lease:job.payload.lease},deps);continue;}
-   const result=await runMediaJob(job,deps);if(result.report)await sendReport(result.report,deps);
+   if(exists(path)){
+    const report=JSON.parse(fs.readFileSync(path,'utf8')),p=job.payload;
+    // A video edit can replace the cid without changing its page or job id.
+    const matching=!report.success||(report.result?.page??1)===(p.page??1)&&(p.cid===undefined||report.result?.cid===p.cid||p.page<=1&&report.result?.cid===undefined);
+    if(matching){await sendReport({...report,id:job.id,lease:p.lease},deps);continue;}
+    fs.rmSync(path,{force:true});
+   }
+   const result=await runMediaJob(job,{...deps,proto:claimed.proto});if(result.report)await sendReport(result.report,deps);
   }
  }finally{release()}
 }
