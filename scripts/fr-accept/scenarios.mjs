@@ -713,6 +713,9 @@ scen("S14", "状态机非法转移与乐观锁", async (ctx) => {
       chk("并发后状态 shipped", (await frRow(e, id2))?.status === "shipped", (await frRow(e, id2))?.status),
       chk("并发后只有 1 条 outbox", out2 === 1, `outbox=${out2}`),
     ],
+    notes: [
+      "并发两条相同 shipped report 按主程裁决②是幂等：可能 [200,409]，也可能后一条已读到 shipped 直接 200；硬断言是状态 shipped 且只入队一次。shipped 后 report failed 仍为 409。",
+    ],
   };
 });
 
