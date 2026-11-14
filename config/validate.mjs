@@ -120,7 +120,7 @@ export function validateTeamConfig(c) {
   for (const key of ['enabled','collect','send_gif']) check(typeof c?.stickers?.[key] === 'boolean', 'stickers.'+key);
   // send is deliberately fail-closed at runtime: only literal true enables it.
   for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:5000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
-  for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
+  for (const [key,max] of Object.entries({tag:40,read:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
   // schedules：定时推送上限与晨报窗口（L1/L5 读；缺省即拒绝启动，避免无上限）
   const s = c?.schedules;
   check(s && typeof s === 'object' && !Array.isArray(s), 'schedules');

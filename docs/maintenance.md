@@ -123,6 +123,10 @@ node scripts/evaluate-timing.mjs
 
 200 个真实窗口的双模型银标、影子回放与 wait 污染排除另行执行；本脚本不声称完成该项。若合并时真实回放仍未达标，部署接续方按方案暂设 `off:wait=1`，达标后再恢复。
 
+## 群友表情读取（D-emoji）
+
+入站系统小黄脸（`<faceType=1,...>`）先读 `ext` 里的名称；`ext` 是 base64 JSON、URL 编码 JSON、转义 JSON 或裸 JSON 都支持，缺 `ext` 时用 `src/face.ts` 的 face id 表兜底（来源：QQBot.Net `Emotes.System`；旧式 `[<face,id=N/>]` 只用 0–54 的 pandolia/qqbot 表）。超级表情（`faceType=6`）和表情包图片走 `emoji_note` 后台任务：下载、识图、把「表情包：画面；表达/梗：…」写进 `image_notes`/`message_images`，GIF 在识图前取首帧转 PNG。默认每天最多读 40 张（`config/team.json` 的 `stickers.caps.read`，运行时可被 `settings.stickers:read_cap` 覆盖）；超限只显示「一张表情包」占位，不报错、不阻塞聊天。紧急停读：`INSERT INTO settings(key,value) VALUES('off:emoji_read','1') ON CONFLICT(key) DO UPDATE SET value='1';`，下一条消息生效，不需要部署。恢复删除该行。读取不新增 D1 表，也不影响 `stickers.send` 的发送开关。
+
 ## 云端表情库（P2）
 
 代码支持收集、后台标签和按语境发送；QQ 群富媒体仍待线上验收。生产配置保持 `stickers.send=false`。`enabled=true / collect=true` 只开启收集：同一张图按原始 sha256 去重，同一成员重复发送不能让候选晋级，至少两名不同成员使用后才交给视觉模型判断；GIF 或无文字的小图才作为候选，每条消息最多两张。图片字节存入 D1 新表 `stickers`，不修改 `messages.body` 或旧表结构。

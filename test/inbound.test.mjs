@@ -322,7 +322,7 @@ test("F4 legacy metadata degrades to nickname or member suffix without address/r
 test("F5 missing mention names fall back to member suffix; emoji only changes view", () => {
   assert.equal(ib.renderMentions("原 <@longU123> 文", [{ id: "longU123", name: "", isBot: false }]), "原 @成员U123 文");
   const body = '[<face,id=2/>]<faceType=1,faceId=2,ext="x">';
-  assert.equal(view.viewMessage(row("faces", "U1", body), names, new Map()).text, "[表情（名称未知）][表情（名称未知）]");
+  assert.equal(view.viewMessage(row("faces", "U1", body), names, new Map()).text, "[表情：色][表情（id=2）]");
 });
 test("F6 forwarded commands never authorize tasks but direct commands still work", async () => {
   const e = await setup(); await qq(e, { ...msg("forward-command", "/方案 群助手 加按钮"), msg_elements: [{ content: "/方案 群助手 加按钮" }] });
