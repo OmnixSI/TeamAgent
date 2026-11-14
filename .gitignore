@@ -13,3 +13,5 @@ src/self-card.generated.ts
 
 clients/node_modules/
 .venv-runner/
+replay/out/
+replay/private/

@@ -1,0 +1,52 @@
+{
+  "source": "线上 D1 只读导出 2026-11-14T14:19+11:00（scripts/review-export.py；audit 每条 rows_written=0 / changes=0）",
+  "group_id": "9968A083EE07797A987010E64CD421B9",
+  "request": {
+    "rid": 351,
+    "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT2V5hU3d-j6xzhbCQeAQ6Z.OwSP3g49XjNFz-7MfTy-y7SwXrIDy1.sk_8ujK3u2doyiDiEnBsDjRwFKyBrETjzvJYw94Gf2XvduFhFPmyNe",
+    "group_id": "9968A083EE07797A987010E64CD421B9",
+    "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+    "body": "然后悉尼时间每天早上8点在群里推送一下昨日聊天内容总结，一定要精简。<@204AE67DE34A4448CEE8EA52208A2BB0>",
+    "ts": "2026-11-13T01:11:39+08:00",
+    "mentioned": 1
+  },
+  "weekly_request": {
+    "rid": 350,
+    "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTy.ZpCTQJKtt41LsedQH.sfUY4d9fcJNRpIgddfT7TeHxn7fhf5NgxUP7td6AFw3iIm4OUZVVKsvr3O3aHhAaSINIqrVm3QhC6-bhktADRFg",
+    "group_id": "9968A083EE07797A987010E64CD421B9",
+    "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+    "body": "按周吧，每个星期日是一周的开始<@204AE67DE34A4448CEE8EA52208A2BB0>",
+    "ts": "2026-11-13T01:11:20+08:00",
+    "mentioned": 1
+  },
+  "bot_replies": [
+    {
+      "rid": 203,
+      "id": "chat-drain-350",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "msg_id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT6TOqlRbLA3s758JnjlweFPjegzF.WWbecyl8ijubaX.SpwOR76ifHxrxqWDEHQEjOfc9CcD.q-wjum3kSu84kM!",
+      "body": "收到，不跟你掰扯那句。口径定这样：悉尼每天 8:00（北京 5:00）推昨日总结，3–5 条要点；周报按周日起算，这周日先出第一份，明早 8:00 出第一份日推。要改直接说。存档文件你没点头，我不动",
+      "status": "sent",
+      "created_at": 1794503523753
+    },
+    {
+      "rid": 206,
+      "id": "chat-ROBOT1.0_uMj7bSoGmOazRMZniW.yT4V7lFNmHhrdCa8hRANWFrzv3bjyMzh8wdkBozXBqchRK4rkTNb2-iGSJOQkaQMsYOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "msg_id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbngshKHExufP4JbscjioWRNILFQS2j65k.FmHJAvy3phpkiJTDJXUT.eRBOXYfwYbufc9CcD.q-wjum3kSu84kM!",
+      "body": "我的问题，昨晚只定了口径，定时任务没真落地，今早才没推。补发昨日精简总结：\n\n- 大肥鱼：马哥只梳理方案、不改代码；main 停 a1cfc82「发布 0.3.5」，开放 PR 为 0，#154–#161 重设计相关还开着，没收完。\n- TeamAgent：CI check 曾失败（job 131394725532，只报 exit code 1、无日志），00:54 恢复通过。\n- AI 中转站：换平台不改变“对外生成式AI服务提供者”定性；上游协议普遍禁 key 共享/转售，号池轮换风控与处罚风险更大；对外收费涉 ICP(B25)、可能 EDI(B21)，建议问属地通信管理局+网信办，并要律师书面意见。\n- Souvereign 结论：别直接卖 API，溢价低，得自己搭软件，把模型能力转成产品能力。\n\n每天 8:00 推送我会做成真正的定时安排，不再只是口头口径。日报要不要按天存档成文件，你明确点头我才做。",
+      "status": "sent",
+      "created_at": 1794522720196
+    },
+    {
+      "rid": 207,
+      "id": "chat-drain-357",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "msg_id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbsCXS4SXvVXMpZKtRTtBnm32TSd-YEU9TNESv.zkkv7wpMy09pAqVlHPpEY8ZpzzDEzeDbkv6wu9JNsYMCqoX6oNIqrVm3QhC6-bhktADRFg",
+      "body": "哥，我的锅，昨晚只定了口径没把定时建起来，今早漏推，刚补了总结。定时推送这次真落地，不再只嘴上说。日推沿用日报模板（项目进展、决策结论、待办、点名给我的改进项）？你确认下",
+      "status": "sent",
+      "created_at": 1794522745099
+    }
+  ],
+  "note": "消息 id 里的 sk- 被导出脚本在 id 字段规范为 sk_；正文未改。chat-drain-350 是真实 outbox 行，不是合成回复。"
+}
