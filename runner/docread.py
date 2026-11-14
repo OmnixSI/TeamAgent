@@ -28,6 +28,9 @@ MAX_TEXT = 60000
 MAX_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 500
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 100
+MIN_RATIO_CHECK_BYTES = 1024 * 1024
+OOXML_SUFFIXES = {".docx", ".xlsx", ".xlsm", ".pptx"}
 SUPPORTED = {".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx", ".csv", ".tsv", ".zip"}
 STOP_TERMS = {
     "多少", "哪个", "哪些", "什么", "怎么", "请问", "一下", "是否", "这个", "那个",
@@ -80,6 +83,42 @@ def resolve_input(path, root=None):
     if not resolved.is_file():
         raise DocReadError("invalid_path", "不是普通文件")
     return resolved
+
+
+def _guard_ooxml(path):
+    """Refuse an OOXML package before python-docx/openpyxl/python-pptx inflate it.
+
+    Those parsers walk the whole archive, so a 1 MiB zip bomb can cost gigabytes of RAM.
+    Inspect the central directory only (no entry is decompressed) and fail honestly.
+    """
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+    except zipfile.BadZipFile:
+        raise DocReadError("corrupted", f"{path.suffix.upper()} 不是有效的压缩包")
+    total = sum(info.file_size for info in infos)
+    if total > MAX_ARCHIVE_BYTES:
+        raise DocReadError(
+            "too_large",
+            f"压缩包解压后 {total} 字节，超过上限 {MAX_ARCHIVE_BYTES} 字节（200 MiB），不解压",
+        )
+    for info in infos:
+        if info.file_size > MAX_ARCHIVE_BYTES:
+            raise DocReadError(
+                "too_large",
+                f"{info.filename} 解压后 {info.file_size} 字节，超过 200 MiB，不解压",
+            )
+        # Tiny highly-compressed members are normal OOXML; only guard members that could
+        # actually cost memory, so a repetitive 10 KB XML does not trip the ratio check.
+        if info.file_size < MIN_RATIO_CHECK_BYTES or not info.compress_size:
+            continue
+        ratio = info.file_size / info.compress_size
+        if ratio > MAX_COMPRESSION_RATIO:
+            raise DocReadError(
+                "too_large",
+                f"{info.filename} 压缩比 {ratio:.0f} 超过 {MAX_COMPRESSION_RATIO}，疑似压缩炸弹，不解压",
+            )
+    return total
 
 
 # --- question matching -------------------------------------------------------
@@ -290,43 +329,65 @@ def _number(value):
     return str(value)
 
 
+def _merged_ranges(worksheet):
+    """Merged ranges for a read-only worksheet, streamed without building the sheet."""
+    import xml.etree.ElementTree as ElementTree
+
+    ranges = []
+    try:
+        with worksheet._get_source() as source:
+            for _event, element in ElementTree.iterparse(source, events=("end",)):
+                if element.tag.endswith("}mergeCell") or element.tag == "mergeCell":
+                    reference = element.get("ref")
+                    if reference:
+                        ranges.append(reference)
+                element.clear()
+    except Exception:
+        return []
+    return ranges
+
+
 def _xlsx_openpyxl(path):
     import openpyxl
 
-    workbook = openpyxl.load_workbook(filename=str(path), data_only=False, read_only=False)
+    # Read-only keeps cell values out of memory; a 20 MB sheet otherwise costs hundreds of MB.
+    workbook = openpyxl.load_workbook(filename=str(path), data_only=False, read_only=True)
     sections, sheets = [], []
-    for worksheet in workbook.worksheets:
-        formulas, lines = [], []
-        merged = [str(item) for item in worksheet.merged_cells.ranges]
-        rows = 0
-        max_row = min(worksheet.max_row or 0, 5000)
-        max_column = min(worksheet.max_column or 0, 200)
-        for row in worksheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column):
-            cells = []
-            for cell in row:
-                if cell.value is None:
-                    continue
-                value = cell.value
-                if isinstance(value, str) and value.startswith("="):
-                    formulas.append({"cell": cell.coordinate, "formula": value})
-                    cells.append(f"{worksheet.title}!{cell.coordinate} 公式 {value}")
-                elif hasattr(value, "isoformat"):
-                    cells.append(f"{cell.coordinate} {value.isoformat()}")
-                else:
-                    cells.append(f"{cell.coordinate} {_number(value)}")
-            if cells:
-                rows += 1
-                lines.append(" | ".join(cells))
-        if merged:
-            lines.append("[合并单元格] " + ", ".join(merged))
-        sections.append({"label": worksheet.title, "text": "\n".join(lines)})
-        sheets.append({
-            "name": worksheet.title,
-            "rows": rows,
-            "cols": max_column,
-            "formulas": formulas,
-            "merged": merged,
-        })
+    try:
+        for worksheet in workbook.worksheets:
+            formulas, lines = [], []
+            merged = _merged_ranges(worksheet)
+            rows = 0
+            max_row = min(worksheet.max_row or 0, 5000)
+            max_column = min(worksheet.max_column or 0, 200)
+            for row in worksheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column):
+                cells = []
+                for cell in row:
+                    if cell.value is None:
+                        continue
+                    value = cell.value
+                    if isinstance(value, str) and value.startswith("="):
+                        formulas.append({"cell": cell.coordinate, "formula": value})
+                        cells.append(f"{worksheet.title}!{cell.coordinate} 公式 {value}")
+                    elif hasattr(value, "isoformat"):
+                        cells.append(f"{cell.coordinate} {value.isoformat()}")
+                    else:
+                        cells.append(f"{cell.coordinate} {_number(value)}")
+                if cells:
+                    rows += 1
+                    lines.append(" | ".join(cells))
+            if merged:
+                lines.append("[合并单元格] " + ", ".join(merged))
+            sections.append({"label": worksheet.title, "text": "\n".join(lines)})
+            sheets.append({
+                "name": worksheet.title,
+                "rows": rows,
+                "cols": max_column,
+                "formulas": formulas,
+                "merged": merged,
+            })
+    finally:
+        workbook.close()
     return sections, sheets
 
 
@@ -615,6 +676,8 @@ def read_document(path, *, root=None, question=None, max_chars=MAX_TEXT, max_byt
         handler = HANDLERS.get(extension)
         if not handler:
             raise DocReadError("unsupported_type", f"不支持 {extension or '无扩展名'}；支持 " + " ".join(sorted(SUPPORTED)))
+        if extension in OOXML_SUFFIXES:
+            _guard_ooxml(resolved)
         result = handler(resolved, question)
     except DocReadError as error:
         return {"ok": False, "error_kind": error.kind, "error": str(error), "retryable": error.retryable}
