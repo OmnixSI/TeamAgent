@@ -78,10 +78,40 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | `library` | 自动存下群里分享的链接和文件的正文，可搜可取 | `library` |
 | `watch` | 盯网页，关心的东西变了才在群里说 | `watch` |
 | `data` | 每天存行情和热榜快照，查历史和走势 | `data` |
+| `uptime` | 定时探测几个网址或接口，连续三次失败才在群里说一次，恢复时再说一次 | `uptime` |
+| `findimage` | 给群里发过的图配文字并算向量，按描述找图 | `find_image` |
+| `steward` | 每天按本月剩余天数给各项额度定当天份额，决定可选的重活开不开；额度见底或月底有富余时在群里说 | `budget` |
+| `skills` | 技能执行器：`src/skills/` 里的固定配方在云电脑里跑，输入输出自动收发 | `skill` |
+| `filebox` | 文件箱：上传页（单个 2 GB、总共 3 GB、默认留 7 天）和下载链接，文件编号 `x12` 能直接进云电脑 | `filebox` |
+| `webkit` | 无头浏览器的批量用法：多个网页按字段摘成表格、网页存档（文字 + PDF + 整页截图）、站点地图 | `web_extract` `web_archive` `site_map` |
+| `feeds` | 订阅 RSS/Atom、GitHub 发布和提交、arXiv、Hacker News、YouTube 频道；有新内容可在群里说，也进每日汇总 | `feeds` |
+| `papers` | 论文检索（arXiv、Semantic Scholar、OpenAlex、Crossref）、BibTeX、相关文献、全文存进资料库 | `papers` |
+| `minutes` | 录音纪要：会议录音或录像 → 转写 → 概要、决定、待办、时间线，全文进资料库 | `minutes` |
+| `subtitle` | 视频字幕：带时间轴的转写、翻译和双语 SRT，可烧进视频 | `subtitle` |
+| `doctrans` | 整份文档翻译并保留版式（Word、PPT、Excel；PDF 出译文文档；Markdown、SRT） | `translate_doc` |
+| `previewlink` | 把仓库的分支或 PR 跑起来，给一个限时能点的链接（默认 10 分钟） | `preview_link` |
+| `staticsite` | 在云电脑里构建静态网站并托管到 `/p/<id>/`，重新部署原地替换 | `deploy_site` |
+| `flashcards` | 从材料生成记忆卡片，按人做间隔重复，可发布成学习网页、导出 Anki | `flashcards` |
+| `toolbox` | 工具箱网页 `/x/toolbox`：全部在浏览器本地运行的小工具，加一份能力清单 | `toolbox` |
+
+## 技能（`src/skills/`）
+
+技能是写死的配方：一个文件一个技能（接口在 `src/skills/types.ts`），`commands(args, files)` 返回要在云电脑里跑的 bash，输入在 `./in/`，结果写到 `./out/`。`skill` 工具负责找输入（聊天文件、`f12`、`g12`、文件箱 `x12`）、恢复需要的工具包、执行、把结果发回群里，超过 25 MB 的结果放进文件箱。模型不用自己拼命令，结果稳定。
+
+| 技能 | 做什么 |
+|---|---|
+| `doc-to-pdf` | Word、Excel、PPT、Markdown、图片等转 PDF |
+| `pdf-tools` | 合并、拆分、抽页、旋转、压缩、转图片、加密解密、水印、页码 |
+| `pdf-to-docx` `pdf-to-markdown` | PDF 转可编辑的 Word；PDF 和 Office 文档转 Markdown |
+| `pdf-ocr` | 扫描件和图片做文字识别，出可搜索的 PDF 和文本 |
+| `md-to-report` `md-to-slides` `resume` | Markdown 排成 PDF 报告（三种版式）、可编辑的 PPT、简历 |
+| `image-batch` `image-collage` | 图片批量压缩、改格式、改名、加水印；拼图和九宫格 |
+| `media-convert` | 音视频转格式、剪辑、压缩、变速、拼接、转 GIF、抽帧 |
+| `qr-code` | 二维码（PNG 和 SVG，可带 logo 和说明文字） |
 
 ## 云电脑
 
-`src/computer.ts`：一台 Cloudflare 容器（托管的 Debian 镜像，不需要 Docker 构建），1 核、1 GiB 内存、4 GB 硬盘。要用时开机，装好的工具（ffmpeg、git、Python、Node 26、字体）从 R2 里的缓存解压恢复，缓存没有或坏了就完整安装一遍并重新存缓存；最后一次使用后 90 秒由闹钟关机，硬盘清空。卡住的命令最多让它多开 35 分钟。运行时间（含那 3 分钟）和 CPU 秒数都记进套餐计数。只有一个实例。`computer` 工具让模型在里面跑命令；`watch_video` 是固定流程：取视频、抽音轨、截帧，音轨再交给转写。
+`src/computer.ts`：一台 Cloudflare 容器（托管的 Debian 镜像，不需要 Docker 构建），1 核、1 GiB 内存、4 GB 硬盘。要用时开机，装好的工具（ffmpeg、git、Python、Node 26、字体）从 R2 里的缓存解压恢复，缓存没有或坏了就完整安装一遍并重新存缓存；最后一次使用后 90 秒由闹钟关机，硬盘清空。卡住的命令最多让它多开 35 分钟。运行时间（含那 90 秒）和 CPU 秒数都记进套餐计数。只有一个实例。大件工具分成工具包（`src/packs.ts`：`office`、`ocr`、`tex`），各自在 R2 里存一层，哪次运行要用才恢复。部署后云电脑对象要等机器睡过一次才换上新代码。`computer` 工具让模型在里面跑命令，文件箱的 `x12` 可以直接作输入，超过 25 MB 的结果自动进文件箱；`watch_video` 是固定流程：取视频、抽音轨、截帧，音轨再交给转写。
 
 ## 自检
 
@@ -119,6 +149,8 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | `src/health.ts` | 每日自检 |
 | `src/render.ts` | 无头浏览器：渲染成图、PDF、打开网页 |
 | `src/computer.ts` | 云电脑：容器的开机、装软件、跑命令、收发文件、计时 |
+| `src/packs.ts` | 云电脑的大件工具包（Office、OCR、LaTeX）怎么装、怎么验 |
+| `src/feat/*.ts` `src/skills/*.ts` | 功能模块和技能，各一个文件 |
 | `src/sites.ts` | 各站点读取：B 站、小红书、知乎、热榜、行情、X、语音合成 |
 | `src/draw.ts` | 画图：找参考图、设计、出图；Python 沙箱 |
 | `src/book.ts` `src/show.ts` | 做书；文档、思维导图、流程图、网页的排版模板 |
@@ -135,11 +167,14 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 |---|---|
 | 查资料 | `web_search` `read_url`（网页、推文、小红书、知乎、公众号；可截图） `research`（多轮联网调研） |
 | 平台 | `bilibili`（字幕/无字幕转写/热评/搜索） `watch_video`（群里发的视频和各平台视频链接：转写 + 截帧） `hot`（各平台热榜） `x_search` `stock` |
-| 团队 | `github`（只读） `ledger`（群内账本） `usage`（花费和套餐用量） |
+| 团队 | `github`（只读） `ledger`（群内账本） `usage`（花费和套餐用量） `budget`（额度的当天份额和节奏） |
 | 文件与媒体 | `read_attachment` `generate_image` `save_reference` `view_image` `speak` `sticker` `show`（文档、思维导图、流程图、网页，可出 PDF） `make_book` |
 | 大活 | `plan`（多步任务） `jobs`（后台任务的进度和叫停） `code_task`（改代码开草稿 PR） `preview_app`（跑起来截图） |
+| 文件处理 | `skill`（转 PDF、PDF 工具、OCR、排版报告和 PPT、图片和音视频处理、二维码） `filebox`（大文件上传页和下载链接） `translate_doc`（整份文档翻译） `minutes`（录音纪要） `subtitle`（视频字幕） |
+| 网页与订阅 | `web_extract` `web_archive` `site_map` `feeds`（订阅源） `papers`（论文和引用） `uptime`（盯网站在不在线） |
+| 发布 | `deploy_site`（构建并托管静态站） `preview_link`（限时可点的预览） `toolbox`（工具箱网页） `flashcards`（记忆卡片） |
 | 好玩的 | `meme`（梗图模板） `narrate`（配音视频） `podcast`（音频节目） `publish`（发布网页、小游戏） |
-| 找东西 | `recall`（按意思搜聊天） `library`（群里分享过的文章和文件） `data`（行情和热榜历史） `watch`（盯网页） `repo_health`（仓库体检结果） |
+| 找东西 | `recall`（按意思搜聊天） `library`（群里分享过的文章和文件） `find_image`（按描述找群里的图） `data`（行情和热榜历史） `watch`（盯网页） `repo_health`（仓库体检结果） |
 | 计算 | `run_python`（云端沙箱） `computer`（云电脑：视频音频、克隆仓库、PPT/Word） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 | 自身 | `about_self`（链路、能力、状态、自检） `self_update`（改参数和做法、授权、写改进提议） |
