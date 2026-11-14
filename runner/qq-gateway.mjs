@@ -3,6 +3,7 @@ import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
 import { sampleCardEvent, sweepCardSamples } from "./card-samples.mjs";
 import { mentionsBili, writeFetchWake } from "./fetch-wake.mjs";
 import { preflightTools } from "./toolchain.mjs";
+import { silkToolchain } from "./silk.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +19,16 @@ else
   );
 if (!tools.ffprobe.ok)
   console.log("ASR probe unavailable: " + tools.ffprobe.error);
+tools.silk = await silkToolchain();
+if (!tools.silk.ok)
+  console.log(
+    "TTS silk unavailable (" +
+      tools.silk.error_kind +
+      "): " +
+      tools.silk.error +
+      "；语音回复会回退为文字",
+  );
+else console.log("TTS silk ready: " + tools.silk.path);
 const home = path.join(os.homedir(), ".inkboard-team");
 const config = JSON.parse(fs.readFileSync(path.join(home, "config.json")));
 const cardConfig = () => {

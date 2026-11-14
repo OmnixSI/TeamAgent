@@ -79,6 +79,10 @@ const FAILURES: Record<string, { reason_text: string; next_action: string }> = {
     reason_text: "本机还没装 silk 解码组件",
     next_action: "让管理员按 runbook 安装 silk-wasm",
   },
+  asr_silk_missing: {
+    reason_text: "本机还没装 silk-wasm，语音转不了",
+    next_action: "让管理员重跑 install-local.py --apply 安装 runner 依赖",
+  },
   too_large: {
     reason_text: "语音太长或文件太大",
     next_action: "分成几条短语音发",

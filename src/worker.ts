@@ -124,7 +124,15 @@ function gatewayTool(value: any) {
     path: String(value.path || "").slice(0, 200),
     ...(value.ok === true
       ? {}
-      : { error: String(value.error || "unavailable").slice(0, 150) }),
+      : {
+          ...(value.error_kind
+            ? { error_kind: String(value.error_kind).slice(0, 80) }
+            : {}),
+          ...(value.missing
+            ? { missing: String(value.missing).slice(0, 80) }
+            : {}),
+          error: String(value.error || "unavailable").slice(0, 150),
+        }),
   };
 }
 async function getChatCursor(e: Env, groupId: string) {
@@ -1616,6 +1624,7 @@ async function api(r: Request, e: Env) {
               ? {
                   ffmpeg: gatewayTool(b.tools.ffmpeg),
                   ffprobe: gatewayTool(b.tools.ffprobe),
+                  silk: gatewayTool(b.tools.silk),
                 }
               : null,
         }),
