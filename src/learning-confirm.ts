@@ -13,6 +13,10 @@ const UNDO_PREFIX = "learn-undo:";
 const REPORT_PREFIX = "reflection-report:";
 const DEDUP = /^[a-z][a-z0-9-]{2,30}:\d{4}-\d{2}-\d{2}$/;
 const NO_WORDS = ["不用", "不要", "别记", "算了", "不对", "不行", "取消", "停", "别发"];
+// 日推取消只认明确的停发说法。不能复用 NO_WORDS：那里的「不对 / 不行 / 算了」是回晨报编号的
+// 否定词，群友也常用它们纠正日推内容（例：「不对，PR #47 已经合了」）；单个「停」「不用」同样
+// 常指别的事。误判会停掉已上线的日推、还把这条纠正吞掉，所以只列整短语，不命中就交回聊天模型。
+const SCHEDULE_CANCEL_WORDS = /不用再发|不要再发|不用发了|不要发了|别再发|别发了|取消|退订|停了吧/;
 const YES_WORDS = ["好", "可以", "行", "要", "嗯", "对", "记住", "记下", "ok", "没问题", "同意", "👍"];
 const CN_NUMBERS: Record<string, number> = { 一: 1, 二: 2, 三: 3 };
 
@@ -62,6 +66,13 @@ export function parseAnswer(text: string, openNos: number[]): ParsedAnswer {
   if (openNos.length === 1) return { kind: no ? "no" : "yes", nos: [openNos[0]], all: false };
   if (openNos.length > 1) return { kind: "ambiguous", nos: [], all: false };
   return { kind: no ? "no" : "yes", nos: [], all: false };
+}
+
+/** 日推的明确停发判断：沿用 parseAnswer 的 clean 归一化，仍只认 30 字内的短答复。 */
+function wantsScheduleCancel(text: string): boolean {
+  const t = clean(text);
+  const len = Array.from(t).length;
+  return len > 0 && len <= 30 && SCHEDULE_CANCEL_WORDS.test(t);
 }
 
 const baseOf = (id: string) => String(id || "").split("~")[0];
@@ -342,10 +353,9 @@ async function handleReport(e: any, input: LearningReply, explicitId: string | n
   return true;
 }
 
-/** 推送的「不用发了」：按 schedule_runs.outbox_id 反查日程，owner/管理员才能取消。 */
+/** 推送的明确停发（「不用再发了」「别发了」等）：按 schedule_runs.outbox_id 反查日程，owner/管理员才能取消。 */
 async function handleScheduleCancel(e: any, input: LearningReply, target: string, now: number): Promise<boolean> {
-  const answer = parseAnswer(input.text, [1]);
-  if (answer.kind !== "no") return false;
+  if (!wantsScheduleCancel(input.text)) return false;
   const run = await e.DB.prepare("SELECT schedule_id FROM schedule_runs WHERE outbox_id=? ORDER BY due_at DESC LIMIT 1")
     .bind(target).first();
   const schedule = run
