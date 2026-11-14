@@ -1,4 +1,5 @@
 // V-D 评判闭环 · 共享类型（种子 v2，来自 design.md §接口与数据结构 + amendments-v2.md；其他包只 import 不改枚举）
+import { NEW_RULE_KINDS, type ScheduleRequest } from '../learning-types';
 export const FAILURE_TYPES = [
   "reasoning.hallucination.language", "reasoning.hallucination.tool",
   "reasoning.information.poor_retrieval", "reasoning.information.tool_misread",
@@ -24,14 +25,16 @@ export const TOOL_ERROR_KINDS = ["unauthorized", "budget", "timeout", "not_found
   "upstream", "risk", "unknown", "duplicate", "unrecorded"] as const; // unrecorded: D-7 之前没审计
 export const SIGNALS = { S1:"漏答", S2:"拒答/降级措辞", S3:"随后用户纠正/抱怨", S4:"发送或交付失败",
   S5:"job 失败/超时/工具报错", S6:"承诺措辞", S7:"连发≥4 条", S8:"能力自述",
-  S9:"与当前对话无关的主动长文", S10:"30 分钟内同问同答/自相矛盾" } as const;
+  S9:"与当前对话无关的主动长文", S10:"30 分钟内同问同答/自相矛盾", S11:"群友的长期要求" } as const;
 export const CAPABILITIES = ["repo_visibility", "repo_read", "repo_disambiguation", "bili_video", "bili_shortlink",
   "xhs_note", "web_search", "attachment_send", "attachment_read", "image_read", "ci_logs", "scheduling", "api_quota",
   "memory_write", "participation", "addressee", "persona_tone", "health_selfcheck"] as const; // 另允许 `other:<词>`
 // v2/P1-1：文本来源。只有 direct 能当规则/记忆的证据；其余只能当「发生了什么」的证据
 export const ORIGINS = ["direct", "quoted", "forwarded", "card", "attachment_text", "image_text", "bot"] as const;
 // v2/P1-1：类型化规则；free 只能停在 candidate，管理员批准后才进 canary
-export const RULE_KINDS = ["reply_max_chars", "burst_max", "mention_only_window", "language", "format_pref", "free"] as const;
+// L3 追加两种长期要求：avoid_phrase 禁口头禅、address_as 改称呼（来自 L0 冻结的 NEW_RULE_KINDS）。
+export const RULE_KINDS = ["reply_max_chars", "burst_max", "mention_only_window", "language", "format_pref", "free",
+  ...NEW_RULE_KINDS] as const;
 // v2：双判官
 export const PROVIDERS = ["deepseek", "workers-ai", "openai", "codex-offline"] as const;
 export const AGREEMENT = ["agree", "disagree", "single", "pending"] as const;
@@ -107,6 +110,7 @@ export type JudgePromise = { outbox_id: string; quote: string; what: string; due
 export type JudgeResult = {
   schema: "ta.review.result.v2"; verdicts: JudgeVerdict[]; requirements: JudgeRequirement[];
   memory_updates: JudgeMemoryUpdate[]; promises: JudgePromise[]; no_action: { trace_id: string; why: string }[];
+  schedule_requests?: ScheduleRequest[];            // L3：群友的「每天/每周 X 点发 XX」请求，可选
 };
 // v2：第二家复核的输出（只判不提新要求/记忆/承诺）
 export type SecondVerdict = { trace_id: string; verdict: "issue" | "pass" | "insufficient";

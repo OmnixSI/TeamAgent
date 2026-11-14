@@ -10,8 +10,13 @@ const group='density';
 const replay=process.env.REVIEW_REPLAY_DIR||fileURLToPath(new URL('../../TeamAgent-p4b-login/.agent/releases/V-D-reflection-loop/replay',import.meta.url));
 const sourceFile=join(replay,'seed-437.sqlite');
 function quiet(body,reply=false){
-  const at=start-DAY;
-  return api.signalsOf({inbound:reply?null:{id:'q',sender:'q',ts:new Date(at).toISOString(),body,mentioned:0},replies:[{body:reply?body:'确认收到这条消息',status:'sent',at:at+1000}],tools:[],signals:[]},{after:reply?[]:[{body,ts:new Date(at+5000).toISOString()}]}).length===0;
+  const at=start-DAY,first=body.split(/[。！？!?\n]/)[0];
+  // addressedOf() also treats a first sentence naming the bot as addressed, independent of @.
+  const named=['小助手','群助手','机器人','bot'].some(name=>body.includes(name));
+  const signals=mentioned=>api.signalsOf({kind:reply?'outbound':'inbound',inbound:reply?null:{id:'q',sender:'q',ts:new Date(at).toISOString(),body,mentioned,addressed:mentioned||named?'bot':'none'},replies:[{body:reply?body:'确认收到这条消息',status:'sent',at:at+1000}],tools:[],signals:[]},{after:reply?[]:[{body,ts:new Date(at+5000).toISOString()}]});
+  // S11 only fires when the member addresses the bot, so a quiet message must stay quiet
+  // both when the fixture leaves it unmentioned and when the row is marked mentioned=1.
+  return signals(0).length===0 && (reply || signals(1).length===0);
 }
 function densityFixture(t){
   assert.ok(existsSync(sourceFile),'real seed required for density replay');
