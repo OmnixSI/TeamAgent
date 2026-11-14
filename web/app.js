@@ -23,6 +23,7 @@ const $ = (s) => document.getElementById(s),
 const tabs = {
   tasks: "任务与方案",
   materials: "资料与发现",
+  desk: "账本与自动化",
   projects: "项目动态",
   memory: "记忆与成长",
   activity: "操作记录",
@@ -58,6 +59,33 @@ const review = {
   filter: "all", showRetired: false, openDays: new Set(), openFindings: new Set(),
   daysInit: false,
 };
+/* D8 · 账本与自动化 */
+const DESK_TABS = [["ledger", "账本/清单"], ["skills", "技能"], ["schedules", "日程"]];
+const DESK_KIND = { ledger: "账本", list: "清单", log: "日志" };
+const DESK_SKILL_STATUS = { active: ["启用中", "ok"], proposed: ["待确认", "warn"], disabled: ["已停用", ""] };
+const DESK_SCHEDULE_STATUS = { active: ["运行中", "ok"], paused: ["已暂停", "warn"], done: ["已完成", ""], cancelled: ["已取消", ""] };
+const DESK_SCHEDULE_KIND = { agent_task: "定时动作", reminder: "提醒", digest_daily: "日报", digest_weekly: "周报", mute: "静音" };
+let desk = {
+  tab: sessionStorage.getItem("desk-tab") || "ledger",
+  types: null,
+  typeId: sessionStorage.getItem("desk-type") || "",
+  showArchived: false,
+  records: null,
+  skills: null,
+  schedules: null,
+  showEnded: false,
+  loading: false,
+  moreLoading: false,
+  error: null,
+  errorAt: 0,
+  fatal: null,
+  loadedAt: { ledger: 0, skills: 0, schedules: 0 },
+  filters: { person: "", text: "", status: "", private: false },
+  people: [],
+  hashType: "",
+  booted: false,
+};
+if (!DESK_TABS.some(([key]) => key === desk.tab)) desk.tab = "ledger";
 
 const date = (t) =>
   t
@@ -69,6 +97,7 @@ const date = (t) =>
       })
     : "尚无记录";
 const short = (r) => (r ? r.split("/").pop() : "团队");
+const repoLabel = (r) => (r === "inbox" ? "收件箱" : short(r));
 function el(tag, text, cls) {
   const x = document.createElement(tag);
   if (text !== undefined) x.textContent = text;
@@ -199,9 +228,15 @@ function selectView(next) {
     $(key + "-view").hidden = key !== view;
     $("tab-" + key).setAttribute("aria-selected", String(key === view));
   }
+  const quiet = ["system", "activity"].includes(view);
   $("person").hidden = view !== "tasks";
-  $("search").hidden = ["system", "activity"].includes(view);
-  $("repo").hidden = ["system", "activity"].includes(view);
+  $("search").hidden = quiet || view === "desk";
+  $("repo").hidden = quiet || view === "desk";
+  const tools = document.querySelector ? document.querySelector(".toolbar") : null;
+  if (tools) tools.hidden = view === "desk";
+  if (view === "desk") deskSyncHash();
+  else if (location.hash.startsWith("#desk"))
+    history.replaceState(null, "", location.pathname + location.search);
   if (view === "system" && !state?.ops) {
     load();
     return;
@@ -248,6 +283,7 @@ async function load() {
     $("admin").hidden = state.who.role !== "owner";
     $("release").textContent = state.project.version.slice(0, 12);
     $("error").textContent = "";
+    $("desk-login-note").hidden = true;
     if ($("repo").options.length === 1)
       for (const r of [
         ...new Set([...state.repos, ...state.projects.map((p) => p.repo)]),
@@ -256,9 +292,20 @@ async function load() {
         o.value = r;
         $("repo").append(o);
       }
+    if (
+      state.tasks.some((t) => t.repo === "inbox") &&
+      ![...$("repo").options].some((o) => o.value === "inbox")
+    ) {
+      const o = el("option", "收件箱");
+      o.value = "inbox";
+      $("repo").append(o);
+    }
     renderStatus();
     renderTeam();
-    render();
+    if (!desk.booted && location.hash.startsWith("#desk")) {
+      desk.booted = true;
+      deskApplyHash();
+    } else render();
   } catch (e) {
     error(e);
   } finally {
@@ -373,6 +420,7 @@ function render() {
   const fn = {
     tasks: renderTasks,
     materials: renderMaterials,
+    desk: renderDesk,
     projects: renderProjects,
     memory: renderMemory,
     activity: renderActivity,
@@ -406,7 +454,7 @@ function renderTasks() {
     for (const t of filtered) {
       const a = el("article", undefined, "card");
       a.append(
-        el("small", short(t.repo)),
+        el("small", repoLabel(t.repo)),
         el("h3", t.title),
         badge(
           names[t.status],
@@ -467,7 +515,10 @@ async function taskDetail(id) {
     t = d.task;
   const box = el("div");
   box.append(
-    el("small", t.repo + " · v" + t.version),
+    el("small", repoLabel(t.repo) + " · v" + t.version),
+    ...(t.repo === "inbox"
+      ? [el("p", "群里直接交办、还没指定项目的任务。", "note")]
+      : []),
     el("pre", t.detail || "尚未整理方案"),
   );
   const original = await source(t.source_id, box);
@@ -541,7 +592,9 @@ async function taskDetail(id) {
         "# " +
           t.title +
           "\n仓库：" +
-          t.repo +
+          (t.repo === "inbox"
+            ? "未指定（收件箱任务，先确认要改哪个项目）"
+            : t.repo) +
           "\n任务：" +
           t.id +
           " · v" +
@@ -2316,6 +2369,1330 @@ async function loadReview(force) {
   review.loading = false;
   renderReview();
 }
+/* D8 · 账本与自动化：只读账本/清单/日志、技能与日程 */
+function formatCents(c) {
+  const v = Math.abs(Number(c || 0)) / 100;
+  return (
+    (c < 0 ? "−" : "") +
+    "¥" +
+    v.toLocaleString("zh-CN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}
+function deskClock(ms) {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+function deskTzShort(tz) {
+  if (tz === "Asia/Shanghai") return "北京";
+  if (tz === "Australia/Sydney") return "悉尼";
+  if (tz === "UTC") return "UTC";
+  return tz || "悉尼";
+}
+function deskHasData(tab) {
+  if (tab === "ledger") return desk.types !== null;
+  if (tab === "skills") return desk.skills !== null;
+  return desk.schedules !== null;
+}
+function deskState(text, isError, retry) {
+  const box = el("div", undefined, "desk-state" + (isError ? " is-error" : ""));
+  box.append(el("p", text));
+  if (retry) box.append(button("重试", retry, "review-mini"));
+  return box;
+}
+function deskErrorLine() {
+  const box = el("div", undefined, "desk-error");
+  box.append(
+    document.createTextNode(
+      "刷新失败：" +
+        desk.error +
+        "（显示的是 " +
+        deskClock(desk.errorAt || desk.loadedAt[desk.tab]) +
+        " 的数据） ",
+    ),
+  );
+  box.append(button("重试", () => loadDesk(true), "review-mini"));
+  return box;
+}
+function deskSyncHash() {
+  let hash = "#desk/" + desk.tab;
+  if (desk.tab === "ledger" && desk.typeId)
+    hash += "/" + encodeURIComponent(desk.typeId);
+  if (location.hash !== hash) history.replaceState(null, "", hash);
+}
+function deskApplyHash() {
+  const raw = String(location.hash || "").replace(/^#desk\/?/, "");
+  const parts = raw.split("/").filter(Boolean);
+  const tab = parts[0];
+  if (DESK_TABS.some(([key]) => key === tab)) desk.tab = tab;
+  if (tab === "ledger" && parts[1]) {
+    try {
+      const next = decodeURIComponent(parts[1]);
+      if (next !== desk.typeId) {
+        desk.typeId = next;
+        desk.records = null;
+        desk.loadedAt.ledger = 0;
+      }
+      desk.hashType = next;
+    } catch {}
+  }
+  sessionStorage.setItem("desk-tab", desk.tab);
+  selectView("desk");
+  loadDesk();
+}
+async function loadDesk(force) {
+  if (!state || view !== "desk" || desk.loading) return;
+  const tab = desk.tab;
+  if (!force && desk.loadedAt[tab] && Date.now() - desk.loadedAt[tab] < 60000)
+    return;
+  desk.loading = true;
+  desk.error = null;
+  if (!deskHasData(tab)) desk.fatal = null;
+  renderDesk();
+  try {
+    if (tab === "ledger") await deskLoadLedger(force);
+    else if (tab === "skills") {
+      const r = await api("/api/skills");
+      desk.skills = r.skills || [];
+      desk.loadedAt.skills = Date.now();
+    } else {
+      const r = await api("/api/schedules");
+      desk.schedules = r.schedules || [];
+      desk.loadedAt.schedules = Date.now();
+    }
+    desk.loadedAt[tab] = Date.now();
+    desk.fatal = null;
+    desk.error = null;
+  } catch (e) {
+    if (e.status !== 401) {
+      if (deskHasData(tab)) {
+        desk.error = e.message || String(e);
+        desk.errorAt = desk.loadedAt[tab];
+      } else desk.fatal = e.message || String(e);
+    }
+  } finally {
+    desk.loading = false;
+    renderDesk();
+  }
+}
+async function deskLoadLedger(force) {
+  if (force || desk.types === null) {
+    const r = await api("/api/records/types");
+    desk.types = r.types || [];
+    desk.loadedAt.ledger = Date.now();
+  }
+  if (!desk.types.length) {
+    desk.typeId = "";
+    desk.records = null;
+    return;
+  }
+  if (desk.hashType) {
+    const found = desk.types.find((t) => t.id === desk.hashType);
+    if (found) {
+      desk.typeId = found.id;
+      if (found.status === "archived") desk.showArchived = true;
+      sessionStorage.setItem("desk-type", found.id);
+    } else {
+      desk.typeId = "";
+      toast("没找到这个账本，可能已归档或被删除");
+    }
+    desk.hashType = "";
+  }
+  if (!desk.typeId || !desk.types.some((t) => t.id === desk.typeId)) {
+    const stored = sessionStorage.getItem("desk-type");
+    const active = desk.types
+      .filter((t) => t.status !== "archived")
+      .sort((a, b) => b.updated_at - a.updated_at);
+    const chosen =
+      active.find((t) => t.id === stored) ||
+      active[0] ||
+      desk.types[0] ||
+      null;
+    desk.typeId = chosen ? chosen.id : "";
+    if (desk.typeId) sessionStorage.setItem("desk-type", desk.typeId);
+  }
+  if (desk.typeId) await deskLoadRecords(true);
+}
+async function deskLoadRecords(reset) {
+  if (!desk.typeId) return;
+  const query = ["type=" + encodeURIComponent(desk.typeId)];
+  if (desk.filters.person)
+    query.push("person=" + encodeURIComponent(desk.filters.person));
+  if (desk.filters.text)
+    query.push("text=" + encodeURIComponent(desk.filters.text));
+  if (desk.filters.status)
+    query.push("status=" + encodeURIComponent(desk.filters.status));
+  if (desk.filters.private) query.push("private=1");
+  if (!reset && desk.records?.next)
+    query.push("cursor=" + encodeURIComponent(desk.records.next));
+  const wanted = desk.typeId;
+  const r = await api("/api/records?" + query.join("&"));
+  if (wanted !== desk.typeId) return;
+  if (reset || !desk.records) desk.records = r;
+  else
+    desk.records = {
+      ...r,
+      rows: [...(desk.records.rows || []), ...(r.rows || [])],
+    };
+  desk.loadedAt.ledger = Date.now();
+}
+async function deskRefreshRecords() {
+  if (desk.loading) return;
+  desk.loading = true;
+  desk.error = null;
+  renderDesk();
+  try {
+    await deskLoadRecords(true);
+    desk.errorAt = 0;
+  } catch (e) {
+    if (e.status !== 401) {
+      desk.error = e.message || String(e);
+      desk.errorAt = desk.loadedAt.ledger;
+    }
+  } finally {
+    desk.loading = false;
+    renderDesk();
+  }
+}
+function deskChangeFilter(patch) {
+  Object.assign(desk.filters, patch);
+  desk.records = null;
+  deskRefreshRecords();
+}
+function deskSelectType(id) {
+  if (!id || id === desk.typeId) return;
+  desk.typeId = id;
+  sessionStorage.setItem("desk-type", id);
+  desk.filters = { person: "", text: "", status: "", private: false };
+  desk.people = [];
+  desk.records = null;
+  desk.error = null;
+  deskSyncHash();
+  renderDesk();
+  deskRefreshRecords();
+}
+async function deskLoadMore() {
+  if (desk.loading || !desk.records?.next) return;
+  desk.loading = true;
+  desk.moreLoading = true;
+  renderDesk();
+  try {
+    await deskLoadRecords(false);
+  } catch (e) {
+    if (e.status !== 401) toast("读取失败：" + (e.message || e));
+  } finally {
+    desk.loading = false;
+    desk.moreLoading = false;
+    renderDesk();
+  }
+}
+function deskOnTab(key) {
+  if (!key || key === desk.tab) return;
+  desk.tab = key;
+  sessionStorage.setItem("desk-tab", key);
+  desk.error = null;
+  desk.fatal = null;
+  deskSyncHash();
+  renderDesk();
+  loadDesk();
+}
+function renderDeskSeg() {
+  const seg = $("desk-seg");
+  if (!seg) return;
+  seg.replaceChildren();
+  const counts = {
+    ledger: desk.types
+      ? desk.types.filter((t) => t.status !== "archived").length
+      : "·",
+    skills: desk.skills
+      ? desk.skills.filter((s) => s.status !== "disabled").length
+      : "·",
+    schedules: "·",
+  };
+  let paused = 0;
+  if (desk.schedules) {
+    paused = desk.schedules.filter((s) => s.status === "paused").length;
+    counts.schedules = desk.schedules.filter((s) =>
+      ["active", "paused"].includes(s.status),
+    ).length;
+  }
+  for (const [key, label] of DESK_TABS) {
+    const b = button(
+      "",
+      () => deskOnTab(key),
+      "",
+    );
+    b.id = "desk-tab-" + key;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(desk.tab === key));
+    b.setAttribute("aria-controls", "desk-body");
+    b.append(document.createTextNode(label));
+    const count = el("span", "", "desk-count");
+    count.append(document.createTextNode(String(counts[key])));
+    if (key === "schedules" && paused)
+      count.append(el("span", " · " + paused + " 暂停", "is-warn"));
+    b.append(count);
+    seg.append(b);
+  }
+  seg.onkeydown = (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const index = DESK_TABS.findIndex(([key]) => key === desk.tab);
+    const next =
+      DESK_TABS[
+        (index + (event.key === "ArrowRight" ? 1 : DESK_TABS.length - 1)) %
+          DESK_TABS.length
+      ][0];
+    deskOnTab(next);
+    setTimeout(() => $("desk-tab-" + next)?.focus(), 0);
+  };
+}
+function renderDesk() {
+  const host = $("desk-body");
+  if (!host) return;
+  renderDeskSeg();
+  host.replaceChildren();
+  host.setAttribute(
+    "aria-busy",
+    String(desk.loading && !deskHasData(desk.tab)),
+  );
+  if (desk.fatal) {
+    host.append(deskState("读取失败：" + desk.fatal, true, () => loadDesk(true)));
+    return;
+  }
+  if (!deskHasData(desk.tab)) {
+    host.append(deskState("正在读取…"));
+    loadDesk();
+    return;
+  }
+  if (desk.error) host.append(deskErrorLine());
+  if (desk.tab === "ledger") renderDeskLedger(host);
+  else if (desk.tab === "skills") renderDeskSkills(host);
+  else renderDeskSchedules(host);
+}
+function renderDeskLedger(host) {
+  const types = desk.types || [];
+  if (!types.length) {
+    const panel = el("div", undefined, "panel");
+    panel.append(empty("还没有账本或清单。"));
+    panel.append(
+      el(
+        "p",
+        "在群里说「记账 报销额度 我¥360」或「建一个购物清单」，就会出现在这里。",
+        "empty",
+      ),
+    );
+    host.append(panel);
+    return;
+  }
+  const archived = types.filter((t) => t.status === "archived").length;
+  const sorted = [...types].sort(
+    (a, b) =>
+      (a.status === "archived" ? 1 : 0) -
+        (b.status === "archived" ? 1 : 0) || b.updated_at - a.updated_at,
+  );
+  const shownTypes = sorted.filter(
+    (t) => t.status !== "archived" || desk.showArchived,
+  );
+  const current =
+    types.find((t) => t.id === desk.typeId) || shownTypes[0] || types[0];
+  const left = el("div", undefined, "desk-types-col");
+  const panel = el("div", undefined, "panel desk-types");
+  for (const type of shownTypes) {
+    const b = el(
+      "button",
+      undefined,
+      "desk-type" + (type.status === "archived" ? " is-archived" : ""),
+    );
+    b.type = "button";
+    b.setAttribute("aria-current", String(type.id === current.id));
+    const name = el("b");
+    name.append(el("span", type.name));
+    if (type.visibility_default === "private")
+      name.append(badge("默认私有"));
+    b.append(name);
+    const meta = el(
+      "small",
+      DESK_KIND[type.kind] +
+        " · " +
+        type.count +
+        " 条 · " +
+        date(type.updated_at) +
+        (type.status === "archived" ? " · 已归档" : ""),
+    );
+    b.append(meta);
+    b.onclick = () => deskSelectType(type.id);
+    panel.append(b);
+  }
+  if (archived)
+    panel.append(
+      button(
+        desk.showArchived ? "收起已归档" : "显示已归档（" + archived + "）",
+        () => {
+          desk.showArchived = !desk.showArchived;
+          renderDesk();
+        },
+        "desk-more",
+      ),
+    );
+  left.append(panel);
+
+  const main = el("div");
+  const mobile = el("select");
+  mobile.id = "desk-type-select";
+  mobile.setAttribute("aria-label", "选择账本");
+  for (const type of shownTypes) {
+    const option = el(
+      "option",
+      type.name + " · " + DESK_KIND[type.kind] + " · " + type.count + " 条",
+    );
+    option.value = type.id;
+    mobile.append(option);
+  }
+  mobile.value = current.id;
+  mobile.onchange = () => deskSelectType(mobile.value);
+  main.append(mobile);
+
+  const head = el("div", undefined, "desk-head");
+  const title = el("div");
+  title.append(el("h2", current.name));
+  title.append(
+    el(
+      "small",
+      DESK_KIND[current.kind] +
+        " · 建本人 " +
+        current.owner_name +
+        " · 建于 " +
+        date(current.created_at),
+    ),
+  );
+  const side = el("div", undefined, "desk-head-side");
+  side.append(deskDownloadButton(current));
+  side.append(el("small", "最多 500 行；不含私有记录。"));
+  head.append(title, side);
+  main.append(head);
+
+  const records = desk.records;
+  if (!records || records.type?.id !== current.id) {
+    main.append(deskState("正在读取…"));
+    host.append(left, main);
+    return;
+  }
+  if (current.kind === "ledger" && records.summary?.groups?.length)
+    main.append(deskSummary(records));
+  main.append(deskFilters(current, records));
+  if (!records.rows?.length) deskEmptyRecords(main, current, records);
+  else {
+    main.append(deskRecordsTable(current, records));
+    if (records.next) {
+      const more = el("div", undefined, "desk-loadmore");
+      const b = el("button", desk.moreLoading ? "正在加载…" : "加载更多");
+      b.disabled = Boolean(desk.loading);
+      b.onclick = () => deskLoadMore();
+      more.append(b);
+      main.append(more);
+    }
+  }
+  if (records.hiddenPrivate > 0)
+    main.append(
+      el(
+        "p",
+        "另有 " +
+          records.hiddenPrivate +
+          " 条私有记录（仅记录人在群里可用「撤销/修改」处理）",
+        "desk-note",
+      ),
+    );
+  host.append(left, main);
+}
+function deskDownloadButton(current) {
+  const b = el("button", "下载 CSV");
+  b.type = "button";
+  b.onclick = async () => {
+    if (b.disabled) return;
+    const label = b.textContent;
+    b.disabled = true;
+    b.textContent = "正在导出…";
+    try {
+      const r = await api(
+        "/api/records/export?type=" + encodeURIComponent(current.id),
+      );
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.filename || "records.csv";
+      document.body.append(a);
+      a.click();
+      a.remove?.();
+      setTimeout(() => URL.revokeObjectURL?.(url), 0);
+      if (!r.rows) toast("这个账本还没有记录，下载的是空表");
+      else if (r.truncated)
+        toast(
+          "已下载前 " +
+            r.rows +
+            " 行（超过上限，可在群里让 bot 按时间段导出）",
+        );
+      else toast("已下载 " + r.rows + " 行");
+    } catch (e) {
+      toast("导出失败：" + (e.message || e));
+    } finally {
+      b.disabled = false;
+      b.textContent = label;
+    }
+  };
+  return b;
+}
+function deskSummary(records) {
+  const panel = el("div", undefined, "panel desk-summary");
+  const head = el("div", undefined, "desk-summary-head");
+  head.append(el("h3", "按人汇总"));
+  head.append(el("span", "共 " + records.summary.count + " 笔", "muted"));
+  panel.append(head);
+  const groups = [...records.summary.groups].sort(
+    (a, b) => Math.abs(b.sum_cents) - Math.abs(a.sum_cents),
+  );
+  const max = Math.max(...groups.map((g) => Math.abs(g.sum_cents)), 0) || 1;
+  for (const group of groups) {
+    const row = el("div", undefined, "desk-sum-row");
+    const name = el("span", group.key || "未写人名");
+    name.append(
+      el("small", " · " + group.count + " 笔", "desk-sum-n-inline"),
+    );
+    const bar = el(
+      "div",
+      undefined,
+      "desk-bar" + (group.sum_cents < 0 ? " is-neg" : ""),
+    );
+    bar.setAttribute("aria-hidden", "true");
+    const fill = el("span");
+    fill.setAttribute(
+      "style",
+      "width:" + ((Math.abs(group.sum_cents) / max) * 100).toFixed(1) + "%",
+    );
+    bar.append(fill);
+    row.append(
+      name,
+      bar,
+      el("span", group.count + " 笔", "desk-n"),
+      el(
+        "span",
+        formatCents(group.sum_cents),
+        "desk-amt" + (group.sum_cents < 0 ? " desk-neg" : ""),
+      ),
+    );
+    panel.append(row);
+  }
+  const total = el("div", undefined, "desk-sum-row desk-sum-total");
+  total.append(
+    el("span", "合计"),
+    el("span"),
+    el("span", records.summary.count + " 笔", "desk-n"),
+    el(
+      "span",
+      formatCents(records.summary.total_cents),
+      "desk-amt" + (records.summary.total_cents < 0 ? " desk-neg" : ""),
+    ),
+  );
+  panel.append(total);
+  const notes = [];
+  if (records.mine_private > 0)
+    notes.push(
+      "含你的私有记录 " + records.mine_private + " 条（只有你看得到）",
+    );
+  if (records.hiddenPrivate > 0)
+    notes.push(
+      "另有 " +
+        records.hiddenPrivate +
+        " 条私有记录（仅记录人在群里可用「撤销/修改」处理）",
+    );
+  if (notes.length) panel.append(el("p", notes.join("；"), "desk-note"));
+  return panel;
+}
+function deskFilters(current, records) {
+  const box = el("div", undefined, "desk-filters");
+  const people = new Set(desk.people || []);
+  if (current.kind === "ledger" && records.summary)
+    for (const group of records.summary.groups) if (group.key) people.add(group.key);
+  else for (const row of records.rows || []) if (row.person) people.add(row.person);
+  desk.people = [...people];
+  const select = el("select");
+  select.setAttribute("aria-label", "按人筛选");
+  const all = el("option", "全部人");
+  all.value = "";
+  select.append(all);
+  for (const person of [...people].sort()) {
+    const option = el("option", person);
+    option.value = person;
+    select.append(option);
+  }
+  if (desk.filters.person && !people.has(desk.filters.person)) {
+    const extra = el("option", desk.filters.person);
+    extra.value = desk.filters.person;
+    select.append(extra);
+  }
+  select.value = desk.filters.person;
+  select.onchange = () => deskChangeFilter({ person: select.value });
+  const search = el("input");
+  search.type = "search";
+  search.placeholder = "搜事项或人名";
+  search.setAttribute("aria-label", "搜索记录");
+  search.value = desk.filters.text;
+  let timer;
+  search.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (desk.filters.text === search.value.trim()) return;
+      deskChangeFilter({ text: search.value.trim() });
+    }, 300);
+  };
+  box.append(select, search);
+  if (records.mine_private > 0) {
+    const chip = button(
+      "只看我的私有 · " + records.mine_private,
+      () => deskChangeFilter({ private: !desk.filters.private }),
+      "review-chip desk-chip",
+    );
+    chip.setAttribute("aria-pressed", String(desk.filters.private));
+    box.append(chip);
+  }
+  if (current.kind === "list") {
+    const counts = records.status_counts || { todo: 0, done: 0 };
+    for (const [value, label, count] of [
+      ["", "全部", null],
+      ["todo", "待办", counts.todo || 0],
+      ["done", "已完成", counts.done || 0],
+    ]) {
+      const chip = button(
+        count === null ? label : label + " · " + count,
+        () => deskChangeFilter({ status: value }),
+        "review-chip desk-chip",
+      );
+      chip.setAttribute("aria-pressed", String(desk.filters.status === value));
+      box.append(chip);
+    }
+  }
+  return box;
+}
+function deskTd(label, cls) {
+  const td = el("td");
+  td.setAttribute("data-label", label);
+  if (cls) td.className = cls;
+  return td;
+}
+function deskExtraText(fields, row) {
+  return fields
+    .map((field) => {
+      const value = row.extra?.[field.label];
+      return (
+        (field.label || field.key) +
+        "：" +
+        (value === undefined || value === "" ? "—" : value)
+      );
+    })
+    .join("；");
+}
+function deskRecordsTable(current, records) {
+  const kind = current.kind;
+  const base = {
+    ledger: ["person", "amount", "title", "occurred_at"],
+    list: ["title", "status", "person"],
+    log: ["title", "occurred_at", "amount"],
+  }[kind] || [];
+  const extraFields = (records.schema?.fields || []).filter(
+    (field) => field?.key && !base.includes(field.key),
+  );
+  const firstExtras = extraFields.slice(0, 3);
+  const restExtras = extraFields.slice(3);
+  const wrap = el("div", undefined, "table-wrap");
+  const table = el("table", undefined, "table desk-records");
+  const thead = el("thead");
+  const head = el("tr");
+  const columns = [];
+  if (kind === "ledger") {
+    columns.push(["时间", true], ["人名", false], ["事项", false]);
+  } else if (kind === "list") {
+    columns.push(["状态", false], ["事项", false]);
+  } else {
+    columns.push(["时间", true], ["事项", false]);
+  }
+  for (const field of firstExtras)
+    columns.push([field.label || field.key, false]);
+  if (restExtras.length) columns.push(["其他", false]);
+  if (kind === "ledger") columns.push(["金额", true], ["创建人", false], ["编号", false]);
+  else if (kind === "list")
+    columns.push(
+      ["负责人", false],
+      ["创建人", false],
+      ["创建时间", true],
+      ["编号", false],
+    );
+  else columns.push(["数值", true], ["创建人", false], ["编号", false]);
+  for (const [label, num] of columns) {
+    const th = el("th", label);
+    th.setAttribute("scope", "col");
+    if (num) th.className = "num";
+    if (label === "时间" || label === "创建时间")
+      th.setAttribute("style", "width:96px");
+    head.append(th);
+  }
+  thead.append(head);
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const row of records.rows || []) {
+    const tr = el(
+      "tr",
+      undefined,
+      row.visibility === "private" ? "is-private" : "",
+    );
+    const addTime = () => {
+      const td = deskTd("时间", "desk-time");
+      td.textContent = date(row.occurred_at ?? row.created_at);
+      tr.append(td);
+    };
+    const addTitle = () => {
+      const td = deskTd("事项");
+      if (row.visibility === "private")
+        td.append(badge("仅我可见", "desk-private"));
+      td.append(document.createTextNode(row.title || "—"));
+      if (kind === "list" && row.status === "done") td.className = "desk-done";
+      tr.append(td);
+    };
+    const addExtras = () => {
+      for (const field of firstExtras) {
+        const td = deskTd(field.label || field.key);
+        const value = row.extra?.[field.label];
+        td.textContent = value === undefined || value === "" ? "—" : value;
+        tr.append(td);
+      }
+      if (restExtras.length) {
+        const td = deskTd("其他");
+        td.textContent = deskExtraText(restExtras, row);
+        tr.append(td);
+      }
+    };
+    const addCreator = () => {
+      const td = deskTd("创建人");
+      td.setAttribute("style", "font-size:12px");
+      td.textContent = row.creator_name || "—";
+      tr.append(td);
+    };
+    const addId = () => {
+      const td = deskTd("编号");
+      td.append(el("span", row.short || "", "desk-id"));
+      tr.append(td);
+    };
+    if (kind === "ledger") {
+      addTime();
+      const person = deskTd("人名");
+      person.textContent = row.person || "—";
+      if (!row.person) person.className = "desk-done";
+      tr.append(person);
+      addTitle();
+      addExtras();
+      const amount = deskTd("金额", "num");
+      const amountText =
+        row.amount_cents < 0 && String(row.amount || "").startsWith("-")
+          ? "−" + String(row.amount).slice(1)
+          : row.amount || "—";
+      amount.append(
+        el("span", amountText, row.amount_cents < 0 ? "desk-neg" : ""),
+      );
+      tr.append(amount);
+      addCreator();
+      addId();
+    } else if (kind === "list") {
+      const status = deskTd("状态");
+      const map = { todo: ["待办", ""], done: ["完成", "ok"] };
+      status.append(badge(row.status ? map[row.status]?.[0] || row.status : "—", map[row.status]?.[1] || ""));
+      tr.append(status);
+      addTitle();
+      addExtras();
+      const person = deskTd("负责人");
+      person.textContent = row.person || "—";
+      if (!row.person) person.className = "desk-done";
+      tr.append(person);
+      addCreator();
+      const created = deskTd("创建时间", "desk-time");
+      created.textContent = date(row.created_at);
+      tr.append(created);
+      addId();
+    } else {
+      addTime();
+      addTitle();
+      addExtras();
+      const amount = deskTd("数值", "num");
+      amount.textContent = row.amount || "—";
+      tr.append(amount);
+      addCreator();
+      addId();
+    }
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  wrap.append(table);
+  return wrap;
+}
+function deskEmptyRecords(host, current, records) {
+  const filtered =
+    desk.filters.person ||
+    desk.filters.text ||
+    desk.filters.status ||
+    desk.filters.private;
+  const panel = el("div", undefined, "panel");
+  if (filtered) {
+    panel.append(empty("没有符合条件的记录"));
+    panel.append(
+      button(
+        "清除筛选",
+        () => {
+          desk.filters = { person: "", text: "", status: "", private: false };
+          desk.records = null;
+          deskRefreshRecords();
+        },
+        "review-mini",
+      ),
+    );
+  } else if (current.kind === "list") {
+    panel.append(
+      empty(
+        "这个清单还是空的。在群里说「" +
+          current.name +
+          " 加一项 xxx」就能添加。",
+      ),
+    );
+  } else if (current.kind === "log") {
+    panel.append(
+      empty(
+        "这个日志还没有记录。在群里说「记账 " +
+          current.name +
+          " 我加10」就能记一笔。",
+      ),
+    );
+  } else {
+    panel.append(
+      empty(
+        "这个账本还没有记录。在群里说「记账 " +
+          current.name +
+          " 我加10」就能记一笔。",
+      ),
+    );
+  }
+  if (!records.rows?.length) host.append(panel);
+}
+function stepLabel(step) {
+  const action = step?.action;
+  const period = {
+    today: "今天",
+    yesterday: "昨天",
+    this_month: "本月",
+    last_month: "上月",
+  };
+  if (action === "records_summary") {
+    let text = String(step.type || "") + "汇总";
+    if (step.group_by) text += "·按人";
+    if (step.period && step.period !== "all")
+      text += "（" + (period[step.period] || step.period) + "）";
+    return { text };
+  }
+  if (action === "records_query") {
+    let text = "查" + String(step.type || "");
+    if (step.filter?.person) text += "·" + step.filter.person;
+    if (step.limit) text += "·前" + step.limit + "条";
+    return { text };
+  }
+  if (action === "quota") return { text: "API 余额" };
+  if (action === "token_usage")
+    return { text: step.period === "yesterday" ? "昨日 token 用量" : "今日 token 用量" };
+  if (action === "chat_digest") {
+    let text = step.days === 7 ? "近 7 天聊天总结" : "昨日聊天总结";
+    if (step.topic) text += "·" + step.topic;
+    return { text };
+  }
+  if (action === "work_status") return { text: "工作进展" };
+  if (action === "text") {
+    const value = String(step.text || "");
+    return {
+      text:
+        "固定文字「" +
+        value.slice(0, 16) +
+        (value.length > 16 ? "…" : "") +
+        "」",
+    };
+  }
+  return { text: "未知步骤 " + String(action || ""), bad: true };
+}
+function deskStepsLine(steps) {
+  const line = el("div");
+  (steps || []).forEach((step, index) => {
+    if (index) line.append(el("span", " → ", "desk-arrow"));
+    const label = stepLabel(step);
+    line.append(el("span", label.text, label.bad ? "desk-neg" : ""));
+  });
+  return line;
+}
+function renderDeskSkills(host) {
+  const skills = desk.skills || [];
+  if (!skills.length) {
+    const panel = el("div", undefined, "panel");
+    panel.append(empty("还没有技能。"));
+    panel.append(
+      el(
+        "p",
+        "在群里说「以后我说『日结』你就出账本和余额」，bot 会把这套步骤存下来，以后说一声就跑。",
+        "empty",
+      ),
+    );
+    host.append(panel);
+    return;
+  }
+  const active = skills.filter((s) => s.status === "active").length;
+  const proposed = skills.filter((s) => s.status === "proposed").length;
+  const disabled = skills.filter((s) => s.status === "disabled").length;
+  const strip = el("div", undefined, "desk-strip");
+  strip.append(badge("启用中 " + active, "ok"));
+  if (proposed) strip.append(badge("待确认 " + proposed, "warn"));
+  if (disabled) strip.append(badge("已停用 " + disabled, ""));
+  strip.append(el("small", "本群最多 20 个"));
+  host.append(strip);
+
+  const rank = { active: 0, proposed: 1, disabled: 2 };
+  const sorted = [...skills].sort(
+    (a, b) =>
+      (rank[a.status] ?? 3) - (rank[b.status] ?? 3) ||
+      (b.uses || 0) - (a.uses || 0) ||
+      String(a.name).localeCompare(String(b.name), "zh-CN"),
+  );
+  const wrap = el("div", undefined, "table-wrap");
+  const table = el("table", undefined, "table desk-skills");
+  const thead = el("thead");
+  const head = el("tr");
+  for (const [label, width] of [
+    ["名字", 140],
+    ["触发词", 180],
+    ["步骤", 0],
+    ["使用", 96],
+    ["状态", 88],
+  ]) {
+    const th = el("th", label);
+    th.setAttribute("scope", "col");
+    if (width) th.setAttribute("style", "width:" + width + "px");
+    head.append(th);
+  }
+  thead.append(head);
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const skill of sorted) {
+    const tr = el("tr");
+    const name = deskTd("名字");
+    const nameLine = el("b", "「" + skill.name + "」");
+    if (skill.status === "disabled") nameLine.className = "desk-done";
+    name.append(
+      nameLine,
+      el(
+        "small",
+        skill.owner_name,
+        "desk-sub" + (skill.status === "disabled" ? " desk-done" : ""),
+      ),
+    );
+    tr.append(name);
+
+    const triggers = deskTd("触发词");
+    if (skill.triggers?.length) {
+      for (const trigger of skill.triggers)
+        triggers.append(el("span", trigger, "pill"));
+    } else triggers.append(el("span", "—", "desk-done"));
+    tr.append(triggers);
+
+    const steps = deskTd("步骤");
+    const line = deskStepsLine(skill.steps);
+    if (skill.status === "disabled") line.className = "desk-done";
+    steps.append(line);
+    if (skill.note) {
+      const note = el("p", skill.note, "desk-sub desk-clamp");
+      note.title = skill.note;
+      note.onclick = () => note.classList.toggle("is-open");
+      steps.append(note);
+    }
+    tr.append(steps);
+
+    const uses = deskTd("使用", "num");
+    uses.append(el("div", (skill.uses || 0) + " 次"));
+    uses.append(
+      el(
+        "small",
+        skill.last_used_at ? "上次 " + date(skill.last_used_at) : "还没用过",
+        "desk-sub",
+      ),
+    );
+    tr.append(uses);
+
+    const status = deskTd("状态");
+    const info = DESK_SKILL_STATUS[skill.status] || [skill.status, ""];
+    status.append(badge(info[0], info[1]));
+    tr.append(status);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  wrap.append(table);
+  const panel = el("div", undefined, "panel");
+  panel.append(wrap);
+  host.append(panel);
+}
+function deskCadenceOf(schedule) {
+  const spec = schedule.spec || {};
+  if (spec.cadence) return spec.cadence;
+  if (spec.run_at) return "once";
+  if (schedule.kind === "digest_weekly") return "weekly";
+  if (schedule.kind === "mute") return "once";
+  if (spec.every_minutes) return "every";
+  if (spec.month_days) return "monthly";
+  if (spec.weekdays) return "weekly";
+  return "daily";
+}
+function deskWeekdays(days) {
+  const list = [...new Set((days || []).map(Number).filter((n) => n >= 0 && n <= 6))].sort(
+    (a, b) => (a === 0 ? 7 : a) - (b === 0 ? 7 : b),
+  );
+  if (!list.length) return "一";
+  if (list.join(",") === "1,2,3,4,5") return "工作日";
+  if (list.join(",") === "0,6" || list.join(",") === "6,0") return "周末";
+  return list.map((day) => "日一二三四五六"[day]).join("、");
+}
+function deskCadenceText(schedule) {
+  const spec = schedule.spec || {};
+  const tz = deskTzShort(schedule.tz);
+  const cadence = deskCadenceOf(schedule);
+  if (cadence === "daily")
+    return "每天 " + (spec.time || "00:00") + "（" + tz + "）";
+  if (cadence === "weekly")
+    return (
+      "每周" +
+      deskWeekdays(spec.weekdays) +
+      " " +
+      (spec.time || "00:00") +
+      "（" +
+      tz +
+      "）"
+    );
+  if (cadence === "monthly") {
+    const days = (spec.month_days || []).map((day) =>
+      Number(day) === -1 ? "月末" : Number(day) + "日",
+    );
+    return (
+      "每月" +
+      (days.length ? days.join("、") : "1日") +
+      " " +
+      (spec.time || "00:00") +
+      "（" +
+      tz +
+      "）"
+    );
+  }
+  if (cadence === "every") {
+    const minutes = Number(spec.every_minutes) || 30;
+    let text =
+      minutes >= 60 && minutes % 60 === 0
+        ? "每 " + minutes / 60 + " 小时"
+        : "每 " + minutes + " 分钟";
+    if (spec.window)
+      text += "，" + spec.window[0] + "–" + spec.window[1];
+    if (spec.until) {
+      const parts = deskDateParts(Number(spec.until), schedule.tz);
+      text += "，到 " + Number(parts.month) + "月" + Number(parts.day) + "日";
+    }
+    return text;
+  }
+  return "一次性";
+}
+function deskDateParts(ms, tz) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: tz || "Australia/Sydney",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+  const pick = (type) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    year: pick("year"),
+    month: pick("month"),
+    day: pick("day"),
+    weekday: pick("weekday"),
+    hour: pick("hour"),
+    minute: pick("minute"),
+  };
+}
+function deskRelative(ms) {
+  const diff = Number(ms) - Date.now();
+  if (diff < 0) return { text: "等待发送", warn: true };
+  if (diff < 60000) return { text: "马上" };
+  if (diff < 3600000) return { text: Math.floor(diff / 60000) + " 分钟后" };
+  if (diff < 86400000) return { text: Math.floor(diff / 3600000) + " 小时后" };
+  return { text: Math.floor(diff / 86400000) + " 天后" };
+}
+function deskNextText(schedule) {
+  if (schedule.status === "paused")
+    return { main: "—", sub: "已暂停，不会发送", warn: true };
+  if (!schedule.next_run_at || schedule.status !== "active")
+    return { main: "—", sub: "" };
+  const tz = schedule.tz || "Australia/Sydney";
+  const main = deskDateParts(schedule.next_run_at, tz);
+  const subTz =
+    tz === "Asia/Shanghai"
+      ? "Australia/Sydney"
+      : tz === "Australia/Sydney"
+        ? "Asia/Shanghai"
+        : "Australia/Sydney";
+  const sub = deskDateParts(schedule.next_run_at, subTz);
+  const sameDay =
+    main.year === sub.year && main.month === sub.month && main.day === sub.day;
+  const relative = deskRelative(schedule.next_run_at);
+  return {
+    main:
+      Number(main.month) +
+      "月" +
+      Number(main.day) +
+      "日 " +
+      main.weekday +
+      " " +
+      main.hour +
+      ":" +
+      main.minute +
+      " " +
+      deskTzShort(tz),
+    sub:
+      deskTzShort(subTz) +
+      " " +
+      (sameDay
+        ? ""
+        : Number(sub.month) + "月" + Number(sub.day) + "日 ") +
+      sub.hour +
+      ":" +
+      sub.minute +
+      " · " +
+      relative.text,
+    warn: relative.warn,
+  };
+}
+function deskScheduleTitle(schedule) {
+  const spec = schedule.spec || {};
+  if (String(spec.title || "").trim()) return spec.title;
+  if (schedule.kind === "agent_task") {
+    const steps = spec.steps || [];
+    const first = steps.length ? stepLabel(steps[0]).text : "定时动作";
+    return steps.length > 1 ? first + "等 " + steps.length + " 项" : first;
+  }
+  if (schedule.kind === "reminder")
+    return "提醒：" + String(spec.text || "").slice(0, 20);
+  if (schedule.kind === "digest_daily") return "每日聊天总结";
+  if (schedule.kind === "digest_weekly") return "每周聊天总结";
+  if (schedule.kind === "mute")
+    return "安静 " + (Number(spec.minutes) || 0) + " 分钟";
+  return DESK_SCHEDULE_KIND[schedule.kind] || schedule.kind;
+}
+function renderDeskSchedules(host) {
+  const all = desk.schedules || [];
+  if (!all.length) {
+    const panel = el("div", undefined, "panel");
+    panel.append(empty("还没有日程。"));
+    panel.append(
+      el(
+        "p",
+        "在群里说「每天北京时间 0 点发 DeepSeek 余额」或「明天下午 3 点提醒我交报告」，就会出现在这里。",
+        "empty",
+      ),
+    );
+    host.append(panel);
+    return;
+  }
+  const active = all.filter((s) => s.status === "active").length;
+  const paused = all.filter((s) => s.status === "paused").length;
+  const ended = all.filter((s) => ["done", "cancelled"].includes(s.status)).length;
+  const strip = el("div", undefined, "desk-strip");
+  strip.append(badge("运行中 " + active, "ok"));
+  if (paused) strip.append(badge("已暂停 " + paused, "warn"));
+  strip.append(el("small", "本群 " + (active + paused) + " / 10 个"));
+  host.append(strip);
+  if (ended) {
+    const chip = button(
+      "显示已结束（" + ended + "）",
+      () => {
+        desk.showEnded = !desk.showEnded;
+        renderDesk();
+      },
+      "review-chip desk-chip",
+    );
+    chip.setAttribute("aria-pressed", String(desk.showEnded));
+    host.append(chip);
+  }
+  const shown = all.filter(
+    (s) =>
+      ["active", "paused"].includes(s.status) ||
+      (desk.showEnded && ["done", "cancelled"].includes(s.status)),
+  );
+  if (!shown.length) {
+    const panel = el("div", undefined, "panel");
+    panel.append(empty("还没有日程。"));
+    panel.append(
+      el(
+        "p",
+        "在群里说「每天北京时间 0 点发 DeepSeek 余额」或「明天下午 3 点提醒我交报告」，就会出现在这里。",
+        "empty",
+      ),
+    );
+    host.append(panel);
+    return;
+  }
+  const order = { paused: 0, active: 1, done: 2, cancelled: 2 };
+  const sorted = [...shown].sort((a, b) => {
+    const rank = (order[a.status] ?? 3) - (order[b.status] ?? 3);
+    if (rank) return rank;
+    if (a.status === "active" && b.status === "active")
+      return (a.next_run_at || 0) - (b.next_run_at || 0);
+    return (b.created_at || 0) - (a.created_at || 0);
+  });
+  const wrap = el("div", undefined, "table-wrap");
+  const table = el("table", undefined, "table desk-schedules");
+  const thead = el("thead");
+  const head = el("tr");
+  for (const [label, width, num] of [
+    ["标题", 200, false],
+    ["节奏", 160, false],
+    ["下次", 170, false],
+    ["最近一次", 150, false],
+    ["失败次数", 72, true],
+    ["状态", 80, false],
+  ]) {
+    const th = el("th", label);
+    th.setAttribute("scope", "col");
+    if (num) th.className = "num";
+    if (width) th.setAttribute("style", "min-width:" + width + "px");
+    head.append(th);
+  }
+  thead.append(head);
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const schedule of sorted) {
+    const tr = el(
+      "tr",
+      undefined,
+      schedule.status === "paused" ? "is-paused" : "",
+    );
+    const title = deskTd("标题");
+    const titleLine = el("b", deskScheduleTitle(schedule));
+    title.append(titleLine);
+    title.append(
+      el(
+        "small",
+        (DESK_SCHEDULE_KIND[schedule.kind] || schedule.kind) +
+          " · " +
+          schedule.owner_name,
+        "desk-sub",
+      ),
+    );
+    if (schedule.kind === "agent_task" && schedule.spec?.steps?.length) {
+      const steps = deskStepsLine(schedule.spec.steps);
+      steps.className = "desk-sub";
+      title.append(steps);
+    }
+    if (schedule.status === "paused" && schedule.last_error) {
+      const reason = el(
+        "p",
+        "暂停原因：" + schedule.last_error,
+        "desk-sub is-bad",
+      );
+      reason.title = schedule.last_error;
+      title.append(reason);
+    }
+    tr.append(title);
+
+    const cadence = deskTd("节奏");
+    cadence.textContent = deskCadenceText(schedule);
+    tr.append(cadence);
+
+    const next = deskTd("下次");
+    const nextText = deskNextText(schedule);
+    next.append(el("b", nextText.main));
+    if (nextText.sub)
+      next.append(
+        el(
+          "small",
+          nextText.sub,
+          "desk-sub" + (nextText.warn ? " is-warn" : ""),
+        ),
+      );
+    tr.append(next);
+
+    const last = deskTd("最近一次");
+    const run = schedule.last_run;
+    if (!run) last.append(el("small", "还没发过"));
+    else {
+      const map = {
+        sent: ["已发送", "ok"],
+        failed: ["失败", "bad"],
+        pending: ["发送中", ""],
+        running: ["发送中", ""],
+      };
+      const info = map[run.status] || ["发送中", ""];
+      last.append(badge(info[0], info[1]), el("small", date(run.at)));
+      if (run.status === "failed" && run.error) {
+        const err = el("small", run.error, "desk-sub is-bad");
+        err.title = run.error;
+        last.append(err);
+      }
+    }
+    tr.append(last);
+
+    const fail = deskTd("失败次数", "num");
+    const failValue = Number(schedule.fail_count) || 0;
+    fail.append(
+      el(
+        "span",
+        String(failValue),
+        failValue === 0
+          ? "desk-done"
+          : failValue >= 9
+            ? "desk-fail-bad"
+            : "desk-fail-warn",
+      ),
+    );
+    tr.append(fail);
+
+    const status = deskTd("状态");
+    const info = DESK_SCHEDULE_STATUS[schedule.status] || [schedule.status, ""];
+    status.append(badge(info[0], info[1]));
+    tr.append(status);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  wrap.append(table);
+  const panel = el("div", undefined, "panel");
+  panel.append(wrap);
+  if (paused)
+    panel.append(
+      el(
+        "p",
+        "连续失败满 9 次会自动暂停。在群里对 bot 说「恢复<标题>」即可重新启用。",
+        "desk-note",
+      ),
+    );
+  host.append(panel);
+}
+if (typeof window !== "undefined" && window.addEventListener)
+  window.addEventListener("hashchange", () => {
+    if (location.hash.startsWith("#desk")) deskApplyHash();
+  });
+
 function renderActivity() {
   $("activity").replaceChildren();
   if (!state.activity.length)
@@ -2718,7 +4095,10 @@ $("logout").onclick = async () => {
   sessionStorage.removeItem("team-token");
   location.reload();
 };
-$("refresh").onclick = load;
+$("refresh").onclick = async () => {
+  await load();
+  if (view === "desk") loadDesk(true);
+};
 $("repo").onchange = render;
 $("search").oninput = render;
 $("person").onchange = render;
@@ -2875,6 +4255,7 @@ async function startLocalOwner() {
   } else if (localSession) await load();
   else showLocalLocked();
 }
+if (location.hash.startsWith("#desk")) $("desk-login-note").hidden = false;
 if (localOwner()) startLocalOwner();
 else if (token) load();
 setInterval(async () => {

@@ -31,6 +31,7 @@
         <p>
           讨论、方案和任务是大家共享的。输入自己的名字，就能认领工作、回填进展。
         </p>
+        <p id="desk-login-note" class="note" hidden>登录后会直接打开群里发来的那一页。</p>
         <form id="nameform">
           <label
             >你的名字 / 登录口令<input
@@ -93,6 +94,10 @@
             <span class="muted">有来源、有用途，再决定要不要做</span>
           </div>
           <div id="discoveries" class="grid"></div>
+        </section>
+        <section id="desk-view" hidden>
+          <div id="desk-seg" class="desk-seg" role="tablist" aria-label="账本与自动化"></div>
+          <div id="desk-body"></div>
         </section>
         <section id="projects-view" hidden>
           <div id="projects" class="grid"></div>
