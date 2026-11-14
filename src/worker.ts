@@ -116,6 +116,17 @@ async function set(e: Env, k: string, v: string) {
     .bind(k, v)
     .run();
 }
+/** One tool's startup preflight, reduced to what the dashboard may show. */
+function gatewayTool(value: any) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    ok: value.ok === true,
+    path: String(value.path || "").slice(0, 200),
+    ...(value.ok === true
+      ? {}
+      : { error: String(value.error || "unavailable").slice(0, 150) }),
+  };
+}
 async function getChatCursor(e: Env, groupId: string) {
   const key = "chat_cursor:" + groupId;
   const legacyKey = "chat_cursor";
@@ -1600,6 +1611,13 @@ async function api(r: Request, e: Env) {
           at: iso(),
           connected: b.connected === true,
           blocked: String(b.blocked || "").slice(0, 150),
+          tools:
+            b.tools && typeof b.tools === "object"
+              ? {
+                  ffmpeg: gatewayTool(b.tools.ffmpeg),
+                  ffprobe: gatewayTool(b.tools.ffprobe),
+                }
+              : null,
         }),
       );
       return json({ ok: true, voice: await voiceAvailable(e) });
