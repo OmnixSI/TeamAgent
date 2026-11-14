@@ -37,6 +37,7 @@ const TOOL_SWITCHES: Record<string, readonly string[]> = {
   feature_request: ["request_feature"],
   repo_tools: ["repo_changes", "repo_commit", "repo_file"],
   generate_image: ["generate_image"],
+  image_gen: ["generate_image"],
   openai: ["generate_image"],
 };
 

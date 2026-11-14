@@ -201,3 +201,20 @@ test('S9 docread 默认关，按 docread:enabled 正向开关判断', async()=>{
   const state=await api.readLive(e,undefined,card);
   assert.equal(state.switches['docread:enabled'],'1');
 });
+
+// A3b: image generation is off in production. The self card must say so and
+// must not present it as a current ability when off:image_gen=1.
+test('A3b 生图默认关，off:image_gen=1 时不自知卡当现有能力',()=>{
+  const image=api.SELF_CARD.capabilities.find(c=>c.id==='image_generation');
+  assert.equal(image.default_state,'off_by_default');
+  const envPresent={...live().envPresent,OPENAI_API_KEY:true};
+  const offState=api.capabilityState(image,live({switches:{'off:image_gen':'1'},envPresent}));
+  assert.equal(offState.state,'switched_off');
+  const off=api.renderSelf(api.SELF_CARD,live({switches:{'off:image_gen':'1'},envPresent}),'capability','生图');
+  assert.match(off,/状态：当前已关闭/);
+  assert.equal(off.includes('可以生图'),false);
+  const overview=api.renderSelf(api.SELF_CARD,live({switches:{'off:image_gen':'1'},envPresent}),'overview');
+  assert.match(overview,/- 生图：.*当前已关闭/);
+  assert.equal(api.capabilityState(image,live({switches:{'off:image_gen':'0'},envPresent})).state,'enabled');
+  assert.equal(api.capabilityState(image,live({envPresent})).state,'off_by_default');
+});
