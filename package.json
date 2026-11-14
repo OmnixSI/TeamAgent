@@ -1,32 +1,19 @@
 {
-  "name": "@omnixsi/team-agent",
+  "name": "teamagent",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "check": "tsc --noEmit --target ES2023 --module ESNext --moduleResolution bundler --lib ES2023,WebWorker src/*.ts src/tools/*.ts src/review/*.ts --resolveJsonModule",
-    "dev": "wrangler dev",
-    "deploy": "node scripts/deploy.mjs",
-    "test:runner": "python3 -m unittest discover -s test -p '*_test.py' && node --test runner/test_fetcher.mjs",
-    "check:ui": "node scripts/check-ui.mjs",
-    "db:migrate": "node scripts/migrate.mjs",
-    "build:web": "node scripts/build-ui.mjs",
-    "build:selfcard": "node scripts/gen-self-card.mjs",
-    "precheck": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
-    "pretest": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
-    "postinstall": "node scripts/check-config.mjs && node scripts/build-ui.mjs && node scripts/gen-self-card.mjs",
-    "config:check": "node scripts/check-config.mjs",
-    "verify:release": "node scripts/verify-release.mjs"
-  },
-  "engines": {
-    "node": ">=24"
-  },
-  "devDependencies": {
-    "esbuild": "0.28.2",
-    "typescript": "7.0.2",
-    "wrangler": "4.159.0"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "npm run typecheck && npm test",
+    "deploy": "npm run check && wrangler deploy"
   },
   "dependencies": {
-    "silk-wasm": "3.7.1"
+    "@cloudflare/puppeteer": "^1.0.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261114.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.162.0"
   }
 }

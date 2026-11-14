@@ -1,178 +1,71 @@
-import { activity } from "./runtime";
-export const digest = async (text: string) =>
-  Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-    ),
-  )
-    .map((x) => x.toString(16).padStart(2, "0"))
-    .join("");
-export const normalizeName = (value: any) =>
-  String(value || "")
-    .normalize("NFKC")
-    .trim()
-    .toLowerCase();
-const json = (value: any, status = 200) =>
-  Response.json(value, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
-const passwordHash = (e: any, password: string) =>
-  digest(e.ADMIN_TOKEN + "\0name-login\0" + normalizeName(password));
-export async function nameLogin(r: Request, e: any) {
-  const b: any = await r.json(),
-    password = normalizeName(b.password);
-  if (!password || password.length > 100)
-    return json({ error: "请输入你的成员名字" }, 401);
-  const row = await e.DB.prepare(
-    "SELECT m.id,m.name,m.revoked,p.password_hash FROM member_passwords p JOIN members m ON m.id=p.member_id WHERE p.login_name=?",
-  )
-    .bind(password)
-    .first();
-  if (!row || row.password_hash !== (await passwordHash(e, password)))
-    return json({ error: "成员名字不匹配，请检查拼写" }, 401);
-  if (row.revoked)
-    return json({ error: "该成员访问已暂停，请联系 hongming" }, 403);
-  const token = crypto.randomUUID() + crypto.randomUUID();
-  await e.DB.prepare("INSERT INTO member_sessions VALUES(?,?,?,?)")
-    .bind(await digest(token), row.id, Date.now(), Date.now() + 30 * 86400000)
-    .run();
-  return json({ token, who: { id: row.id, name: row.name, role: "member" } });
-}
-export async function provisionNames(e: any, b: any) {
-  if (!Array.isArray(b.members) || b.members.length !== 3)
-    return json({ error: "当前团队配置需要三名成员" }, 400);
-  const names = b.members.map((m: any) => normalizeName(m.name));
-  if (
-    new Set(names).size !== 3 ||
-    names.some((n: string) => !/^[a-z][a-z0-9_-]{1,39}$/.test(n))
-  )
-    return json({ error: "成员名字需互不相同" }, 400);
-  const writes = [];
-  for (const m of b.members) {
-    const name = normalizeName(m.name),
-      id = "name:" + name;
-    if (normalizeName(m.password) !== name)
-      return json({ error: "本团队按名字登录，口令应与成员名字一致" }, 400);
-    writes.push(
-      e.DB.prepare(
-        "INSERT INTO members(id,name,token_hash,role) VALUES(?,?,?,'member') ON CONFLICT(id) DO UPDATE SET name=excluded.name,role='member'",
-      ).bind(id, name, await digest(crypto.randomUUID() + crypto.randomUUID())),
-    );
-    writes.push(
-      e.DB.prepare(
-        "INSERT INTO member_passwords VALUES(?,?,?) ON CONFLICT(member_id) DO UPDATE SET login_name=excluded.login_name,password_hash=excluded.password_hash",
-      ).bind(id, name, await passwordHash(e, name)),
-    );
+// The bot's own books: what every paid call cost, per day and per purpose, checked against the real
+// DeepSeek balance, plus how much of the Cloudflare plan's monthly allowance is used.
+import type { Hub } from "./hub.ts";
+import { dsBalance } from "./llm.ts";
+import { PRICE } from "./meter.ts";
+import type { Use } from "./meter.ts";
+import { BJ, fmtDate } from "./util.ts";
+
+export class Accounts {
+  private hub: Hub;
+  constructor(hub: Hub) { this.hub = hub; }
+  record(u: Use) {
+    this.hub.sql.exec(
+      "INSERT INTO spend(day,provider,item,unit,calls,in_tok,cached_tok,out_tok,units,usd) VALUES(?,?,?,?,1,?,?,?,?,?) " +
+      "ON CONFLICT(day,provider,item) DO UPDATE SET calls=calls+1, in_tok=in_tok+excluded.in_tok, cached_tok=cached_tok+excluded.cached_tok, out_tok=out_tok+excluded.out_tok, units=units+excluded.units, usd=usd+excluded.usd",
+      fmtDate(Date.now(), BJ), u.provider, u.item, u.unit || "", u.inTok || 0, u.cachedTok || 0, u.outTok || 0, u.units || 0, u.usd || 0);
   }
-  writes.push(
-    e.DB.prepare(
-      "INSERT INTO settings VALUES('auth_mode','names') ON CONFLICT(key) DO UPDATE SET value='names'",
-    ),
-  );
-  await e.DB.batch(writes);
-  await e.DB.prepare(
-    "UPDATE tasks SET assignee='hongming' WHERE assignee='群主'",
-  ).run();
-  await activity(
-    e,
-    "members.configured",
-    "team",
-    "hongming",
-    "三名成员的名字登录已配置",
-  );
-  return json({ ok: true, members: names });
-}
-export async function aiIdentity(e: any, hash: string) {
-  const row = await e.DB.prepare(
-    "SELECT m.id,m.name,'member' AS role,a.id AS key_id FROM ai_tokens a JOIN members m ON m.id=a.member_id WHERE a.token_hash=? AND a.revoked=0 AND a.expires>? AND m.revoked=0 AND EXISTS(SELECT 1 FROM member_passwords p WHERE p.member_id=m.id)",
-  )
-    .bind(hash, Date.now())
-    .first();
-  if (!row) return null;
-  await e.DB.prepare(
-    "UPDATE ai_tokens SET last_used=? WHERE id=? AND (last_used IS NULL OR last_used<?)",
-  )
-    .bind(Date.now(), row.key_id, Date.now() - 60000)
-    .run();
-  return { ...row, via: "ai" };
-}
-export function aiRouteAllowed(path: string, method: string) {
-  if (method === "GET")
-    return [
-      "/api/team/tasks",
-      "/api/team/task",
-      "/api/team/source",
-      "/api/team/project",
-      "/api/team/state",
-      "/api/team/guide",
-    ].includes(path);
-  return (
-    method === "POST" &&
-    [
-      "/api/team/task/claim",
-      "/api/team/task/report",
-      "/api/team/task",
-    ].includes(path)
-  );
-}
-export async function tokenRoute(r: Request, e: any, who: any) {
-  const member = who.id === "owner" ? "name:hongming" : who.id;
-  if (who.via === "ai")
-    return json({ error: "本机AI不能创建或管理访问凭证" }, 403);
-  if (r.method === "GET")
-    return json({
-      tokens: (
-        await e.DB.prepare(
-          "SELECT id,label,created_at,expires,last_used,revoked FROM ai_tokens WHERE member_id=? ORDER BY created_at DESC",
-        )
-          .bind(member)
-          .all()
-      ).results,
-    });
-  const b: any = await r.json();
-  if (r.method === "DELETE") {
-    await e.DB.prepare(
-      "UPDATE ai_tokens SET revoked=1 WHERE id=? AND member_id=?",
-    )
-      .bind(b.id, member)
-      .run();
-    await activity(e, "ai.revoked", b.id, who.name, "已撤销一把本机AI访问凭证");
-    return json({ ok: true });
+  async balance(): Promise<number | null> {
+    try {
+      const d: any = await dsBalance(this.hub.env);
+      const cny = Number((d.balance_infos || []).find((b: any) => b.currency === "CNY")?.total_balance);
+      return Number.isFinite(cny) ? cny : null;
+    } catch { return null; }
   }
-  if (r.method !== "POST") return json({ error: "method not allowed" }, 405);
-  if (
-    !(await e.DB.prepare(
-      "SELECT member_id FROM member_passwords WHERE member_id=?",
-    )
-      .bind(member)
-      .first())
-  )
-    return json({ error: "请先用成员名字登录" }, 403);
-  const active = await e.DB.prepare(
-    "SELECT COUNT(*) AS n FROM ai_tokens WHERE member_id=? AND revoked=0 AND expires>?",
-  )
-    .bind(member, Date.now())
-    .first();
-  if (active.n >= 10) return json({ error: "请先撤销不用的接入凭证" }, 409);
-  const id = crypto.randomUUID(),
-    token = "teamai_" + crypto.randomUUID() + crypto.randomUUID(),
-    expires = Date.now() + 90 * 86400000;
-  await e.DB.prepare(
-    "INSERT INTO ai_tokens(id,member_id,label,token_hash,created_at,expires) VALUES(?,?,?,?,?,?)",
-  )
-    .bind(
-      id,
-      member,
-      String(b.label || "本机AI").slice(0, 60),
-      await digest(token),
-      Date.now(),
-      expires,
-    )
-    .run();
-  await activity(e, "ai.created", id, who.name, "已创建本机AI访问凭证");
-  return json({ id, token, expires });
+  /** DeepSeek balance at the start of each Beijing day; the difference between days is what was really spent. */
+  async snapshot() {
+    const day = fmtDate(Date.now(), BJ);
+    if (this.hub.sql.exec("SELECT 1 FROM snap WHERE day=?", day).toArray().length) return;
+    const cny = await this.balance();
+    if (cny !== null) this.hub.sql.exec("INSERT OR IGNORE INTO snap(day,cny,ts) VALUES(?,?,?)", day, cny, Date.now());
+  }
+  /** Estimated spend for one Beijing day, both providers folded into CNY at the DeepSeek rate. */
+  dayEstimateCny(day: string) {
+    const rows = this.hub.sql.exec("SELECT provider, SUM(usd) usd FROM spend WHERE day=? GROUP BY provider", day).toArray() as any[];
+    return rows.reduce((n, r) => n + Number(r.usd) * (r.provider === "deepseek" ? PRICE.dsCnyPerUsd : 7.2), 0);
+  }
+  async usage(days: number) {
+    await this.snapshot().catch(() => {});
+    const since = fmtDate(Date.now() - (days - 1) * 86400000, BJ), today = fmtDate(Date.now(), BJ);
+    const rows = this.hub.sql.exec("SELECT * FROM spend WHERE day>=? ORDER BY day DESC, usd DESC", since).toArray();
+    const cny = (usd: number) => Math.round(usd * PRICE.dsCnyPerUsd * 1000) / 1000, r4 = (n: number) => Math.round(n * 10000) / 10000;
+    const byDay: Record<string, any> = {};
+    for (const r of rows as any[]) {
+      const d = (byDay[r.day] ||= { date: r.day, deepseek_estimate_cny: 0, openai_estimate_usd: 0, items: [] });
+      if (r.provider === "deepseek") d.deepseek_estimate_cny += Number(r.usd) * PRICE.dsCnyPerUsd; else d.openai_estimate_usd += Number(r.usd);
+      d.items.push({
+        what: r.item, via: r.provider === "deepseek" ? "DeepSeek" : "OpenAI", calls: r.calls,
+        ...(r.in_tok || r.out_tok ? { input_tokens: r.in_tok, cached_input_tokens: r.cached_tok, output_tokens: r.out_tok } : {}),
+        ...(r.units && r.unit ? { amount: Math.round(Number(r.units) * 10) / 10 + " " + r.unit } : {}),
+        cost: r.provider === "deepseek" ? "约 ¥" + cny(Number(r.usd)) : "约 $" + r4(Number(r.usd)),
+      });
+    }
+    const balanceNow = await this.balance();
+    const snaps = this.hub.sql.exec("SELECT day,cny FROM snap WHERE day>=? ORDER BY day", fmtDate(Date.now() - days * 86400000, BJ)).toArray() as any[];
+    const real: any[] = [];
+    for (let i = 0; i < snaps.length; i++) {
+      const end = i + 1 < snaps.length ? Number(snaps[i + 1].cny) : snaps[i].day === today ? balanceNow : null;
+      if (end === null || !Number.isFinite(end)) continue;
+      const diff = Math.round((Number(snaps[i].cny) - end) * 100) / 100;
+      real.push({ date: snaps[i].day, ...(diff >= 0 ? { really_spent_cny: diff } : { topped_up_cny: -diff }), ...(snaps[i].day === today ? { note: "今天到现在" } : {}) });
+    }
+    const list = Object.values(byDay).map((d: any) => ({ ...d, deepseek_estimate_cny: Math.round(d.deepseek_estimate_cny * 1000) / 1000, openai_estimate_usd: r4(d.openai_estimate_usd) }));
+    return {
+      days: list,
+      total: { deepseek_estimate_cny: Math.round(list.reduce((n, d: any) => n + d.deepseek_estimate_cny, 0) * 100) / 100, openai_estimate_usd: r4(list.reduce((n, d: any) => n + d.openai_estimate_usd, 0)) },
+      deepseek_account: { balance_now_cny: balanceNow, real_spend_by_day: real, note: "真实花费是账户余额的变化，包含这个 key 在别处的用量；记账是从 2026-11-14 晚上开始的，之前的没有明细" },
+      cloudflare_plan: this.hub.plan.report(this.hub.store.r2Bytes()),
+      about_the_numbers: "DeepSeek 按官方价格表估（工作日北京时间 9–12 点、14–18 点是双倍价），以余额变化为准。OpenAI 是按每次调用返回的用量和官方价格估的美元，真实账单要这把 key 有读账单的权限才能查，现在没有。Cloudflare 是每月 5 美元的固定套餐，cloudflare_plan 里是套餐内含量用了多少，用到停止线就停，不会多花钱。日期按北京时间。",
+    };
+  }
 }

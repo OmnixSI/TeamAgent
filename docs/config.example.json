@@ -1,8 +1,0 @@
-{
-  "url": "https://YOUR-TEAM-WORKER.workers.dev",
-  "adminToken": "REPLACE_LOCALLY",
-  "runnerToken": "REPLACE_LOCALLY",
-  "hub": "http://127.0.0.1:3350",
-  "sourceKey": "REPLACE_WITH_EXISTING_LOCAL_SOURCE_KEY",
-  "repos": ["OmnixSI/NextThought", "OmnixSI/NextThought-Website", "OmnixSI/WhalePartner", "OmnixSI/peiwan-store-platform-blueprint", "OmnixSI/TeamAgent"]
-}

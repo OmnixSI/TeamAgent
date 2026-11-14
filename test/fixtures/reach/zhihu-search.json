@@ -1,7 +1,0 @@
-{
-  "data": [
-    {"type": "search_result", "object": {"id": 201, "title": "端侧模型推理的工程实践", "excerpt": "从量化到调度，端侧部署需要关注的几个点。", "url": "https://api.zhihu.com/answers/201", "created_time": 1794300000, "author": {"name": "实践者"}}},
-    {"type": "search_result", "object": {"id": 202, "title": "如何做前端性能预算", "excerpt": "先量化，再设阈值，最后进 CI。", "url": "https://api.zhihu.com/answers/202", "created_time": 1794310000, "author": {"name": "性能小组"}}},
-    {"type": "search_result", "object": {"id": 203, "title": "RAG 的召回评估方法", "excerpt": "用分层样本而不是单一平均值。", "url": "https://api.zhihu.com/answers/203", "created_time": 1794320000, "author": {"name": "检索笔记"}}}
-  ]
-}
