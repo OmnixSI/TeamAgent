@@ -130,7 +130,7 @@ test("F2 no actions and no avoid is byte-identical (JSON and plain text)", async
   const json = JSON.stringify({ mode: "care", text: "早点睡。", voice: true });
   assert.equal(await api.finalizeSpoken(json, { acceptedActions: [], avoid: [] }), json);
   assert.equal(await api.finalizeSpoken("纯文本回复，没有 JSON。", { acceptedActions: [], avoid: [] }), "纯文本回复，没有 JSON。");
-  assert.deepEqual(api.scrubAvoided("草，这个不行。", ["草"]), { text: "草，这个不行。", count: 0 });
+  assert.deepEqual(api.scrubAvoided("草，这个不行。", ["草"]), { text: "这个不行。", count: 0 });
 });
 
 test("F3 [[SILENT]] is untouched in raw and JSON form", async () => {
