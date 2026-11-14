@@ -7,7 +7,7 @@ import {
 
 const SNAP = () => ({
   at: 1000, switches: {}, runner: { seen_age_s: 0, ok_ratio_24h: 1 },
-  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: "cat-v1", release: "test",
+  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: "cat-v2", release: "test",
 });
 
 function traceWithOffers(switches, runnerOk, capability = "repo_read", tool = "repo_changes") {
@@ -19,7 +19,7 @@ function traceWithOffers(switches, runnerOk, capability = "repo_read", tool = "r
       segs: [{ origin: "direct", text: body }], bound_member: "qq:s1", addressed: "bot", mentioned: 1, images: [],
     },
     context_before: [], after: [], replies: [{ outbox_id: "o-snap", body: "我看看", status: "sent", at: 1000, link: "reply_to" }],
-    tools: [], tools_offered: { names: [tool], catalog_version: "cat-v1", switches, runner_ok: runnerOk, turn_id: "turn-snap" },
+    tools: [], tools_offered: { names: [tool], catalog_version: "cat-v2", switches, runner_ok: runnerOk, turn_id: "turn-snap" },
     snapshot_ref: { health_at: 1000, gateway_ok: 1, runner_ok: runnerOk }, has_image: false, signals: [],
   };
 }

@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS member_names(member_id TEXT PRIMARY KEY,name TEXT NOT
 
 CREATE TABLE IF NOT EXISTS video_waits(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,ref TEXT NOT NULL,latest_id TEXT NOT NULL,batch_ids TEXT NOT NULL,mentioned INTEGER NOT NULL,due_at INTEGER NOT NULL,ready INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'waiting',lease_until INTEGER,created_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,phase TEXT NOT NULL DEFAULT 'light');
 CREATE INDEX IF NOT EXISTS video_waits_due ON video_waits(status,due_at);
-CREATE TABLE IF NOT EXISTS image_notes(sha TEXT PRIMARY KEY,desc TEXT NOT NULL,tags TEXT NOT NULL,sticker_like INTEGER NOT NULL,text TEXT,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS image_notes(sha TEXT PRIMARY KEY,desc TEXT NOT NULL,tags TEXT NOT NULL,sticker_like INTEGER NOT NULL,text TEXT,created_at INTEGER NOT NULL,provider TEXT NOT NULL DEFAULT 'workers_ai',model TEXT NOT NULL DEFAULT '@cf/meta/llama-3.2-11b-vision-instruct');
 CREATE TABLE IF NOT EXISTS message_images(message_id TEXT NOT NULL,idx INTEGER NOT NULL,sha TEXT NOT NULL,PRIMARY KEY(message_id,idx));
 
 CREATE TABLE IF NOT EXISTS chat_decisions(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,latest_id TEXT NOT NULL,batch_ids TEXT NOT NULL,mentioned INTEGER NOT NULL,forced INTEGER NOT NULL,waited INTEGER NOT NULL,gate TEXT NOT NULL,action TEXT NOT NULL,spoken_kind TEXT,target_id TEXT,wait_seconds INTEGER,reason TEXT,outbox_id TEXT,policy TEXT NOT NULL DEFAULT 'live',model_ms INTEGER,created_at INTEGER NOT NULL);
@@ -198,6 +198,57 @@ CREATE TABLE IF NOT EXISTS image_gen_log(
 CREATE INDEX IF NOT EXISTS image_gen_log_group_turn ON image_gen_log(group_id, turn_id);
 CREATE INDEX IF NOT EXISTS image_gen_log_group_time ON image_gen_log(group_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS image_gen_log_turn_live ON image_gen_log(group_id, turn_id) WHERE status IN ('pending', 'ok');
+CREATE TABLE IF NOT EXISTS feature_request(
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  msg_id TEXT NOT NULL UNIQUE,
+  sender TEXT NOT NULL,
+  sender_name TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'build',
+  risk_tags TEXT NOT NULL DEFAULT '[]',
+  auto INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  status_reason TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 0,
+  day TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claimed_by TEXT,
+  lease_until INTEGER,
+  release TEXT,
+  rollback_point TEXT,
+  smoke_verified INTEGER NOT NULL DEFAULT 0,
+  proposal_note TEXT,
+  reply_kind TEXT,
+  reply_text TEXT,
+  reply_outbox_id TEXT,
+  reply_enqueued_at INTEGER,
+  approved_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS feature_request_status ON feature_request(status, created_at);
+CREATE INDEX IF NOT EXISTS feature_request_day_sender ON feature_request(day, sender);
+CREATE INDEX IF NOT EXISTS feature_request_day ON feature_request(day);
+CREATE TABLE IF NOT EXISTS image_cache(
+  sha TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  mime TEXT,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  width INTEGER,
+  height INTEGER,
+  data BLOB,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  source_msg TEXT,
+  source_idx INTEGER,
+  skipped_reason TEXT,
+  error_kind TEXT,
+  error_stage TEXT);
+CREATE INDEX IF NOT EXISTS image_cache_expires ON image_cache(expires_at);
+CREATE INDEX IF NOT EXISTS image_cache_group ON image_cache(group_id, created_at);
+
 CREATE TABLE IF NOT EXISTS ds_balance_snapshots(
   scope TEXT NOT NULL,
   currency TEXT NOT NULL,

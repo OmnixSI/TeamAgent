@@ -102,7 +102,7 @@
         "messages_per_batch": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 60
+          "maximum": 120
         }
       },
       "required": [
@@ -360,6 +360,74 @@
         }
       }
     },
+    "feature_requests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "auto_senders": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "daily_auto_cap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "daily_cap_per_sender": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "group_daily_cap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_developing": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lease_hours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stale_hours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "title_max": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "detail_max": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "enabled",
+        "auto_senders",
+        "daily_auto_cap",
+        "daily_cap_per_sender",
+        "group_daily_cap",
+        "max_developing",
+        "lease_hours",
+        "stale_hours",
+        "quote_max",
+        "title_max",
+        "detail_max"
+      ]
+    },
     "stickers": {
       "type": "object",
       "additionalProperties": false,
@@ -389,7 +457,7 @@
         "max_rows": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 1000
+          "maximum": 5000
         },
         "caps": {
           "type": "object",

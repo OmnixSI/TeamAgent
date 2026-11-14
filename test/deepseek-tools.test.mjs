@@ -195,7 +195,9 @@ test("D1 every purpose uses its fixed path on api.deepseek.com and ignores calle
     );
     for (const call of f.calls) {
       assert.equal(call.init.method, "POST");
-      assert.equal(call.init.redirect, "error");
+      // workerd rejects redirect:"error"; manual keeps the no-follow intent.
+      assert.equal(call.init.redirect, "manual");
+      assert.notEqual(call.init.redirect, "error");
       assert.equal(call.init.headers.Authorization, "Bearer " + KEY);
     }
     const bad = await api.callDsTool(e, {
@@ -207,6 +209,40 @@ test("D1 every purpose uses its fixed path on api.deepseek.com and ignores calle
     assert.equal(f.calls.length, 5, "unknown purpose must not send");
   } finally {
     f.restore();
+  }
+});
+
+test("D1b redirects are never followed: manual fetch, every 3xx fails, 200 still works", async () => {
+  const { e } = env();
+  for (const status of [301, 302, 303, 307, 308]) {
+    const f = spyFetch(
+      () =>
+        new Response(null, {
+          status,
+          headers: { location: "https://evil.test/redirected" },
+        }),
+    );
+    try {
+      const r = await api.callDsTool(e, searchRequest());
+      assert.equal(r.ok, false, status + " must be a failure");
+      assert.equal(r.error_kind, "upstream", status + " kind");
+      assert.equal(r.status, status);
+      assert.equal(f.calls.length, 1, status + " is not followed");
+      assert.equal(f.calls[0].url, "https://api.deepseek.com/v1/tools/search");
+      assert.equal(f.calls[0].init.redirect, "manual");
+    } finally {
+      f.restore();
+    }
+  }
+  const ok = spyFetch(() => jsonResponse(searchJson));
+  try {
+    const r = await api.callDsTool(e, searchRequest());
+    assert.equal(r.ok, true);
+    assert.equal(r.status, 200);
+    assert.equal(ok.calls[0].init.redirect, "manual");
+    assert.notEqual(ok.calls[0].init.redirect, "error");
+  } finally {
+    ok.restore();
   }
 });
 

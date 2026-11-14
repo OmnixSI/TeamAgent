@@ -437,7 +437,9 @@ export async function callDsTool<T = any>(
     method: "POST",
     headers,
     body: payload,
-    redirect: "error",
+    // workerd rejects "error" (TypeError before any request), so keep the
+    // no-follow intent with "manual" and fail on a 3xx answer below.
+    redirect: "manual",
     signal: controller.signal,
   });
   // The loser of the race may reject later; never leave it unhandled.
@@ -469,6 +471,15 @@ export async function callDsTool<T = any>(
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
   const expected = call.expect ?? (purpose === "tts" ? "bytes" : "json");
   const isJsonBody = contentType.includes("json") || looksLikeJson(bytes);
+
+  // Redirects are never followed: a 3xx answer is a failed call, not a new target.
+  if (response.status >= 300 && response.status < 400)
+    return finish(
+      failure("upstream", response.status, {
+        reason_text: "DeepSeek 返回了重定向，已按不跟随处理",
+        next_action: "稍后重试；若持续出现，让管理员检查 DeepSeek 接入地址",
+      }),
+    );
 
   if (!response.ok) {
     const data = isJsonBody ? decodeJson(bytes) : null;

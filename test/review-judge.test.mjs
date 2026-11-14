@@ -16,12 +16,12 @@ const { judgeModel, judgeBatches, estimateReservation, validateProviders } = awa
 const { compareVerdicts, selectForSecond, secondJudge } = await load('second');
 after(() => rmSync(out, { recursive: true, force: true }));
 const snap = () => ({ at: 1000, switches: { 'off:repo_tools': 'on' }, runner: { seen_age_s: 0, ok_ratio_24h: 1 },
-  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: 'cat-v1', release: 'test' });
+  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: 'cat-v2', release: 'test' });
 const msg = (id = 'm1', body = '以后请只给结论，不要发长文') => ({ id, sender: 's1', ts: '2026-11-13T00:00:00Z', body,
   segs: [{ origin: 'direct', text: body }], bound_member: 'qq:s1', addressed: 'bot', images: [] });
 const trace = (id = 't1') => ({ id, group_id: 'g', kind: 'inbound', inbound: { ...msg('m-' + id), mentioned: 1 },
   context_before: [], after: [], replies: [{ outbox_id: 'o-' + id, body: '我会每天总结仓库变化。', status: 'sent', at: 1000, link: 'reply_to' }],
-  tools: [], tools_offered: { names: ['repo_changes'], catalog_version: 'cat-v1', switches: { 'off:repo_tools': 'off' }, runner_ok: 1, turn_id: 'turn-' + id },
+  tools: [], tools_offered: { names: ['repo_changes'], catalog_version: 'cat-v2', switches: { 'off:repo_tools': 'off' }, runner_ok: 1, turn_id: 'turn-' + id },
   snapshot_ref: { health_at: 1000, gateway_ok: 1, runner_ok: 1 }, has_image: false, signals: ['S3'] });
 const evidence = t => [{ source: 'message', id: t.inbound.id, quote: '以后请只给结论' }];
 const verdict = t => ({ trace_id: t.id, kind: 'response_fault', reasoning: '要求结论，回复却未提供。',
@@ -83,7 +83,7 @@ test('VD-R7-CAP unknown offers force INSUFFICIENT and erase four unsupported gap
 test('VD-R7-CAP catalog mismatch is insufficient; historical offline only affects a runner tool', () => {
   const t=trace(); t.tools_offered.catalog_version='old';
   assert.equal(validateResult(result([verdict(t)]),ctx([t])).verdicts[0].gap_type,null);
-  t.tools_offered.catalog_version='cat-v1'; t.tools_offered.names=['create_file_task']; t.tools_offered.runner_ok=0; t.snapshot_ref.runner_ok=0;
+  t.tools_offered.catalog_version='cat-v2'; t.tools_offered.names=['create_file_task']; t.tools_offered.runner_ok=0; t.snapshot_ref.runner_ok=0;
   const v={...verdict(t),capability:'attachment_send',should_use_tool:'create_file_task',gap_type:'tool_failed'};
   assert.equal(validateResult(result([v]),ctx([t])).verdicts[0].gap_type,'capability_offline');
 });

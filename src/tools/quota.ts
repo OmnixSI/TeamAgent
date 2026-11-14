@@ -1,21 +1,21 @@
-// ds-balance get_quota: answer "how much DeepSeek balance is left" from the
-// provider's own read-only endpoint, comparing with the previous real read.
-// Read-only: one cached balance read and at most one small snapshot write.
-// The kill switch is settings key off:ds_balance; it is on unless an admin
-// writes a truthy value there.
+// A-quota get_quota: answer "how much allowance do you have left" from real
+// provider numbers. Read-only: one cached balance read, a few D1 aggregates,
+// no writes except the ten-minute cache. Only the group owner who directly asks
+// gets exact amounts; everyone else gets one of three coarse words.
 import type { BotTool, ToolCtx } from "../toolkit";
 import { renderQuota } from "../quota";
+import { isAutoSender } from "../feature-request-core";
 
 export const getQuotaTool: BotTool = {
   name: "get_quota",
-  switch: "ds_balance",
   untrusted: false,
   def: {
     type: "function",
     function: {
       name: "get_quota",
       description:
-        "查 DeepSeek 账户还剩多少余额：读官方余额，跟上次查询比较，回答里直接说还剩多少、比上次多了或少了多少。被问「你还有多少额度」「DeepSeek 余额」「额度还剩多少」「比上次少了多少」时调用。只有群主本人直接问才给具体金额；其他人只回答够用/偏低/快没了。只读，不猜数字；查不到就如实说查不到。回答保持口语化，不要提接口、缓存或数据库。",
+        "查自己还剩多少额度：DeepSeek 余额（缓存十分钟）、今天/本月的 DeepSeek 次数与估算花费、OpenAI 与生图的每日限额已用/剩余、Workers AI 今日 neurons；有上次快照时会带「较上次」的变化。被问「你还有多少额度/余额/今天用了多少」时调用。" +
+        "只有群主本人直接问才给具体金额和数字；其他人只回答够用/偏低/快没了。只读，不要猜数字。",
       parameters: {
         type: "object",
         properties: {},
@@ -24,12 +24,18 @@ export const getQuotaTool: BotTool = {
     },
   },
   async run(e: any, _args: any, ctx: ToolCtx): Promise<any> {
-    // Reuse A-quota's owner rule: only the QQ owner who directly asked gets
-    // exact amounts; everyone else gets the same one-line band.
     const latest = ctx?.context?.latest || {};
     const meta = latest?.meta || {};
-    const owner = String(meta.memberRole || "").toLowerCase() === "owner";
+    // QQ group events carry no member_role: owner = members row (id or qq:id,
+    // role=owner, not revoked) or config auto_senders, same rule as request_feature.
+    const owner =
+      String(meta.memberRole || "").toLowerCase() === "owner" ||
+      (await isAutoSender(e, String(latest?.sender || "")));
     const direct = !!(ctx?.context?.mentioned || meta.direct === true);
-    return renderQuota(e, { owner: owner && direct });
+    return renderQuota(e, {
+      owner: owner && direct,
+      group: latest?.group_id,
+      sender: latest?.sender,
+    });
   },
 };

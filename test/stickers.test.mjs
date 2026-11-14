@@ -34,7 +34,7 @@ test('S1 byte descriptions share the original image cache and exact return value
  await models(e,async state=>{
   const first=await vision.describeBytes(e,bytes,'image/gif','表情图片',AbortSignal.timeout(1000));
   const second=await vision.describeImage(e,{kind:'image',url:'https://multimedia.nt.qq.com.cn/sticker.gif'},'表情图片',AbortSignal.timeout(1000));
-  assert.deepEqual(second,first);assert.equal(first.sha,sha+':'+vision.VISION_VERSION);assert.equal(state.vision,1);assert.equal(state.images,1);
+  assert.deepEqual(second,first);assert.ok(first.sha.startsWith(sha+':'));assert.match(first.sha,/:v1$/);assert.equal(state.vision,1);assert.equal(state.images,1);
  });
 });
 test('S2/S3 same sender stays a candidate; second sender queues exactly one tag job, including races',async()=>{
@@ -66,18 +66,44 @@ test('S5 download failure and oversized image never create rows and the worker f
   await models(e,async()=>{await queue(e,'oversize');assert.equal((await all(e,'stickers')).length,0);assert.equal((await all(e,'jobs'))[0].status,'done');},options);
  }
 });
-test('S6 full storage prunes only old singleton candidates and otherwise records full',async()=>{
+test('S6 full storage prunes only old singleton candidates and otherwise records full at 5,000 rows',async()=>{
+ const cap=JSON.parse(readFileSync(new URL('../config/team.json',import.meta.url),'utf8')).stickers.max_rows;assert.equal(cap,5000);
  for(const removable of [false,true]){
   const e=env();
-  await e.DB.prepare("INSERT INTO stickers(sha,mime,bytes,data,state,senders,created_at) SELECT 'full-'||value,'image/gif',1,?1,0,'[\"one\"]',?2 FROM json_each(?3)").bind(bytes.buffer,removable?Date.now()-31*86400000:Date.now(),JSON.stringify(Array.from({length:1000},(_,i)=>i))).run();
-  await models(e,()=>collect(e,'new'));const r=await row(e);assert.equal(!!r,removable);assert.ok((await all(e,'stickers')).length<=1000);
+  await e.DB.prepare("INSERT INTO stickers(sha,mime,bytes,data,state,senders,created_at) SELECT 'full-'||value,'image/gif',1,?1,0,'[\"one\"]',?2 FROM json_each(?3)").bind(bytes.buffer,removable?Date.now()-31*86400000:Date.now(),JSON.stringify(Array.from({length:cap},(_,i)=>i))).run();
+  await models(e,()=>collect(e,'new'));const r=await row(e);assert.equal(!!r,removable);assert.ok((await all(e,'stickers')).length<=cap);
   assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.full').length,removable?0:1);
  }
+});
+test('S7 sticker bytes stay inside the self-imposed 2 GB library budget',async()=>{
+ const {STICKER_STORE_MAX_BYTES,collectSticker}=await stickers();assert.equal(STICKER_STORE_MAX_BYTES,2_000_000_000);
+ const e=env();
+ await e.DB.prepare("INSERT INTO stickers(sha,mime,bytes,data,state,senders,created_at) VALUES('budget-seed','image/gif',?,?,2,'[\"a\",\"b\"]',?)")
+  .bind(STICKER_STORE_MAX_BYTES-10,bytes.buffer,Date.now()).run();
+ const old=globalThis.fetch;
+ globalThis.fetch=async url=>{const extra=String(url).includes('budget-two')?1:0;return new Response(Uint8Array.from([...bytes,...Array(extra).fill(1)]),{headers:{'Content-Type':'image/gif'}});};
+ try{
+  await collectSticker(e,{url:'https://multimedia.nt.qq.com.cn/budget-one.gif',sender:'a',message:'budget-one'});
+  let r=await e.DB.prepare("SELECT SUM(bytes) AS n FROM stickers").first();assert.equal(r.n,STICKER_STORE_MAX_BYTES-1);
+  await collectSticker(e,{url:'https://multimedia.nt.qq.com.cn/budget-two.gif',sender:'b',message:'budget-two'});
+  r=await e.DB.prepare("SELECT SUM(bytes) AS n FROM stickers").first();assert.equal(r.n,STICKER_STORE_MAX_BYTES-1,'over-budget image is refused without changing bytes');
+  assert.equal((await all(e,'activity')).filter(a=>a.kind==='sticker.full').length,1);
+ }finally{globalThis.fetch=old;}
 });
 test('hourly minute seven queues at most ten durable tag retries and respects per-invocation budget',async()=>{
  const e=env();for(let i=0;i<12;i++)await seed(e,'retry-'+i);
  const real=Date.now;try{Date.now=()=>Date.parse('2026-11-12T01:07:00Z');await cron(e);await cron(e);}finally{Date.now=real;}
  const jobs=(await all(e,'jobs')).filter(j=>j.kind==='sticker-tag');assert.equal(jobs.length,10);assert.equal(new Set(jobs.map(j=>j.id)).size,10);
+});
+test('S8 a five-message WORK batch processes every sticker job and acknowledges each message',async()=>{
+ const e=env();const ids=[];
+ for(let i=0;i<5;i++){const id='batch-'+i;ids.push(id);await e.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind(id,'sticker',JSON.stringify({url:'https://multimedia.nt.qq.com.cn/batch-'+i+'.gif',sender:'a',message:id}),Date.now()).run();}
+ const old=globalThis.fetch;globalThis.fetch=async url=>new Response(Uint8Array.from([...bytes,Number(String(url).match(/batch-(\d)/)[1])]),{headers:{'Content-Type':'image/gif'}});
+ const acks=[],retries=[];
+ try{await worker.queue({queue:'inkboard-team',messages:ids.map((id,i)=>({body:{id},ack(){acks.push(i)},retry(){retries.push(i)}}))},e);}finally{globalThis.fetch=old;}
+ assert.deepEqual(acks,[0,1,2,3,4]);assert.deepEqual(retries,[]);
+ assert.equal((await all(e,'stickers')).length,5);
+ assert.ok((await all(e,'jobs')).every(j=>j.status==='done'),'all five jobs finish');
 });
 test('S13 owner import handles binary data; members, unsupported MIME and decoded overflow are rejected',async()=>{
  const e=env(),memberToken='test-member-token';await e.DB.prepare('INSERT INTO members VALUES(?,?,?,?,0)').bind('member','Test Member',shaOf(memberToken),'member').run();
@@ -118,7 +144,7 @@ test('new import, receive, collection, tagging and retry invocations stay within
 test('sticker configuration preserves a literal false default and enforces sender/storage/daily caps',async()=>{
  const {validateTeamConfig}=await import('../config/validate.mjs'),team=JSON.parse(readFileSync(new URL('../config/team.json',import.meta.url),'utf8'));
  assert.equal(team.stickers.send,false);assert.equal(team.stickers.min_senders,2);assert.equal(team.stickers.caps.tag,40);assert.equal(team.stickers.caps.send,20);
- for(const [key,value] of [['min_senders',1],['max_bytes',400001],['max_rows',1001]]){const bad=structuredClone(team);bad.stickers[key]=value;assert.ok(validateTeamConfig(bad).includes('stickers.'+key));}
+ for(const [key,value] of [['min_senders',1],['max_bytes',400001],['max_rows',5001]]){const bad=structuredClone(team);bad.stickers[key]=value;assert.ok(validateTeamConfig(bad).includes('stickers.'+key));}
 });
 
 const patchedModules=new Map();

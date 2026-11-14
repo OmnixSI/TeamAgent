@@ -28,6 +28,16 @@ function dayBounds(date: string): { start: number; end: number } {
   return { start, end: start + 86400000 };
 }
 
+/** A-quota: one developer-room line written by the main Worker's daily job. */
+function morningQuota(value: any): { at: number; line: string } | null {
+  const parsed = parse(value, null);
+  if (!parsed || typeof parsed.line !== 'string') return null;
+  const line = parsed.line.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const at = Number(parsed.at);
+  if (!line || !Number.isFinite(at)) return null;
+  return { at, line };
+}
+
 type Grouped = {
   fingerprint: string; severity: string; fix_layer: string; findings: Row[];
   evidence: any[]; allSingle: boolean; what_happened: string; expected: string;
@@ -143,6 +153,8 @@ export type Digest = {
   agreement: { agree: number; disagree: number; single: number; pending: number; rate: number | null };
   tasks: any[];
   findings: { total: number; p0: number; p1: number; p2: number };
+  /** A-quota: developer-room line from quota:morning; null when absent. */
+  quota: { at: number; line: string } | null;
 };
 
 /** One merged digest for one Sydney date, across all groups. */
@@ -179,6 +191,9 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
   const tasks = await reviewRead<Row>(ctx,
     "SELECT id,title,status,source_id,created_at FROM tasks WHERE source_id LIKE 'review:%' AND created_at>=? AND created_at<? ORDER BY created_at,id",
     [new Date(start).toISOString(), new Date(end).toISOString()]);
+  const [quotaRow] = await reviewRead<Row>(ctx,
+    'SELECT value FROM settings WHERE key=?', ['quota:morning']);
+  const quota = morningQuota(quotaRow?.value);
 
   const counts = { p0: 0, p1: 0, p2: 0 };
   const agreement = { agree: 0, disagree: 0, single: 0, pending: 0, rate: null as number | null };
@@ -281,5 +296,6 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
     agreement,
     tasks: tasks.map(task => ({ id: task.id, title: task.title, status: task.status, created_at: task.created_at })),
     findings: { total: findings.length, ...counts },
+    quota,
   };
 }

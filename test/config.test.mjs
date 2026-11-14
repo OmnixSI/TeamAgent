@@ -18,7 +18,7 @@ test("shared settings reject unsupported effort, unsafe night batches and malfor
   assert.deepEqual(validateTeamConfig(settings), []);
   const bad = structuredClone(settings);
   bad.model.quick_effort = "guess";
-  bad.memory.messages_per_batch = 100;
+  bad.memory.messages_per_batch = 121;
   bad.memory.timezone = "NoSuch/Zone";
   bad.repositories = ["outside/project"];
   bad.web = { jina: "yes" };
