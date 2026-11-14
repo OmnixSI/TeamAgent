@@ -13,6 +13,7 @@ import { BJ, SYD, b64, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } fr
 import type { Env } from "./util.ts";
 
 const INTENTS = (1 << 0) | (1 << 1) | (1 << 30) | (1 << 12) | (1 << 25) | (1 << 26);
+const BUILD = "2026-11-14.4";
 const TICK_MS = 20000;
 const REPLY_WINDOW_MS = 270000;   // a QQ message can be answered for five minutes
 const REPLIES_PER_MESSAGE = 5;
@@ -425,6 +426,7 @@ export class Hub extends DurableObject<Env> {
     if (path === "/admin/status") {
       const count = (q: string, ...b: any[]) => Number(this.sql.exec(q, ...b).toArray()[0].n);
       return json({
+        build: BUILD,
         gateway: { on: this.on("gateway"), connected: !!this.ws, lastAckAgoMs: this.lastAck ? Date.now() - this.lastAck : null, session: !!this.session, ready: this.get("gw:ready"), error: this.gwError },
         main: this.get("main"), messages: count("SELECT COUNT(*) n FROM msg"), pending: count("SELECT COUNT(*) n FROM pending"),
         notes: count("SELECT COUNT(*) n FROM note"), schedules: this.sql.exec("SELECT id,conv,spec,task,next,active FROM sched WHERE active=1").toArray(),

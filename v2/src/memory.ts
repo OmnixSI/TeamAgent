@@ -20,23 +20,27 @@ const SYSTEM = `你在替 QQ 群里的常驻群友 Bot 做每晚的整理。输�
 这段时间群聊的小结，200 字以内，口语：聊了什么，定了什么，谁要去干什么。`;
 
 export async function reflect(env: Env, input: { memory: string; notes: string[]; transcript: string; label: string }) {
-  const r = await dsChat(env, {
-    messages: [
-      { role: "system", content: SYSTEM },
-      {
-        role: "user",
-        content: "【现有长期记忆】\n" + (input.memory.trim() || "（空）") +
-          "\n\n【白天记下的条目】\n" + (input.notes.length ? input.notes.map(n => "· " + n).join("\n") : "（无）") +
-          "\n\n【群聊记录：" + input.label + "】\n" + input.transcript,
-      },
-    ],
-    max_tokens: 8000,
-  }, "max", 280000);
-  const text = String(r.message.content || "");
-  const memory = text.split("===小结===")[0].replace(/^[\s\S]*?===记忆===/, "").trim();
-  const summary = (text.split("===小结===")[1] || "").trim();
-  if (memory.length < 80) throw new Error("reflect produced no memory");
-  return { memory, summary, usage: r.usage };
+  const messages = [
+    { role: "system", content: SYSTEM },
+    {
+      role: "user",
+      content: "【现有长期记忆】\n" + (input.memory.trim() || "（空）") +
+        "\n\n【白天记下的条目】\n" + (input.notes.length ? input.notes.map(n => "· " + n).join("\n") : "（无）") +
+        "\n\n【群聊记录：" + input.label + "】\n" + input.transcript,
+    },
+  ];
+  let last = "";
+  // Reasoning shares the output budget, so the first attempt can come back empty; retry with less thinking.
+  for (const effort of ["max", "high"] as const) {
+    const r = await dsChat(env, { messages, max_tokens: 24000 }, effort, 280000);
+    const text = String(r.message.content || "");
+    const cut = text.split(/={2,}\s*小结\s*={2,}/);
+    const memory = cut[0].replace(/^[\s\S]*?={2,}\s*记忆\s*={2,}/, "").trim();
+    const summary = (cut[1] || "").trim();
+    if (memory.length >= 200 && memory.includes("【")) return { memory, summary, usage: r.usage };
+    last = text.slice(0, 200);
+  }
+  throw new Error("reflect produced no memory: " + last);
 }
 
 export async function caption(env: Env, dataUrl: string) {
