@@ -4,11 +4,12 @@ import { TEAM } from "./config";
 import { WorkersAiBudgetFault } from "./ai-budget";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
-import { renderMentions } from "./inbound";
+import { isStickerMedia, renderMentions } from "./inbound";
 import { visionModel, redact } from "./runtime";
 import { callOpenAi } from "./openai";
-import { metaOf } from "./view";
+import { metaOf, withoutFaces } from "./view";
 import { untrusted } from "./untrusted";
+import { gifFirstFramePng } from "./gif";
 
 export const VISION_VERSION = "v1";
 export const SELFTEST_PNG =
@@ -30,6 +31,7 @@ export interface VisionProvider {
     mime: string,
     hint: string,
     signal: AbortSignal,
+    sticker?: boolean,
   ): Promise<Omit<ImageNote, "sha">>;
 }
 export type ImagePick = {
@@ -38,6 +40,7 @@ export type ImagePick = {
   idx: number;
   media: Media;
   hint: string;
+  sticker?: boolean;
 };
 
 type VisionStage = "fetch" | "body" | "cache" | "budget" | "describe" | "store" | "link";
@@ -82,7 +85,7 @@ function failed(report: Report, stage: VisionStage, error: unknown, signal: Abor
   report({ stage, status: "failed", reason: timedOut ? "timeout" : error instanceof VisionFault ? error.reason : fallback, ...(hop === undefined ? {} : { hop }) });
 }
 export type VisionToolFailure = { ok: false; tool: "vision"; error_kind: string; retryable: boolean; detail: string; next_action: string };
-export type ImageOutcome = VisionEvent & Partial<Omit<VisionToolFailure, "detail">> & { messageId: string; idx: number; toolFailure?: VisionToolFailure };
+export type ImageOutcome = VisionEvent & Partial<Omit<VisionToolFailure, "detail">> & { messageId: string; idx: number; sticker?: boolean; toolFailure?: VisionToolFailure };
 export function visionFailure(event: VisionEvent): VisionToolFailure {
   const reason = event.reason;
   let error_kind = "upstream", detail = "图片分析失败", next_action = "稍后重试，或提供图中文字";
@@ -136,6 +139,11 @@ export function applyImageOutcomes(notes: Map<string, string[]>, outcomes: Image
     const position = Number.isInteger(outcome.hop) && outcome.hop! >= 0 && outcome.hop! <= 3
       ? "；位置：" + (outcome.hop === 0 ? "原始地址" : "第" + outcome.hop + "次跳转") : "";
     const failure = visionFailure(outcome);
+    if (outcome.sticker && (outcome.reason === "cap" || outcome.reason === "provider_cap")) {
+      list[outcome.idx] = "一张表情包（今天先不识别）";
+      notes.set(outcome.messageId, list);
+      continue;
+    }
     list[outcome.idx] = "看不了这张图（" + (download ? "未取得：图片下载失败" : "未分析") + "：" + reason
       + (outcome.reason === "http" && Number.isInteger(outcome.http) ? "，HTTP " + outcome.http : "")
       + (outcome.reason === "mime" && outcome.mime ? "，MIME " + outcome.mime : "")
@@ -172,8 +180,8 @@ const LUNA_PROMPT =
 
 type ProviderName = "deepseek" | "luna" | "workers";
 type ProviderChoice = { provider: ProviderName; model: string };
-type VisionSettings = { choices: ProviderChoice[]; perImageMs: number; turnMs: number; dailyCap: number; disabled: boolean };
-const VISION_SETTING_KEYS = ["vision:provider", "vision:ds_model", "vision:openai_model", "vision:per_image_deadline_ms", "vision:turn_deadline_ms", "vision:daily_cap", "off:vision", "off:openai"] as const;
+type VisionSettings = { choices: ProviderChoice[]; perImageMs: number; turnMs: number; dailyCap: number; stickerDailyCap: number; disabled: boolean };
+const VISION_SETTING_KEYS = ["vision:provider", "vision:ds_model", "vision:openai_model", "vision:per_image_deadline_ms", "vision:turn_deadline_ms", "vision:daily_cap", "stickers:read_cap", "off:vision", "off:openai"] as const;
 
 function providerOrder(mode: string, lowValue: boolean): ProviderName[] {
   if (mode === "luna") return ["luna", "deepseek", "workers"];
@@ -182,18 +190,25 @@ function providerOrder(mode: string, lowValue: boolean): ProviderName[] {
   return lowValue ? ["workers", "deepseek"] : ["deepseek", "workers"];
 }
 
-function visionPrompt(hint: string) {
+function visionPrompt(hint: string, sticker = false) {
   return (
     (TEAM.vision?.prompt || VISION_PROMPT_DEFAULT) +
     "\n" +
     UNCERTAIN_PROMPT +
+    (sticker
+      ? "\n这是群聊里的表情包。desc 描述画面；tags 写它表达的情绪、语气、梗或适合接什么话（最多5个）；meme 必须为 true。表情的「意思」只看画面和常见用法，不猜人物身份。"
+      : "") +
     "\n" +
     untrusted("图片提示", hint.slice(0, 300) || "群聊里的一张图")
   );
 }
 
-function lunaPrompt(hint: string) {
-  return LUNA_PROMPT + "\n" + untrusted("图片提示", redact(hint.slice(0, 300)) || "群聊里的一张图");
+function lunaPrompt(hint: string, sticker = false) {
+  return LUNA_PROMPT +
+    (sticker
+      ? "\n这是群聊里的表情包。desc 描述画面；tags 写它表达的情绪、语气、梗或适合接什么话（最多5个）；meme 必须为 true。"
+      : "") +
+    "\n" + untrusted("图片提示", redact(hint.slice(0, 300)) || "群聊里的一张图");
 }
 
 async function visionSettings(e: any, supplied?: Map<string, string>, lowValue = false): Promise<VisionSettings> {
@@ -227,6 +242,7 @@ async function visionSettings(e: any, supplied?: Map<string, string>, lowValue =
     perImageMs: number("vision:per_image_deadline_ms", 25000),
     turnMs: number("vision:turn_deadline_ms", turnDefault),
     dailyCap: number("vision:daily_cap", TEAM.vision?.daily_cap ?? 300, true),
+    stickerDailyCap: number("stickers:read_cap", TEAM.stickers?.caps?.read ?? 40, true),
     disabled: TEAM.vision?.enabled === false || off("off:vision"),
   };
 }
@@ -418,7 +434,7 @@ export function pickImages(
     const key = row.id + ":" + idx;
     if (seen.has(key)) return;
     seen.add(key);
-    picks.push({ messageId: row.id, ...(row.group_id ? { groupId: String(row.group_id) } : {}), idx, media, hint });
+    picks.push({ messageId: row.id, ...(row.group_id ? { groupId: String(row.group_id) } : {}), idx, media, hint, ...(isStickerPick(row, media) ? { sticker: true } : {}) });
   };
   const images = (row: any) => {
     let imageIdx = -1;
@@ -426,6 +442,10 @@ export function pickImages(
       .filter((media: Media) => media.kind === "image")
       .map((media: Media) => ({ media, idx: ++imageIdx }));
   };
+  const isStickerPick = (row: any, media: Media) =>
+    media.subType === 1 || String(media.contentType || "").toLowerCase() === "image/gif" ||
+    media.sticker === true || /<faceType=6\b/.test(String(row.body || "")) ||
+    (!withoutFaces(String(row.body || "")).trim() && isStickerMedia(media));
   const hintOf = (row: any) => {
     const m = metaOf(row);
     return (
@@ -515,7 +535,7 @@ function cachedNote(row: any): ImageNote {
 
 export function openAiVision(e: any, model = OPENAI_VISION_MODEL, timeoutMs = 25000): VisionProvider {
   return {
-    async describe(bytes, mime, hint, signal) {
+    async describe(bytes, mime, hint, signal, sticker = false) {
       aborted(signal);
       if (!e.OPENAI_API_KEY) throw new VisionFault("unsupported");
       if (!IMAGE_MIME.has(mime)) throw new VisionFault("mime");
@@ -526,7 +546,7 @@ export function openAiVision(e: any, model = OPENAI_VISION_MODEL, timeoutMs = 25
         estCostMicroUsd: 5000,
         body: {
           model, max_completion_tokens: 1600, messages: [{ role: "user", content: [
-            { type: "text", text: lunaPrompt(hint) },
+            { type: "text", text: lunaPrompt(hint, sticker) },
             { type: "image_url", image_url: { url: "data:" + mime + ";base64," + b64(bytes) } },
           ] }],
         },
@@ -547,7 +567,7 @@ export function openAiVision(e: any, model = OPENAI_VISION_MODEL, timeoutMs = 25
 
 export function workersAiVision(e: any): VisionProvider {
   return {
-    async describe(bytes, mime, hint, signal) {
+    async describe(bytes, mime, hint, signal, sticker = false) {
       if (typeof e.AI?.run !== "function") throw new VisionFault("unsupported");
       const controller = new AbortController();
       const onAbort = () => controller.abort();
@@ -559,7 +579,7 @@ export function workersAiVision(e: any): VisionProvider {
         if (!bytes.length) throw new VisionFault("empty");
         if (bytes.length > 5_000_000) throw new VisionFault("oversize");
         const d = await visionModel(e, {
-          prompt: visionPrompt(hint),
+          prompt: visionPrompt(hint, sticker),
           image: "data:" + mime + ";base64," + b64(bytes),
           max_tokens: 400,
         }, controller.signal);
@@ -592,7 +612,7 @@ export function deepseekVision(
   onUsage?: (usage: any) => void,
 ): VisionProvider {
   return {
-    async describe(bytes, mime, hint, signal) {
+    async describe(bytes, mime, hint, signal, sticker = false) {
       if (!e.DEEPSEEK_API_KEY) throw new VisionFault("unsupported");
       if (!IMAGE_MIME.has(mime)) throw new VisionFault("mime");
       if (!bytes.length) throw new VisionFault("empty");
@@ -617,7 +637,7 @@ export function deepseekVision(
                   {
                     role: "user",
                     content: [
-                      { type: "text", text: visionPrompt(hint) },
+                      { type: "text", text: visionPrompt(hint, sticker) },
                       { type: "image_url", image_url: { url: "data:" + mime + ";base64," + b64(bytes) } },
                     ],
                   },
@@ -672,14 +692,14 @@ function noteKey(hash: string, choice: ProviderChoice, version: string) {
   return hash + ":" + storeProvider(choice.provider) + ":" + encodeURIComponent(choice.model) + ":" + version;
 }
 
-async function describeWithChoice(e: any, choice: ProviderChoice, timeoutMs: number, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal) {
+async function describeWithChoice(e: any, choice: ProviderChoice, timeoutMs: number, bytes: Uint8Array, mime: string, hint: string, signal: AbortSignal, sticker = false) {
   const controller = new AbortController();
   const stop = () => controller.abort();
   const timer = setTimeout(stop, timeoutMs);
   if (signal.aborted) stop(); else signal.addEventListener("abort", stop, { once: true });
   try {
     const provider = providerFor(e, choice.provider, choice.model);
-    return await untilAbort(() => provider.describe(bytes, mime, hint, controller.signal), controller.signal);
+    return await untilAbort(() => provider.describe(bytes, mime, hint, controller.signal, sticker), controller.signal);
   } finally { clearTimeout(timer); signal.removeEventListener("abort", stop); }
 }
 
@@ -691,6 +711,7 @@ async function describeWithChain(
   signal: AbortSignal,
   lowValue: boolean,
   report?: Report,
+  sticker = false,
 ): Promise<{ note: Omit<ImageNote, "sha">; choice: ProviderChoice }> {
   const config = await visionSettings(e, undefined, lowValue);
   if (config.disabled) throw new VisionFault("disabled");
@@ -698,7 +719,7 @@ async function describeWithChain(
   let workersCapped = false;
   for (const choice of config.choices) {
     try {
-      const note = await describeWithChoice(e, choice, config.perImageMs, bytes, mime, hint, signal);
+      const note = await describeWithChoice(e, choice, config.perImageMs, bytes, mime, hint, signal, sticker);
       // Diagnostic only: the group already heard the answer from the fallback.
       if (workersCapped && choice.provider !== "workers")
         report?.({ stage: "describe", status: "ok", reason: "provider_cap", note: choice.provider === "deepseek" ? "Workers AI 今日额度已用完，改用 DeepSeek" : "Workers AI 今日额度已用完，改用其他视觉模型" });
@@ -727,8 +748,8 @@ function uncertainNote<T extends Omit<ImageNote, "sha">>(note: T, hint: string):
 export function visionProvider(e: any): VisionProvider | null {
   if (TEAM.vision?.enabled === false) return null;
   return {
-    describe: async (bytes, mime, hint, signal) =>
-      (await describeWithChain(e, bytes, mime, hint, signal, false)).note,
+    describe: async (bytes, mime, hint, signal, sticker) =>
+      (await describeWithChain(e, bytes, mime, hint, signal, false, undefined, sticker)).note,
   };
 }
 
@@ -741,14 +762,15 @@ export async function describeImage(
   report: Report = reportVision,
   settings?: VisionSettings,
   groupId?: string,
+  sticker = false,
 ): Promise<ImageNote | null> {
   try {
     aborted(signal);
     if (!img.url) throw new VisionFault("blocked");
-    const lowValue = looksLikeSticker(img, !!hint.trim());
+    const lowValue = sticker || looksLikeSticker(img, !!hint.trim());
     let cached: any = null;
     try { cached = await getCached(e, await sourceSha(img.url), groupId); } catch { cached = null; }
-    if (cached?.data) return await describeBytes(e, cached.data, cached.mime || "image/jpeg", hint, signal, version, report, { lowValue, settings });
+    if (cached?.data) return await describeBytes(e, cached.data, cached.mime || "image/jpeg", hint, signal, version, report, { lowValue, settings, sticker });
     let lastHttp = 0;
     const fetched = await fetchImage(img.url, signal, 5_000_000, (event) => {
       if (event.status === "failed" && Number.isInteger(event.http)) lastHttp = event.http!;
@@ -761,7 +783,7 @@ export async function describeImage(
       }
       return null;
     }
-    return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version, report, { lowValue, settings });
+    return await describeBytes(e, fetched.bytes, fetched.mime, hint, signal, version, report, { lowValue, settings, sticker });
   } catch (error) {
     failed(report, "fetch", error, signal, "network");
     return null;
@@ -778,10 +800,16 @@ export async function describeBytes(
   signal: AbortSignal,
   version = VISION_VERSION,
   report: Report = reportVision,
-  opts: { lowValue?: boolean; settings?: VisionSettings } = {},
+  opts: { lowValue?: boolean; settings?: VisionSettings; sticker?: boolean } = {},
 ): Promise<ImageNote | null> {
   try {
     aborted(signal);
+    // A still first frame is deterministic across providers; an animated GIF
+    // would otherwise be provider-dependent (some reject it outright).
+    if (mime === "image/gif") {
+      const still = await gifFirstFramePng(bytes);
+      if (still) { bytes = still; mime = "image/png"; }
+    }
     const config = opts.settings || await visionSettings(e, undefined, !!opts.lowValue);
     if (config.disabled) throw new VisionFault("disabled");
     const sha = await sha256(bytes);
@@ -798,7 +826,7 @@ export async function describeBytes(
     const work = describeBytesOnce(e, bytes, mime, hint, signal, sha, version, config, event => {
       if (event.status === "failed") entry.failure = event;
       report(event);
-    });
+    }, opts.sticker === true);
     entry.promise = work;
     pending.set(pendingKey, entry);
     try { return await work; }
@@ -818,6 +846,7 @@ async function describeBytesOnce(
   version: string,
   config: VisionSettings,
   report: Report,
+  sticker = false,
 ): Promise<ImageNote | null> {
   let stage: VisionStage = "cache";
   try {
@@ -835,12 +864,14 @@ async function describeBytesOnce(
       if (cached?.desc?.trim()) { report({ stage, status: "ok" }); return cachedNote(cached); }
       if (!reserved) {
         stage = "budget"; report({ stage, status: "attempt" });
-        if (!(await budget(e, "vision", config.dailyCap))) throw new VisionFault("cap");
+        const budgetName = sticker ? "sticker_read" : "vision";
+        const budgetCap = sticker ? config.stickerDailyCap : config.dailyCap;
+        if (!(await budget(e, budgetName, budgetCap))) throw new VisionFault("cap");
         reserved = true; aborted(signal); report({ stage, status: "ok" });
       }
       stage = "describe"; report({ stage, status: "attempt" });
       try {
-        const raw = await describeWithChoice(e, choice, config.perImageMs, bytes, mime, hint, signal);
+        const raw = await describeWithChoice(e, choice, config.perImageMs, bytes, mime, hint, signal, sticker);
         if (workersCapped && choice.provider !== "workers")
           report({ stage: "describe", status: "ok", reason: "provider_cap", note: choice.provider === "deepseek" ? "Workers AI 今日额度已用完，改用 DeepSeek" : "Workers AI 今日额度已用完，改用其他视觉模型" });
         note = choice.provider === "luna" ? raw : uncertainNote(raw, hint);
@@ -885,7 +916,7 @@ export async function coldPicks(e: any, picks: ImagePick[]): Promise<ImagePick[]
     "SELECT 'note' AS row_kind,mi.message_id,mi.idx,n.provider,n.model,n.desc,NULL AS config," + blanks +
     " FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" + ids.map(() => "?").join(",") + ")" +
     cache +
-    " UNION ALL SELECT 'config',NULL,NULL,NULL,NULL,NULL,(SELECT json_group_object(key,value) FROM settings WHERE key LIKE 'vision:%' OR key IN ('off:vision','off:openai'))," + blanks,
+    " UNION ALL SELECT 'config',NULL,NULL,NULL,NULL,NULL,(SELECT json_group_object(key,value) FROM settings WHERE key LIKE 'vision:%' OR key IN ('off:vision','off:openai','stickers:read_cap'))," + blanks,
   ).bind(...ids, ...wanted, ...(wanted.length ? [Date.now()] : [])).all()).results;
   // F8-V2: the same statement prefetches cached bytes, so a vision turn pays no extra D1 query.
   primeImageCache(e, rows.filter((r: any) => r.row_kind === "cache"), wanted);
@@ -915,10 +946,10 @@ export async function annotateTurn(
       picks.map(async (p): Promise<ImageOutcome> => {
           const started = Date.now();
           const traceId = crypto.randomUUID();
-          let outcome: ImageOutcome = { messageId: p.messageId, idx: p.idx, stage: "fetch", status: "failed", reason: "invalid", traceId };
+          let outcome: ImageOutcome = { messageId: p.messageId, idx: p.idx, ...(p.sticker ? { sticker: true } : {}), stage: "fetch", status: "failed", reason: "invalid", traceId };
           const report: Report = event => {
             reportVision({ ...event, elapsedMs: Date.now() - started, traceId });
-            if (event.status === "failed") outcome = { ...event, messageId: p.messageId, idx: p.idx, traceId };
+            if (event.status === "failed") outcome = { ...event, messageId: p.messageId, idx: p.idx, ...(p.sticker ? { sticker: true } : {}), traceId };
           };
           const imageController = new AbortController();
           const stopImage = () => imageController.abort();
@@ -940,6 +971,7 @@ export async function annotateTurn(
               imageReport,
               config,
               p.groupId,
+              p.sticker === true,
             );
           } finally {
             clearTimeout(downloadTimer);
@@ -975,13 +1007,16 @@ export async function imageNotesFor(
   const out = new Map<string, string[]>();
   if (!ids.length) return out;
   const batches = await e.DB.batch(chunks(ids).map(part =>
-    e.DB.prepare("SELECT mi.message_id,mi.idx,n.desc,n.text,n.created_at,n.provider,n.model FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" + part.map(() => "?").join(",") + ") ORDER BY mi.message_id,mi.idx")
+    e.DB.prepare("SELECT mi.message_id,mi.idx,n.desc,n.text,n.tags,n.sticker_like,n.created_at,n.provider,n.model FROM message_images mi JOIN image_notes n ON n.sha=mi.sha WHERE mi.message_id IN (" + part.map(() => "?").join(",") + ") ORDER BY mi.message_id,mi.idx")
       .bind(...part)));
   const rows = batches.flatMap((r: any) => r.results);
   for (const r of rows) {
+    let tags: string[] = [];
+    try { const parsed = JSON.parse(String(r.tags || "[]")); if (Array.isArray(parsed)) tags = parsed.filter((x: any) => typeof x === "string" && x.trim()).slice(0, 5); } catch {}
     const note =
       "图片：" +
-      String(r.desc || "") +
+      String(r.desc || "").replace(/[。；;]\s*$/, "") +
+      (r.sticker_like && tags.length ? "；表达/梗：" + tags.join("、") : "") +
       (r.provider ? "；识图来源：" + r.provider + "/" + r.model : "") +
       (String(r.desc || "").startsWith(CAUTION) ? "；可能有误，不要当逐字真值" : "") +
       (r.text

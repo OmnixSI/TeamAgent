@@ -9,6 +9,7 @@ import { looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
+import { runEmojiNote } from "./emojis";
 import { isDirectRequest } from "./engagement";
 import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
@@ -435,6 +436,22 @@ async function receive(r: Request, e: Env) {
     const images = imageCacheEntries(ib.media);
     if (images.length) await job(e, "image-cache-" + m.id, "image_cache", { group: m.group_openid, message: m.id, images });
   }
+  // Sticker/super-emoji images are read as emoji, not as ordinary pictures. The
+  // daily cap lives in vision; exceeding it leaves a "一张表情包" placeholder.
+  if (inserted && TEAM.vision?.enabled !== false && ib.media.length) {
+    const candidates = ib.media.map((media: any, idx: number) => ({ media, idx }))
+      .filter(({ media }: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text)))
+      .slice(0, 2);
+    if (candidates.length && (await setting(e, "off:emoji_read")) !== "1")
+      for (const { media, idx } of candidates)
+        await job(e, "emoji-note-" + m.id + "-" + idx, "emoji_note", {
+          message: m.id,
+          group: m.group_openid,
+          idx,
+          media,
+          hint: withoutFaces(text).trim().slice(0, 80),
+        });
+  }
   // Video links are read through fetchjobs (subtitles/comments), never as an automatic heavy media job.
   // Audio transcription is deferred to the local X-ASR path; this version starts no local transcription work.
   if (inserted) await set(e, "last_message", iso());
@@ -779,6 +796,7 @@ async function processJob(e: Env, id: string) {
     if (claim.kind === "voice_asr") await runVoiceCloudJob(e, p);
     if (claim.kind === "sticker") await collectSticker(e, p);
     if (claim.kind === "sticker-tag") await tagSticker(e, p);
+    if (claim.kind === "emoji_note") await runEmojiNote(e, p);
     if (claim.kind === "video_deadline") await wakeVideoWait(e, p.wait);
     if (claim.kind === "video_reply") await runVideoWait(e, p.wait);
     if (claim.kind === "chat") {
