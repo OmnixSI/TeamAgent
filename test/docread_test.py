@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 from xml.sax.saxutils import escape
 
 ROOT = pathlib.Path(__file__).parents[1]
@@ -127,7 +128,7 @@ def make_xlsx(path):
         z.writestr("xl/worksheets/sheet2.xml", sheet2)
 
 
-def make_zip_bomb(path, member="word/document.xml", size=120 * 1024 * 1024):
+def make_zip_bomb(path, member="word/media/bomb.bin", size=120 * 1024 * 1024):
     """An OOXML-shaped zip that inflates to `size` bytes from a few hundred KB on disk."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", "<Types/>")
@@ -154,6 +155,69 @@ def make_declared_size_zip(path, declared=210 * 1024 * 1024):
         offset = start + 4
     assert patched, "the fixture must contain a central directory"
     path.write_bytes(bytes(raw))
+
+
+def make_low_ratio_zip(path, members, extra=()):
+    """OOXML-shaped zip with large XML members that compress only ~11x, not >100x.
+
+    Each random byte becomes eight '0'/'1' chars carrying three random bits, so a
+    40 MiB part is roughly 3.7 MiB on disk: too big for the XML cap, but far below
+    the bomb ratio.
+    """
+    mask = bytes(i & 0x07 for i in range(256))
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        for name, data in extra:
+            z.writestr(name, data)
+        for name, size in members:
+            with z.open(name, "w") as entry:
+                entry.write(b"<root>")
+                remaining = size - len(b"<root>") - len(b"</root>")
+                while remaining > 0:
+                    take = min(remaining, 8 * 1024 * 1024)
+                    raw = os.urandom(max(1, (take + 7) // 8))
+                    masked = raw.translate(mask)
+                    chunk = bin(int.from_bytes(masked, "big"))[2:].zfill(len(masked) * 8).encode("ascii")[:take]
+                    entry.write(chunk)
+                    remaining -= len(chunk)
+                entry.write(b"</root>")
+
+
+def make_many_rows_xlsx(path, rows=6000, dimension=True):
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+    rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    workbook = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="大表" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"""
+    workbook_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+    sheet_rows = "".join(
+        f'<row r="{r}"><c r="A{r}" t="inlineStr"><is><t>项目{r}</t></is></c>'
+        f'<c r="B{r}"><v>{r}</v></c></row>'
+        for r in range(1, rows + 1)
+    )
+    dimension_tag = f'<dimension ref="A1:B{rows}"/>' if dimension else ""
+    sheet = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+{dimension_tag}<sheetData>{sheet_rows}</sheetData></worksheet>"""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
 
 
 class DocReadTests(unittest.TestCase):
@@ -282,7 +346,7 @@ class DocReadTests(unittest.TestCase):
         self.assertFalse(out["ok"], out)
         self.assertEqual(out["error_kind"], "too_large")
         self.assertIn("压缩比", out["error"])
-        self.assertIn("word/document.xml", out["error"])
+        self.assertIn("word/media/bomb.bin", out["error"])
 
     def test_ooxml_declared_uncompressed_total_over_limit_is_rejected(self):
         make_declared_size_zip(self.root / "huge.xlsx")
@@ -291,6 +355,78 @@ class DocReadTests(unittest.TestCase):
         self.assertEqual(out["error_kind"], "too_large")
         self.assertIn("解压后", out["error"])
         self.assertIn("200", out["error"])
+
+    def test_ooxml_rejects_xml_member_over_32_mib_at_low_compression(self):
+        # A Python-docx XML part: 40 MiB uncompressed, ~2 MiB compressed (ratio ~20),
+        # so the bomb-ratio rule does not catch it; the XML cap must.
+        make_low_ratio_zip(self.root / "wide.docx", [("word/document.xml", 40 * 1024 * 1024)])
+        with zipfile.ZipFile(self.root / "wide.docx") as archive:
+            info = archive.getinfo("word/document.xml")
+        self.assertGreater(info.file_size, 32 * 1024 * 1024)
+        self.assertLess(info.compress_size, 4 * 1024 * 1024)
+        self.assertLess(info.file_size / info.compress_size, 100)
+        out = self.read("wide.docx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("XML 单文件上限", out["error"])
+        self.assertIn("32", out["error"])
+
+    def test_ooxml_rejects_xml_total_over_48_mib(self):
+        make_low_ratio_zip(self.root / "total.docx", [
+            ("word/document.xml", 17 * 1024 * 1024),
+            ("word/styles.xml", 17 * 1024 * 1024),
+            ("word/numbering.xml", 17 * 1024 * 1024),
+        ])
+        out = self.read("total.docx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("合计", out["error"])
+        self.assertIn("48", out["error"])
+
+    def test_xlsx_sheet_xml_over_32_mib_is_rejected(self):
+        make_low_ratio_zip(
+            self.root / "wide.xlsx",
+            [("xl/worksheets/sheet1.xml", 40 * 1024 * 1024)],
+            extra=[("xl/workbook.xml", b"<workbook/>"), ("xl/_rels/workbook.xml.rels", b"<Relationships/>")],
+        )
+        with zipfile.ZipFile(self.root / "wide.xlsx") as archive:
+            info = archive.getinfo("xl/worksheets/sheet1.xml")
+        self.assertLess(info.compress_size, 4 * 1024 * 1024)
+        self.assertLess(info.file_size / info.compress_size, 100)
+        out = self.read("wide.xlsx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("XML 单文件上限", out["error"])
+
+    def test_xlsx_caps_rows_when_dimension_is_missing(self):
+        make_many_rows_xlsx(self.root / "nodim.xlsx", rows=6000, dimension=False)
+        out = self.read("nodim.xlsx")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["sheets"][0]["rows"], 5000)
+        self.assertTrue(out["sheets"][0]["truncated"])
+        self.assertTrue(any("超过 5000 行" in warning for warning in out["warnings"]))
+
+    def test_xlsx_stdlib_keeps_shared_strings_formulas_and_merges(self):
+        sections, sheets = docread._xlsx_stdlib(self.root / "book.xlsx")
+        self.assertEqual([sheet["name"] for sheet in sheets], ["汇总", "明细"])
+        self.assertEqual(sheets[0]["formulas"], [{"cell": "B7", "formula": "=SUM(B2:B6)"}])
+        self.assertEqual(sheets[0]["merged"], ["A1:B1"])
+        self.assertIn("季度", sections[1]["text"])
+        self.assertIn("备注", sections[1]["text"])
+
+    def test_xlsx_stdlib_truncates_rows_and_warns(self):
+        make_many_rows_xlsx(self.root / "many.xlsx", rows=6000)
+        sections, sheets = docread._xlsx_stdlib(self.root / "many.xlsx")
+        self.assertEqual(sheets[0]["rows"], 5000)
+        self.assertTrue(sheets[0]["truncated"])
+        lines = sections[0]["text"].splitlines()
+        self.assertEqual(len(lines), 5000)
+        self.assertIn("项目5000", sections[0]["text"])
+        self.assertNotIn("项目5001", sections[0]["text"])
+        with mock.patch.object(docread, "_xlsx_openpyxl", side_effect=ImportError):
+            out = self.read("many.xlsx")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(any("超过 5000 行" in warning for warning in out["warnings"]))
 
     # --- text cap ---------------------------------------------------------
     def test_text_is_capped_at_sixty_thousand_characters(self):
