@@ -153,7 +153,7 @@ test("F4 slug keeps ascii topics and hashes the full qq id for other topics", ()
   assert.equal(api.slug("礼物日早报"), "rpt-000000");
 });
 
-test("F5 promiseGuard registers the real empty promise and prefixes 记下了", async () => {
+test("F5 the guard registers the real empty promise and appends id + next run", async () => {
   const now = at("2026-11-14T14:30:00+11:00");
   const made = {
     id: "sched-digest_daily-msg-351",
@@ -182,8 +182,13 @@ test("F5 promiseGuard registers the real empty promise and prefixes 记下了", 
     findDuplicate: async () => null,
   });
   const v = JSON.parse(out);
-  assert.ok(v.text.startsWith("记下了，每天 08:00（悉尼）发昨日聊天内容总结，第一次是 2026-11-15 08:00（悉尼）。"));
-  assert.ok(v.text.includes(PROMISE), "the original reply is kept after the ack");
+  assert.ok(
+    v.text.includes("3–5 条要点（#sched-digest_daily-msg-351，下次 2026-11-15 08:00（悉尼））；"),
+    v.text,
+  );
+  assert.ok(v.text.includes("口径定这样"), "the original reply is kept");
+  assert.ok(v.text.includes("周报按周日起算"), "later sentences are untouched");
+  assert.ok(!v.text.includes(api.GUARD_FALLBACK), "a landed promise must not fall back");
   assert.equal(created.kind, "digest_daily");
   assert.equal(created.owner, "U1");
   assert.equal(created.group_id, GROUP);
@@ -217,7 +222,7 @@ test("F6 promiseGuard rewrites the promise when the member's words do not parse"
   assert.equal(v.text, "这个我还没登记上，你说一下每天几点、发什么，我马上建。");
 });
 
-test("F6b promiseGuard still catches promises whose question words sit in a later clause", async () => {
+test("F6b the guard still catches promises whose question words sit in a later clause", async () => {
   const cases = [
     "以后每天早上 9 点给你推一份汇总，列出当天是否有新 PR。",
     "我会每天 8 点发日报，看看进展如何。",
@@ -256,7 +261,9 @@ test("F6b promiseGuard still catches promises whose question words sit in a late
       findDuplicate: async () => null,
     });
     assert.equal(created.length, 1, `case ${i + 1} must be registered: ${text}`);
-    assert.ok(JSON.parse(out).text.startsWith("记下了，"), `case ${i + 1} must get the ack`);
+    const body = JSON.parse(out).text;
+    assert.ok(body.includes(`（#sched-${i}，下次 2026-11-15 08:00（悉尼））`), `case ${i + 1} must get id + next run: ${body}`);
+    assert.ok(!body.includes(api.GUARD_FALLBACK), `case ${i + 1} must not fall back`);
   }
 });
 
@@ -310,7 +317,7 @@ test("F7 an active schedule within ten minutes is reused, not recreated", async 
   });
   const v = JSON.parse(out);
   assert.equal(called, 0);
-  assert.ok(v.text.startsWith("已经在发了，每天 08:00（悉尼）发昨日聊天内容总结"));
+  assert.ok(v.text.includes("（#sched-digest_daily-old，下次 2026-11-15 08:00（悉尼））"), v.text);
 });
 
 test("F8 schedule_create passes topic/origin/quote and returns say; no-topic stays compatible", async () => {
@@ -430,7 +437,64 @@ test("F10 the non-tool reply path is also finalised (real promise, no tool call)
     s.restore();
   }
   const created = await rows(e, "SELECT * FROM schedules WHERE kind='digest_daily'");
-  assert.equal(created.length, 1, "promiseGuard must register exactly one schedule");
-  assert.ok(JSON.parse(answer).text.startsWith("记下了，"));
+  assert.equal(created.length, 1, "the guard must register exactly one schedule");
+  const body = JSON.parse(answer).text;
+  assert.ok(body.includes(`（#${created[0].id}，下次 `), body);
   console.log("B-l2 回放：QQ 真实发送 0 次（本地假 D1，未调用 sendOutbox），线上 D1 写入 0 行");
+});
+
+test("RC-03: 0 rows and no time in the member's words never claims 真落地/已经建好/以后每天", async () => {
+  let created = 0;
+  const out = await api.finalizeSpoken(
+    JSON.stringify({
+      mode: "work",
+      text: "定时推送这次真落地了，已经建好，以后每天都会发。",
+    }),
+    {
+      acceptedActions: [],
+      avoid: [],
+      userText: "你妈的，我的日报呢？",
+      owner: "U1",
+      groupId: GROUP,
+      sourceMsgId: "msg-355",
+      createSchedule: async () => {
+        created++;
+        return null;
+      },
+      findDuplicate: async () => null,
+    },
+  );
+  assert.equal(created, 0);
+  assert.equal(JSON.parse(out).text, api.GUARD_FALLBACK);
+});
+
+test("RC-13: talking about someone else's 2:10 schedule is left alone", async () => {
+  let created = 0;
+  const text = "后面直接挂个定时任务，让它2:10自动开干。";
+  const out = await api.finalizeSpoken(JSON.stringify({ mode: "banter", text }), {
+    acceptedActions: [],
+    avoid: [],
+    userText: "后面直接挂个定时任务，让它2:10自动开干",
+    owner: "U1",
+    groupId: GROUP,
+    sourceMsgId: "msg-449",
+    createSchedule: async () => {
+      created++;
+      return null;
+    },
+    findDuplicate: async () => null,
+  });
+  assert.equal(created, 0);
+  assert.deepEqual(JSON.parse(out), { mode: "banter", text });
+});
+
+test("F11 a failed tool's reason reaches the honest wording", async () => {
+  const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text: "记好了，我 360。" }), {
+    acceptedActions: [],
+    failedActions: [
+      { tool: "records_write", family: "record", accepted: false, reason_text: "金额没说清。" },
+    ],
+    avoid: [],
+  });
+  assert.equal(JSON.parse(out).text, "没记上：金额没说清。");
 });
