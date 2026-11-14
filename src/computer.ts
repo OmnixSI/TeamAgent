@@ -29,7 +29,7 @@ const BOOT = String.raw`set -e
 export DEBIAN_FRONTEND=noninteractive HOME=/root
 mkdir -p /opt/computer ${WORK}
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends curl ca-certificates xz-utils git fontconfig fonts-noto-cjk >/dev/null
+apt-get install -y -qq --no-install-recommends curl ca-certificates xz-utils git fontconfig fonts-noto-cjk libatomic1 >/dev/null
 # A static build unpacks in seconds; the Debian package takes over half a minute to install.
 curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJ -C /usr/local/bin --strip-components=1 --wildcards '*/ffmpeg' '*/ffprobe' \
   || apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
@@ -157,8 +157,16 @@ export class Computer extends DurableObject<Env> {
   // starts counting only once this object has left memory, which adds an unmetered minute or more.
   private async touch() { await this.ctx.storage.setAlarm(Date.now() + IDLE * 1000); }
 
+  // Work in progress postpones the shutdown, but not for ever: a command that never returns (a server
+  // left in the foreground, a hung download) would otherwise keep the machine up and the meter running.
+  // The longest run a caller may ask for is 30 minutes, so anything busy beyond 35 is stuck.
+  private busyFrom = 0;
+  private enter() { if (this.busy++ === 0) this.busyFrom = Date.now(); }
+  private leave() { this.busy = Math.max(0, this.busy - 1); }
+
   async alarm() {
-    if (this.busy > 0) return this.touch();
+    if (this.busy > 0 && Date.now() - this.busyFrom < 35 * 60000) return this.touch();
+    this.busy = 0;
     if (this.box.running) await this.box.destroy().catch(() => {});
   }
 
@@ -186,11 +194,11 @@ export class Computer extends DurableObject<Env> {
     if (!box.running) { this.start(); woke = true; }
     await box.setInactivityTimeout(IDLE * 1000);
     await this.touch();
-    this.busy++;
+    this.enter();
     try {
       this.booting ??= this.setup(cache).finally(() => { this.booting = null; });
       return { woke, ...(await this.booting) };
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 
   private async setup(cache?: CacheLinks): Promise<{ bootstrap_seconds: number; setup?: "restored" | "installed"; saving?: boolean; restore_error?: string }> {
@@ -226,30 +234,30 @@ export class Computer extends DurableObject<Env> {
     const url = this.pendingSave;
     if (!url || this.saving || !this.box.running) return false;
     this.pendingSave = "";
-    this.busy++;
+    this.enter();
     this.saving = this.node(SEND, [url, String(ENV_MAX), "/tmp/computer-env.tar.zst", "-cf", "-", "-C", "/", "-T", LIST], 900)
       .then(r => { if (r.exit !== 0) console.log("environment cache upload failed", r.err.slice(-300)); })
       .catch(e => console.log("environment cache upload failed", e?.message))
-      .finally(() => { this.busy--; this.saving = null; return this.touch(); });
+      .finally(() => { this.leave(); this.saving = null; return this.touch(); });
     return true;
   }
 
   /** Unpacks a saved workspace into /work/<name> unless that directory is already there (the machine stayed
    *  awake); without a saved copy (`url` empty) it just creates the directory. */
   async restoreWorkspace(name: string, url: string): Promise<{ restored: boolean; error?: string }> {
-    this.busy++;
+    this.enter();
     try {
       if ((await this.sh('[ -e "$1" ] || { [ -z "$2" ] && mkdir -p -- "$1"; }', 10, [name, url ? "1" : ""])).exit === 0) return { restored: false };
       const r = await this.node(FETCH, [url, WORK], 600);
       if (r.exit === 0) return { restored: true };
       await this.sh('rm -rf -- "$1"', 60, [name]);
       return { restored: false, error: r.err.slice(-300) };
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 
   /** Packs /work/<name> (without dependency folders and files over 50 MB) and uploads it. */
   async saveWorkspace(name: string, url: string): Promise<{ bytes?: number; left_out: string[]; error?: string }> {
-    this.busy++;
+    this.enter();
     try {
       if ((await this.sh('[ -d "$1" ]', 10, [name])).exit !== 0) return { left_out: [], error: "/work/" + name + " 不存在" };
       const skip = WS_SKIP.map(n => "-name " + n).join(" -o ");
@@ -262,7 +270,7 @@ export class Computer extends DurableObject<Env> {
       if (r.exit !== 0 || !res) return { left_out, error: "保存工作区失败：" + r.err.slice(-300) };
       if (!res.ok) return { left_out, bytes: res.bytes, error: "工作区压缩后 " + Math.round(res.bytes / 1048576) + " MB，超过 300 MB，没有保存" };
       return { bytes: res.bytes, left_out };
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 
   /** Passes an HTTP request to a server listening inside the machine (a dev server being previewed). */
@@ -283,23 +291,23 @@ export class Computer extends DurableObject<Env> {
   }
 
   async put(name: string, bytes: Uint8Array) {
-    this.busy++;
+    this.enter();
     try {
       const safe = name.replace(/^.*[\\/]/, "").replace(/[^\w.\-一-鿿]/g, "_") || "file";
       const r = await this.sh('cat > "$1"', 120, [safe], new Blob([bytes]).stream());
       if (r.exit !== 0) throw new Error("放文件失败：" + text(r.err));
       return safe;
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 
   async run(command: string, seconds: number, env?: Record<string, string>): Promise<Step> {
-    this.busy++;
+    this.enter();
     const t = Date.now();
     try {
       const r = await this.sh(command, seconds, [], undefined, env);
       const stderr = text(r.err) + (r.exit === 124 ? "\n（超时，被停掉了）" : "");
       return { command, exit: r.exit, stdout: text(r.out), stderr, seconds: secs(t) };
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 
   /** Files to bring back (paths relative to the work directory, globs allowed) with their sizes. */
@@ -311,13 +319,13 @@ export class Computer extends DurableObject<Env> {
   }
 
   async take(path: string): Promise<Uint8Array> {
-    this.busy++;
+    this.enter();
     try {
       const p = await this.box.exec(["head", "-c", String(FILE_CAP), path], { cwd: WORK });
       const [out, , exit] = await Promise.all([capped(p.stdout, FILE_CAP), capped(p.stderr, 0), p.exitCode]);
       if (exit !== 0) throw new Error("取不回文件 " + path);
       return out.bytes;
-    } finally { this.busy--; await this.touch(); }
+    } finally { this.leave(); await this.touch(); }
   }
 }
 

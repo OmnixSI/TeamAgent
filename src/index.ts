@@ -41,12 +41,12 @@ async function webhook(req: Request, env: Env) {
 export default {
   async fetch(req: Request, env: Env) {
     const url = new URL(req.url);
-    if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: buildOf(env).slice(0, 8), deployed: env.VERSION?.timestamp || "" });
-    if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
     // A headless browser previewing an app inside the cloud computer sends this header with every request,
     // so the app's absolute paths (/assets/…) still reach it. The value is a short-lived token the Hub checks.
     const pv = req.headers.get("x-preview");
     if (pv && /^[a-z0-9]{16,64}$/.test(pv)) return hub(env).fetch(new Request(url.origin + "/x/preview/" + pv + url.pathname + url.search, req));
+    if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: buildOf(env).slice(0, 8), deployed: env.VERSION?.timestamp || "" });
+    if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
     // Published pages and file transfers: served by the Hub's features, no admin token.
     if (url.pathname.startsWith("/p/") || url.pathname.startsWith("/x/")) return hub(env).fetch(req);
     if (url.pathname.startsWith("/admin/")) {
