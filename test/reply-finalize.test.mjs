@@ -139,9 +139,17 @@ test("F3 [[SILENT]] is untouched in raw and JSON form", async () => {
   assert.equal(await api.finalizeSpoken(silent, { acceptedActions: [], avoid: [] }), silent);
 });
 
-test("F4 slug keeps ascii topics and falls back to rpt-<id6>", () => {
+test("F4 slug keeps ascii topics and hashes the full qq id for other topics", () => {
   assert.equal(api.slug("PR Progress", "anything"), "pr-progress");
-  assert.equal(api.slug("礼物日早报", "msg-351"), "rpt-msg351");
+  // QQ 群消息 id 全以 ROBOT1.0_ 开头，取前 6 位会恒为 rpt-robot1。
+  const one = "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbkS08eu4PfP";
+  const two = "ROBOT1.0_uMj7bSoGmOazRMZniWJ8kZ0mY7pQx3vN";
+  const a = api.slug("礼物日早报", one);
+  const b = api.slug("礼物日早报", two);
+  assert.notEqual(a, b, "two qq messages with one topic must not share a dedup key");
+  assert.match(a, /^rpt-[a-z0-9]{6,8}$/);
+  assert.match(b, /^rpt-[a-z0-9]{6,8}$/);
+  assert.equal(api.slug("礼物日早报", one), a, "same id must stay stable");
   assert.equal(api.slug("礼物日早报"), "rpt-000000");
 });
 
@@ -185,7 +193,7 @@ test("F5 promiseGuard registers the real empty promise and prefixes 记下了", 
   assert.equal(created.spec.origin, "chat");
   assert.ok(created.spec.request_quote.startsWith("然后悉尼时间每天早上8点"));
   assert.ok(created.spec.request_quote.length <= 200);
-  assert.equal(created.spec.dedup, "rpt-msg351");
+  assert.equal(created.spec.dedup, api.slug("昨日聊天内容总结", "msg-351"));
 });
 
 test("F6 promiseGuard rewrites the promise when the member's words do not parse", async () => {

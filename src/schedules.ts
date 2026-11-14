@@ -246,9 +246,21 @@ export function parseScheduleRequest(text: string): ParsedScheduleRequest | null
   };
 }
 
+/** FNV-1a（32 位）压成 6 位 base36：同一 id 稳定，不同 id 几乎不撞。 */
+function idHash(id: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36).padStart(6, "0").slice(-6);
+}
+
 /**
- * L2：按 topic 生成去重键。ASCII 主题转 kebab-case；中文等转不出合法键时
- * 退化为 rpt-<id 前 6 位>，保证符合 createSchedule 的 3–31 位小写规则。
+ * L2：按 topic 生成去重键。ASCII 主题转 kebab-case，已上线的规则保持不变；
+ * 中文等转不出合法键时用完整消息 id 的短哈希（rpt-<6 位 base36>）。QQ 消息 id
+ * 都以 ROBOT1.0_ 开头，不能取前缀，否则所有群共用 rpt-robot1。
+ * 结果保证符合 createSchedule 的 3–31 位小写规则。
  */
 export function slug(topic: string, id = "") {
   const ascii = String(topic ?? "")
@@ -258,8 +270,9 @@ export function slug(topic: string, id = "") {
     .replace(/^-+|-+$/g, "")
     .slice(0, 31);
   if (/^[a-z][a-z0-9-]{2,30}$/.test(ascii)) return ascii;
-  const tail = String(id ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6) || "000000";
-  return `rpt-${tail}`;
+  const key = String(id ?? "");
+  if (!key) return "rpt-000000";
+  return `rpt-${idHash(key)}`;
 }
 
 /** 2026-11-14 08:00（悉尼） */
