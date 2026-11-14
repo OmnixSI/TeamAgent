@@ -23,11 +23,13 @@ export async function requestReach(e:any,r:ReachTarget,group:string,message:stri
  if(!settings.on)return {ok:false,error_kind:'tool_not_ready',next_action:'该平台读取尚未开启，不能声称读过正文。'};
  if(settings.circuit?.until>Date.now())return {ok:false,error_kind:settings.circuit.kind,retry_after:Math.ceil((settings.circuit.until-Date.now())/1000),next_action:'该站点正在冷却，停止请求并等待冷却结束。'};
  const key=await reachKey(group,r),jobId='fetch-'+key,now=Date.now();
+ // Handle-based X actions have no URL target; keep a stable profile source for the envelope.
+ const sourceUrl=publicSourceUrl(r.target)||(r.channel==='x'&&['profile','tweets'].includes(r.action)?`https://x.com/${r.target.trim()}`:'');
  const cached=await e.DB.prepare('SELECT body,created_at FROM media_notes WHERE id=?').bind(key).first();
  if(cached&&Date.parse(cached.created_at)>now-300000){
-  try{const result=normalizeReachResult({...r,backend:'local'},JSON.parse(cached.body));if(result.ok)return result;}catch{}
+  try{const result=normalizeReachResult({...r,backend:'local',source_url:sourceUrl},JSON.parse(cached.body));if(result.ok)return result;}catch{}
  }
- const payload={source:'reach',version:1,...r,source_url:publicSourceUrl(r.target),backend:'local',deadline_ms:45000,cooldown_ms:settings.cooldown_ms,key,waiters:[{group,message}]};
+ const payload={source:'reach',version:1,...r,source_url:sourceUrl,backend:'local',deadline_ms:45000,cooldown_ms:settings.cooldown_ms,key,waiters:[{group,message}]};
  // Every waiter is explicit and group-scoped. The running command's signed URL is immutable until it finishes.
  await e.DB.prepare(`INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,'fetch',?,?)
   ON CONFLICT(id) DO UPDATE SET

@@ -1,9 +1,9 @@
 /** TeamAgent-owned contract. No third-party runtime or setup is executed. */
 export const REACH_BOUNDARY_TEXT='这些平台的读取有服务条款和账号受限风险；只在成员主动给链接或明确提问时只读访问，不批量或定时抓取。';
-const scopes={read:'post_text',thread:'post_text',search:'search_results',hot:'search_results',quote:'quote',profile:'post_text',comments:'loaded_comments'};
+const scopes={read:'post_text',thread:'post_text',search:'search_results',hot:'search_results',quote:'quote',profile:'post_text',tweets:'post_text',comments:'loaded_comments'};
 export const CHANNELS=Object.freeze({
  xiaohongshu:{hosts:['www.xiaohongshu.com','xiaohongshu.com'],short:['xhslink.com'],actions:['read','search','comments','profile']},
- x:{hosts:['x.com','www.x.com','twitter.com','www.twitter.com'],short:['t.co'],actions:['thread','search','profile']},
+ x:{hosts:['x.com','www.x.com','twitter.com','www.twitter.com'],short:['t.co'],actions:['thread','search','profile','tweets']},
  xueqiu:{hosts:['xueqiu.com','www.xueqiu.com'],short:[],actions:['quote','search','hot']},
  weibo:{hosts:['weibo.com','www.weibo.com','m.weibo.cn'],short:['weibo.cn'],actions:['read','search','hot','profile','comments']},
  zhihu:{hosts:['www.zhihu.com','zhihu.com'],short:['zhihu.com'],actions:['read','search','hot','profile']},
@@ -17,7 +17,7 @@ export function publicSourceUrl(value){
 export function safeReachText(value,max=12000){
  if(typeof value!=='string')return '';
  return value.replace(/(?:cookie|set-cookie|authorization)\s*[:=][^\r\n]*/gi,'[已过滤]')
-  .replace(/(?:xsec_token|auth_token|access_token|api[_-]?key|password|sessionid)\s*[=:]\s*[^\s&"'<>]+/gi,'[已过滤]')
+  .replace(/(?:xsec_token|auth_token|access_token|csrf|ct0|api[_-]?key|password|sessionid)\s*[=:]\s*[^\s&"'<>]+/gi,'[已过滤]')
   .replace(/https?:\/\/[^\s<>"']+/g,s=>publicSourceUrl(s)||'[链接已过滤]').slice(0,max);
 }
 export function validTarget(channel,action,target){
@@ -29,6 +29,6 @@ export function validTarget(channel,action,target){
  }
  if(['read','thread','comments'].includes(action))return false;
  if(action==='quote')return /^(?:SH|SZ|HK|US)?[A-Z0-9.]{1,12}$/i.test(target);
- if(action==='profile')return /^[\w-]{1,80}$/.test(target);
+ if(action==='profile'||action==='tweets')return /^[\w-]{1,80}$/.test(target);
  return !!target.trim()&&target.length<=200&&!/[&]/.test(decoded)&&!target.startsWith('-');
 }

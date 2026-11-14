@@ -3,6 +3,7 @@ import {CHANNELS,REACH_BOUNDARY_TEXT,validTarget} from '../reach-contract.mjs';
 import {requestReach,reachSettings} from '../reachjobs';
 export {REACH_BOUNDARY_TEXT};
 const inputKeys=new Set(['url','channel','action','target']);
+const X_RESERVED=new Set(['home','explore','search','notifications','messages','i','settings','login','logout','signup','tos','privacy','compose','intent','share','hashtag','lists','bookmarks','jobs','premium','verified','account','about','help']);
 function checkedUrl(value:string){
  const u=new URL(value);
  if(u.protocol!=='https:'||u.username||u.password||u.port&&u.port!=='443'||![...Object.values(CHANNELS)].some((c:any)=>[...c.hosts,...c.short].includes(u.hostname)))throw Error('unsupported');
@@ -24,7 +25,13 @@ export async function resolveSocialTarget(args:any):Promise<{channel:string;acti
   }finally{clearTimeout(timer);}
   const channel=Object.keys(CHANNELS).find(c=>CHANNELS[c].hosts.includes(u.hostname));if(!channel)throw Error('unsupported');
   let action='read';
-  if(channel==='x'){if(!/^\/[\w]+\/status\/\d+\/?$/.test(u.pathname))throw Error('unsupported');action='thread';}
+  if(channel==='x'){
+   const status=u.pathname.match(/^\/(?:i\/(?:web\/)?status|[A-Za-z0-9_]{1,15}\/status)\/(\d{1,25})(?:\/(?:photo|video)\/\d+)?\/?$/);
+   if(status){action='thread';return {channel,action,target:'https://x.com'+u.pathname.replace(/\/(?:photo|video)\/\d+\/?$/,'').replace(/\/$/,'')};}
+   const profile=u.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/);
+   if(profile&&!X_RESERVED.has(profile[1].toLowerCase()))return {channel,action:'profile',target:profile[1]};
+   throw Error('unsupported');
+  }
   if(channel==='xueqiu'){if(!/^\/S\/[A-Z0-9.]+\/?$/i.test(u.pathname))throw Error('unsupported');action='quote';}
   if(!validTarget(channel,action,u.href))throw Error('unsupported');
   return {channel,action,target:u.href};
@@ -34,8 +41,8 @@ export async function resolveSocialTarget(args:any):Promise<{channel:string;acti
 }
 export const readSocialTool:BotTool={
  name:'read_social',switch:'reach',untrusted:true,
- def:{type:'function',function:{name:'read_social',description:'按成员主动请求，只读社交平台链接或搜索；长读取进入本机队列，未取得结果不能声称已读。B站和公开单条推文优先使用原有读取。'+REACH_BOUNDARY_TEXT,
-  parameters:{type:'object',properties:{url:{type:'string'},channel:{type:'string',enum:Object.keys(CHANNELS)},action:{type:'string',enum:['read','search','hot','quote','profile','thread','comments']},target:{type:'string'}},additionalProperties:false}}},
+ def:{type:'function',function:{name:'read_social',description:'按成员主动请求，只读社交平台链接或搜索；长读取进入本机队列，未取得结果不能声称已读。X 登录后的推文串、用户资料/最近推文、搜索走本机登录会话；B站和公开单条推文优先使用原有读取。'+REACH_BOUNDARY_TEXT,
+  parameters:{type:'object',properties:{url:{type:'string'},channel:{type:'string',enum:Object.keys(CHANNELS)},action:{type:'string',enum:['read','search','hot','quote','profile','thread','tweets','comments']},target:{type:'string'}},additionalProperties:false}}},
  async run(e,args,ctx){
   const latest=ctx?.context?.latest,source=ctx?.source||latest;
   const fail=(kind:string)=>({ok:false,error_kind:kind,next_action:'需要成员主动提供支持的链接或明确查询；目前不能声称读过内容。'});
