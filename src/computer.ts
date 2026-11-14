@@ -38,7 +38,11 @@ for n in soffice libreoffice; do printf '#!/bin/sh\n[ -x /usr/bin/soffice ] || D
 touch ${MARK}`;
 
 export type Step = { command: string; exit: number; stdout: string; stderr: string; seconds: number };
-export type ComputerRequest = { commands: string[]; files?: { name: string; bytes: Uint8Array }[]; collect?: string[]; timeoutSeconds?: number };
+export type ComputerRequest = {
+  commands: string[]; files?: { name: string; bytes: Uint8Array }[]; collect?: string[]; timeoutSeconds?: number;
+  /** Environment for the commands of this run only (tokens, keys). Never written to disk or to any log here. */
+  env?: Record<string, string>;
+};
 export type ComputerResult = {
   ok: boolean; steps: Step[]; files: { name: string; bytes: Uint8Array }[]; seconds: number;
   woke?: boolean; bootstrap_seconds?: number; skipped?: string[]; error?: string;
@@ -91,9 +95,9 @@ export class Computer extends DurableObject<Env> {
     if (this.box.running) await this.box.destroy().catch(() => {});
   }
 
-  private async sh(command: string, seconds: number, args: string[] = [], stdin?: ReadableStream) {
+  private async sh(command: string, seconds: number, args: string[] = [], stdin?: ReadableStream, env?: Record<string, string>) {
     // coreutils timeout signals the whole process group; kill() would reach only the bash it started.
-    const p = await this.box.exec(["timeout", "-k", "5", String(seconds), "bash", "-lc", command, "bash", ...args], { cwd: WORK, stdin });
+    const p = await this.box.exec(["timeout", "-k", "5", String(seconds), "bash", "-lc", command, "bash", ...args], { cwd: WORK, stdin, ...(env ? { env } : {}) });
     const [out, err, exit] = await Promise.all([capped(p.stdout, OUT_CAP), capped(p.stderr, OUT_CAP), p.exitCode]);
     return { exit, out, err };
   }
@@ -139,11 +143,11 @@ export class Computer extends DurableObject<Env> {
     } finally { this.busy--; await this.touch(); }
   }
 
-  async run(command: string, seconds: number): Promise<Step> {
+  async run(command: string, seconds: number, env?: Record<string, string>): Promise<Step> {
     this.busy++;
     const t = Date.now();
     try {
-      const r = await this.sh(command, seconds);
+      const r = await this.sh(command, seconds, [], undefined, env);
       const stderr = text(r.err) + (r.exit === 124 ? "\n（超时，被停掉了）" : "");
       return { command, exit: r.exit, stdout: text(r.out), stderr, seconds: secs(t) };
     } finally { this.busy--; await this.touch(); }
@@ -189,7 +193,7 @@ export async function runComputer(hub: Hub, req: ComputerRequest): Promise<Compu
     for (const command of req.commands) {
       const left = Math.floor((deadline - Date.now()) / 1000);
       if (left < 2) { out.error = "超过时限，后面的命令没跑"; break; }
-      const step: Step = await box.run(command, left);
+      const step: Step = await box.run(command, left, req.env);
       out.steps.push(step);
       if (step.exit !== 0) break;
     }

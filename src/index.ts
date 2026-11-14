@@ -43,6 +43,8 @@ export default {
     const url = new URL(req.url);
     if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: buildOf(env).slice(0, 8), deployed: env.VERSION?.timestamp || "" });
     if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
+    // Published pages and file transfers: served by the Hub's features, no admin token.
+    if (url.pathname.startsWith("/p/") || url.pathname.startsWith("/x/")) return hub(env).fetch(req);
     if (url.pathname.startsWith("/admin/")) {
       const given = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
       const a = new TextEncoder().encode(given), b = new TextEncoder().encode(env.ADMIN_TOKEN || "");

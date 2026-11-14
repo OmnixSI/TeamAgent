@@ -14,7 +14,7 @@ registerHooks({
     return { ...r, source: src.replace(/constructor\(\s*(?:private|public|protected)\s+(?:readonly\s+)?(\w+)\s*:\s*([^)]*)\)\s*\{\s*\}/g, "constructor($1: $2) { this.$1 = $1; }") };
   },
 });
-const { cycleStart, Plan, PLAN, R2_STORAGE_STOP } = await import("../src/budget.ts");
+const { cycleStart, Plan, PLAN, DAILY, R2_STORAGE_STOP } = await import("../src/budget.ts");
 const { SelfEdit } = await import("../src/selfedit.ts");
 
 const kv = () => {
@@ -72,7 +72,7 @@ describe("budget.Plan", () => {
     const start = cycleStart(now), end = new Date(start); end.setUTCMonth(end.getUTCMonth() + 1);
     assert.equal(r.cycle, day(start) + " 到 " + day(end.getTime()));
     assert.equal(typeof r.rule, "string");
-    assert.equal(r.items.length, Object.keys(PLAN).length + 2);
+    assert.equal(r.items.length, Object.keys(PLAN).length + Object.keys(DAILY).length + 2);
     for (const i of r.items) {
       for (const k of ["what", "used", "included", "unit", "percent_of_included"]) assert.ok(k in i, k);
     }

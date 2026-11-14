@@ -5,6 +5,7 @@ import type { Asker } from "./selfedit.ts";
 import { displayName } from "./core.ts";
 import { browse, render, renderPdf } from "./render.ts";
 import { runComputer } from "./computer.ts";
+import { FEATURES } from "./feat/index.ts";
 import { checkHealth } from "./health.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, unb64 } from "./util.ts";
 
@@ -20,6 +21,7 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
     sendImage: (bytes, note, mime, silent, made) => hub.sendImage(conv, bytes, note, mime, silent, made),
     sendFile: (name, bytes) => hub.sendMediaMessage(conv, 4, bytes, "[你发了一个文件：" + name + "]", name),
     sendVoice: silk => hub.sendMediaMessage(conv, 3, unb64(silk), "[你发了一条语音]"),
+    sendVideo: (name, bytes) => hub.sendMediaMessage(conv, 2, bytes, "[你发了一个视频：" + name + "]", name),
     // pictures and files
     imageRef: ref => hub.store.imageRef(conv, ref),
     fileRef: ref => hub.store.fileRef(conv, ref),
@@ -40,6 +42,7 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
       const img = await hub.store.imageRef(conv, ref), clean = name.trim().slice(0, 16);
       return !!img && !!clean && img.bytes.length <= 1_500_000 && !!(await hub.store.putImage(conv, img.bytes, img.mime, clip(mood || "", 30) || "表情包", { name: "sticker:" + clean }));
     },
+    features: () => FEATURES.map(f => ({ name: f.name, about: f.about })),
     // rendering and browsing
     render: page => render(hub, page),
     renderPdf: (html, width, height) => renderPdf(hub, html, width, height),
@@ -64,7 +67,8 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
       return Date.now() - Number(hub.get("sandbox:at") || 0) < 17 * 60000 ? hub.get("sandbox:id") || "" : "";
     },
     quota: async (kind, limit) => {
-      const k = "quota:" + kind + ":" + fmtDate(Date.now(), SYD), used = Number(hub.get(k) || 0);
+      // Test rooms count on their own, so trying things out does not eat the group's daily allowance.
+      const k = "quota:" + kind + ":" + (hub.shadow(conv) ? conv + ":" : "") + fmtDate(Date.now(), SYD), used = Number(hub.get(k) || 0);
       if (used >= limit) return false;
       hub.set(k, String(used + 1)); return true;
     },

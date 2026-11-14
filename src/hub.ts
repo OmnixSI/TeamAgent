@@ -22,6 +22,7 @@ import { dailyHealth } from "./health.ts";
 import { makeHost } from "./host.ts";
 import { hearSilk } from "./sites.ts";
 import { route } from "./admin.ts";
+import { FEATURES } from "./feat/index.ts";
 import { BJ, SYD, b64, buildOf, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 
@@ -77,6 +78,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS job(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, title TEXT, task TEXT, state TEXT, created INTEGER, updated INTEGER,
         tries INTEGER DEFAULT 0, steps INTEGER DEFAULT 0, error TEXT);
     `);
+    for (const f of FEATURES) if (f.schema) this.sql.exec(f.schema);
     this.qq = new QQ(env);
     this.plan = new Plan(this);
     this.store = new Store(this);
@@ -159,7 +161,7 @@ export class Hub extends DurableObject<Env> {
     return false;
   }
   /**
-   * fileType 1 = image, 3 = voice (SILK), 4 = file. With nobody to reply to (a scheduled task at night),
+   * fileType 1 = image, 2 = video (MP4), 3 = voice (SILK), 4 = file. With nobody to reply to (a scheduled task at night),
    * QQ may refuse an unprompted picture or file; it is then kept and goes out when someone next speaks.
    */
   async sendMediaMessage(conv: string, fileType: number, bytes: Uint8Array, label: string, fileName?: string): Promise<{ ok: boolean; error?: string; queued?: boolean }> {
@@ -360,7 +362,12 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM turn WHERE id < (SELECT MAX(id) FROM turn) - 3000");
     if (s.runs.length) this.sql.exec("DELETE FROM toolrun WHERE id < (SELECT MAX(id) FROM toolrun) - 6000");
   }
-  tools(conv: string, askers: Asker[] = []) { return buildTools(makeHost(this, conv, askers)); }
+  tools(conv: string, askers: Asker[] = []) {
+    const host = makeHost(this, conv, askers), built = buildTools(host);
+    // Feature tools are appended in place: about_self describes whatever this list holds.
+    for (const f of FEATURES) built.push(...(f.tools?.({ hub: this, conv, askers, host }) || []));
+    return built;
+  }
   /** `job` is a getter because a chat turn only becomes a job partway through. */
   deps(conv: string, interim: boolean, askers: Asker[], job: number | (() => number), detach?: (what: string) => void) {
     const jobId = () => (typeof job === "function" ? job() : job);
@@ -535,6 +542,7 @@ export class Hub extends DurableObject<Env> {
         const waiting = this.sql.exec("SELECT COUNT(*) n, SUM(mentioned) m, MAX(ts) t FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0];
         if (Number(waiting.n) && (Number(waiting.m) > 0 || now - Number(waiting.t) < 240000)) this.ctx.waitUntil(this.runConv(conv).catch(() => {}));
       }
+      for (const f of FEATURES) { try { await f.tick?.(this, now); } catch (e: any) { console.log("feature tick failed", f.name, e?.message); } }
       if (this.restartWanted) this.maybeRestart();
     } finally {
       await this.ctx.storage.setAlarm(Date.now() + TICK_MS);

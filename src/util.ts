@@ -22,6 +22,10 @@ export type Env = {
   FILES?: any;
   /** Set by Cloudflare on every deploy. */
   VERSION?: { id: string; tag?: string; timestamp?: string };
+  /** Workers AI: 10,000 neurons a day are free; every call must go through hub.plan ("ai_neurons"). */
+  AI?: any;
+  /** Vectorize index of chat and document passages (1024 dimensions, cosine). */
+  VEC?: any;
   /** Durable Object namespace of the cloud computer (one Linux container). */
   COMPUTER?: any;
 };

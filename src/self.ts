@@ -103,7 +103,7 @@ const SELF_EDIT = [
   "做法：先看现状和源码、能复现就复现，找到原因再动手；一次只改一处；改完验证一次；说清改了什么、怎么撤销。",
 ];
 
-export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?: any, health?: any) {
+export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?: any, health?: any, features: { name: string; about?: string[] }[] = []) {
   return {
     notice: "这是你自己的真实情况，回答“你怎么实现的、接了什么、能做什么”时照这个说，别凭印象补。不要说出任何密钥、登录信息或管理接口地址。",
     how_a_message_flows: PIPELINE,
@@ -114,6 +114,7 @@ export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?:
     memory: MEMORY,
     drawing: DRAWING,
     capabilities: tools.filter(t => t.name !== "about_self").map(t => t.name + "：" + (t.description.length > 130 ? t.description.slice(0, 130) + "…" : t.description)),
+    added_abilities_and_how_they_work: Object.fromEntries(features.filter(f => f.about?.length).map(f => [f.name, f.about])),
     cannot_do: CANNOT,
     self_iteration: SELF_EDIT,
     ...(selfEdit ? { self_edit_state: selfEdit } : {}),

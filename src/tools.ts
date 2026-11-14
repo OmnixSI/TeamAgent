@@ -49,6 +49,8 @@ export interface Host {
   computer(req: ComputerRequest): Promise<ComputerResult>;
   /** Link of a video someone posted, by the message number shown as [视频 123]; "" when unknown. */
   videoUrl(seq: number): string;
+  /** The added abilities (src/feat) and what each says about itself. */
+  features(): { name: string; about?: string[] }[];
   /** A short progress line to the chat during a long job. */
   say(text: string): Promise<boolean>;
   jobs(): any[];
@@ -79,6 +81,8 @@ export interface Host {
   /** Saved login cookie header for a site ("bili", "xhs", "zhihu", "douyin", "x"), or "". */
   cookie(site: string): string;
   sendVoice(silkB64: string): Promise<{ ok: boolean; error?: string }>;
+  /** Sends an MP4 as a playable video message. */
+  sendVideo(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string; queued?: boolean }>;
 }
 
 const toDataUrl = (r: Ref) => { let t = ""; for (let i = 0; i < r.bytes.length; i += 0x8000) t += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000)); return "data:" + r.mime + ";base64," + btoa(t); };
@@ -270,7 +274,7 @@ export function buildTools(host: Host): Tool[] {
       name: "about_self",
       description: "你自己的真实情况：整条链路怎么走、背后接了哪些服务、数据存在哪、记忆和画图怎么做、现在能做的全部事情、做不到的事、代码在哪个文件、当前运行状态。有人问你怎么实现的、接了什么模型、能做什么、现在状态怎样，先调它再答。",
       parameters: obj({ check: { type: "boolean", description: "填 true 现在就把自检重跑一遍（令牌、各站登录、余额、套餐额度）；不填用今天上午那次的结果" } }),
-      run: async a => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" }), await host.health(!!a.check).catch(() => null)); },
+      run: async a => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" }), await host.health(!!a.check).catch(() => null), host.features()); },
     },
     {
       name: "plan", work: true, long: true,
