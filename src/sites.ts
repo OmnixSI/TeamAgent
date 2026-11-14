@@ -8,7 +8,13 @@ import { clip, unb64, b64 } from "./util.ts";
 import type { Env } from "./util.ts";
 import { X_BEARER_TOKEN, buildSearchTimelineRequest, formatTweetText, parseSearchTimeline, parseStatusId } from "./xgraphql.mjs";
 
-export type Net = { env: Env & { RELAY_URL?: string; RELAY_KEY?: string }; cookie(site: string): string };
+export type Net = {
+  env: Env & { RELAY_URL?: string; RELAY_KEY?: string }; cookie(site: string): string;
+  /** Speech to text that tries the free daily allowance first; without it the paid service is used directly. */
+  transcribe?(audio: Uint8Array, seconds: number, type: string, name: string): Promise<string>;
+};
+const hear = (net: Net, audio: Uint8Array, seconds: number, type = "audio/mp4", name = "audio.m4a") =>
+  net.transcribe ? net.transcribe(audio, seconds, type, name) : transcribe(net.env, audio, seconds, type, name);
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -214,7 +220,7 @@ async function biliTranscript(net: Net, query: string, cid: number, maxMinutes: 
       const i = next++; if (i >= pieces.length) return;
       const body = await range(url, pieces[i].from, pieces[i].to);
       const joined = new Uint8Array(initBytes.length + body.length); joined.set(initBytes); joined.set(body, initBytes.length);
-      out[i] = "[" + stamp(pieces[i].start) + "] " + await transcribe(net.env, joined, pieces[i].dur).catch(e => "（这一段没转出来：" + e.message + "）");
+      out[i] = "[" + stamp(pieces[i].start) + "] " + await hear(net, joined, pieces[i].dur).catch(e => "（这一段没转出来：" + e.message + "）");
     }
   }));
   return out.join("\n");
@@ -316,12 +322,19 @@ export async function hot(net: Net, source: string) {
 }
 
 // ---------- stocks (Tencent quotes: A shares, Hong Kong, US) ----------
+// The name search returns a company or an ETF for these; an index has to be asked for by its code.
+const INDEX_CODES: [RegExp, string][] = [
+  [/^(纳斯达克(综合)?(指数)?|纳指|ixic)$/i, "usIXIC"], [/^(标普\s*500(指数)?|标普|spx|s&p\s*500)$/i, "usINX"], [/^(道琼斯(工业)?(指数)?|道指|dji)$/i, "usDJI"],
+  [/^(恒生指数|恒指|hsi)$/i, "hkHSI"], [/^(恒生科技(指数)?|恒科)$/i, "hkHSTECH"],
+];
 export async function stock(query: string) {
   const text = async (url: string, charset: string) => new TextDecoder(charset).decode(await (await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) })).arrayBuffer());
   let symbols: string[] = [];
   for (const raw of query.split(/[,，\s]+/).filter(Boolean).slice(0, 6)) {
     if (/^(sh|sz|bj)\d{6}$/i.test(raw)) { symbols.push(raw.toLowerCase()); continue; }
     if (/^hk\d{5}$/i.test(raw)) { symbols.push(raw.toLowerCase()); continue; }
+    const index = INDEX_CODES.find(([re]) => re.test(raw));
+    if (index) { symbols.push(index[1]); continue; }
     const hint = await text("https://smartbox.gtimg.cn/s3/?v=2&t=all&q=" + encodeURIComponent(raw), "utf-8");
     const first = (hint.match(/v_hint="([^"]*)"/)?.[1] || "").split("^").map(e => e.split("~")).filter(e => e.length >= 5 && ["sh", "sz", "bj", "hk", "us"].includes(e[0]))
       .sort((x, y) => Number(y[4]?.startsWith("GP")) - Number(x[4]?.startsWith("GP")))[0];
@@ -388,13 +401,16 @@ export async function hearSilk(net: Net, silk: Uint8Array) {
   tag(0, "RIFF"); v.setUint32(4, 36 + pcm.length, true); tag(8, "WAVE"); tag(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
   v.setUint32(24, 24000, true); v.setUint32(28, 48000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, "data"); v.setUint32(40, pcm.length, true);
   wav.set(pcm, 44);
-  return (await transcribe(net.env, wav, pcm.length / 48000, "audio/wav", "voice.wav")).trim();
+  return (await hear(net, wav, pcm.length / 48000, "audio/wav", "voice.wav")).trim();
 }
 
 export async function ttsSilk(net: Net, text: string, voice: string) {
   const r = await dsJson(net.env, "/v1/tools/tts", { text, voice_id: voice === "male" ? "tide" : "stella", format: "pcm", filter_markdown: true }, 60000);
   if (!r.ok) throw new Error("语音合成失败（" + r.status + "）");
-  const pcm = new Uint8Array(await r.arrayBuffer());
+  return pcmSilk(net, new Uint8Array(await r.arrayBuffer()));
+}
+/** 24 kHz 16-bit mono samples to the SILK format QQ voice messages use (encoded on the relay). */
+export async function pcmSilk(net: Net, pcm: Uint8Array) {
   if (pcm.length < 2000) throw new Error("语音合成没有返回声音");
   if (pcm.length > 3_000_000) throw new Error("这段话太长了，语音最多一分钟左右");
   const enc = await fetch(net.env.RELAY_URL + "/api/silk", {

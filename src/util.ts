@@ -15,6 +15,7 @@ export type Env = {
   CHAT_MODEL?: string;
   RELAY_URL?: string;
   RELAY_KEY?: string;
+  PUBLIC_URL?: string;
   CODE_MODEL?: string;
   OWNERS?: string;
   BROWSER?: any;
@@ -22,6 +23,8 @@ export type Env = {
   FILES?: any;
   /** Set by Cloudflare on every deploy. */
   VERSION?: { id: string; tag?: string; timestamp?: string };
+  /** Workers AI: 10,000 neurons a day are free; every call must go through hub.plan ("ai_neurons"). */
+  AI?: any;
   /** Durable Object namespace of the cloud computer (one Linux container). */
   COMPUTER?: any;
 };
@@ -63,15 +66,16 @@ export function zonedToUtc(date: string, time: string, tz: string) {
   ts = guess - tzOffset(ts, tz);
   return ts;
 }
-/** Next occurrence of HH:MM in a zone strictly after `after`; `days` are 0=Sunday. */
-export function nextDaily(time: string, tz: string, after: number, days?: number[]) {
-  for (let i = 0; i < 9; i++) {
+/** Next occurrence of HH:MM in a zone strictly after `after`; `days` are weekdays (0=Sunday), `dom` days of the month. */
+export function nextDaily(time: string, tz: string, after: number, days?: number[], dom?: number[]) {
+  for (let i = 0; i < (dom?.length ? 63 : 9); i++) {
     const day = fmtDate(after + i * 86400000, tz), ts = zonedToUtc(day, time, tz);
     if (ts <= after) continue;
     if (days?.length) {
       const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts(ts, tz).weekday);
       if (!days.includes(wd)) continue;
     }
+    if (dom?.length && !dom.includes(Number(parts(ts, tz).day))) continue;
     return ts;
   }
   return after + 86400000;

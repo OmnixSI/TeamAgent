@@ -38,6 +38,8 @@ CHAT_MODEL = "deepseek-flash"
 # QQ member ids allowed to change the bot's own settings directly (comma separated).
 OWNERS = "0FC1E8A8BD28981E86866125AC3FCEFF"
 RELAY_URL = "https://relay-dusky-five.vercel.app"
+# Where published pages and transfers are reachable from outside.
+PUBLIC_URL = "https://teamagent.inkboard-server.workers.dev"
 
 # Headless browser for rendering documents, mind maps and pages to pictures (included in Workers Paid).
 [browser]
@@ -47,6 +49,11 @@ binding = "BROWSER"
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "teamagent"
+
+# Workers AI: 10,000 neurons a day are free; every call is metered and stops at 8,000 (src/budget.ts).
+# Vectors for searching by meaning are kept in the Hub's own SQLite, which costs nothing.
+[ai]
+binding = "AI"
 
 # Lets the Hub notice that a newer version was deployed and restart itself onto it.
 [version_metadata]

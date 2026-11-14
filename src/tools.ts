@@ -6,10 +6,12 @@ import type { Ref } from "./draw.ts";
 import type { Row, Tool } from "./core.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
-import { biliSearch, biliVideo, hot, readRelayed, stock, transcribe, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { biliSearch, biliVideo, hot, pcmSilk, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { VOICES, edgeSpeak, pickVoice } from "./feat/voice.ts";
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
+import { PACKS } from "./packs.ts";
 import { PRICE, meter } from "./meter.ts";
 import { buildPage } from "./show.ts";
 import { bookHtml, illustrate, planBook } from "./book.ts";
@@ -47,8 +49,12 @@ export interface Host {
   browse(url: string, shot: boolean): Promise<{ title: string; text: string; shot: Uint8Array | null }>;
   /** Runs shell commands in the cloud computer (Linux, 1 vCPU, 1 GiB) and returns their output and the files asked for. */
   computer(req: ComputerRequest): Promise<ComputerResult>;
+  /** Speech to text, free allowance first. */
+  transcribe(audio: Uint8Array, seconds: number, type: string, name: string): Promise<string>;
   /** Link of a video someone posted, by the message number shown as [视频 123]; "" when unknown. */
   videoUrl(seq: number): string;
+  /** The added abilities (src/feat) and what each says about itself. */
+  features(): { name: string; about?: string[] }[];
   /** A short progress line to the chat during a long job. */
   say(text: string): Promise<boolean>;
   jobs(): any[];
@@ -79,6 +85,8 @@ export interface Host {
   /** Saved login cookie header for a site ("bili", "xhs", "zhihu", "douyin", "x"), or "". */
   cookie(site: string): string;
   sendVoice(silkB64: string): Promise<{ ok: boolean; error?: string }>;
+  /** Sends an MP4 as a playable video message. */
+  sendVideo(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string; queued?: boolean }>;
 }
 
 const toDataUrl = (r: Ref) => { let t = ""; for (let i = 0; i < r.bytes.length; i += 0x8000) t += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000)); return "data:" + r.mime + ";base64," + btoa(t); };
@@ -224,7 +232,8 @@ function parseWhen(when: any, now: number) {
   if (when?.daily) {
     const tz = when.tz === "beijing" || when.tz === BJ ? BJ : SYD;
     if (!/^\d{1,2}:\d{2}$/.test(when.daily)) throw new Error("daily 要写成 HH:MM");
-    return { type: "daily", time: when.daily.padStart(5, "0"), tz, ...(Array.isArray(when.weekdays) && when.weekdays.length ? { days: when.weekdays } : {}) };
+    const dom = (Array.isArray(when.month_days) ? when.month_days : []).map(Number).filter((d: number) => d >= 1 && d <= 28);
+    return { type: "daily", time: when.daily.padStart(5, "0"), tz, ...(Array.isArray(when.weekdays) && when.weekdays.length ? { days: when.weekdays } : {}), ...(dom.length ? { dom } : {}) };
   }
   if (when?.in_minutes) return { type: "once", at: now + Math.max(1, Number(when.in_minutes)) * 60000 };
   if (when?.at) {
@@ -263,14 +272,14 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
 export function buildTools(host: Host): Tool[] {
   const env = host.env;
-  const net: Net = { env: env as any, cookie: site => host.cookie(site) };
+  const net: Net = { env: env as any, cookie: site => host.cookie(site), transcribe: (a, s, t, n) => host.transcribe(a, s, t, n) };
   let sawSelf = false;
   const tools: Tool[] = [
     {
       name: "about_self",
       description: "你自己的真实情况：整条链路怎么走、背后接了哪些服务、数据存在哪、记忆和画图怎么做、现在能做的全部事情、做不到的事、代码在哪个文件、当前运行状态。有人问你怎么实现的、接了什么模型、能做什么、现在状态怎样，先调它再答。",
       parameters: obj({ check: { type: "boolean", description: "填 true 现在就把自检重跑一遍（令牌、各站登录、余额、套餐额度）；不填用今天上午那次的结果" } }),
-      run: async a => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" }), await host.health(!!a.check).catch(() => null)); },
+      run: async a => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" }), await host.health(!!a.check).catch(() => null), host.features()); },
     },
     {
       name: "plan", work: true, long: true,
@@ -393,11 +402,17 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "speak", slow: true,
-      description: "发一条语音到群里（群友让你发语音、念出来、用语音说，或者你觉得这句用嘴说更有意思时）。text 是要说的话，口语，不超过 150 字。返回 sent=true 才算发出去。",
-      parameters: obj({ text: str("要说的话"), voice: { type: "string", enum: ["female", "male"] } }, ["text"]),
+      description: "发一条语音到群里（群友让你发语音、念出来、用语音说，或者你觉得这句用嘴说更有意思时）。text 是要说的话，口语，不超过 150 字。voice 选声音：female=你平时的女声（默认）、male=你平时的男声、" + Object.entries(VOICES).filter(([k]) => k !== "female" && k !== "male").map(([k, v]) => k + "=" + v.label).join("、") + "。没人指定就用平时的声音；有人点名要方言，或者这句话用方言说更有味道，就换。方言声音念的是你写的字，想要地道就把词也写成那边的说法。返回 sent=true 才算发出去。",
+      parameters: obj({ text: str("要说的话"), voice: { type: "string", enum: Object.keys(VOICES) } }, ["text"]),
       run: async a => {
         if (!(await host.quota("voice", Number(host.cfg("voice_daily"))))) return { ok: false, sent: false, error: "今天语音发太多了" };
-        const audio = await ttsSilk(net, clip(a.text, 400), a.voice === "male" ? "male" : "female");
+        const text = clip(a.text, 400), voice = pickVoice(a.voice);
+        // The everyday voice stays the one the group knows; the other voices and the dialects are the free
+        // Edge ones. Each covers for the other when its service is down.
+        const usual = () => ttsSilk(net, text, voice.key === "male" ? "male" : "female");
+        const other = () => edgeSpeak(text, voice.key).then(v => pcmSilk(net, v.pcm));
+        const everyday = voice.key === "female" || voice.key === "male";
+        const audio = await (everyday ? usual().catch(other) : other().catch(usual));
         const sent = await host.sendVoice(audio.silk);
         return sent.ok ? { ok: true, sent: true, seconds: audio.seconds } : { ok: false, sent: false, error: "语音合成好了但发到 QQ 失败：" + (sent.error || "未知原因") };
       },
@@ -608,12 +623,14 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "computer", work: true, slow: true,
-      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 24、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置 3 分钟就关机并清空，隔了一阵再用要重新放文件，开机多等半分钟。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
+      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 26、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置一分半钟就关机并清空，隔了一阵再用要重新放文件，开机多等约 10 秒。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
       parameters: obj({
         commands: { type: "array", items: { type: "string" }, description: "按顺序执行的 bash 命令。例：[\"git clone --depth 1 https://github.com/OmnixSI/WhalePartner repo\", \"cd repo && grep -rn 'TODO' src | head -50\"]" },
         files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },
         collect: { type: "array", items: { type: "string" }, description: "跑完要取回的文件，如 \"out/report.pdf\"、\"frames/*.jpg\"" },
         timeout_seconds: { type: "integer", description: "整批命令的总时限，默认 300，最多 1800" },
+        packs: { type: "array", items: { type: "string" }, description: "要用到的大件工具包，会先装好再跑命令：" + (Object.entries(PACKS).map(([k, p]) => k + "（" + p.what + "）").join("；") || "暂无") },
+        workspace: { type: "string", description: "要跨天接着干的活，起个英文名：/work/<名字> 这个目录会在关机前存起来、下次自动恢复（最多 300 MB）。一次性的活不用填" },
         deliver: { type: "boolean", description: "默认 true，取回的图和文件直接发群里。只是中间素材时填 false：不发群，只返回编号" },
       }, ["commands"]),
       run: async a => {
@@ -622,7 +639,7 @@ export function buildTools(host: Host): Tool[] {
         for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) files.push(f); }
         const commands = (Array.isArray(a.commands) ? a.commands : [a.commands]).map(String).filter(Boolean).slice(0, 20);
         if (!commands.length) return { ok: false, error: "没有要跑的命令" };
-        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300 });
+        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300, ...(Array.isArray(a.packs) && a.packs.length ? { packs: a.packs.map(String).filter((p: string) => PACKS[p]) } : {}), ...(a.workspace ? { workspace: String(a.workspace) } : {}) });
         return {
           ok: out.ok, ...(out.error ? { error: out.error } : {}), seconds: out.seconds, ...(out.bootstrap_seconds ? { note_boot: "电脑刚开机，装软件用了 " + out.bootstrap_seconds + " 秒" } : {}),
           steps: out.steps.map(st => ({ command: clip(st.command, 200), exit: st.exit, seconds: st.seconds, stdout: clip(st.stdout, 5000), ...(st.stderr.trim() ? { stderr: clip(st.stderr, 2000) } : {}) })),
@@ -660,7 +677,7 @@ export function buildTools(host: Host): Tool[] {
         const info = new TextDecoder().decode(file("info.txt")?.bytes || new Uint8Array()), seconds = Number(info.match(/seconds: (\d+)/)?.[1] || 0);
         const audio = file("audio.mp3");
         let said = "", heard = "";
-        if (audio && audio.bytes.length > 2000) { try { said = await transcribe(host.env, audio.bytes, Math.min(seconds, minutes * 60), "audio/mpeg", "audio.mp3"); } catch (e: any) { heard = "声音没转出来：" + clip(e?.message || "", 80); } }
+        if (audio && audio.bytes.length > 2000) { try { said = await host.transcribe(audio.bytes, Math.min(seconds, minutes * 60), "audio/mpeg", "audio.mp3"); } catch (e: any) { heard = "声音没转出来：" + clip(e?.message || "", 80); } }
         else heard = "这个视频没有声音";
         const shots = out.files.filter(f => /f\d+\.jpg$/.test(f.name)).slice(0, 4);
         return {
@@ -727,6 +744,7 @@ export function buildTools(host: Host): Tool[] {
         when: obj({
           daily: str("每天的 HH:MM"), tz: { type: "string", enum: ["sydney", "beijing"] },
           weekdays: { type: "array", items: { type: "integer" }, description: "只在这些星期几，0=周日" },
+          month_days: { type: "array", items: { type: "integer" }, description: "只在每月这几号（1 到 28），如每月 1 号填 [1]" },
           in_minutes: { type: "number" }, at: str("ISO 8601 带时区的一次性时间"),
         }),
         task: str("到点要做的事"), id: { type: "integer" },

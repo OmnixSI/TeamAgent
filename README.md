@@ -11,7 +11,8 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
                           ├─ Cloudflare 无头浏览器：文档、思维导图、网页渲染成图和 PDF，打开动态网页
                           ├─ 云电脑（Cloudflare 容器）：ffmpeg、git、Python、LibreOffice，按需开机
                           ├─ 中转（Vercel 香港）：国内站点出口、SILK 语音编码
-                          └─ GitHub：只读查看组织仓库
+                          ├─ Workers AI：免费转写、按意思搜索用的向量（每天 1 万 neurons 内）
+                          └─ GitHub：读组织仓库；改代码只开草稿 PR
 ```
 
 线上地址 https://teamagent.inkboard-server.workers.dev （`/health`）。Worker 名 `teamagent`。旧版（v1）的代码在标签 `v1-archive`。
@@ -55,12 +56,32 @@ Cloudflare 是每月 5 美元的固定套餐，要求是绝不超出。按量的
 | 容器 CPU | 每月 375 vCPU 分钟 | 300 分钟 |
 | R2 存储 | 10 GB | 8 GB |
 | R2 写入 / 读取 | 100 万 / 1000 万次 | 70 万 / 700 万次 |
+| Workers AI | 每天 1 万 neurons | 每天 8,000 |
 
 Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Object 在线时长的 83% 左右（一个月约 33 万 / 40 万 GB·秒）。所以不能再有第二个常驻对象。`usage` 工具和 `GET /admin/usage` 里的 `cloudflare_plan` 能看到每项用了多少。
 
+## 功能模块（`src/feat/`）
+
+每个模块一个文件，通过 `src/feat/types.ts` 里的接口挂进来（工具、时钟、管理接口、公开路由、建表、可调参数、自述），在 `src/feat/index.ts` 登记一次。加新能力优先照这个做，不用动共享文件。
+
+| 模块 | 做什么 | 工具 |
+|---|---|---|
+| `backup` | 每天北京 03:10 把全部数据（不含站点登录）备份到 R2，留 30 天；周日另存形象和表情包 | `backups` |
+| `transfer` | 云电脑和 R2 之间的大文件传输（短时令牌）；云电脑的工具缓存和长期工作区走它 | — |
+| `meme` | 300 个梗图模板（摸头、举牌…），拿现成图片秒出 | `meme` |
+| `voice` | 免费的方言和多音色语音；图配旁白做视频；双人音频节目 | `narrate` `podcast`（`speak` 也用它的声音） |
+| `codeagent` | 云电脑里跑编码代理（OpenCode + DeepSeek），改完开草稿 PR；只读调查 | `code_task` |
+| `publish` | 把网页（小游戏、投票、图集、报告）托管在 `/p/<id>/`，带一个小的状态接口 | `publish` |
+| `preview` | 把仓库的分支或 PR 在云电脑里跑起来，无头浏览器截图 | `preview_app` |
+| `repocheck` | 每晚北京 02:40 给团队仓库装依赖、跑测试，测试由过变挂时在群里说一次 | `repo_health` |
+| `search` | 聊天记录分段算向量（存在 SQLite），按意思搜；Workers AI 的计量封装 | `recall` |
+| `library` | 自动存下群里分享的链接和文件的正文，可搜可取 | `library` |
+| `watch` | 盯网页，关心的东西变了才在群里说 | `watch` |
+| `data` | 每天存行情和热榜快照，查历史和走势 | `data` |
+
 ## 云电脑
 
-`src/computer.ts`：一台 Cloudflare 容器（托管的 Debian 镜像，不需要 Docker 构建），1 核、1 GiB 内存、4 GB 硬盘。要用时开机（约 0.2 秒），每次开机后装一遍工具（约 25–30 秒），最后一次使用后 3 分钟由闹钟关机，硬盘清空。运行时间（含那 3 分钟）和 CPU 秒数都记进套餐计数。只有一个实例。`computer` 工具让模型在里面跑命令；`watch_video` 是固定流程：取视频、抽音轨、截帧，音轨再交给转写。
+`src/computer.ts`：一台 Cloudflare 容器（托管的 Debian 镜像，不需要 Docker 构建），1 核、1 GiB 内存、4 GB 硬盘。要用时开机，装好的工具（ffmpeg、git、Python、Node 26、字体）从 R2 里的缓存解压恢复，缓存没有或坏了就完整安装一遍并重新存缓存；最后一次使用后 90 秒由闹钟关机，硬盘清空。卡住的命令最多让它多开 35 分钟。运行时间（含那 3 分钟）和 CPU 秒数都记进套餐计数。只有一个实例。`computer` 工具让模型在里面跑命令；`watch_video` 是固定流程：取视频、抽音轨、截帧，音轨再交给转写。
 
 ## 自检
 
@@ -116,7 +137,9 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | 平台 | `bilibili`（字幕/无字幕转写/热评/搜索） `watch_video`（群里发的视频和各平台视频链接：转写 + 截帧） `hot`（各平台热榜） `x_search` `stock` |
 | 团队 | `github`（只读） `ledger`（群内账本） `usage`（花费和套餐用量） |
 | 文件与媒体 | `read_attachment` `generate_image` `save_reference` `view_image` `speak` `sticker` `show`（文档、思维导图、流程图、网页，可出 PDF） `make_book` |
-| 大活 | `plan`（多步任务） `jobs`（后台任务的进度和叫停） |
+| 大活 | `plan`（多步任务） `jobs`（后台任务的进度和叫停） `code_task`（改代码开草稿 PR） `preview_app`（跑起来截图） |
+| 好玩的 | `meme`（梗图模板） `narrate`（配音视频） `podcast`（音频节目） `publish`（发布网页、小游戏） |
+| 找东西 | `recall`（按意思搜聊天） `library`（群里分享过的文章和文件） `data`（行情和热榜历史） `watch`（盯网页） `repo_health`（仓库体检结果） |
 | 计算 | `run_python`（云端沙箱） `computer`（云电脑：视频音频、克隆仓库、PPT/Word） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 | 自身 | `about_self`（链路、能力、状态、自检） `self_update`（改参数和做法、授权、写改进提议） |

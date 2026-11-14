@@ -122,7 +122,7 @@ export class Store {
       return got ? { name: name || decodeURIComponent(text.split("/").pop()?.split("?")[0] || "input.bin"), bytes: got.bytes } : null;
     }
     const img = await this.imageRef(conv, text);
-    return img ? { name: "image-" + text.replace(/[^0-9a-z-]/gi, "") + "." + (img.mime.split("/")[1] || "jpg"), bytes: img.bytes } : null;
+    return img ? { name: "image-" + (text.replace(/[^0-9a-z\u4e00-\u9fff-]/gi, "") || "x") + "." + (img.mime.split("/")[1] || "jpg"), bytes: img.bytes } : null;
   }
 
   /** Copies what a message carried before its QQ links expire. */

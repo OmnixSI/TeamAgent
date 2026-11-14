@@ -39,10 +39,28 @@ async function webhook(req: Request, env: Env) {
 }
 
 export default {
-  async fetch(req: Request, env: Env) {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(req.url);
+    // A headless browser previewing an app inside the cloud computer sends this header with every request,
+    // so the app's absolute paths (/assets/…) still reach it. The value is a short-lived token the Hub checks.
+    const pv = req.headers.get("x-preview");
+    if (pv && /^[a-z0-9]{16,64}$/.test(pv)) return hub(env).fetch(new Request(url.origin + "/x/preview/" + pv + url.pathname + url.search, req));
     if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: buildOf(env).slice(0, 8), deployed: env.VERSION?.timestamp || "" });
     if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
+    // Downloads out of R2: the Hub checks the token and names the parts, the bytes go straight from the bucket.
+    if (url.pathname.startsWith("/x/get/") && req.method === "GET" && env.FILES) {
+      const plan = await hub(env).fetch(new Request(url.origin + url.pathname + "?plan=1"));
+      if (!plan.ok) return plan;
+      const { size, keys } = await plan.json() as { size: number; keys: string[] };
+      const { readable, writable } = new (globalThis as any).FixedLengthStream(size) as TransformStream;
+      ctx.waitUntil((async () => {
+        for (const key of keys) { const o = await env.FILES.get(key); if (!o) throw new Error("missing part"); await o.body.pipeTo(writable, { preventClose: true }); }
+        await writable.close();
+      })().catch(e => writable.abort(e).catch(() => {})));
+      return new Response(readable, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(size) } });
+    }
+    // Published pages and file transfers: served by the Hub's features, no admin token.
+    if (url.pathname.startsWith("/p/") || url.pathname.startsWith("/x/")) return hub(env).fetch(req);
     if (url.pathname.startsWith("/admin/")) {
       const given = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
       const a = new TextEncoder().encode(given), b = new TextEncoder().encode(env.ADMIN_TOKEN || "");

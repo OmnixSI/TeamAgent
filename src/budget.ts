@@ -15,6 +15,10 @@ export const PLAN: Record<string, { included: number; stop: number; unit: string
   r2_writes: { included: 1_000_000, stop: 700_000, unit: "次", what: "R2 写入，免费额度每月 100 万次" },
   r2_reads: { included: 10_000_000, stop: 7_000_000, unit: "次", what: "R2 读取，免费额度每月 1000 万次" },
 };
+/** Allowances that reset every day at 00:00 UTC rather than every billing cycle. */
+export const DAILY: Record<string, { included: number; stop: number; unit: string; what: string }> = {
+  ai_neurons: { included: 10_000, stop: 8_000, unit: "neurons", what: "Workers AI（转写、向量、草稿图），每天免费 1 万 neurons" },
+};
 /** R2 keeps 10 GB for free; stop storing new large files well before that. */
 export const R2_STORAGE_INCLUDED = 10 * 1024 ** 3;
 export const R2_STORAGE_STOP = 8 * 1024 ** 3;
@@ -28,14 +32,17 @@ export function cycleStart(now: number) {
 export class Plan {
   private hub: Hub;
   constructor(hub: Hub) { this.hub = hub; }
-  private key(name: string, now = Date.now()) { return "plan:" + new Date(cycleStart(now)).toISOString().slice(0, 10) + ":" + name; }
+  private key(name: string, now = Date.now()) {
+    return DAILY[name] ? "plan:day:" + new Date(now).toISOString().slice(0, 10) + ":" + name : "plan:" + new Date(cycleStart(now)).toISOString().slice(0, 10) + ":" + name;
+  }
+  private rule(name: string) { return PLAN[name] || DAILY[name]; }
   used(name: string) { return Number(this.hub.get(this.key(name)) || 0); }
   /** Whether `amount` more of this still fits under the stop line. */
-  fits(name: string, amount = 0) { const p = PLAN[name]; return !p || this.used(name) + amount <= p.stop; }
+  fits(name: string, amount = 0) { const p = this.rule(name); return !p || this.used(name) + amount <= p.stop; }
   add(name: string, amount: number) { if (amount > 0) this.hub.set(this.key(name), String(Math.round((this.used(name) + amount) * 100) / 100)); }
   /** Counts `amount` if it fits; false means the allowance for this cycle is used up. */
   take(name: string, amount: number) { if (!this.fits(name, amount)) return false; this.add(name, amount); return true; }
-  left(name: string) { const p = PLAN[name]; return p ? Math.max(0, p.stop - this.used(name)) : Infinity; }
+  left(name: string) { const p = this.rule(name); return p ? Math.max(0, p.stop - this.used(name)) : Infinity; }
 
   report(r2Bytes: number, now = Date.now()) {
     const start = cycleStart(now), end = new Date(start); end.setUTCMonth(end.getUTCMonth() + 1);
@@ -50,6 +57,9 @@ export class Plan {
       items: [
         ...Object.entries(PLAN).map(([name, p]) => ({
           what: p.what, used: Math.round(this.used(name)), stop_at: p.stop, included: p.included, unit: p.unit, percent_of_included: pct(this.used(name), p.included),
+        })),
+        ...Object.entries(DAILY).map(([name, p]) => ({
+          what: p.what + "（今天）", used: Math.round(this.used(name)), stop_at: p.stop, included: p.included, unit: p.unit, percent_of_included: pct(this.used(name), p.included),
         })),
         { what: "R2 存储，免费额度 10 GB", used: Math.round(r2Bytes / 1048576), stop_at: Math.round(R2_STORAGE_STOP / 1048576), included: Math.round(R2_STORAGE_INCLUDED / 1048576), unit: "MB", percent_of_included: pct(r2Bytes, R2_STORAGE_INCLUDED) },
         {

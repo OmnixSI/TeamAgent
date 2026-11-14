@@ -20,8 +20,10 @@ import type { Asker } from "./selfedit.ts";
 import { Accounts } from "./accounts.ts";
 import { dailyHealth } from "./health.ts";
 import { makeHost } from "./host.ts";
-import { hearSilk } from "./sites.ts";
+import { hearSilk, transcribe } from "./sites.ts";
+import { aiTranscribe } from "./feat/search.ts";
 import { route } from "./admin.ts";
+import { FEATURES } from "./feat/index.ts";
 import { BJ, SYD, b64, buildOf, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 
@@ -77,6 +79,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS job(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, title TEXT, task TEXT, state TEXT, created INTEGER, updated INTEGER,
         tries INTEGER DEFAULT 0, steps INTEGER DEFAULT 0, error TEXT);
     `);
+    for (const f of FEATURES) if (f.schema) this.sql.exec(f.schema);
     this.qq = new QQ(env);
     this.plan = new Plan(this);
     this.store = new Store(this);
@@ -159,7 +162,7 @@ export class Hub extends DurableObject<Env> {
     return false;
   }
   /**
-   * fileType 1 = image, 3 = voice (SILK), 4 = file. With nobody to reply to (a scheduled task at night),
+   * fileType 1 = image, 2 = video (MP4), 3 = voice (SILK), 4 = file. With nobody to reply to (a scheduled task at night),
    * QQ may refuse an unprompted picture or file; it is then kept and goes out when someone next speaks.
    */
   async sendMediaMessage(conv: string, fileType: number, bytes: Uint8Array, label: string, fileName?: string): Promise<{ ok: boolean; error?: string; queued?: boolean }> {
@@ -319,7 +322,7 @@ export class Hub extends DurableObject<Env> {
   addSchedule(conv: string, spec: any, task: string) {
     const count = this.sql.exec("SELECT COUNT(*) n FROM sched WHERE conv=? AND active=1", conv).toArray()[0].n;
     if (Number(count) >= 20) throw new Error("定时任务太多了（20 个），先取消几个");
-    const next = spec.type === "daily" ? nextDaily(spec.time, spec.tz, Date.now(), spec.days) : Number(spec.at);
+    const next = spec.type === "daily" ? nextDaily(spec.time, spec.tz, Date.now(), spec.days, spec.dom) : Number(spec.at);
     const row = this.sql.exec("INSERT INTO sched(conv,spec,task,next) VALUES(?,?,?,?) RETURNING id", conv, JSON.stringify(spec), task, next).toArray()[0];
     return { id: Number(row.id), next };
   }
@@ -360,7 +363,12 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM turn WHERE id < (SELECT MAX(id) FROM turn) - 3000");
     if (s.runs.length) this.sql.exec("DELETE FROM toolrun WHERE id < (SELECT MAX(id) FROM toolrun) - 6000");
   }
-  tools(conv: string, askers: Asker[] = []) { return buildTools(makeHost(this, conv, askers)); }
+  tools(conv: string, askers: Asker[] = []) {
+    const host = makeHost(this, conv, askers), built = buildTools(host);
+    // Feature tools are appended in place: about_self describes whatever this list holds.
+    for (const f of FEATURES) built.push(...(f.tools?.({ hub: this, conv, askers, host }) || []));
+    return built;
+  }
   /** `job` is a getter because a chat turn only becomes a job partway through. */
   deps(conv: string, interim: boolean, askers: Asker[], job: number | (() => number), detach?: (what: string) => void) {
     const jobId = () => (typeof job === "function" ? job() : job);
@@ -437,10 +445,14 @@ export class Hub extends DurableObject<Env> {
       if (Number(more) && !this.wake.has(conv)) { this.wake.set(conv, Date.now() + 600); setTimeout(() => this.poke(conv), 610); }
     }
   }
+  /** Speech to text: the free daily Workers AI allowance first, the paid service when that is used up or fails. */
+  async transcribe(audio: Uint8Array, seconds: number, type = "audio/mp4", name = "audio.m4a") {
+    return (await aiTranscribe(this, audio, seconds, type).catch(() => null)) ?? transcribe(this.env, audio, seconds, type, name);
+  }
   /** Voice messages that came without QQ's own transcript are transcribed before the model reads them. */
   async hearVoices(conv: string, cursor: number) {
     const rows = this.sql.exec("SELECT seq, text, meta FROM msg WHERE conv=? AND seq>? AND role='user' AND meta LIKE '%\"voice\"%' ORDER BY seq DESC LIMIT 3", conv, cursor).toArray() as any[];
-    const net = { env: this.env as any, cookie: () => "" };
+    const net = { env: this.env as any, cookie: () => "", transcribe: (a: Uint8Array, s: number, t: string, n: string) => this.transcribe(a, s, t, n) };
     await Promise.all(rows.map(async r => {
       const meta = JSON.parse(String(r.meta));
       if (!meta.voice?.length || meta.heard) return;
@@ -505,7 +517,7 @@ export class Hub extends DurableObject<Env> {
       for (const s of this.sql.exec("SELECT * FROM sched WHERE active=1 AND next<=? ORDER BY next LIMIT 3", now).toArray()) {
         const spec = JSON.parse(String(s.spec)), conv = String(s.conv);
         if ([...this.jobs.values()].filter(j => j.conv === conv).length >= JOBS_PER_CONV) continue;
-        if (spec.type === "daily") this.sql.exec("UPDATE sched SET next=?, last=? WHERE id=?", nextDaily(spec.time, spec.tz, now, spec.days), now, s.id);
+        if (spec.type === "daily") this.sql.exec("UPDATE sched SET next=?, last=? WHERE id=?", nextDaily(spec.time, spec.tz, now, spec.days, spec.dom), now, s.id);
         else this.sql.exec("UPDATE sched SET active=0, last=? WHERE id=?", now, s.id);
         if (now - Number(s.next) < 6 * 3600000) this.ctx.waitUntil(this.runTask(conv, String(s.task)));
       }
@@ -535,6 +547,7 @@ export class Hub extends DurableObject<Env> {
         const waiting = this.sql.exec("SELECT COUNT(*) n, SUM(mentioned) m, MAX(ts) t FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0];
         if (Number(waiting.n) && (Number(waiting.m) > 0 || now - Number(waiting.t) < 240000)) this.ctx.waitUntil(this.runConv(conv).catch(() => {}));
       }
+      for (const f of FEATURES) { try { await f.tick?.(this, now); } catch (e: any) { console.log("feature tick failed", f.name, e?.message); } }
       if (this.restartWanted) this.maybeRestart();
     } finally {
       await this.ctx.storage.setAlarm(Date.now() + TICK_MS);

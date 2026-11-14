@@ -246,7 +246,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
       }
       if (calls.some(c => c.function?.name === "plan")) { maxRounds = PROJECT_ROUNDS; careful = true; }
       const longOne = used.find(t => t?.long);
-      if (longOne) deps.detach?.(longOne.name === "plan" ? "按计划做一个多步骤的成品" : longOne.name === "make_book" ? "做一本插画书" : longOne.name);
+      if (longOne) deps.detach?.(longOne.name === "plan" ? "按计划做一个多步骤的成品" : longOne.name === "make_book" ? "做一本插画书" : longOne.name === "narrate" ? "做一段配音视频" : longOne.name === "code_task" ? "在云电脑里改代码" : longOne.name === "preview_app" ? "把项目跑起来截图" : longOne.name);
       // Thinking mode requires the reasoning of earlier tool-call turns to be passed back.
       messages.push({ role: "assistant", content: msg.content || "", reasoning_content: msg.reasoning_content || "", tool_calls: calls });
       // Saved before the tools run, so a restart in the middle repeats exactly these calls.

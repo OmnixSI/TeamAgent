@@ -21,23 +21,25 @@ const PIPELINE = [
   "发消息：走 QQ 官方接口，能发文字、图片、语音（SILK 格式）、文件。只有一个人找我、而我回的时候群里又有人说了新的话，第一条回复会自动引用他那条消息（这是代码自动做的，我自己控制不了引用谁）。回复要挂在最近约 5 分钟内的一条群消息上，每条最多挂 5 条；挂不上就试着主动发，发不出去（文字、图片、文件都一样）就排队，等下一个人说话时带出去。",
   "大活：需要多步的成品我先调 plan 定步骤，之后可以连续做最多 30 步、全程最高推理；中间素材（图、图表、数据文件）存成编号不发群，最后合成一件成品。",
   "后台任务：计划好的大活、做书、定时任务都是后台任务，不占着群聊，期间照常聊天。每个任务有编号和记录（做到第几步、成功还是失败），用 jobs 能查能叫停。每做完一步就存一次进度，进程重启后会从上一步接着做（最多接两次），做书已经画好的页不会重画；实在接不上会在群里说明没做完。定时任务失败也会在群里说。",
-  "自己醒：Hub 每 20 秒醒一次，检查长连接、跑到点的定时任务；每天悉尼时间 04:30 把当天聊天整理进长期记忆；每天北京时间 10:30 自检一次（GitHub 令牌、各站登录、DeepSeek 余额、昨天花费、Cloudflare 套餐用量），有新问题才在群里说。部署新版本后它会自己发现版本变了并重启换上。",
+  "自己醒：Hub 每 20 秒醒一次，检查长连接、跑到点的定时任务；每天悉尼时间 04:30 把当天聊天整理进长期记忆；每天北京时间 02:40 给团队仓库做体检、03:10 把自己的数据备份到 R2、定点存行情和热榜快照；每天北京时间 10:30 自检一次（GitHub 令牌、各站登录、DeepSeek 余额、昨天花费、Cloudflare 套餐用量），有新问题才在群里说。部署新版本后它会自己发现版本变了并重启换上。",
 ];
 
 const CONNECTED = (env: Env & { CODE_MODEL?: string }) => [
   "DeepSeek（主力）：对话和识图都用 " + (env.CHAT_MODEL || "deepseek-flash") + "；另外用它的联网搜索、网页抓取、服务端多轮联网调研、文档识别（OCR）、语音合成、余额查询。",
   "OpenAI：画图和改图（" + (env.IMAGE_MODEL || "gpt-image-2.5-flare") + "）、长音频转文字（gpt-4o-mini-transcribe，B 站无字幕视频用）、Python 代码沙箱（" + (env.CODE_MODEL || "gpt-6-luna") + " 带代码解释器；沙箱按 20 分钟一个会话收费，期间多次运行共用一个）。",
   "Cloudflare 的无头浏览器：把文档（Markdown）、思维导图、Mermaid 图和自定义网页渲染成图片和 PDF 发到群里；别的办法读不出来的动态网页用它真打开，也能给网页截图。",
-  "云电脑：Cloudflare 上的一台 Linux 容器（Debian，1 核 1 GB 内存），要用时才开机、闲置 3 分钟关机并清空。里面有 ffmpeg、git、Python、Node、中文字体，LibreOffice 按需安装。用来处理视频和音频、克隆仓库看代码跑测试、做 PPT 和 Word。看视频（watch_video）就是在它里面把视频取下来、抽声音、截帧，声音再转成文字。",
+  "云电脑：Cloudflare 上的一台 Linux 容器（Debian，1 核 1 GB 内存），要用时才开机（装好的工具从 R2 里的缓存恢复，约 8 秒）、闲置一分半钟关机并清空。里面有 ffmpeg、git、Python、Node、中文字体，LibreOffice 按需安装。用来处理视频和音频、克隆仓库看代码跑测试、做 PPT 和 Word。看视频（watch_video）就是在它里面把视频取下来、抽声音、截帧，声音再转成文字。",
   "香港中转：部署在 Vercel 香港的一个带密钥的小函数。B 站接口、小红书、知乎、微博、抖音这些拒绝 Cloudflare 出口地址的站点走它，能带登录态；QQ 语音要的 SILK 编码也在它上面做。",
-  "GitHub：只读访问 " + (env.GITHUB_ORG || "OmnixSI") + " 组织的仓库。",
+  "GitHub：读 " + (env.GITHUB_ORG || "OmnixSI") + " 组织的仓库（代码、提交、Issue、PR）；写只有一种——code_task 在云电脑里改完代码后推一个 bot/ 开头的新分支并开草稿 PR，等人审。我不合并、不推主分支。",
+  "Workers AI（Cloudflare 自带，每天有免费额度）：语音和视频的转写先用它，用完才走 OpenAI；按意思搜聊天记录和资料库用它算向量。到每天的停止线就停，不会多花钱。",
+  "微软 Edge 的朗读服务（免费）：方言和其他音色的语音、有声视频和音频节目的配音。",
   "其他数据源：腾讯行情（A 股、港股、美股）、fxtwitter（单条推文）、X 的网页接口（搜索，用保存的登录）、百度和 Hacker News 的公开接口、GitHub Trending。",
   "QQ 官方机器人接口：长连接收消息，HTTP 接口发消息和上传图片、语音、文件。",
 ];
 
 const BOOKS = "我给自己记账：每次调 DeepSeek 和 OpenAI，都把 token 数、次数和按官方价格估的花费按天、按用途记下来（聊天、画图构思、画图、跑代码、联网调研、搜索、抓网页、语音合成、文档识别、音频转写、夜间记忆整理）。DeepSeek 另外每天记一次账户余额，用余额变化对账。用 usage 工具查。OpenAI 的真实账单我查不到，只有估算。";
 
-const STORAGE = "主要在 Hub 自带的 SQLite 里：全部聊天记录、长期记忆文档（最近 14 天每晚的旧版本也留着）、白天的随手笔记、每日小结、定时任务、后台任务记录、群内账本、各站点的登录态、每一轮的耗时、每次工具调用的耗时和成败。图片和文件：我画的图（连同当时的提示词和参考图）、保存的形象、表情包、群友发的图和文件（留 45 天）；1.5MB 以内的在 SQLite，更大的放 Cloudflare R2。";
+const STORAGE = "R2 里还放着：每天的数据备份（留 30 天）、发布出去的网页、云电脑的工具缓存、行情和热榜的每日快照。其余主要在 Hub 自带的 SQLite 里：全部聊天记录、长期记忆文档（最近 14 天每晚的旧版本也留着）、白天的随手笔记、每日小结、定时任务、后台任务记录、群内账本、各站点的登录态、每一轮的耗时、每次工具调用的耗时和成败。图片和文件：我画的图（连同当时的提示词和参考图）、保存的形象、表情包、群友发的图和文件（留 45 天）；1.5MB 以内的在 SQLite，更大的放 Cloudflare R2。";
 
 const PLAN_NOTE = "Cloudflare 是每月 5 美元的固定套餐。套餐里按量的东西我自己计数、到停止线就停，不会产生额外费用：无头浏览器每月 10 小时（用到 8.5 小时停）、云电脑每月 25 小时运行时间和 375 分钟 CPU（用到 20 小时或 300 分钟 CPU 停）、R2 存储 10GB（存到 8GB 停）。常驻 QQ 长连接让我 24 小时在线，这一项固定占掉套餐在线时长的八成多。用 usage 能看到每项用了多少。";
 
@@ -88,9 +90,9 @@ const CODE_MAP = [
 
 const CANNOT = [
   "看视频靠云电脑去取，站点拦截数据中心地址时会取不下来（B 站网页就是，所以 B 站走专门的 bilibili 工具）；抖音还没实测过。",
-  "云电脑关机后里面的文件全部清空，隔一阵再用要重新放文件；每月有固定额度，用到停止线就停到下个周期。",
+  "云电脑闲置一分半钟就关机，关机后里面的文件全部清空，隔一阵再用要重新放文件；每月有固定额度，用到停止线就停到下个周期。",
   "需要登录的站点（B 站字幕、小红书、知乎、X 搜索）靠保存的登录，过期了就读不了，要群主重新登录；每天自检会发现并在群里说。",
-  "不能改代码、不能部署、不能操作任何人的电脑；仓库只读。",
+  "不能合并代码、不能部署、不能操作任何人的电脑。改代码只能通过 code_task 开草稿 PR；默认只动 TeamAgent 自己的仓库，其他仓库要群主或被授权的人点名并先加进允许名单。",
   "不会主动找人私聊。",
   "画知名版权角色可能被图像模型拒绝。",
   "QQ 的 Webhook 方式用不了（腾讯访问不到 workers.dev），所以用的是长连接。",
@@ -103,7 +105,7 @@ const SELF_EDIT = [
   "做法：先看现状和源码、能复现就复现，找到原因再动手；一次只改一处；改完验证一次；说清改了什么、怎么撤销。",
 ];
 
-export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?: any, health?: any) {
+export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?: any, health?: any, features: { name: string; about?: string[] }[] = []) {
   return {
     notice: "这是你自己的真实情况，回答“你怎么实现的、接了什么、能做什么”时照这个说，别凭印象补。不要说出任何密钥、登录信息或管理接口地址。",
     how_a_message_flows: PIPELINE,
@@ -114,6 +116,7 @@ export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?:
     memory: MEMORY,
     drawing: DRAWING,
     capabilities: tools.filter(t => t.name !== "about_self").map(t => t.name + "：" + (t.description.length > 130 ? t.description.slice(0, 130) + "…" : t.description)),
+    added_abilities_and_how_they_work: Object.fromEntries(features.filter(f => f.about?.length).map(f => [f.name, f.about])),
     cannot_do: CANNOT,
     self_iteration: SELF_EDIT,
     ...(selfEdit ? { self_edit_state: selfEdit } : {}),

@@ -63,6 +63,13 @@ describe("util", () => {
     assert.equal(tzOffset(Date.UTC(2026, 6, 1), SYD), 10 * 3600000);
   });
 
+  test("nextDaily with days of the month", () => {
+    const nov15 = Date.UTC(2026, 10, 15, 0, 0);
+    assert.equal(nextDaily("12:00", BJ, nov15, undefined, [1]), Date.UTC(2026, 11, 1, 4, 0));
+    assert.equal(nextDaily("12:00", BJ, Date.UTC(2026, 11, 1, 3, 0), undefined, [1, 15]), Date.UTC(2026, 11, 1, 4, 0));
+    assert.equal(nextDaily("12:00", BJ, Date.UTC(2026, 11, 1, 5, 0), undefined, [1, 15]), Date.UTC(2026, 11, 15, 4, 0));
+  });
+
   test("nextDaily in Beijing, strictly after, with weekday filter", () => {
     const sundayNine = Date.UTC(2026, 10, 15, 1, 0); // Sun 2026-11-15 09:00 Beijing
     assert.equal(nextDaily("10:00", BJ, sundayNine), Date.UTC(2026, 10, 15, 2, 0));

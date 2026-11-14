@@ -2,16 +2,23 @@
 import type { Hub } from "./hub.ts";
 import { displayName } from "./core.ts";
 import { checkHealth } from "./health.ts";
+import { FEATURES } from "./feat/index.ts";
 import { SYD, clip, fmtFull } from "./util.ts";
 
 export async function route(hub: Hub, req: Request): Promise<Response> {
   const url = new URL(req.url), path = url.pathname;
-  const body: any = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+  const open = url.pathname.startsWith("/p/") || url.pathname.startsWith("/x/");   // these read their own request body
+  const body: any = req.method === "POST" && !open ? await req.json().catch(() => ({})) : {};
   const json = (v: any, status = 200) => new Response(JSON.stringify(v, null, 1), { status, headers: { "Content-Type": "application/json" } });
   const conv = String(body.conv || url.searchParams.get("conv") || hub.get("main") || "");
   const count = (q: string, ...b: any[]) => Number(hub.sql.exec(q, ...b).toArray()[0].n);
   const limit = Number(url.searchParams.get("n") || 30);
 
+  // Pages and transfers that features serve without the admin token; the Worker forwards only /p/ and /x/.
+  if (path.startsWith("/p/") || path.startsWith("/x/")) {
+    for (const f of FEATURES) { const r = await f.open?.(hub, req, url); if (r) return r; }
+    return new Response("not found", { status: 404 });
+  }
   if (path === "/tick" || path === "/admin/restart") {
     // A deploy does not replace an object that is holding a live connection, so it steps aside itself
     // when the Worker (which always runs the newest version) reports a different one.
@@ -141,5 +148,6 @@ export async function route(hub: Hub, req: Request): Promise<Response> {
     return json({ started: true });
   }
   if (path === "/admin/set") { hub.set(String(body.k), String(body.v)); return json({ ok: true }); }
+  for (const f of FEATURES) { const r = await f.admin?.(hub, req, url, body); if (r) return r; }
   return json({ error: "not found" }, 404);
 }
