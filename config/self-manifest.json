@@ -1136,6 +1136,56 @@
       "requires_env": [],
       "runs_on": "cloud",
       "default_state": "on"
+    },
+    {
+      "id": "quota",
+      "title": "额度自知（DeepSeek 余额）",
+      "aliases": [
+        "额度",
+        "余额",
+        "还剩多少",
+        "DeepSeek 余额",
+        "quota",
+        "get_quota",
+        "ds_balance"
+      ],
+      "tools": [
+        "get_quota"
+      ],
+      "how": "被问「你还有多少额度」「DeepSeek 余额」「还剩多少」时，get_quota 读 DeepSeek 官方余额接口（十分钟缓存），把这一次的总余额、赠送余额和充值余额与 D1 表 ds_balance_snapshots 里的上一次记录比较，直接用口语说还剩多少、比上次多了或少了多少；第一次查会说这是第一次记录，查不到就如实说查不到，不猜数字。开关是 off:ds_balance，默认开。",
+      "files": [
+        {
+          "path": "src/quota.ts",
+          "anchor": "export async function renderQuota",
+          "role": "余额读取、缓存与上次快照对比"
+        },
+        {
+          "path": "src/tools/quota.ts",
+          "anchor": "export const getQuotaTool",
+          "role": "工具入口与 off:ds_balance 开关"
+        },
+        {
+          "path": "migrations/0061_ds_balance.sql",
+          "anchor": "CREATE TABLE IF NOT EXISTS ds_balance_snapshots",
+          "role": "上一次余额快照表"
+        }
+      ],
+      "providers": [
+        {
+          "role": "余额查询",
+          "vendor": "DeepSeek",
+          "file": "src/quota.ts",
+          "host_pattern": "(api\\.deepseek\\.com)"
+        }
+      ],
+      "switches": [
+        "ds_balance"
+      ],
+      "requires_env": [
+        "DEEPSEEK_API_KEY"
+      ],
+      "runs_on": "cloud",
+      "default_state": "on"
     }
   ],
   "vendors": [
