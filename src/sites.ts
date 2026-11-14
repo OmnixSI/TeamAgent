@@ -400,7 +400,10 @@ export async function hearSilk(net: Net, silk: Uint8Array) {
 export async function ttsSilk(net: Net, text: string, voice: string) {
   const r = await dsJson(net.env, "/v1/tools/tts", { text, voice_id: voice === "male" ? "tide" : "stella", format: "pcm", filter_markdown: true }, 60000);
   if (!r.ok) throw new Error("语音合成失败（" + r.status + "）");
-  const pcm = new Uint8Array(await r.arrayBuffer());
+  return pcmSilk(net, new Uint8Array(await r.arrayBuffer()));
+}
+/** 24 kHz 16-bit mono samples to the SILK format QQ voice messages use (encoded on the relay). */
+export async function pcmSilk(net: Net, pcm: Uint8Array) {
   if (pcm.length < 2000) throw new Error("语音合成没有返回声音");
   if (pcm.length > 3_000_000) throw new Error("这段话太长了，语音最多一分钟左右");
   const enc = await fetch(net.env.RELAY_URL + "/api/silk", {

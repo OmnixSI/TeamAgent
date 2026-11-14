@@ -6,7 +6,8 @@ import type { Ref } from "./draw.ts";
 import type { Row, Tool } from "./core.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
-import { biliSearch, biliVideo, hot, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { biliSearch, biliVideo, hot, pcmSilk, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { VOICES, edgeSpeak, pickVoice } from "./feat/voice.ts";
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
@@ -399,11 +400,17 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "speak", slow: true,
-      description: "发一条语音到群里（群友让你发语音、念出来、用语音说，或者你觉得这句用嘴说更有意思时）。text 是要说的话，口语，不超过 150 字。返回 sent=true 才算发出去。",
-      parameters: obj({ text: str("要说的话"), voice: { type: "string", enum: ["female", "male"] } }, ["text"]),
+      description: "发一条语音到群里（群友让你发语音、念出来、用语音说，或者你觉得这句用嘴说更有意思时）。text 是要说的话，口语，不超过 150 字。voice 选声音：female=你平时的女声（默认）、male=你平时的男声、" + Object.entries(VOICES).filter(([k]) => k !== "female" && k !== "male").map(([k, v]) => k + "=" + v.label).join("、") + "。没人指定就用平时的声音；有人点名要方言，或者这句话用方言说更有味道，就换。方言声音念的是你写的字，想要地道就把词也写成那边的说法。返回 sent=true 才算发出去。",
+      parameters: obj({ text: str("要说的话"), voice: { type: "string", enum: Object.keys(VOICES) } }, ["text"]),
       run: async a => {
         if (!(await host.quota("voice", Number(host.cfg("voice_daily"))))) return { ok: false, sent: false, error: "今天语音发太多了" };
-        const audio = await ttsSilk(net, clip(a.text, 400), a.voice === "male" ? "male" : "female");
+        const text = clip(a.text, 400), voice = pickVoice(a.voice);
+        // The everyday voice stays the one the group knows; the other voices and the dialects are the free
+        // Edge ones. Each covers for the other when its service is down.
+        const usual = () => ttsSilk(net, text, voice.key === "male" ? "male" : "female");
+        const other = () => edgeSpeak(text, voice.key).then(v => pcmSilk(net, v.pcm));
+        const everyday = voice.key === "female" || voice.key === "male";
+        const audio = await (everyday ? usual().catch(other) : other().catch(usual));
         const sent = await host.sendVoice(audio.silk);
         return sent.ok ? { ok: true, sent: true, seconds: audio.seconds } : { ok: false, sent: false, error: "语音合成好了但发到 QQ 失败：" + (sent.error || "未知原因") };
       },
