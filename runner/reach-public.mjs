@@ -11,7 +11,7 @@
  * and no write action. The caller never supplies an executable or argv.
  */
 import {fileURLToPath} from 'node:url';
-import {CHANNELS, validTarget} from '../src/reach-contract.mjs';
+import {CHANNELS, validTarget} from './reach-contract.mjs';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';

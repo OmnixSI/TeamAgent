@@ -38,19 +38,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-OpenCLI — https://github.com/jackwener/OpenCLI
-------------------------------------------------
-Copyright (c) 2025 jackwener
-License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
-Commit referenced: 9bc5f5ca132ec4d4e48d7ee517d4303bf159e8e8
-Used in: runner/reach-public.mjs
-Borrowed: documented read-only command semantics and response field names for
-          Weibo hot/search/user, Zhihu hot/search/question/answer-detail and
-          Douyin detail; the six-redirect short-link bound.
-Changed: rewritten as a fixed-argv, no-cookie public reader with this repo's
-         error_kind mapping, content-scope markers and no media download.
-No OpenCLI source code was copied.
+OpenCLI — https://github.com/jackwener/opencli
+----------------------------------------------
+Copyright (c) jackwener
+License: Apache License 2.0
+Version used: 1.7.22 (@jackwener/opencli, installed local package)
+Source files:
+  clis/xiaohongshu/note.js — NOTE_EXTRACT_JS and the .interact-container
+    scope for like/collect/comment counts.
+  clis/xiaohongshu/note-helpers.js — the signed-URL rule (buildNoteUrl /
+    parseNoteId) requiring a full note URL with xsec_token.
+  clis/xiaohongshu/search.js — search-card selectors and the bounded
+    scroll-until-enough loop.
+  clis/xiaohongshu/comments.js — top-level comment selectors.
+Borrowed: the DOM selector scopes for the note body, author and interaction
+          bar; the signed-URL validation rule; the search-card and comment
+          selector chains; the "loaded comments" limit convention.
+Changed: rewritten for runner/reach-xiaohongshu.mjs and this repo's JSON
+         envelope. Removed automatic risk-control retries, feed/Pinia
+         interception, publish/comment/like actions and nested-reply clicks.
+         Output is read-only and bounded to 10 search rows / 20 comments.
 
+Also referenced by runner/reach-public.mjs (F9-5): the documented read-only
+command semantics and response field names for Weibo hot/search/user, Zhihu
+hot/search/question/answer-detail and Douyin detail, plus the six-redirect
+short-link bound. No OpenCLI source code was copied.
+
+Apache License 2.0 text:
 
                                  Apache License
                            Version 2.0, January 2004
@@ -102,7 +116,7 @@ No OpenCLI source code was copied.
       "Contribution" shall mean any work of authorship, including
       the original version of the Work and any modifications or additions
       to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
+      submitted to the Licensor for inclusion in the Work by the copyright owner
       or by an individual or Legal Entity authorized to submit on behalf of
       the copyright owner. For the purposes of this definition, "submitted"
       means any form of electronic, verbal, or written communication sent
@@ -114,7 +128,7 @@ No OpenCLI source code was copied.
       designated in writing by the copyright owner as "Not a Contribution."
 
       "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
+      on behalf of whom a Contribution has been received by the Licensor and
       subsequently incorporated within the Work.
 
    2. Grant of Copyright License. Subject to the terms and conditions of
@@ -160,7 +174,7 @@ No OpenCLI source code was copied.
       (d) If the Work includes a "NOTICE" text file as part of its
           distribution, then any Derivative Works that You distribute must
           include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
+          within such NOTICE file, excluding any notices that do not
           pertain to any part of the Derivative Works, in at least one
           of the following places: within a NOTICE text file distributed
           as part of the Derivative Works; within the Source form or
@@ -229,18 +243,7 @@ No OpenCLI source code was copied.
 
    END OF TERMS AND CONDITIONS
 
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [yyyy] [name of copyright owner]
+   Copyright 2025 jackwener
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
