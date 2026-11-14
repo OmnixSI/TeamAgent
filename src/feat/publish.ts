@@ -18,7 +18,7 @@ const TYPES: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif",
   svg: "image/svg+xml", ico: "image/x-icon", mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", mp4: "video/mp4",
   webm: "video/webm", wasm: "application/wasm", txt: "text/plain; charset=utf-8", md: "text/plain; charset=utf-8",
-  csv: "text/csv; charset=utf-8", xml: "application/xml; charset=utf-8", pdf: "application/pdf", woff: "font/woff", woff2: "font/woff2",
+  csv: "text/csv; charset=utf-8", ttf: "font/ttf", otf: "font/otf", webmanifest: "application/manifest+json", xml: "application/xml; charset=utf-8", pdf: "application/pdf", woff: "font/woff", woff2: "font/woff2",
 };
 export const contentType = (path: string) => TYPES[(path.split(".").pop() || "").toLowerCase()] || "";
 const IMG_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg" };
@@ -50,6 +50,11 @@ const kb = (n: number) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math
 const fnv = (s: string) => { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 0).toString(36); };
 const baseUrl = (hub: Hub) => String(hub.env.PUBLIC_URL || DEFAULT_URL).replace(/\/+$/, "");
 const key = (id: string, path: string) => "site/" + id + "/" + path;
+/** Sites deployed by staticsite.ts keep each version under its own prefix; this kv pointer switches versions in one step. */
+export const verKey = (id: string) => "site:ver:" + id;
+/** "1" when a deployed single-page app answers unknown page paths with its index.html. */
+export const spaKey = (id: string) => "site:spa:" + id;
+export const objectKey = (hub: { get?(k: string): string | null }, id: string, path: string) => { const v = hub.get?.(verKey(id)); return v ? "site/" + id + "@" + v + "/" + path : key(id, path); };
 const bucket = (hub: Hub) => hub.env.FILES as any;
 
 type Site = { id: string; conv: string; title: string; created: number; updated: number; by: string; files: number; bytes: number; views: number };
@@ -92,6 +97,7 @@ async function serveFile(hub: Hub, req: Request, site: Site, rawRest: string) {
     // "docs" with no slash, where docs/index.html exists: send the browser to "docs/" so relative links resolve
     if (!decoded.endsWith("/") && has(normPath(decoded + "/index.html")))
       return reply(null, 301, { Location: "/p/" + site.id + "/" + decoded.split("/").map(encodeURIComponent).join("/") + "/" });
+    if (hub.get?.(spaKey(site.id)) === "1" && !/\.[a-z0-9]{1,8}$/i.test(decoded)) return serveFile(hub, req, site, "/");
     return notFound();
   }
   const size = Number(f.size), etag = etagOf(site, path!, size);
@@ -104,7 +110,7 @@ async function serveFile(hub: Hub, req: Request, site: Site, rawRest: string) {
   if (!get) return reply(null, 200, { ...head, "Content-Length": String(size) });
   if (!bucket(hub)) return page(503, "暂时打不开", "存储没有接好，稍后再试。");
   if (!hub.plan.take("r2_reads", 1)) return page(503, "这个月的额度用完了", "网页的读取次数到了本月上限，下个周期恢复。");
-  const obj = await bucket(hub).get(key(site.id, path!), range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : undefined).catch(() => null);
+  const obj = await bucket(hub).get(objectKey(hub, site.id, path!), range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : undefined).catch(() => null);
   if (!obj) return notFound();
   const buf = await obj.arrayBuffer();
   if (range) return reply(buf, 206, { ...head, "Content-Range": `bytes ${range.start}-${range.end}/${size}`, "Content-Length": String(buf.byteLength) });
@@ -195,17 +201,18 @@ async function api(hub: Hub, req: Request, site: Site, name: string) {
 // ---- writing sites ----
 
 function removeSite(hub: Hub, id: string) {
-  const paths = hub.sql.exec("SELECT path FROM site_file WHERE id=?", id).toArray().map((r: any) => key(id, String(r.path)));
+  const paths = hub.sql.exec("SELECT path FROM site_file WHERE id=?", id).toArray().map((r: any) => objectKey(hub, id, String(r.path)));
   for (const t of ["site", "site_file", "site_state", "site_item"]) hub.sql.exec(`DELETE FROM ${t} WHERE id=?`, id);
+  for (const k of [verKey(id), spaKey(id)]) if (hub.get?.(k)) hub.set(k, "");
   return paths.length && bucket(hub) ? Promise.resolve(bucket(hub).delete(paths)).catch((e: any) => console.log("publish: r2 delete failed", e?.message)) : Promise.resolve();
 }
 
 /** Frees room by dropping sites nobody ever opened that are over a year old; returns a refusal when that is not enough. */
 async function makeRoom(hub: Hub, addBytes: number, addSites: number, keep: string) {
   for (let i = 0; i < LIMITS.sites + 1; i++) {
-    const t = hub.sql.exec("SELECT COUNT(*) c, COALESCE(SUM(bytes),0) b FROM site").toArray()[0] as any;
+    const t = hub.sql.exec(`SELECT COUNT(*) c, COALESCE(SUM(bytes),0) b FROM site WHERE "by"<>'deploy'`).toArray()[0] as any;
     if (Number(t.c) + addSites <= LIMITS.sites && Number(t.b) + addBytes <= LIMITS.totalBytes) return "";
-    const old = hub.sql.exec("SELECT id FROM site WHERE views=0 AND created<? AND id<>? ORDER BY created LIMIT 1", Date.now() - LIMITS.oldMs, keep).toArray()[0] as any;
+    const old = hub.sql.exec(`SELECT id FROM site WHERE views=0 AND created<? AND id<>? AND "by"<>'deploy' ORDER BY created LIMIT 1`, Date.now() - LIMITS.oldMs, keep).toArray()[0] as any;
     if (!old) return Number(t.c) + addSites > LIMITS.sites ? "网页已经有 " + LIMITS.sites + " 个，到上限了，先删掉不要的再做新的" : "所有网页加起来占的空间到 " + LIMITS.totalBytes / 1048576 + " MB 上限了，先删掉不要的再做新的";
     await removeSite(hub, String(old.id));
   }
@@ -236,12 +243,12 @@ async function commit(hub: Hub, conv: string, existing: Site | null, plan: Plan,
   }
   try {
     for (const [p, bytes] of plan.put) {
-      await bucket(hub).put(key(id, p), bytes);
+      await bucket(hub).put(objectKey(hub, id, p), bytes);
       hub.sql.exec("INSERT INTO site_file(id,path,size) VALUES(?,?,?) ON CONFLICT(id,path) DO UPDATE SET size=excluded.size", id, p, bytes.length);
     }
     if (plan.remove.length) {
       const gone = plan.remove.filter(p => old.has(p));
-      if (gone.length) await bucket(hub).delete(gone.map(p => key(id, p)));
+      if (gone.length) await bucket(hub).delete(gone.map(p => objectKey(hub, id, p)));
       for (const p of gone) hub.sql.exec("DELETE FROM site_file WHERE id=? AND path=?", id, p);
     }
   } catch (e: any) {
