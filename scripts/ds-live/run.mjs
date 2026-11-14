@@ -13,6 +13,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const SCEN = process.env.DS_LIVE_SCEN || "/Users/yanghongming/Projects/.worktrees/TeamAgent-p4b-login/.agent/scenarios/ds-live";
 const EVID = process.env.DS_LIVE_EVID || "/Users/yanghongming/Projects/.worktrees/TeamAgent-p4b-login/.agent/releases/DS-live/evidence";
 const KEY_FILE = process.env.DEEPSEEK_API_KEY_FILE || "/tmp/ds-live-key";
+const OPENAI_KEY_FILE = process.env.OPENAI_API_KEY_FILE || "";
 const PORT = Number(process.env.DS_LIVE_PORT || 18765);
 const BASE = "http://127.0.0.1:" + PORT;
 const GROUP = "9968A083EE07797A987010E64CD421B9";
@@ -76,7 +77,8 @@ async function startServer() {
     'database_id = "00000000-0000-0000-0000-000000000001"',
     '',
   ].join("\n"));
-  fs.writeFileSync(path.join(TMP, ".dev.vars"), "DEEPSEEK_API_KEY=" + KEY + "\n", { mode: 0o600 });
+  const openaiKey = OPENAI_KEY_FILE && fs.existsSync(OPENAI_KEY_FILE) ? fs.readFileSync(OPENAI_KEY_FILE, "utf8").trim() : "";
+  fs.writeFileSync(path.join(TMP, ".dev.vars"), "DEEPSEEK_API_KEY=" + KEY + "\n" + (openaiKey ? "OPENAI_API_KEY=" + openaiKey + "\n" : ""), { mode: 0o600 });
   const cli = path.join(ROOT, "node_modules/wrangler/bin/wrangler.js");
   const persist = path.join(TMP, "state");
   const env = { ...process.env, WRANGLER_SEND_METRICS: "false", WRANGLER_LOG_PATH: path.join(TMP, "wrangler.log"), WRANGLER_HOME: path.join(TMP, "wrangler-home"), XDG_CONFIG_HOME: path.join(TMP, "xdg-config"), XDG_CACHE_HOME: path.join(TMP, "xdg-cache") };
@@ -370,6 +372,29 @@ async function caseDoc() {
     state: { outbox: s2.outbox, toolCalls: s2.toolCalls, jobs: s2.jobs, mediaNotes: s2.mediaNotes, calls: s2.calls, dsUsage: s2.dsUsage },
   });
 }
+async function caseImageGen() {
+  await reset();
+  const started = Date.now();
+  const id = "ROLEPLAY-IMAGEGEN-1";
+  const direct = await post("/__tool", {
+    name: "generate_image", messageId: id, groupId: GROUP, sender: SENDER,
+    input: { prompt: "一只戴草帽的橘猫在海边看日落，水彩风格", size: "square" },
+  });
+  const s = await state();
+  const log = (s.imageGenLog || [])[0] || null;
+  const image = (s.generatedImages || [])[0] || null;
+  const outbox = (s.outbox || []).find(o => String(o.id).endsWith("~g")) || null;
+  record({
+    item: "8-imagegen", id, lane: "imagegen",
+    input: { prompt: "一只戴草帽的橘猫在海边看日落，水彩风格", size: "square", real_sample: "F8 探针同款提示词；线上没有真实生图请求（image_gen_log=0）" },
+    output: { result: direct.result, log, image, outbox, openai: (s.calls || []).filter(c => c.path && c.path.includes("images")) },
+    ms: Date.now() - started, cost: { ds_micro_usd: 0, openai_micro_usd: (s.openaiUsage || []).reduce((n, r) => n + Number(r.est_cost_micro_usd || 0), 0), total_micro_usd: (s.openaiUsage || []).reduce((n, r) => n + Number(r.est_cost_micro_usd || 0), 0) },
+    pass: !!log && log.status === "ok" && !!image && image.bytes > 0 && image.width === 1024 && image.height === 1024 && !!outbox,
+    note: { calls: s.calls, openaiUsage: s.openaiUsage, quota: s.quotaReservations },
+    state: { outbox: s.outbox, outboxMeta: s.outboxMeta, imageGenLog: s.imageGenLog, generatedImages: s.generatedImages, openaiUsage: s.openaiUsage, calls: s.calls },
+  });
+}
+
 async function caseVoiceCommand() {
   await reset({ members: [{ id: "qq:" + SENDER, name: "Souvereign", role: "owner" }] });
   const started = Date.now();
@@ -398,6 +423,7 @@ async function main() {
     if (lane === "all" || lane === "bili") await caseBili();
     if (lane === "all" || lane === "tts") await caseTts();
     if (lane === "all" || lane === "voicecmd") await caseVoiceCommand();
+    if (lane === "all" || lane === "imagegen") await caseImageGen();
     if (lane === "all" || lane === "vision") await caseImage("6-vision", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "vision-cases.json"), "utf8")).map(c => ({ ...c, check: c.kind === "person" ? ({ notes, out }) => notes.some(n => /敬礼|眼镜|T恤|短裤/.test((n.desc || "") + (n.text || ""))) || /敬礼|眼镜|T恤|短裤/.test(out) : ({ notes, out }) => notes.length > 0 && /黄仁勋|出轨|新闻|截图/.test((notes[0]?.desc || "") + (notes[0]?.text || "") + out) })));
     if (lane === "all" || lane === "ocr") await caseImage("4a-read-image-text", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "ocr-cases.json"), "utf8")).map(c => ({ ...c, check: c.kind === "text" ? ({ out, tool }) => !!tool && tool.status === "ok" && /黄仁勋|1031|11月13日|路透社/.test(out) : ({ out, tool }) => (!tool || tool.status === "ok") && /敬礼|眼镜|T恤|短裤|没有|无文字|回退/.test(out) })));
     if (lane === "all" || lane === "search") await caseText("5-search-fetch", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "search-cases.json"), "utf8")));

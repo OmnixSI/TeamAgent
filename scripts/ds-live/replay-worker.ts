@@ -43,6 +43,29 @@ globalThis.fetch = async (input: any, init: any = {}): Promise<Response> => {
     if (!item) return new Response("replay media missing", { status: 404 });
     return new Response(bytesOf(item.b64), { status: 200, headers: { "content-type": item.mime } });
   }
+  if (host === "api.openai.com") {
+    const started = Date.now();
+    const meta: any = { path: url.pathname, status: 0, ms: 0, redirect: init?.redirect };
+    let response: Response;
+    try {
+      response = await realFetch(input, init);
+    } catch (error: any) {
+      meta.ms = Date.now() - started;
+      meta.error = String(error?.message || error);
+      active.calls.push(meta);
+      throw error;
+    }
+    meta.status = response.status;
+    meta.ms = Date.now() - started;
+    try {
+      const data = await response.clone().json();
+      meta.model = data?.model;
+      meta.usage = data?.usage;
+      meta.error = data?.error?.message;
+    } catch {}
+    active.calls.push(meta);
+    return response;
+  }
   if (host === "api.deepseek.com") {
     const started = Date.now();
     const meta: any = { path: url.pathname, status: 0, ms: 0 };
@@ -214,6 +237,9 @@ export default {
         decisions: await rows(e, "SELECT latest_id,gate,action,outbox_id,model_ms FROM chat_decisions ORDER BY created_at"),
         mediaNotes: await rows(e, "SELECT id,substr(body,1,200) AS body,created_at FROM media_notes ORDER BY created_at"),
         settings: await rows(e, "SELECT key,value FROM settings ORDER BY key"),
+        imageGenLog: await rows(e, "SELECT group_id,sender_id,turn_id,prompt,size,quality,model,status,error_kind,bytes,latency_ms,est_cost_micro_usd,outbox_id FROM image_gen_log ORDER BY id"),
+        generatedImages: await rows(e, "SELECT id,group_id,mime,bytes,width,height,length(data) AS stored_bytes,expires_at FROM generated_images"),
+        openaiUsage: await rows(e, "SELECT purpose,model,status,error_kind,latency_ms,est_cost_micro_usd FROM openai_usage ORDER BY created_at"),
         calls: active.calls,
         qq: active.qq,
       });
