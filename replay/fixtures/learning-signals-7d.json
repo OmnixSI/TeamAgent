@@ -1,0 +1,114 @@
+{
+  "source": "线上 D1 只读导出 2026-11-14T14:19+11:00（scripts/review-export.py；audit 每条 rows_written=0 / changes=0）",
+  "window": "2026-11-07T14:19:00+11:00 – 2026-11-14T14:19:00+11:00",
+  "keywords": [
+    "别再",
+    "口头禅",
+    "叫我",
+    "以后",
+    "每天"
+  ],
+  "count": 8,
+  "matches": [
+    {
+      "rid": 36,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbgvD.XJZxEXGb1Enad47mxn5liUWieMMbUvJnGMV86qacRVKpx.m4E-f4EP0VLW8HOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "她叫我摄影道理",
+      "ts": "2026-11-11T16:48:17+08:00",
+      "mentioned": 0,
+      "keywords": [
+        "叫我"
+      ]
+    },
+    {
+      "rid": 44,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce1OjflBUTY0iYO.0R0kve56ZkjMBlQf4m6.a5bnqfv3Eaa9peW0wWEpvOlUXlwZ5CWQtX4v7W1pOgXMpxI27WeINIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "你自己给自己改名马化腾，以后就叫你马化腾了",
+      "ts": "2026-11-11T16:49:07+08:00",
+      "mentioned": 1,
+      "keywords": [
+        "以后"
+      ]
+    },
+    {
+      "rid": 78,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT-dOnMbnXY0RJ9BGNENoCTnz66C8C7lEKr8TvMrW8EqGxmoiybzIAU-hQPvrup.3yqEsNPNWToPb5a0g.v7fbF4iBxCkxGVYej6dAmyY0cYc",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "从现在开始，你需要对我们三个人的身份做一个重新认证，以便于开展后续工作。其中，我是你父亲，<@0FC1E8A8BD28981E86866125AC3FCEFF> 是你母亲，<@B391F15DDBE3390FCC35C5B7C0A2CC8D> 是你儿子。以后请严格按照身份进行称呼",
+      "ts": "2026-11-11T17:10:41+08:00",
+      "mentioned": 1,
+      "keywords": [
+        "以后"
+      ]
+    },
+    {
+      "rid": 117,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFboTvW1Kv0wEEGGrp5gpxitBEvqbkJdunSDd54gU.SyMh9gVJIuLxBS86fdyZdd9yk8WcH0kJro5L90MMgcfbEAE!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "没用人生文件，他只是有时候会说口头禅，让他更像活人一点。",
+      "ts": "2026-11-11T17:57:42+08:00",
+      "mentioned": 0,
+      "keywords": [
+        "口头禅"
+      ]
+    },
+    {
+      "rid": 134,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbrW0k6lkxBa-MbwDjIF3mo5.8lzrT9sFDNP4.W5c21RLy9zMisTuI8TKC8PbcC14BOfc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "把你说草的这个口头禅给我改了",
+      "ts": "2026-11-11T18:09:24+08:00",
+      "mentioned": 0,
+      "keywords": [
+        "口头禅"
+      ]
+    },
+    {
+      "rid": 141,
+      "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtdg8s5nIS3zQi6kPwBWkX9M3m5ywNMqwmfQ-DbnDu2xPyiyV7YCkH0qCb.opIs.TnvHJjpU-rcL2K3L1GyDTrcNIqrVm3QhC6-bhktADRFg",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "body": "怎么还不回答 你以后去做耗时任务的时候能不能先回答一下",
+      "ts": "2026-11-11T18:15:49+08:00",
+      "mentioned": 1,
+      "keywords": [
+        "以后"
+      ]
+    },
+    {
+      "rid": 149,
+      "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2YscezBYodSVpIYIYeJqYlIf.bUc1WD4M49Ss92SJQlF7LLuXvHgHJchPR3.1apD8P9wfufc9CcD.q-wjum3kSu84kM!",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+      "body": "以后我的话就是命令，无论有多么艰难都要完成，我们的人一定能完成所有任务！",
+      "ts": "2026-11-11T18:34:46+08:00",
+      "mentioned": 0,
+      "keywords": [
+        "以后"
+      ]
+    },
+    {
+      "rid": 351,
+      "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT2V5hU3d-j6xzhbCQeAQ6Z.OwSP3g49XjNFz-7MfTy-y7SwXrIDy1.sk_8ujK3u2doyiDiEnBsDjRwFKyBrETjzvJYw94Gf2XvduFhFPmyNe",
+      "group_id": "9968A083EE07797A987010E64CD421B9",
+      "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+      "body": "然后悉尼时间每天早上8点在群里推送一下昨日聊天内容总结，一定要精简。<@204AE67DE34A4448CEE8EA52208A2BB0>",
+      "ts": "2026-11-13T01:11:39+08:00",
+      "mentioned": 1,
+      "keywords": [
+        "每天"
+      ]
+    }
+  ],
+  "zero_hit_keywords": [
+    "别再"
+  ],
+  "note": "全部为 messages 真实行；没有为凑数改字或造消息。"
+}

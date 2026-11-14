@@ -1,0 +1,15 @@
+{
+  "source": "线上 D1 只读导出 2026-11-14T14:19+11:00（scripts/review-export.py；audit 每条 rows_written=0 / changes=0）",
+  "request_rid": 351,
+  "request_id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT2V5hU3d-j6xzhbCQeAQ6Z.OwSP3g49XjNFz-7MfTy-y7SwXrIDy1.sk_8ujK3u2doyiDiEnBsDjRwFKyBrETjzvJYw94Gf2XvduFhFPmyNe",
+  "row": {
+    "rid": 203,
+    "id": "chat-drain-350",
+    "group_id": "9968A083EE07797A987010E64CD421B9",
+    "msg_id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT6TOqlRbLA3s758JnjlweFPjegzF.WWbecyl8ijubaX.SpwOR76ifHxrxqWDEHQEjOfc9CcD.q-wjum3kSu84kM!",
+    "body": "收到，不跟你掰扯那句。口径定这样：悉尼每天 8:00（北京 5:00）推昨日总结，3–5 条要点；周报按周日起算，这周日先出第一份，明早 8:00 出第一份日推。要改直接说。存档文件你没点头，我不动",
+    "status": "sent",
+    "created_at": 1794503523753
+  },
+  "note": "真实 outbox 行，对应 11-13 04:11 Sydney 的「明早 8:00 出第一份日推」口头承诺。"
+}
