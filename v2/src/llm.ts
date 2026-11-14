@@ -1,4 +1,4 @@
-// Model boundary. DeepSeek for chat, tools and the application APIs; OpenAI for images.
+// Model boundary for DeepSeek: chat, tools and the application APIs. Image and sandbox calls live in draw.ts.
 import type { Env } from "./util.ts";
 
 export type Effort = "none" | "low" | "high" | "max";
@@ -52,25 +52,4 @@ export async function dsBalance(env: Env) {
   });
   if (!r.ok) throw new Error("balance http " + r.status);
   return r.json();
-}
-
-export async function openaiImage(env: Env, prompt: string, size: string, quality: string) {
-  if (!env.OPENAI_API_KEY) throw new Error("没有配置 OpenAI 密钥");
-  const r = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: { Authorization: "Bearer " + env.OPENAI_API_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: env.IMAGE_MODEL || "gpt-image-2.5-flare",
-      prompt, size, quality, output_format: "jpeg", n: 1,
-    }),
-    signal: AbortSignal.timeout(120000),
-  });
-  const data: any = await r.json().catch(() => ({}));
-  if (!r.ok || !data.data?.[0]?.b64_json) {
-    const reason = data.error?.code === "moderation_blocked" || /safety|moderation/i.test(data.error?.message || "")
-      ? "内容被图像模型的安全策略拒绝"
-      : "图像模型返回错误（" + r.status + "）" + (data.error?.message ? "：" + String(data.error.message).slice(0, 120) : "");
-    throw new Error(reason);
-  }
-  return data.data[0].b64_json as string;
 }

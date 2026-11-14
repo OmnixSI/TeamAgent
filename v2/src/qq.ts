@@ -52,9 +52,9 @@ export class QQ {
   sendText(conv: string, text: string, msgId?: string) {
     return this.call(this.base(conv) + "/messages", { content: text.slice(0, 4000), msg_type: 0, msg_id: msgId, msg_seq: this.seq() });
   }
-  /** fileType 1 = image, 3 = voice (SILK). Uploads, then sends as a rich-media message. */
-  async sendMedia(conv: string, fileType: number, dataB64: string, msgId?: string) {
-    const up = await this.call(this.base(conv) + "/files", { file_type: fileType, file_data: dataB64, srv_send_msg: false });
+  /** fileType 1 = image, 3 = voice (SILK), 4 = file. Uploads, then sends as a rich-media message. */
+  async sendMedia(conv: string, fileType: number, dataB64: string, msgId?: string, fileName?: string) {
+    const up = await this.call(this.base(conv) + "/files", { file_type: fileType, file_data: dataB64, srv_send_msg: false, ...(fileType === 4 && fileName ? { file_name: fileName } : {}) });
     if (!up.ok || !up.data?.file_info) return { ok: false, status: up.status, data: up.data, stage: "upload" };
     const sent = await this.call(this.base(conv) + "/messages", { msg_type: 7, media: { file_info: up.data.file_info }, msg_id: msgId, msg_seq: this.seq() });
     return { ...sent, stage: "send" };
@@ -65,8 +65,8 @@ export type Inbound = {
   id: string; conv: string; sender: string; name: string; text: string; ts: number; mentioned: boolean; meta?: any;
 };
 
-/** Typed names people use for the bot when they do not use a real @. */
-const CALLED = /@\s*(bot|boat|机器人|奶蛙)|^\s*(bot|boat|奶蛙)(?![a-z])/i;
+/** Typed names people use for the bot when they do not use a real @; talking about "bot" counts as talking to it. */
+const CALLED = /@\s*(bot|boat|机器人|奶蛙)|(^|[^a-z])(bot|boat)(?![a-z])|^\s*奶蛙/i;
 
 export function parseEvent(type: string, d: any): Inbound | null {
   const group = type === "GROUP_AT_MESSAGE_CREATE" || type === "GROUP_MESSAGE_CREATE";

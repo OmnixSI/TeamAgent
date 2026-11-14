@@ -6,7 +6,7 @@
 QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
                           ├─ 聊天记录、记忆、账本、定时任务（自带 SQLite）
                           ├─ DeepSeek：对话、联网搜索、读网页、深度调研、识图、读文档、余额
-                          ├─ OpenAI：生图、长音频转写
+                          ├─ OpenAI：生图/改图、长音频转写、Python 沙箱
                           ├─ 中转（Vercel 香港）：国内站点出口、SILK 语音编码
                           └─ GitHub：只读查看组织仓库
 ```
@@ -18,10 +18,19 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 1. QQ 把群消息推到 Hub 持有的长连接，消息落库。
 2. 被 @ 或被叫到等 0.35 秒，普通闲聊等 2.2 秒（把连发的几句合起来看）。
 3. 同一个模型看到真实的聊天记录和图片，自己决定：不说话（`PASS`）、直接回、或调工具后再回。
-4. 调了查资料类工具后自动切到深度思考档；闲聊不思考，约 1 秒出话。
+4. 推理强度：没人叫它时先不思考地看一眼（约 1 秒决定接不接）；只要开口回话就用 high；调了查资料、跑代码这类干活的工具后用 max。
 5. 回复按 QQ 的习惯发：闲聊拆成一两条短句，认真回答发成一条。
 
 图有没有发出去、定时有没有建好，模型只能从工具返回值知道，所以不会出现“画好了”但没图。
+
+## 画图
+
+每次画图固定四步（`src/draw.ts`）：
+
+1. **揣摩意图**：读群友原话和上下文，弄清这张图给谁、干什么用、指的是谁。
+2. **找参考**：保存过的形象（`save_reference`，如 奶蛙）+ 上网找画面里每个具体对象的真实长相。
+3. **设计画面**（max 推理，能看到全部参考图）：定主体、构图、风格、图中文字、尺寸和质量，挑出真正相关的参考图，写出提示词。
+4. **出图**：有参考图走改图接口保持长相，没有就直接生成；成品存一份，之后可以用编号（如 g12）继续改。
 
 ## 文件
 
@@ -31,6 +40,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | `src/core.ts` | 一轮对话：拼上下文、工具循环、出话 |
 | `src/tools.ts` | 全部工具。加能力在这里加一项 |
 | `src/sites.ts` | 各站点的读取：B 站、小红书、知乎、热榜、行情、X、语音合成 |
+| `src/draw.ts` | 画图四步、找参考图、云端 Python 沙箱 |
 | `src/hub.ts` | Durable Object：QQ 连接、存储、发送、定时、夜间整理、管理接口 |
 | `src/memory.ts` | 每晚把当天聊天整理成长期记忆、教训和小结 |
 | `src/qq.ts` | QQ 接口与消息解析 |
@@ -44,7 +54,8 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | 查资料 | `web_search` `read_url`（网页、推文、小红书笔记、知乎、公众号） `research`（多轮联网调研） `think_hard`（最高推理档） |
 | 平台 | `bilibili`（视频字幕/无字幕转写/热评/搜索） `hot`（微博、抖音、B站、知乎、百度、GitHub、HN 热榜） `x_search` `stock`（A股/港股/美股行情） |
 | 团队 | `github`（只读） `ledger`（群内账本） `balance`（DeepSeek 余额） |
-| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image` `speak`（语音回复） |
+| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图） `save_reference` `view_image` `speak`（语音回复） |
+| 计算 | `run_python`（云端沙箱：算数据、画图表、生成 Excel/CSV/PDF，产物直接发群） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 
 ## 出网的三条路

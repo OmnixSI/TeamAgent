@@ -46,7 +46,7 @@ export function renderLine(r: Row, captions = true) {
   if (meta.quote) body = "〔回复 " + (meta.quote.name || "某人") + "：“" + clip(meta.quote.text, 60) + "”〕" + body;
   const images: any[] = meta.images || [];
   images.forEach((im, i) => {
-    body += captions && im.caption ? " [图片：" + clip(im.caption, 80) + "]" : " [图片 " + r.seq + "-" + i + "]";
+    body += " [图片 " + r.seq + "-" + i + (captions && im.caption ? "：" + clip(im.caption, 80) : "") + "]";
   });
   for (const f of meta.files || []) body += " [文件 " + (f.name || "未命名") + " " + f.url + "]";
   if (meta.video) body += " [视频]";
@@ -124,7 +124,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   const messages = buildMessages(input);
   const defs = toolDefs(deps.tools);
   const mustReply = input.mentioned || !!input.task;
-  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false;
+  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false, engaged = false;
 
   const call = async (withTools: boolean, effort: Effort, maxTokens: number) => {
     const r = await deps.chat({ messages, tools: withTools ? defs : undefined, max_tokens: maxTokens }, effort, effort === "none" ? 45000 : 150000);
@@ -140,12 +140,15 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const lastRound = round === MAX_ROUNDS - 1;
       if (lastRound) messages.push({ role: "user", content: "[工具次数用完了。就用手上已有的结果把话说完，没查到的照实说。]" });
-      // Chatter nobody addressed to you gets the instant path; a direct call gets a moment of thought,
-      // which is what makes it reach for tools instead of answering from memory.
-      const msg = await call(!lastRound, careful ? "high" : mustReply ? "low" : "none", careful ? 4000 : 1500);
+      // Replies are written with high reasoning and real work with max. Only the "is this even for me?"
+      // glance at chatter nobody addressed to you runs without thinking, so staying silent is instant.
+      const effort: Effort = careful ? "max" : mustReply || engaged ? "high" : "none";
+      const msg = await call(!lastRound, effort, effort === "max" ? 12000 : effort === "high" ? 5000 : 900);
       const calls: any[] = msg.tool_calls || [];
       if (!calls.length) {
         final = tidy(msg.content);
+        // The glance says you have something to say: write the actual line properly.
+        if (effort === "none" && !isPass(final)) { engaged = true; final = ""; continue; }
         // You have no background: announcing work without doing it in this turn means it never happens.
         if (!promised && !stats.tools.length && final.length < 120 && PROMISE.test(final)) {
           promised = true; careful = true;
@@ -161,6 +164,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
         }
         break;
       }
+      if (effort === "none") { engaged = true; continue; }   // wants a tool: redo the step with thinking on
       const used = calls.map(c => deps.tools.find(t => t.name === c.function?.name));
       if (deps.interim && !interimSent && input.mentioned && used.some(t => t?.slow)) {
         const lead = tidy(msg.content);
@@ -177,7 +181,17 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
         try { return await tool.run(args); }
         catch (err: any) { return { ok: false, error: clip(err?.message || String(err), 300) }; }
       }));
-      calls.forEach((c, i) => messages.push({ role: "tool", tool_call_id: c.id, content: clip(JSON.stringify(results[i]), 24000) }));
+      // Pictures a tool brought back are shown to the model right after the tool results.
+      const pictures: string[] = [];
+      calls.forEach((c, i) => {
+        const result: any = results[i];
+        if (result && Array.isArray(result._images)) { pictures.push(...result._images.slice(0, 4)); delete result._images; result.images_shown = true; }
+        messages.push({ role: "tool", tool_call_id: c.id, content: clip(JSON.stringify(result), 120000) });
+      });
+      if (pictures.length) messages.push({
+        role: "user",
+        content: [{ type: "text", text: "[上面工具拿回来的图片，共 " + Math.min(pictures.length, 6) + " 张，按顺序]" }, ...pictures.slice(0, 6).map(url => ({ type: "image_url", image_url: { url } }))],
+      });
       if (used.some(t => t?.work)) careful = true;
     }
   } catch (err: any) {

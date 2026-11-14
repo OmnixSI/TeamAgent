@@ -49,6 +49,7 @@ export class Hub extends DurableObject<Env> {
         calls INTEGER, tools TEXT, in_tok INTEGER, out_tok INTEGER, cached INTEGER, said TEXT, err TEXT);
       CREATE TABLE IF NOT EXISTS ledger(conv TEXT, name TEXT, balance REAL NOT NULL DEFAULT 0, PRIMARY KEY(conv, name));
       CREATE TABLE IF NOT EXISTS ledger_log(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, name TEXT, delta REAL, balance REAL, note TEXT, ts INTEGER);
+      CREATE TABLE IF NOT EXISTS img(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, mime TEXT, data BLOB, note TEXT, name TEXT);
       CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, body TEXT, ts INTEGER);
     `);
     const gw = this.get("gw");
@@ -183,24 +184,90 @@ export class Hub extends DurableObject<Env> {
       await this.say(conv, String(p.body), { queue: false });
     }
   }
-  /** fileType 1 = image (JPEG), 3 = voice (SILK). */
-  async sendMediaMessage(conv: string, fileType: number, dataB64: string, label: string) {
+  /** fileType 1 = image, 3 = voice (SILK), 4 = file. */
+  async sendMediaMessage(conv: string, fileType: number, dataB64: string, label: string, fileName?: string) {
     if (conv.startsWith("t:")) { this.insert(conv, { id: "bot:" + crypto.randomUUID(), role: "bot", name: "Bot", text: label, ts: Date.now() }); return { ok: true }; }
     const id = this.anchor(conv);
-    const r = await this.qq.sendMedia(conv, fileType, dataB64, id).catch((e: any) => ({ ok: false, status: 0, data: { message: e?.message }, stage: "network" }));
+    const r = await this.qq.sendMedia(conv, fileType, dataB64, id, fileName).catch((e: any) => ({ ok: false, status: 0, data: { message: e?.message }, stage: "network" }));
     if (!r.ok) return { ok: false, error: (r.stage === "upload" ? "上传被拒" : "发送被拒") + "（" + r.status + " " + clip(r.data?.message || r.data?.code || "", 80) + "）" };
     this.used(id);
     this.insert(conv, { id: "bot:" + String(r.data?.id || crypto.randomUUID()), role: "bot", name: "Bot", text: label, ts: Date.now() });
     return { ok: true };
   }
-  sendImage(conv: string, jpegB64: string) { return this.sendMediaMessage(conv, 1, jpegB64, "[你发了一张图]"); }
+  /** Keeps a picture so it can be referenced later ("g12"); unnamed ones are trimmed to the latest 40. */
+  keepImage(conv: string, bytes: Uint8Array, mime: string, note: string) {
+    if (bytes.length > 1_800_000) return "";
+    const row = this.sql.exec("INSERT INTO img(conv,ts,mime,data,note) VALUES(?,?,?,?,?) RETURNING id", conv, Date.now(), mime, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), note).toArray()[0];
+    this.sql.exec("DELETE FROM img WHERE conv=? AND name IS NULL AND id NOT IN (SELECT id FROM img WHERE conv=? AND name IS NULL ORDER BY id DESC LIMIT 40)", conv, conv);
+    return "g" + row.id;
+  }
+  async sendImage(conv: string, bytes: Uint8Array, note: string, mime = "image/jpeg") {
+    const id = this.keepImage(conv, bytes, mime, note);
+    const r = await this.sendMediaMessage(conv, 1, b64(bytes), "[你发了一张图" + (id ? " " + id : "") + "：" + clip(note, 60) + "]");
+    return { ...r, id };
+  }
+  async fetchBytes(url: string, limit: number) {
+    const origin = new URL(url).origin;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36", Referer: origin + "/" }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return null;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    if (bytes.length < 64 || bytes.length > limit) return null;
+    return { bytes, mime: (r.headers.get("content-type") || "").split(";")[0] };
+  }
+  async imageRef(conv: string, ref: string) {
+    const label = ref.trim().replace(/^\[?图片\s*/, "").replace(/\]$/, "");
+    const stored = (row: any) => row ? { label, bytes: new Uint8Array(row.data as ArrayBuffer), mime: String(row.mime || "image/jpeg") } : null;
+    const g = label.match(/^g(\d+)$/i);
+    if (g) return stored(this.sql.exec("SELECT data,mime FROM img WHERE id=?", Number(g[1])).toArray()[0]);
+    let url = /^https?:\/\//.test(label) ? label : "";
+    const chat = label.match(/^(\d+)-(\d+)$/);
+    if (chat) {
+      const row = this.sql.exec("SELECT meta FROM msg WHERE seq=? AND conv=?", Number(chat[1]), conv).toArray()[0];
+      url = row?.meta ? JSON.parse(String(row.meta)).images?.[Number(chat[2])]?.url || "" : "";
+    }
+    if (!url) {
+      // Saved characters; private test rooms borrow the main group's.
+      const named = (c: string) => this.sql.exec("SELECT data,mime FROM img WHERE conv=? AND name=? ORDER BY id DESC LIMIT 1", c, label).toArray()[0];
+      return stored(named(conv) || (conv.startsWith("t:") ? named(this.get("main") || "") : null));
+    }
+    const got = await this.fetchBytes(url, 8 * 1024 * 1024);
+    return got ? { label, bytes: got.bytes, mime: got.mime.startsWith("image/") ? got.mime : "image/jpeg" } : null;
+  }
 
   // ---------- turns ----------
   host(conv: string): Host {
     const hub = this;
     return {
       env: this.env, now: () => Date.now(),
-      sendImage: b => hub.sendImage(conv, b),
+      sendImage: (bytes, note, mime) => hub.sendImage(conv, bytes, note, mime),
+      sendFile: (name, bytes) => hub.sendMediaMessage(conv, 4, b64(bytes), "[你发了一个文件：" + name + "]", name),
+      imageRef: ref => hub.imageRef(conv, ref),
+      nameImage: async (ref, name) => {
+        const img = await hub.imageRef(conv, ref);
+        if (!img || img.bytes.length > 1_800_000) return false;
+        hub.sql.exec("DELETE FROM img WHERE conv=? AND name=?", conv, name);
+        hub.sql.exec("INSERT INTO img(conv,ts,mime,data,note,name) VALUES(?,?,?,?,?,?)", conv, Date.now(), img.mime, img.bytes.buffer.slice(img.bytes.byteOffset, img.bytes.byteOffset + img.bytes.byteLength), "参考图", name);
+        return true;
+      },
+      fileRef: async ref => {
+        if (/^https?:\/\//.test(ref.trim())) {
+          const got = await hub.fetchBytes(ref.trim(), 30 * 1024 * 1024);
+          const named = hub.sql.exec("SELECT meta FROM msg WHERE conv=? AND meta LIKE ? ORDER BY seq DESC LIMIT 1", conv, "%" + ref.trim().slice(0, 80) + "%").toArray()[0];
+          const name = named?.meta ? (JSON.parse(String(named.meta)).files || []).find((f: any) => f.url === ref.trim())?.name : "";
+          return got ? { name: name || decodeURIComponent(ref.split("/").pop()?.split("?")[0] || "input.bin"), bytes: got.bytes } : null;
+        }
+        const img = await hub.imageRef(conv, ref);
+        return img ? { name: "image-" + ref.replace(/[^0-9a-z-]/gi, "") + "." + (img.mime.split("/")[1] || "jpg"), bytes: img.bytes } : null;
+      },
+      savedNames: () => {
+        const of = (c: string) => hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", c).toArray().map((r: any) => String(r.name));
+        return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(hub.get("main") || "") : [])])];
+      },
+      stats: days => hub.sql.exec(
+        "SELECT date(ts/1000 + 28800, 'unixepoch') d, COALESCE(NULLIF(name,''), '成员') n, COUNT(*) c FROM msg WHERE conv=? AND role='user' AND ts>? GROUP BY d, n ORDER BY d DESC, c DESC",
+        conv, Date.now() - days * 86400000).toArray().map((r: any) => ({ date: String(r.d), name: String(r.n), count: Number(r.c) })),
+      recentLines: n => hub.recent(conv, n).map(r => (r.role === "bot" ? "Bot" : displayName(r)) + "：" + clip(r.text, 300)).join("\n"),
+      memory: () => hub.get("memory:" + conv) || "",
       quota: async (kind, limit) => {
         const k = "quota:" + kind + ":" + fmtDate(Date.now(), SYD), n = Number(hub.get(k) || 0);
         if (n >= limit) return false;
@@ -500,6 +567,20 @@ export class Hub extends DurableObject<Env> {
       const h = this.host(conv);
       for (const [name, amount] of Object.entries(body.set || {})) await h.ledger("set", name, Number(amount), "初始化");
       return json(await h.ledger("list"));
+    }
+    if (path === "/admin/img") {
+      if (body.delete) { this.sql.exec("DELETE FROM img WHERE id=?", Number(body.delete)); return json({ ok: true }); }
+      if (body.name && body.url) {
+        const got = await this.fetchBytes(String(body.url), 1_800_000);
+        if (!got) return json({ error: "fetch failed" }, 400);
+        this.sql.exec("DELETE FROM img WHERE conv=? AND name=?", conv, String(body.name));
+        this.sql.exec("INSERT INTO img(conv,ts,mime,data,note,name) VALUES(?,?,?,?,?,?)", conv, Date.now(), got.mime || "image/png", got.bytes.buffer.slice(got.bytes.byteOffset, got.bytes.byteOffset + got.bytes.byteLength), "参考图", String(body.name));
+        return json({ ok: true, bytes: got.bytes.length });
+      }
+      const id = url.searchParams.get("id");
+      if (!id) return json(this.sql.exec("SELECT id,conv,ts,mime,length(data) bytes,note,name FROM img ORDER BY id DESC LIMIT 30").toArray());
+      const row = this.sql.exec("SELECT data,mime FROM img WHERE id=?", Number(id)).toArray()[0];
+      return row ? new Response(row.data as ArrayBuffer, { headers: { "Content-Type": String(row.mime) } }) : json({ error: "no such image" }, 404);
     }
     if (path === "/admin/cookie") {
       if (typeof body.cookie === "string" && body.site) this.set("cookie:" + body.site, body.cookie);

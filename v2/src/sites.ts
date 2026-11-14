@@ -341,7 +341,8 @@ export async function tweet(url: string) {
     stats: { likes: x.likes, reposts: x.retweets, replies: x.replies, views: x.views },
     media: (x.media?.all || []).map((m: any) => m.type + " " + m.url).slice(0, 6),
   });
-  return { ...one(t), ...(t.quote ? { quoted: one(t.quote) } : {}), url: t.url };
+  const photos = (t.media?.photos || []).map((m: any) => m.url).filter(Boolean).slice(0, 4);
+  return { ...one(t), ...(t.quote ? { quoted: one(t.quote) } : {}), url: t.url, ...(photos.length ? { images: photos } : {}) };
 }
 export async function xSearch(net: Net, query: string) {
   const cookie = net.cookie("x"), ct0 = cookie.match(/(?:^|;\s*)ct0=([^;]+)/)?.[1];

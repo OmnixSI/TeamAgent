@@ -16,7 +16,7 @@ function host(now, upto) {
   const notes = [];
   return {
     env, now: () => now, notes,
-    sendImage: async () => ({ ok: true }),
+    sendImage: async () => ({ ok: true, id: 'g1' }), sendFile: async () => ({ ok: true }), imageRef: async () => null, nameImage: async () => true, fileRef: async () => null, recentLines: () => '', savedNames: () => [], stats: () => [], memory: () => memory,
     quota: async () => true,
     remember: async t => { notes.push(t); console.log("     [remember]", t); },
     forget: async () => 0,
