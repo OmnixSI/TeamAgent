@@ -43,7 +43,7 @@ const TOOL_SWITCHES: Record<string, readonly string[]> = {
 
 /** Card wording that must not depend on the registered tool description. */
 const DESC_OVERRIDES: Record<string, string> = {
-  request_feature: "提需求：被 @ 说『你应该加个…』会自动记下，做好上线后回复原消息",
+  request_feature: "提需求：被 @ 说『加个…』『以后…』『能不能…』会记下（含改说话方式），做好上线后回复原消息",
   generate_image: "按你给的描述生成一张图并发到群里",
 };
 
