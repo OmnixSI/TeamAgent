@@ -47,6 +47,7 @@ FIXED_HELPER = ('!f() { test "$1" = get || exit 0; '
                 'printf \'username=%s\\npassword=%s\\n\' "$TEAMAGENT_GIT_USERNAME" "$TEAMAGENT_GIT_PASSWORD"; }; f')
 READ = {'log', 'show', 'rev-list', 'rev-parse', 'merge-base', 'for-each-ref',
         'status', 'diff', 'cat-file', 'ls-files', 'grep', 'config', 'worktree'}
+MAX_STDERR = 65536  # Bounded diagnostic tail; Git errors never include output.
 _clock = threading.local()
 
 
@@ -131,35 +132,57 @@ def _kill_process_group(process):
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    process.communicate(timeout=1)
+    try:
+        process.communicate(timeout=1)
+    except ValueError:  # stdin was already closed by the input feeder thread
+        process.wait(timeout=1)
 
 
 def _run_process(args, *, cwd, env, timeout, input=None, max_bytes=None):
-    """Reap Git after every run; kill its entire process group on timeout."""
+    """Reap Git after every run; kill its entire process group on timeout.
+
+    Both pipes are drained while the child runs, so a chatty helper cannot
+    deadlock on a full stderr pipe. stderr is kept as a bounded tail only
+    (MAX_STDERR) and never enters an exception message.
+    """
     with subprocess.Popen(args, cwd=cwd, env=env, start_new_session=True,
                           stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        feeder = None
+        if input is not None:
+            payload = input.encode('utf-8')
+            def feed():
+                try:
+                    process.stdin.write(payload); process.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
+            feeder = threading.Thread(target=feed, daemon=True)
+            feeder.start()
         try:
-            if max_bytes is None:
-                output, _ = process.communicate(None if input is None else input.encode('utf-8'), timeout=timeout)
-            else:
-                # Patch reads have no stdin. Read at most cap+1 bytes so a large
-                # tracked file cannot first be buffered in full in memory.
-                deadline = time.monotonic() + timeout
-                output = bytearray()
-                with selectors.DefaultSelector() as ready:
-                    ready.register(process.stdout, selectors.EVENT_READ)
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0 or not ready.select(remaining):
-                            raise subprocess.TimeoutExpired(args, timeout)
-                        block = os.read(process.stdout.fileno(), min(65536, max_bytes + 1 - len(output)))
+            # Patch reads have no stdin. Read at most cap+1 bytes so a large
+            # tracked file cannot first be buffered in full in memory.
+            deadline = time.monotonic() + timeout
+            output, error = bytearray(), bytearray()
+            with selectors.DefaultSelector() as ready:
+                ready.register(process.stdout, selectors.EVENT_READ)
+                ready.register(process.stderr, selectors.EVENT_READ)
+                while ready.get_map():
+                    remaining = deadline - time.monotonic()
+                    events = ready.select(remaining) if remaining > 0 else []
+                    if not events:
+                        raise subprocess.TimeoutExpired(args, timeout)
+                    for key, _ in events:
+                        block = os.read(key.fileobj.fileno(), 65536)
                         if not block:
-                            break
-                        output.extend(block)
-                        if len(output) > max_bytes:
-                            raise GitOutputTooLarge('Git output exceeded byte limit')
-                process.wait(timeout=max(0, deadline - time.monotonic()))
+                            ready.unregister(key.fileobj)
+                        elif key.fileobj is process.stdout:
+                            output.extend(block)
+                            if max_bytes is not None and len(output) > max_bytes:
+                                raise GitOutputTooLarge('Git output exceeded byte limit')
+                        else:
+                            error.extend(block)
+                            del error[:-MAX_STDERR]
+            process.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             _kill_process_group(process)
             raise
@@ -169,10 +192,14 @@ def _run_process(args, *, cwd, env, timeout, input=None, max_bytes=None):
             process.kill()
             try:
                 process.communicate(timeout=1)
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, ValueError):
                 _kill_process_group(process)
             raise
-        return subprocess.CompletedProcess(args, process.returncode, output.decode('utf-8', errors='replace'), '')
+        finally:
+            if feeder is not None:
+                feeder.join(timeout=1)
+        return subprocess.CompletedProcess(args, process.returncode, output.decode('utf-8', errors='replace'),
+                                            error.decode('utf-8', errors='replace'))
 
 
 def _credential_env(env, gitdir):

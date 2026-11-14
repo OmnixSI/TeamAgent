@@ -43,6 +43,10 @@ CONFIG_SECRET_KEYS = frozenset(('admintoken', 'runnertoken', 'sourcekey', 'acces
                               'apikey', 'deepseekapikey', 'clientsecret', 'qqappsecret', 'password', 'cookie',
                               'authorization', 'sessdata', 'bilijct', 'authtoken', 'ct0',
                               'token', 'secret', 'privatekey', 'credential', 'credentials', 'accesskey', 'secretkey', 'passwd'))
+# B25: the two names whose values are already resident in this process. The
+# cookie arrives through the bridge's in-memory config (CONFIG_SECRET_KEYS above)
+# and the model key through the launch environment; neither is read from a file.
+ENV_SECRET_NAMES = ('DEEPSEEK_API_KEY',)
 
 
 def _json(path, default):
@@ -88,6 +92,22 @@ def _config_secrets(value, sensitive=False):
             yield from _config_secrets(item, sensitive)
     elif sensitive and isinstance(value, str) and len(value) >= 16:
         yield value
+
+
+def known_values(config=None, environ=None):
+    """Secret values the caller already holds in memory; never read a file here.
+
+    Config keys are matched by name (CONFIG_SECRET_KEYS includes 'cookie');
+    environment values are taken only for ENV_SECRET_NAMES and only from a
+    snapshot the caller passes in, so this module never inspects the live
+    environment by itself.
+    """
+    values = list(_config_secrets(config)) if isinstance(config, dict) else []
+    for name in ENV_SECRET_NAMES if environ else ():
+        value = environ.get(name)
+        if isinstance(value, str) and len(value) >= 16:
+            values.append(value)
+    return tuple(values)
 
 
 def cut_bytes(s, n):
@@ -367,12 +387,12 @@ def sync_once(now, known_values=()):
         _save(state); _offset += 1
 
 
-def loop():
+def loop(known_values=()):
     if _config().get('index',{}).get('enabled',True) is False:
         return
     while True:
         try:
-            sync_once(time.time())
+            sync_once(time.time(), known_values)
         except Exception as error:
             print('repo index',type(error).__name__,flush=True)
         time.sleep(10 if _backlog else 60)

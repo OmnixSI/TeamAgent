@@ -164,6 +164,32 @@ class RepoIndexTests(unittest.TestCase):
             self.assertIn('[REDACTED]', record[field])
         self.assertNotIn('synthetic-run', record['patch'])
 
+    def test_b25_process_env_key_and_caller_cookie_are_redacted_without_file_reads(self):
+        # B25: the values the bridge already holds (config cookie + the
+        # DEEPSEEK_API_KEY in its own environment) must be literal redactions,
+        # and the index must reach them without opening a credential file.
+        key, cookie = 'synthetic-deepseek-key-value', 'opaque-cookie-fake.+value'
+        values = index.known_values({'cookie': cookie, 'url': 'https://cloud.invalid'},
+                                    {'DEEPSEEK_API_KEY': key, 'UNRELATED': 'ignored-value-xyz'})
+        self.assertEqual(set(values), {key, cookie})
+        self.commit(key + ' ' + cookie)
+        self.git('commit', '--amend', '-qm', key + ' ' + cookie, '-m', cookie + ' ' + key)
+        self.git('update-ref', 'refs/remotes/origin/main', self.git('rev-parse', 'HEAD'))
+        read = Path.read_text
+        def guarded(path, *args, **kwargs):
+            self.assertNotIn(path.name, ('worker-secrets.json', 'bili-cookie.json', '.env'))
+            return read(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', guarded):
+            index.sync_once(1000, known_values=values)
+        payload = json.dumps(self.batches[-1])
+        for value in (key, cookie):
+            self.assertNotIn(value, payload)
+        self.assertIn('[REDACTED]', payload)
+        record = self.commits()[0]
+        for field in ('author', 'subject', 'body', 'patch'):
+            self.assertNotIn(key, record[field])
+            self.assertNotIn(cookie, record[field])
+
     def test_sync_redacts_all_config_secret_values_in_patch_and_commit_message(self):
         values = ['opaque-admin.+value', 'opaque-source-key', 'opaque-api-key-value',
                   'opaque-client-value', 'opaque-password-value', 'opaque-cookie-value', 'opaque-list-token']
@@ -367,11 +393,14 @@ class RepoIndexTests(unittest.TestCase):
         tree = ast.parse(source.read_text()); block = next(n for n in tree.body if isinstance(n, ast.If) and '__main__' in ast.unparse(n.test))
         started = threading.Event(); release = threading.Event(); ticks = []
         class Done(Exception): pass
-        def slow(): started.set(); release.wait(2)
+        def slow(known_values=()): started.set(); release.wait(2)
         def tick(): self.assertTrue(started.wait(1)); ticks.append(len(ticks)*15)
         def sleep(seconds):
             if len(ticks) == 3: raise Done()
-        namespace = {'threading':threading,'sync_loop':lambda:None,'repo_index':types.SimpleNamespace(loop=slow),'tick':tick,'time':types.SimpleNamespace(sleep=sleep),'urllib':__import__('urllib'),'CURRENT':self.h/'current.json'}
+        namespace = {'threading':threading,'sync_loop':lambda:None,
+                     'repo_index':types.SimpleNamespace(loop=slow, known_values=lambda config,environ: ()),
+                     'CONFIG':{}, 'os':types.SimpleNamespace(environ={}),
+                     'tick':tick,'time':types.SimpleNamespace(sleep=sleep),'urllib':__import__('urllib'),'CURRENT':self.h/'current.json'}
         try:
             with self.assertRaises(Done): exec(compile(ast.Module(body=block.body,type_ignores=[]),str(source),'exec'), namespace)
             self.assertEqual(ticks, [0,15,30])

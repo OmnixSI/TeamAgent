@@ -763,6 +763,20 @@ class GitSafeTests(unittest.TestCase):
                 gitsafe._run_process(args, cwd=self.root, env=self.hardened_env(), timeout=2, max_bytes=256)
         self.assertIsNotNone(processes[0].poll())
 
+    def test_b26_stderr_is_drained_while_running_and_keeps_a_64k_tail(self):
+        # B26: a child that fills the stderr pipe must not deadlock, and what is
+        # kept must be bounded at 64 KiB rather than buffered in full.
+        script = ('import sys; sys.stderr.write("e" * 200000); sys.stderr.flush(); '
+                  'sys.stdout.write("ok"); sys.stdout.flush()')
+        began = time.monotonic()
+        result = gitsafe._run_process([sys.executable, '-c', script], cwd=self.root,
+                                      env=self.hardened_env(), timeout=10)
+        self.assertLess(time.monotonic() - began, 5)
+        self.assertEqual(result.stdout, 'ok')
+        self.assertEqual(gitsafe.MAX_STDERR, 65536)
+        self.assertEqual(len(result.stderr.encode()), gitsafe.MAX_STDERR)
+        self.assertEqual(result.stderr[-100:], 'e' * 100)
+
     def test_followup_bounded_output_preserves_unicode_and_exact_limit(self):
         for text in ('a' * 256, '中' * 85):
             args = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(' + repr(text.encode()) + ')']

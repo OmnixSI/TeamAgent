@@ -291,7 +291,11 @@ def sync_loop():
 
 if __name__ == "__main__":
     threading.Thread(target=sync_loop, daemon=True).start()
-    threading.Thread(target=repo_index.loop, daemon=True).start()
+    # B25: hand the index the secret values this process already holds in memory
+    # instead of letting it rediscover them; no credential file is read here.
+    threading.Thread(target=repo_index.loop,
+                     kwargs={"known_values": repo_index.known_values(CONFIG, os.environ)},
+                     daemon=True).start()
     while True:
         try:
             tick()
