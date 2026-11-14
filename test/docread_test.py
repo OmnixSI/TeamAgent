@@ -1,3 +1,4 @@
+import codecs
 import importlib.util
 import json
 import os
@@ -291,7 +292,7 @@ def make_docx_many_elements(path, count=2_000_001, member="word/document.xml"):
             entry.write(b"</document>")
 
 
-def make_large_sheet_xlsx(path, rows, cols, text=False):
+def make_large_sheet_xlsx(path, rows, cols, text=False, relationship_type="worksheet"):
     """A real large worksheet, streamed so the fixture itself stays cheap.
 
     `text=True` uses unique 8-hex inline strings, which keeps the deflate ratio
@@ -312,9 +313,9 @@ def make_large_sheet_xlsx(path, rows, cols, text=False):
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <sheets><sheet name="大表" sheetId="1" r:id="rId1"/></sheets>
 </workbook>"""
-    workbook_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    workbook_rels = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{relationship_type}" Target="worksheets/sheet1.xml"/>
 </Relationships>"""
     last_column = xlsx_column(cols - 1)
     header = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -345,8 +346,8 @@ def make_large_sheet_xlsx(path, rows, cols, text=False):
             entry.write(b"</sheetData></worksheet>")
 
 
-def make_shared_strings_xlsx(path, count=1_000_000):
-    """An XLSX with `count` unique shared strings: >2M elements but only a 32 MiB cap."""
+def make_shared_strings_xlsx(path, count=1_000_000, garbage=0, si_flood=0):
+    """An XLSX with shared strings, plus optional si-external or in-si element garbage."""
     content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -380,17 +381,33 @@ def make_shared_strings_xlsx(path, count=1_000_000):
         z.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
         z.writestr("xl/worksheets/sheet1.xml", sheet)
         with z.open("xl/sharedStrings.xml", "w") as entry:
+            unique = max(count, 1)
             entry.write(
                 f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
                 f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-                f'count="{count}" uniqueCount="{count}">'.encode("utf-8")
+                f'count="{unique}" uniqueCount="{unique}">'.encode("utf-8")
             )
-            for base in range(0, count, 5000):
-                chunk = []
-                for i in range(base, min(base + 5000, count)):
-                    token = f"{(i * 2654435761) & 0xffffffff:08x}"
-                    chunk.append(f"<si><t>{token}</t></si>")
-                entry.write("".join(chunk).encode("utf-8"))
+            if si_flood:
+                entry.write(b"<si>")
+                for base in range(0, si_flood, 5000):
+                    chunk = "".join(
+                        f"<x{i:x}/>" for i in range(base, min(base + 5000, si_flood))
+                    )
+                    entry.write(chunk.encode("ascii"))
+                entry.write(b"</si>")
+            else:
+                for base in range(0, count, 5000):
+                    chunk = []
+                    for i in range(base, min(base + 5000, count)):
+                        token = f"{(i * 2654435761) & 0xffffffff:08x}"
+                        chunk.append(f"<si><t>{token}</t></si>")
+                    entry.write("".join(chunk).encode("utf-8"))
+            if garbage:
+                for base in range(0, garbage, 5000):
+                    chunk = "".join(
+                        f"<x{i:x}/>" for i in range(base, min(base + 5000, garbage))
+                    )
+                    entry.write(chunk.encode("ascii"))
             entry.write(b"</sst>")
 
 
@@ -421,6 +438,64 @@ def make_long_text_node_docx(path, size=5 * 1024 * 1024):
                 entry.write(os.urandom(take).hex().encode("ascii")[:take])
                 remaining -= take
             entry.write(b"</t></document>")
+
+
+def make_gt_value_tag_docx(path, attrs=2_500_000):
+    """A <28 MiB part whose single start tag has 2.5M attributes, every value `>`."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        with z.open("word/document.xml", "w") as entry:
+            entry.write(b'<?xml version="1.0" encoding="UTF-8"?><document')
+            batch = 50_000
+            for base in range(0, attrs, batch):
+                entry.write("".join(
+                    f' a{i:x}=">"' for i in range(base, min(base + batch, attrs))
+                ).encode("ascii"))
+            entry.write(b"></document>")
+
+
+def make_docx_main_under_worksheets(path, paragraphs=1_200_000):
+    """A docx whose main part sits at xl/worksheets/a.xml and carries >2M elements.
+
+    Each paragraph gets a random 4-hex attribute so the part stays under 32 MiB and
+    below the 100x compression ratio (only the element count can reject it).
+    """
+    tokens = os.urandom(2 * paragraphs).hex()
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        with z.open("xl/worksheets/a.xml", "w") as entry:
+            entry.write(
+                b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+            )
+            entry.write(b"<w:row/>" * 5001)
+            chunk = []
+            for index in range(paragraphs):
+                token = tokens[index * 4:(index + 1) * 4]
+                chunk.append(f'<w:p a="{token}"><w:r/></w:p>')
+                if len(chunk) == 5000:
+                    entry.write("".join(chunk).encode("ascii"))
+                    chunk = []
+            if chunk:
+                entry.write("".join(chunk).encode("ascii"))
+            entry.write(b"</w:body></w:document>")
+
+
+def make_encoded_xml_docx(path, encoding, bom=b"", size=34 * 1024 * 1024):
+    """A docx-shaped XML part in UTF-16BE (no BOM) or UTF-32 (with BOM)."""
+    head = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+    )
+    encoded = bom + head.encode(encoding)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        with z.open("word/document.bin", "w") as entry:
+            entry.write(encoded)
+            remaining = size - len(encoded)
+            while remaining > 0:
+                take = min(remaining, 65536)
+                entry.write(os.urandom(take))
+                remaining -= take
 
 
 class DocReadTests(unittest.TestCase):
@@ -596,6 +671,30 @@ class DocReadTests(unittest.TestCase):
         self.assertLess(info.file_size / info.compress_size, 100)
         self.assertGreater(docread._guard_ooxml(self.root / "wide.xlsx"), 40 * 1024 * 1024)
 
+    def test_docx_main_under_worksheets_is_not_exempt(self):
+        # A docx part at xl/worksheets/a.xml must not inherit the xlsx streaming
+        # exemption: 1.2M paragraphs are 2.4M elements and must hit the 2M budget.
+        make_docx_main_under_worksheets(self.root / "fake-worksheet.docx")
+        with zipfile.ZipFile(self.root / "fake-worksheet.docx") as archive:
+            info = archive.getinfo("xl/worksheets/a.xml")
+        self.assertLess(info.file_size, 32 * 1024 * 1024)
+        out = self.read("fake-worksheet.docx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("XML 元素", out["error"])
+        self.assertIn("2000000", out["error"])
+
+    def test_xlsx_chartsheet_is_not_exempt(self):
+        # A chartsheet relationship is not a worksheet: the part gets the 32 MiB cap.
+        make_large_sheet_xlsx(
+            self.root / "chartsheet.xlsx", rows=75_000, cols=10, text=True,
+            relationship_type="chartsheet",
+        )
+        out = self.read("chartsheet.xlsx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("XML 单文件上限", out["error"])
+
     def test_xlsx_large_sheets_are_truncated_not_rejected(self):
         # The 2M global element budget must not reject ordinary big sheets; each
         # is read to the 5000-row/output cap with a truncation warning instead.
@@ -625,6 +724,31 @@ class DocReadTests(unittest.TestCase):
         self.assertLess(info.file_size, 32 * 1024 * 1024)
         self.assertGreater(docread._guard_ooxml(self.root / "strings.xlsx"), 20 * 1024 * 1024)
 
+    def test_xlsx_shared_strings_outside_si_garbage_is_rejected(self):
+        # openpyxl only clears <si>; 2M <x/> siblings stay in its tree. The guard scans
+        # sharedStrings like a worksheet and caps the si-external count at 100k.
+        make_shared_strings_xlsx(
+            self.root / "ss-garbage.xlsx", count=1, garbage=2_000_000,
+        )
+        with zipfile.ZipFile(self.root / "ss-garbage.xlsx") as archive:
+            info = archive.getinfo("xl/sharedStrings.xml")
+        self.assertLess(info.file_size, 32 * 1024 * 1024)
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(self.root / "ss-garbage.xlsx")
+        self.assertEqual(caught.exception.kind, "too_large")
+        self.assertIn("si 外元素", str(caught.exception))
+        self.assertIn("100000", str(caught.exception))
+
+    def test_xlsx_shared_strings_single_si_flood_is_rejected(self):
+        make_shared_strings_xlsx(
+            self.root / "ss-si.xlsx", count=0, si_flood=100_001,
+        )
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(self.root / "ss-si.xlsx")
+        self.assertEqual(caught.exception.kind, "too_large")
+        self.assertIn("单个 si 内元素", str(caught.exception))
+        self.assertIn("100000", str(caught.exception))
+
     def test_ooxml_rejects_single_oversized_tag(self):
         # Expat builds the whole attribute dict before the start callback, so a
         # 28 MiB single tag with 2.5M attributes must be refused before it is fed.
@@ -637,6 +761,45 @@ class DocReadTests(unittest.TestCase):
         self.assertFalse(out["ok"], out)
         self.assertEqual(out["error_kind"], "too_large")
         self.assertIn("4 MiB", out["error"])
+
+    def test_ooxml_rejects_gt_value_tag_with_low_prescan_memory(self):
+        # Every attribute value is ">"; a >-based counter resets at each one and
+        # expat then builds the 2.5M-attribute dict. The < spacing must reject at 4 MiB
+        # and the pre-scan process must stay under 100 MiB.
+        make_gt_value_tag_docx(self.root / "gt-tag.docx")
+        with zipfile.ZipFile(self.root / "gt-tag.docx") as archive:
+            info = archive.getinfo("word/document.xml")
+        self.assertGreater(info.file_size, 20 * 1024 * 1024)
+        self.assertLess(info.file_size, 32 * 1024 * 1024)
+        out = self.read("gt-tag.docx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("4 MiB", out["error"])
+
+        code = (
+            "import importlib.util, resource, sys\n"
+            "spec = importlib.util.spec_from_file_location('docread', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "try:\n"
+            "    module._guard_ooxml(sys.argv[2])\n"
+            "except module.DocReadError as error:\n"
+            "    print(error.kind)\n"
+            "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)\n"
+        )
+        completed = subprocess.run(
+            [
+                sys.executable, "-c", code,
+                str(ROOT / "runner/docread.py"), str(self.root / "gt-tag.docx"),
+            ],
+            capture_output=True, check=True,
+        )
+        lines = completed.stdout.decode("utf-8").strip().splitlines()
+        self.assertEqual(lines[0], "too_large")
+        peak = int(lines[-1])
+        if sys.platform != "darwin":
+            peak *= 1024
+        self.assertLess(peak, 100 * 1024 * 1024, peak)
 
     def test_ooxml_rejects_single_oversized_text_node(self):
         make_long_text_node_docx(self.root / "long-text.docx")
@@ -667,6 +830,30 @@ class DocReadTests(unittest.TestCase):
         self.assertEqual(out["error_kind"], "too_large")
         self.assertIn("XML 元素", out["error"])
         self.assertIn("2000000", out["error"])
+
+    def test_utf16be_xml_without_bom_is_detected(self):
+        # lxml parses UTF-16BE with an XML declaration and no BOM; the 64-byte head
+        # has NULs beside every ASCII byte, so they must be dropped before the `<`.
+        make_encoded_xml_docx(self.root / "utf16be.docx", "utf-16-be")
+        with zipfile.ZipFile(self.root / "utf16be.docx") as archive:
+            info = archive.getinfo("word/document.bin")
+        self.assertGreater(info.file_size, 32 * 1024 * 1024)
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(self.root / "utf16be.docx")
+        self.assertEqual(caught.exception.kind, "too_large")
+        self.assertIn("XML 单文件上限", str(caught.exception))
+
+    def test_utf32_xml_with_bom_is_detected(self):
+        make_encoded_xml_docx(
+            self.root / "utf32le.docx", "utf-32-le", bom=codecs.BOM_UTF32_LE,
+        )
+        with zipfile.ZipFile(self.root / "utf32le.docx") as archive:
+            info = archive.getinfo("word/document.bin")
+        self.assertGreater(info.file_size, 32 * 1024 * 1024)
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(self.root / "utf32le.docx")
+        self.assertEqual(caught.exception.kind, "too_large")
+        self.assertIn("XML 单文件上限", str(caught.exception))
 
     def test_docx_with_too_many_xml_elements_is_rejected(self):
         make_docx_many_elements(self.root / "elements.docx")
