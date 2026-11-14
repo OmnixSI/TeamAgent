@@ -4,7 +4,13 @@ import { isAutoSender } from "./feature-request-core";
 import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction" | "request_feature";
-export const WRITE_TOOLS = new Set<string>(["create_file_task", "prepare_project_task", "remember_correction", "request_feature"]);
+/** D4 §5.9：所有会写 D1 的工具都在这里；各自函数体（authorizeRecords / schedule-tools 的
+ *  owner 检查 / skills 的同名覆盖 / run_task 的管理员检查）负责真正的授权。 */
+export const WRITE_TOOLS = new Set<string>([
+  "create_file_task", "prepare_project_task", "remember_correction", "request_feature",
+  "records_write", "schedule_create", "schedule_update", "schedule_cancel",
+  "skill_save", "run_task",
+]);
 export const UNTRUSTED_TOOLS = new Set<string>(["search_web", "read_web", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", ...extraUntrustedNames()]);
 
 /** Once external material enters a turn, later tool calls cannot shed its taint. */

@@ -57,7 +57,8 @@ async function registeredTools() {
     const end = base.indexOf("const allTools = [");
     assert.ok(start > 0 && end > start, "semantic.ts baseTools block not found");
     const baseNames = [...base.slice(start, end).matchAll(/name: "([a-z_]+)"/g)].map((m) => m[1]);
-    assert.ok(baseNames.length >= 10, `only ${baseNames.length} base tool names`);
+    // D4 moved the three schedule_* definitions out of baseTools into EXTRA_TOOLS.
+    assert.ok(baseNames.length >= 9, `only ${baseNames.length} base tool names`);
     return [
       ...baseNames,
       ...api.repoTools.map((t) => (t.def || t).function.name),

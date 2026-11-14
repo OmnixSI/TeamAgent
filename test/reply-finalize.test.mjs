@@ -320,7 +320,7 @@ test("F7 an active schedule within ten minutes is reused, not recreated", async 
   assert.ok(v.text.includes("（#sched-digest_daily-old，下次 2026-11-15 08:00（悉尼））"), v.text);
 });
 
-test("F8 schedule_create passes topic/origin/quote and returns say; no-topic stays compatible", async () => {
+test("F8 schedule_create v2 records cadence/tz/topic and returns say; no-topic stays compatible", async () => {
   const e = env();
   let s = stub([call("schedule_create", { kind: "digest_daily", time: "08:00", topic: "礼物日早报" })]);
   let answer;
@@ -332,10 +332,10 @@ test("F8 schedule_create passes topic/origin/quote and returns say; no-topic sta
   const created = await row(e, "SELECT * FROM schedules WHERE kind='digest_daily'");
   const spec = JSON.parse(created.spec);
   assert.equal(spec.topic, "礼物日早报");
-  assert.equal(spec.origin, "chat");
-  assert.ok(spec.request_quote.startsWith("然后悉尼时间每天早上8点"));
+  assert.equal(spec.cadence, "daily");
+  assert.equal(spec.time, "08:00");
+  assert.equal(created.tz, "Australia/Sydney");
   assert.equal(created.source_msg_id, "msg-351");
-  assert.match(spec.dedup, /^rpt-[a-z0-9]{3,6}$/);
 
   const results = s.seen
     .flatMap((b) => b.messages || [])
@@ -343,18 +343,16 @@ test("F8 schedule_create passes topic/origin/quote and returns say; no-topic sta
     .map((m) => JSON.parse(m.content));
   const result = results.find((r) => r.say);
   assert.ok(result, "schedule_create result missing say");
-  assert.match(
-    result.say,
-    /^记下了，每天 08:00（悉尼）发礼物日早报，第一次是 .+（悉尼）。不想要了回那条推送说「不用再发了」。$/,
-  );
+  assert.match(result.say, /^记下了，每天 08:00 发礼物日早报，第一次是 .+（悉尼）。$/);
   assert.ok(JSON.parse(answer).text.includes("记下了"), "final reply must carry the code ack");
 
   const names = s.seen[0].tools.map((t) => t.function.name);
   assert.equal(new Set(names).size, names.length, "tool names must stay unique");
   const createTool = s.seen[0].tools.find((t) => t.function.name === "schedule_create");
-  assert.ok(createTool.function.description.includes("没调用成功前，不要说『明早 X 点会发』"));
-  assert.ok(createTool.function.description.includes("用现有消息就能写出来的定时推送直接登记，不要提功能需求"));
-  assert.ok(createTool.function.parameters.properties.topic, "topic is an exposed parameter");
+  assert.ok(createTool.function.description.includes("没调用成功前不要说「记下了」「会发」"));
+  assert.ok(createTool.function.description.includes("when_text"));
+  for (const name of ["when_text", "content_text", "tz", "steps", "month_days", "pending_id"])
+    assert.ok(createTool.function.parameters.properties[name], `${name} must be exposed`);
   assert.equal(createTool.function.parameters.properties.dedup, undefined, "dedup must not be exposed");
 
   const e2 = env();
@@ -368,10 +366,11 @@ test("F8 schedule_create passes topic/origin/quote and returns say; no-topic sta
   const oldSpec = JSON.parse(old.spec);
   assert.equal(oldSpec.time, "09:00");
   assert.equal(oldSpec.topic, undefined);
+  assert.equal(old.tz, "Australia/Sydney");
   assert.equal(old.source_msg_id, "msg-old");
 });
 
-test("F9 schedule_cancel can cancel by unique topic and asks when several match", async () => {
+test("F9 schedule_cancel cancels by exact topic, refuses unknown topics, and still takes id", async () => {
   const now = Date.now();
   const seed = async (e, id, time, topic, dedup) =>
     api.createSchedule(
@@ -384,7 +383,7 @@ test("F9 schedule_cancel can cancel by unique topic and asks when several match"
   const e1 = env();
   await seed(e1, "m1", "08:00", "礼物日早报", "gift-daily");
   await seed(e1, "m2", "09:00", "周报", "weekly-report");
-  let s = stub([call("schedule_cancel", { topic: "礼物" })]);
+  let s = stub([call("schedule_cancel", { topic: "礼物日早报" })]);
   try {
     await sem.agentAnswer(e1, await contextFor(e1, { id: "msg-cancel-1", body: "把礼物早报那个停了" }));
   } finally {
@@ -393,7 +392,7 @@ test("F9 schedule_cancel can cancel by unique topic and asks when several match"
   assert.equal((await row(e1, "SELECT * FROM schedules WHERE id=?", "sched-digest_daily-m1")).status, "cancelled");
   assert.equal((await row(e1, "SELECT * FROM schedules WHERE id=?", "sched-digest_daily-m2")).status, "active");
 
-  // 多个命中：返回列表让模型问，两个都不取消。
+  // 主题不存在（只说「报」）：如实 not_found，两个都不取消。
   const e2 = env();
   await seed(e2, "m3", "08:00", "礼物日早报", "gift-daily2");
   await seed(e2, "m4", "09:00", "周报", "weekly-report2");
@@ -403,13 +402,12 @@ test("F9 schedule_cancel can cancel by unique topic and asks when several match"
   } finally {
     s.restore();
   }
-  const ambiguous = s.seen
+  const missing = s.seen
     .flatMap((b) => b.messages || [])
     .filter((m) => m.role === "tool")
     .map((m) => JSON.parse(m.content))
-    .find((r) => r.error_kind === "ambiguous");
-  assert.ok(ambiguous, "several topic matches must be returned to the model");
-  assert.equal(ambiguous.candidates.length, 2);
+    .find((r) => r.error_kind === "not_found");
+  assert.ok(missing, "an unknown topic must be reported, not silently cancelled");
   assert.equal((await rows(e2, "SELECT * FROM schedules WHERE status='active'")).length, 2);
 
   // 老行为：按 id 取消。

@@ -38,7 +38,8 @@ test('MG1 merged bot quote cannot stop or wait even when the latest message is o
 });
 
 test('MG2 msg#428 shape missed beyond cursor gets a durable reply and recovery job at 90 seconds',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  // 固定 10:00（悉尼）：19:00 的 scout 槽位会额外花 2 条 D1，和这条预算断言无关。
+  t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-14T10:00:00+11:00')});
   const e=await fixture('msg-428','说话',{age:90000});
   await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('chat_cursor:'+group,'999').run();
   const before=e.DB.executed;await scheduled(e);

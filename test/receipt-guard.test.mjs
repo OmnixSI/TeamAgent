@@ -135,6 +135,14 @@ test("one sentence may hit several families; any satisfied family keeps it", asy
   assert.deepEqual(result.violations, []);
 });
 
+test("the short 已记：… claim (outside the frozen table) is still reconciled", async () => {
+  const claim = "已记：TOO 的报销额度从 ¥360 改成 ¥370，记录 #493a67。";
+  const replaced = await guardReceipts({ text: claim, accepted: [], failures: [] });
+  assert.equal(replaced.text, honest("record", [], 1));
+  const kept = await guardReceipts({ text: claim, accepted: [accepted("record")], failures: [] });
+  assert.equal(kept.text, claim);
+});
+
 test("a failed action's reason is quoted instead of a generic sentence", async () => {
   const claim = "记好了，我 360，卡特龙 50。";
   const result = await guardReceipts({

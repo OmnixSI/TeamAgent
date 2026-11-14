@@ -97,8 +97,11 @@ export async function updateTask(e: any, b: any, who: any) {
   return { ok: true };
 }
 
+/** RC-04: repo-less workbench tasks go to the inbox instead of being refused. */
+export const BOARD_INBOX = "inbox";
+
 export async function createBoardTask(e: any, b: any, who: any) {
-  if (!REPOS.includes(b.repo) || !String(b.title || "").trim()) return null;
+  if ((b.repo !== BOARD_INBOX && !REPOS.includes(b.repo)) || !String(b.title || "").trim()) return null;
   const id = crypto.randomUUID();
   await e.DB.prepare(
     "INSERT INTO tasks(id,repo,title,detail,status,assignee,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",

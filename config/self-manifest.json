@@ -961,6 +961,7 @@
       ],
       "tools": [
         "schedule_create",
+        "schedule_update",
         "schedule_list",
         "schedule_cancel"
       ],

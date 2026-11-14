@@ -163,9 +163,13 @@ function legacySchedulePromise(sentence: string) {
   return RECURRING_RE.test(sentence) && CLOCK_RE.test(sentence) && PUSH_VERB_RE.test(sentence);
 }
 
+// design 的冻结表漏了「已记：…」这种省略「上/账」的说法；模型真的会这样编记录号。
+const RECORD_SHORT_RE = /已记(?=[：:，,。]|$)/;
+
 function familiesFor(sentence: string): Family[] {
   const hits: Family[] = [];
   for (const claim of CLAIMS) if (claim.re.test(sentence)) hits.push(claim.family);
+  if (!hits.includes("record") && RECORD_SHORT_RE.test(sentence)) hits.push("record");
   if (!hits.includes("schedule") && legacySchedulePromise(sentence)) hits.unshift("schedule");
   return hits;
 }
