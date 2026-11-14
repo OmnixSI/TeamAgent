@@ -111,7 +111,7 @@ test('logged-in X offers an enabled relogin action for both auth and completed-f
  }
 });
 test('existing navigation keeps every label keyboard-reachable and the new-task action in the page shell',()=>{
- const f=ui(),nav=f.ids.get('tabs'),labels=['任务与方案','资料与发现','项目动态','记忆与成长','操作记录','运行状态'];
+ const f=ui(),nav=f.ids.get('tabs'),labels=['任务与方案','资料与发现','账本与自动化','项目动态','记忆与成长','操作记录','运行状态'];
  assert.deepEqual(nav.children.map(n=>n.textContent),labels);assert.equal(nav.attrs.role,'tablist');
  for(const tab of nav.children){f.ids.set(tab.id,tab);assert.equal(tab.attrs.role,'tab');}
  vm.runInContext('render=()=>{};load=()=>{}',f.context);
