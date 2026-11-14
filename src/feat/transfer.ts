@@ -5,6 +5,7 @@
 // back together. Everything stored here is counted and stops at 1.5 GB.
 import type { Hub } from "../hub.ts";
 import type { Feature } from "./types.ts";
+import { R2_STORAGE_STOP } from "../budget.ts";
 
 /** Upload part size used by the container scripts; the route refuses anything above PART_MAX. */
 export const PART = 80 * 1024 * 1024;
@@ -108,6 +109,8 @@ async function put(hub: Hub, req: Request, url: URL, key: string) {
   if (part > 0 && (!old || old.done || old.parts !== part)) return json({ error: "parts must be uploaded in order starting at 0" }, 409);
   const keep = part === 0 ? 0 : old!.size;
   if (!fitsCap(stored(hub), old?.size || 0, keep + len)) return json({ error: "storage cap reached" }, 507);
+  // The bucket as a whole (kept media, sites and backups included) has one stop line below what the plan includes.
+  if (((hub as any).store?.r2All?.() ?? 0) - (old?.size || 0) + keep + len > R2_STORAGE_STOP) return json({ error: "storage cap reached" }, 507);
   if (!hub.plan.fits("r2_writes", 1)) return json({ error: "R2 write allowance used up" }, 503);
   if (part === 0) {
     await remove(hub, key);

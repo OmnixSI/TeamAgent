@@ -1,6 +1,7 @@
 // Publishing: the bot writes a web page (mini game, poll, gallery, report) and gets a public link for it.
 // A site is a set of files in R2 under site/<id>/<path>; its bookkeeping lives in the Hub's SQLite, so serving
 // a request costs at most one R2 read. The only protection is the unguessable id: no route ever lists sites.
+import { R2_STORAGE_STOP } from "../budget.ts";
 import type { Feature, Ctx } from "./types.ts";
 import type { Hub } from "../hub.ts";
 import type { Tool } from "../core.ts";
@@ -209,6 +210,7 @@ function removeSite(hub: Hub, id: string) {
 
 /** Frees room by dropping sites nobody ever opened that are over a year old; returns a refusal when that is not enough. */
 async function makeRoom(hub: Hub, addBytes: number, addSites: number, keep: string) {
+  if (addBytes > 0 && ((hub as any).store?.r2All?.() ?? 0) + addBytes > R2_STORAGE_STOP) return "文件存储快到套餐上限了，先删掉些不要的大文件或网页再发布";
   for (let i = 0; i < LIMITS.sites + 1; i++) {
     const t = hub.sql.exec(`SELECT COUNT(*) c, COALESCE(SUM(bytes),0) b FROM site WHERE "by"<>'deploy'`).toArray()[0] as any;
     if (Number(t.c) + addSites <= LIMITS.sites && Number(t.b) + addBytes <= LIMITS.totalBytes) return "";
