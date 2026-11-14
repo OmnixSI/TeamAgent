@@ -5,7 +5,7 @@ import {
   buildSearchTimelineRequest, parseTweetDetail, parseUserTweets, parseSearchTimeline, parseUserProfile,
   classifyGraphqlStatus, classifyXPage, formatTweetText, fitItems,
 } from '../runner/x-graphql.mjs';
-import {readX, xEnvelope} from '../runner/x-reader.mjs';
+import {readX, xEnvelope, spawnBrowser, EDGE_SPAWN_OPTIONS} from '../runner/x-reader.mjs';
 import {REACH_COMMANDS} from '../runner/reach-adapter.mjs';
 
 const person=(handle,name='')=>({__typename:'User',core:{screen_name:handle,name},legacy:{screen_name:handle,name}});
@@ -204,4 +204,12 @@ test('a killed browser lock is cleared only when its owner pid is gone',async()=
  await symlink('host-'+process.pid,join(dir,'SingletonLock'));
  await clearStaleLock(dir);
  assert.deepEqual((await readdir(dir)).filter(n=>n.startsWith('Singleton')),['SingletonLock']);
+});
+
+test('the reader keeps its short-lived Edge in the reader process group, not a detached one',async()=>{
+ const child=spawnBrowser(process.execPath,['-e','setInterval(()=>{},1000)']);
+ try{
+  assert.notEqual(EDGE_SPAWN_OPTIONS.detached,true);
+  assert.throws(()=>process.kill(-child.pid,0),error=>error.code==='ESRCH','browser became its own process group');
+ }finally{child.kill('SIGKILL');}
 });

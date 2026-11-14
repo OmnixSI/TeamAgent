@@ -83,3 +83,16 @@ test('runner SIGTERM cancellation reaps its detached command group before the ru
  child.kill('SIGTERM');await exited;
  assert.equal(spawnSync('pgrep',['-f',marker]).status,1,'shutdown left a detached command');
 });
+test('a reader that already closed its browser returns without the old 1.5 s grace wait',async t=>{
+ const {adapter}=await setup(t,{'x:thread:local':command(success)});
+ const started=Date.now();const r=await adapter.run(request);
+ assert.equal(r.ok,true);assert.ok(Date.now()-started<1000,`reader took ${Date.now()-started}ms after exiting`);
+});
+test('a reader that exits before its browser leaves nothing behind',async t=>{
+ const marker='f9-2-orphan-'+crypto.randomUUID();
+ const code=`const {spawn}=require('node:child_process');spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)",${JSON.stringify(marker)}],{stdio:'ignore'});console.log(JSON.stringify({ok:true,items:[{text:"ok"}]}));process.exit(0)`;
+ const {adapter}=await setup(t,{'x:thread:local':command(code)});
+ t.after(()=>{const p=spawnSync('pgrep',['-f',marker]);for(const pid of String(p.stdout||'').trim().split(/\s+/).filter(Boolean))try{process.kill(Number(pid),'SIGKILL');}catch{}});
+ assert.equal((await adapter.run(request)).ok,true);
+ assert.equal(spawnSync('pgrep',['-f',marker]).status,1,'reader exit left its browser behind');
+});

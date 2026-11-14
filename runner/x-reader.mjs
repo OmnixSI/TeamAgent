@@ -192,6 +192,14 @@ export async function clearStaleLock(profile){
 }
 function alive(pid){try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}}
 
+/**
+ * Edge must stay in the reader's process group. The adapter reaps that whole
+ * group when a read times out and the reader is SIGKILLed; a detached browser
+ * would survive as an orphan and keep the profile locked.
+ */
+export const EDGE_SPAWN_OPTIONS=Object.freeze({stdio:'ignore'});
+export function spawnBrowser(executable,args){return spawn(executable,args,EDGE_SPAWN_OPTIONS);}
+
 async function launch(deadline){
  let executable;
  try{executable=nativeXExecutable();}catch{throw Error('TOOL_NOT_READY');}
@@ -200,11 +208,14 @@ async function launch(deadline){
  await mkdir(profile,{recursive:true,mode:0o700});
  const port=await freePort();
  await clearStaleLock(profile);
- const child=spawn(executable,[
+ // Load the CDP client before starting a browser: the require is synchronous,
+ // and a signal arriving during it must not leave a live Edge behind.
+ const {chromium}=playwrightModule();
+ const child=spawnBrowser(executable,[
   `--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${port}`,
   // X returns HTTP 403 to HeadlessChrome; a short-lived visible Edge window keeps the real session.
   '--window-size=960,720','--no-first-run','--no-default-browser-check','https://x.com/home',
- ],{detached:true,stdio:'ignore'});
+ ]);
  live={browser:null,child};
  try{
   let exited=false;child.once('exit',()=>{exited=true;});
@@ -214,7 +225,6 @@ async function launch(deadline){
    await sleep(200);
   }
   if(!endpoint)throw Error(exited?'BUSY':'TIMEOUT');
-  const {chromium}=playwrightModule();
   const browser=await chromium.connectOverCDP(endpoint,{timeout:5000});
   live={browser,child};
   return {browser,child};
@@ -228,7 +238,8 @@ async function launch(deadline){
 async function close(browser,child){
  if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(2000)]);
  if(child&&child.exitCode===null&&child.signalCode===null){
-  const kill=sig=>{try{process.kill(-child.pid,sig);}catch{try{child.kill(sig);}catch{}}};
+  // Edge shares this reader's process group, so signal the child directly.
+  const kill=sig=>{try{child.kill(sig);}catch{}};
   await new Promise(done=>{
    const timer=setTimeout(()=>{kill('SIGKILL');done();},2500);
    child.once('exit',()=>{clearTimeout(timer);done();});
@@ -244,12 +255,14 @@ async function shutdown(code){
  return closing;
 }
 
-/** Timeout/signal exit: the adapter is waiting, so kill our own browser group at once and leave. */
+/** Timeout/signal exit: the adapter is waiting, so kill our own browser and leave. */
 async function fastShutdown(code){
  if(closing)return closing;
  closing=(async()=>{
   const current=live;live=null;
-  if(current?.child){try{process.kill(-current.child.pid,'SIGKILL');}catch{try{current.child.kill('SIGKILL');}catch{}}}
+  // Edge is in this process group; the adapter SIGKILLs the group if we cannot
+  // finish here, so never detach it and never signal the group from inside it.
+  if(current?.child){try{current.child.kill('SIGKILL');}catch{}}
   await flushed;process.exit(code);
  })();
  return closing;

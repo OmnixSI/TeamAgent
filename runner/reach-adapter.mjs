@@ -41,12 +41,24 @@ function lock(dir){
 function runProcess(argv,{deadline,signal}){
  return new Promise(resolve=>{
   let child,reason=null,bytes=0,chunks=[],done=false,killTimer,deadlineTimer,cleanupPromise=null;
-  const kill=sig=>{if(child?.pid)try{process.kill(-child.pid,sig);}catch{}};
-  // Give a reader enough time to close the browser it started before the group is killed.
+  // The command runs in its own group. A browser it spawned stays in that
+  // group (readers must not detach one), so a group kill is the safety net
+  // when a hard timeout lands before the command can clean up itself.
+  const groupAlive=()=>{if(!child?.pid)return false;try{process.kill(-child.pid,0);return true;}catch{return false;}};
+  const kill=sig=>{if(child?.pid)try{process.kill(-child.pid,sig);}catch{try{child.kill(sig);}catch{}}};
+  // Give a reader time to close the browser it started, then kill the group.
+  // Wait on the group being gone, not on the child's exit: the child may have
+  // exited already while a descendant it started is still alive.
   const cleanup=()=>cleanupPromise??=new Promise(done=>{
+   if(!groupAlive()){done();return;}
+   const started=Date.now();
    kill('SIGTERM');
-   killTimer=setTimeout(()=>{kill('SIGKILL');done();},1500);
-   child?.once('exit',()=>{clearTimeout(killTimer);done();});
+   const tick=()=>{
+    if(!groupAlive()){done();return;}
+    if(Date.now()-started>=1500){kill('SIGKILL');done();return;}
+    killTimer=setTimeout(tick,50);
+   };
+   killTimer=setTimeout(tick,50);
   });
   const stop=kind=>{reason??=kind;void cleanup();};
   const abort=()=>stop('timeout');
