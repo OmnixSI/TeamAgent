@@ -4,7 +4,7 @@ import { TEAM } from "./config";
 import { WorkersAiBudgetFault } from "./ai-budget";
 import { budget } from "./budget";
 import type { Media } from "./inbound";
-import { isStickerMedia, renderMentions } from "./inbound";
+import { isStickerMedia, renderMentions, QUOTED_IMAGE_BASE } from "./inbound";
 import { visionModel, redact } from "./runtime";
 import { callOpenAi } from "./openai";
 import { metaOf, withoutFaces } from "./view";
@@ -424,22 +424,28 @@ export function looksLikeSticker(m: Media, hasText: boolean, explicitFace = fals
   );
 }
 
+/** A member is asking about a picture, not merely mentioning one. */
+export function asksForImage(body: string) {
+  const text = String(body || "").trim();
+  return /图|表情|照片/.test(text) && /看|读|识别|什么|啥|内容|吗|[？?]/.test(text);
+}
+
 export function pickImages(
   batch: any[],
   latest: any,
   refRows: Map<string, any>,
-  max = 3,
+  max = 4,
 ): ImagePick[] {
   if (!latest) return [];
   const picks: ImagePick[] = [];
   const seen = new Set<string>();
   const meta = metaOf(latest);
-  const take = (row: any, media: Media, idx: number, hint: string) => {
+  const take = (row: any, media: Media, idx: number, hint: string, sticker = false) => {
     if (picks.length >= max || media.kind !== "image") return;
     const key = row.id + ":" + idx;
     if (seen.has(key)) return;
     seen.add(key);
-    picks.push({ messageId: row.id, ...(row.group_id ? { groupId: String(row.group_id) } : {}), idx, media, hint, ...(isStickerPick(row, media) ? { sticker: true } : {}) });
+    picks.push({ messageId: row.id, ...(row.group_id ? { groupId: String(row.group_id) } : {}), idx, media, hint, ...(sticker || isStickerPick(row, media) ? { sticker: true } : {}) });
   };
   const images = (row: any) => {
     let imageIdx = -1;
@@ -464,7 +470,7 @@ export function pickImages(
     latest.mentioned === true ||
     !!meta.mentionsBot;
   const body = String(latest.body || "").trim();
-  const asksImage = /图|表情|照片/.test(body) && /看|读|识别|什么|啥|内容|吗|[？?]/.test(body);
+  const asksImage = asksForImage(body);
   const reply = meta.replyTo;
   if (
     mentioned ||
@@ -478,6 +484,12 @@ export function pickImages(
   if (target)
     for (const { media, idx } of images(target))
       take(target, media, idx, hintOf(target));
+  else if (Array.isArray(meta.quoted?.media) && meta.quoted.media.length && (mentioned || asksImage || reply?.kind === "bot")) {
+    // 518: the quoted image is only in quoted.media, with no member target row.
+    meta.quoted.media.filter((media: Media) => media.kind === "image").forEach((media: Media, i: number) => {
+      take(latest, media, QUOTED_IMAGE_BASE + i, hintOf(latest) || String(meta.quoted?.text || "").slice(0, 200), isStickerMedia(media));
+    });
+  }
   if (mentioned || asksImage)
     for (const row of [...batch].reverse()) {
       if (row.id === latest.id) continue;
@@ -966,6 +978,21 @@ export async function coldPicks(e: any, picks: ImagePick[]): Promise<ImagePick[]
   return cold;
 }
 
+/** At most two provider calls at once: four small stickers should not trip a rate limit. */
+async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await run(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 export async function annotateTurn(
   e: any,
   picks: ImagePick[],
@@ -977,11 +1004,11 @@ export async function annotateTurn(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs ?? config.turnMs);
   try {
-    return await Promise.all(
-      picks.map(async (p): Promise<ImageOutcome> => {
+    return await mapLimit(picks, 2, async (p): Promise<ImageOutcome> => {
           const started = Date.now();
           const traceId = crypto.randomUUID();
           let outcome: ImageOutcome = { messageId: p.messageId, idx: p.idx, ...(p.sticker ? { sticker: true } : {}), stage: "fetch", status: "failed", reason: "invalid", traceId };
+          if (controller.signal.aborted) return failureOutcome({ ...outcome, stage: "describe", reason: "timeout" });
           const report: Report = event => {
             reportVision({ ...event, elapsedMs: Date.now() - started, traceId });
             if (event.status === "failed") outcome = { ...event, messageId: p.messageId, idx: p.idx, ...(p.sticker ? { sticker: true } : {}), traceId };
@@ -1027,8 +1054,7 @@ export async function annotateTurn(
             failed(report, "link", error, controller.signal, "database");
             return failureOutcome(outcome);
           }
-        }),
-    );
+        });
   } finally {
     clearTimeout(timer);
   }
