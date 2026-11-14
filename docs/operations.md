@@ -6,7 +6,14 @@
 
 ## 云端
 
-Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。创建 inkboard-team、inkboard-team-chat、team-agent-tools 三条队列（Workers Paid 自带 1M ops/月）；聊天消费者并发1，工具消费者并发2，深度工作消费者并发2，batch size1。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
+Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1 ID。Workers Paid 自带 1M ops/月；聊天消费者 batch size1、并发1，工具与深度工作消费者 batch size5、并发3，两条后台队列 max_retries=2 后转入死信队列（默认保留4天）。`dead_letter_queue` 指向的队列必须先建好，否则部署会失败：
+
+```bash
+npx wrangler queues create inkboard-team-dlq
+npx wrangler queues create team-agent-tools-dlq
+```
+
+死信批次只写 `dlq:<队列名>:count` 与 `dlq:<队列名>:last` 两个 settings 计数键（Worker 不群发）；开发室晨报可从这两个键读取并提示。工具与普通整理不排在max后面，工作任务不进入聊天消费者。
 
 服务端密钥：ADMIN_TOKEN、RUNNER_TOKEN、DEEPSEEK_API_KEY、QQ_APP_ID、QQ_APP_SECRET、GITHUB_TOKEN。GITHUB_TOKEN 用只读 fine-grained token（Contents、Metadata、Pull Requests 均 Read-only；不需要写入权限），本机把令牌文件路径放在 GITHUB_TOKEN_FILE，由 scripts/sync-runtime-secrets.py 读取并同步，脚本只打印“已加入/跳过”，不打印值；未设置时 Worker 只能读公开仓库。用 Wrangler 交互配置或权限0600文件的 secret bulk；不要写进源码、构建变量和 shell 参数。无需把本机 GitHub OAuth令牌上传云端，GITHUB_TOKEN 与 gh 的本机登录态相互独立。
 
@@ -19,7 +26,7 @@ Node24+ 执行 npm ci。wrangler.toml 从示例复制，填自己的账户与 D1
 5. npm run deploy。脚本要求工作区已提交，把准确提交号写入 /health。
 6. 检查 /health、成员登录、工作台与原有任务；需要时回滚 Worker 版本。新增表可保留，不要反向删除数据来“回滚”。
 
-Workers Paid $5/月已购，不运行升到更高档或附加项的命令。D1 平台单次调用最多 1,000 查询，应用按入口：聊天/HTTP ≤48、后台 ≤200；批量操作使用 batch；单条参数最多100。Workers AI 仍每天 10k neurons 免费、超出计费，必须硬闸退回 DeepSeek。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
+Workers Paid $5/月已购，不运行升到更高档或附加项的命令。D1 平台单次调用最多 1,000 查询，应用按入口：聊天/HTTP ≤48、后台 ≤200（每条队列消息独立计量，单次调用最多5条）；批量操作使用 batch；单条语句最多100个绑定参数，120条夜批的消息 ID 查询与阶段事件写入因此分块。Workers AI 仍每天 10k neurons 免费、超出计费，必须硬闸退回 DeepSeek。本机转发、模型与消息发送有超时，D1保存权威状态，队列只是唤醒。
 
 ## 本机
 

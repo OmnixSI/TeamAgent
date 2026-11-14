@@ -29,7 +29,7 @@
     "end_hour": 6,
     "quiet_minutes": 20,
     "batches_per_night": 8,
-    "messages_per_batch": 60
+    "messages_per_batch": 120
   },
   "scout": {
     "enabled": true,
@@ -128,7 +128,7 @@
     "send_gif": true,
     "min_senders": 2,
     "max_bytes": 400000,
-    "max_rows": 1000,
+    "max_rows": 5000,
     "caps": {
       "tag": 40,
       "send": 20

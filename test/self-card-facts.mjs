@@ -124,7 +124,11 @@ export function readFacts() {
   const ttsSilk = /SILK/.test(qqVoice) || /wavToSilk/.test(tts) ? "SILK" : null;
 
   const entry = need(/^main\s*=\s*["']([^"']+)["']/m, wrangler, "worker entry", "wrangler.toml");
-  const queues = uniq([...wrangler.matchAll(/^\s*queue\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]));
+  // The card names the three functional lanes (producers); dead-letter queues are
+  // consumer plumbing and are asserted separately by the queue config tests.
+  const queues = uniq([...wrangler.matchAll(/\[\[queues\.producers\]\]([\s\S]*?)(?=\[\[|\n\[|$)/g)]
+    .map((block) => block[1].match(/^\s*queue\s*=\s*["']([^"']+)["']/m)?.[1])
+    .filter(Boolean));
   const bindings = uniq([...wrangler.matchAll(/^\s*binding\s*=\s*["']([^"']+)["']/gm)].map((m) => m[1]));
   const crons = parseCrons(wrangler);
   const schemaTables = tableNames(schema);

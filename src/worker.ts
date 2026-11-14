@@ -13,12 +13,13 @@ import { isDirectRequest } from "./engagement";
 import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
-import { metered, COST, left, D1_BUDGET, queueLimit } from "./d1";
+import { metered, COST, left, D1_BUDGET, chunks } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
 import { runCronExtras } from "./cron-extra";
+import { runQueueBatch } from "./queue-batch";
 import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { SELF_CARD } from "./self-card.generated";
@@ -585,24 +586,31 @@ async function processJob(e: Env, id: string) {
           .run();
     }
     if (claim.kind === "dream") {
-      if (p.messageIds?.length)
-        p.messages = (
-          await e.DB.prepare(
+      if (p.messageIds?.length) {
+        // D1 accepts at most 100 bound parameters per statement; a paid-tier night
+        // batch is 120 messages, so read and mark them in chunks.
+        const loaded: any[] = [];
+        for (const part of chunks(p.messageIds)) {
+          const result = await e.DB.prepare(
             "SELECT id,group_id,sender,substr(body,1,3000) AS body,ts FROM messages WHERE id IN (" +
-              p.messageIds.map(() => "?").join(",") +
-              ") ORDER BY ts",
+              part.map(() => "?").join(",") +
+              ")",
           )
-            .bind(...p.messageIds)
-            .all()
-        ).results;
+            .bind(...part)
+            .all();
+          loaded.push(...result.results);
+        }
+        p.messages = loaded.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+      }
       await analyse(e, p, semanticServices(e));
-      if (p.messages?.length)
+      const done = (p.messages || []).map((m: any) => m.id);
+      for (const part of chunks(done))
         await e.DB.prepare(
           "UPDATE messages SET processed=1 WHERE id IN (" +
-            p.messages.map(() => "?").join(",") +
+            part.map(() => "?").join(",") +
             ")",
         )
-          .bind(...p.messages.map((m: any) => m.id))
+          .bind(...part)
           .run();
     }
     if (claim.kind === "ci_triage") {
@@ -1009,13 +1017,13 @@ async function processJob(e: Env, id: string) {
       const payload = JSON.parse(claim.payload);
       const ids =
         payload.messageIds || (payload.messages || []).map((m: any) => m.id);
-      if (ids.length)
+      for (const part of chunks(ids))
         await e.DB.prepare(
           "UPDATE messages SET processed=-1 WHERE processed=0 AND id IN (" +
-            ids.map(() => "?").join(",") +
+            part.map(() => "?").join(",") +
             ")",
         )
-          .bind(...ids)
+          .bind(...part)
           .run();
     }
     if (claim.attempts >= 3)
@@ -2706,18 +2714,12 @@ export default {
     }
   },
   async queue(batch: any, e: Env) {
-    const base = e;
-    const limit = queueLimit(batch?.queue);
-    e = metered(base, limit);
-    for (let i = 0; i < batch.messages.length; i++) {
-      const m = batch.messages[i];
-      e = metered(base, limit);
-      await processJob(e, m.body.id);
-      if (i < batch.messages.length - 1) await flushTail(e);
-      m.ack();
-    }
-    await sendOutbox(e);
-    await flushTail(e);
+    return runQueueBatch(
+      batch,
+      e,
+      (scoped: any, id: string) => processJob(scoped, id),
+      (scoped: any) => sendOutbox(scoped),
+    );
   },
   async scheduled(c: any, e: Env, ctx: any) {
     e = metered(e, D1_BUDGET.background);
