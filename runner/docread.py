@@ -133,7 +133,11 @@ _CT_WORKBOOKS = (  # openpyxl's lookup order for the workbook part
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
 )
 _CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
-_CT_SHARED = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedstrings+xml"
+_CT_SHARED = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+_REL_WORKSHEET = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+_REL_SHARED = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
+_RELS_MEMBER = re.compile(r"(^|/)_rels/[^/]+\.rels$", re.IGNORECASE)
+_NEVER_EXEMPT = ("[content_types].xml", "xl/workbook.xml", "xl/styles.xml")
 
 
 def _parse_small_xml(archive, infos, name):
@@ -152,60 +156,105 @@ def _parse_small_xml(archive, infos, name):
         return None
 
 
+def _resolve_target(directory, target):
+    import posixpath
+
+    if target.startswith("/"):
+        return posixpath.normpath(target.lstrip("/"))
+    return posixpath.normpath(posixpath.join(directory, target))
+
+
+def _never_exempt(part):
+    lowered = part.lower()
+    return (
+        lowered in _NEVER_EXEMPT
+        or lowered.startswith(("docprops/", "xl/theme/"))
+        or lowered.endswith(".rels")
+        or "_rels/" in lowered
+    )
+
+
 def _relationships(archive, infos, extension):
     """Worksheet / sharedStrings parts of a real .xlsx/.xlsm, decided like openpyxl reads them.
 
-    Whitelist: a part is exempt from the whole-tree caps only when [Content_Types].xml
-    types it as a worksheet (or the one sharedStrings part) AND every workbook
-    relationship pointing at it has that same kind. Anything else (workbook, styles,
-    chartsheets, external links, docProps, parts with a second relationship) gets the
-    normal 32 MiB cap and 2M-element budget. docx/pptx never get an exemption.
+    Strict whitelist. Any irregularity anywhere in the package (oversized or DTD-bearing
+    relationship parts, duplicate or malformed PartNames, a part referenced by a second
+    relationship from anywhere) means NO exemption at all. A part is exempt from the
+    whole-tree caps only when [Content_Types].xml types it exactly as a worksheet (or the
+    single registered sharedStrings part), the workbook relationships point at it with the
+    exact worksheet (sharedStrings) type and nothing else references it, and it is not a
+    fixed-path part openpyxl reads as a whole tree (styles, docProps, theme, workbook, rels).
+    docx/pptx never get an exemption.
     """
+    none = (set(), set())
     if extension not in {".xlsx", ".xlsm"}:
-        return set(), set()
-    import posixpath
-
+        return none
     types = _parse_small_xml(archive, infos, "[Content_Types].xml")
     if types is None:
-        return set(), set()
-    overrides = {}
+        return none
+    overrides = []  # (part, content_type) in document order, exactly as openpyxl sees them
+    seen = set()
     for node in types:
-        if node.tag.endswith("}Override") or node.tag == "Override":
-            part = (node.get("PartName") or "").lstrip("/")
-            overrides[part] = node.get("ContentType") or ""
+        if not (node.tag.endswith("}Override") or node.tag == "Override"):
+            continue
+        name = node.get("PartName") or ""
+        if not name.startswith("/") or name.startswith("//"):
+            return none
+        if name.lower() in seen:
+            return none
+        seen.add(name.lower())
+        overrides.append((name[1:], node.get("ContentType") or ""))
     workbook = "xl/workbook.xml"
     for content_type in _CT_WORKBOOKS:
-        hits = [part for part, kind in overrides.items() if kind == content_type]
+        hits = [part for part, kind in overrides if kind == content_type]
         if hits:
             workbook = hits[0]
             break
     directory, _, base = workbook.rpartition("/")
-    rels_name = f"{directory}/_rels/{base}.rels" if directory else f"_rels/{base}.rels"
-    rels = _parse_small_xml(archive, infos, rels_name)
-    if rels is None:
-        return set(), set()
-    kinds = {}
-    for relation in rels:
-        if (relation.get("TargetMode") or "").lower() == "external":
+    workbook_rels = f"{directory}/_rels/{base}.rels" if directory else f"_rels/{base}.rels"
+    if not any(info.filename == workbook_rels for info in infos):
+        return none
+    workbook_kinds = {}  # part -> relationship types from the workbook rels
+    other_refs = set()  # parts referenced by any other relationship file
+    for info in infos:
+        if not _RELS_MEMBER.search(info.filename):
             continue
-        target = relation.get("Target") or ""
-        if not target:
-            continue
-        if target.startswith("/"):
-            part = posixpath.normpath(target.lstrip("/"))
-        else:
-            part = posixpath.normpath(posixpath.join(directory, target))
-        kind = (relation.get("Type") or "").rstrip("/").rsplit("/", 1)[-1].lower()
-        kinds.setdefault(part, set()).add(kind)
+        root = _parse_small_xml(archive, infos, info.filename)
+        if root is None:
+            return none
+        parent = info.filename.rsplit("_rels/", 1)[0].rstrip("/")
+        for relation in root:
+            if (relation.get("TargetMode") or "").lower() == "external":
+                continue
+            target = relation.get("Target") or ""
+            if not target:
+                continue
+            part = _resolve_target(parent, target)
+            if info.filename == workbook_rels:
+                workbook_kinds.setdefault(part, set()).add(relation.get("Type") or "")
+            else:
+                other_refs.add(part)
+    types_by_part = {}
+    for part, kind in overrides:
+        types_by_part.setdefault(part, kind)
     worksheets = {
-        part for part, found in kinds.items()
-        if found == {"worksheet"} and overrides.get(part) == _CT_WORKSHEET and part != workbook
+        part for part, kinds in workbook_kinds.items()
+        if kinds == {_REL_WORKSHEET}
+        and types_by_part.get(part) == _CT_WORKSHEET
+        and part not in other_refs
+        and not _never_exempt(part)
+        and part.lower() != "xl/sharedstrings.xml"
     }
-    shared = [part for part, kind in overrides.items() if kind.lower() == _CT_SHARED]
+    shared = [part for part, kind in overrides if kind == _CT_SHARED]
     shared_ok = set()
     if shared:
         first = shared[0]  # openpyxl reads only the first registered sharedStrings part
-        if kinds.get(first, {"sharedstrings"}) == {"sharedstrings"} and first not in worksheets and first != workbook:
+        if (
+            workbook_kinds.get(first, {_REL_SHARED}) == {_REL_SHARED}
+            and first not in other_refs
+            and first not in worksheets
+            and not _never_exempt(first)
+        ):
             shared_ok.add(first)
     return worksheets, shared_ok
 

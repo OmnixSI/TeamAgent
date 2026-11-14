@@ -775,6 +775,89 @@ class DocReadTests(unittest.TestCase):
             docread._guard_ooxml(path)
         self.assertEqual(caught.exception.kind, "too_large")
 
+    REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    CT_MAIN = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+    CT_SHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+    CT_SHARED = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+
+    def _exemptions(self, overrides, workbook_rels, extra=None, workbook_rels_name="xl/_rels/workbook.xml.rels"):
+        """Build a tiny package and return what _relationships would exempt."""
+        types = "".join(
+            f'<Override PartName="{name}" ContentType="{kind}"/>' for name, kind in overrides
+        )
+        rels = "".join(
+            f'<Relationship Id="r{i}" Type="{kind}" Target="{target}"/>'
+            for i, (kind, target) in enumerate(workbook_rels)
+        )
+        path = self.root / "exempt.xlsx"
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("[Content_Types].xml", f'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">{types}</Types>')
+            z.writestr(workbook_rels_name, f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>')
+            z.writestr("xl/workbook.xml", "<workbook/>")
+            for name, data in (extra or {}).items():
+                z.writestr(name, data)
+        with zipfile.ZipFile(path) as z:
+            return docread._relationships(z, z.infolist(), ".xlsx")
+
+    def _good(self):
+        return (
+            [("/xl/workbook.xml", self.CT_MAIN), ("/xl/worksheets/sheet1.xml", self.CT_SHEET),
+             ("/xl/sharedStrings.xml", self.CT_SHARED)],
+            [(self.REL + "worksheet", "worksheets/sheet1.xml"), (self.REL + "sharedStrings", "sharedStrings.xml")],
+        )
+
+    def test_relationships_whitelist_accepts_a_regular_package(self):
+        overrides, rels = self._good()
+        self.assertEqual(self._exemptions(overrides, rels), ({"xl/worksheets/sheet1.xml"}, {"xl/sharedStrings.xml"}))
+
+    def test_relationships_styles_never_exempt(self):
+        overrides, _ = self._good()
+        as_sheet = self._exemptions(
+            overrides + [("/xl/styles.xml", self.CT_SHEET)],
+            [(self.REL + "worksheet", "styles.xml")],
+        )
+        self.assertEqual(as_sheet, (set(), {"xl/sharedStrings.xml"}))
+        as_shared = self._exemptions(
+            [("/xl/workbook.xml", self.CT_MAIN), ("/xl/styles.xml", self.CT_SHARED)],
+            [(self.REL + "sharedStrings", "styles.xml")],
+        )
+        self.assertEqual(as_shared, (set(), set()))
+
+    def test_relationships_second_reference_from_chartsheet_rels_denies(self):
+        overrides, rels = self._good()
+        extra = {"xl/chartsheets/_rels/chart1.xml.rels": (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="d1" Type="{self.REL}drawing" Target="../worksheets/sheet1.xml"/></Relationships>'
+        )}
+        self.assertEqual(self._exemptions(overrides, rels, extra)[0], set())
+
+    def test_relationships_oversized_or_dtd_rels_member_denies_all(self):
+        overrides, rels = self._good()
+        big = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + " " * (2 * 1024 * 1024) + "</Relationships>"
+        self.assertEqual(self._exemptions(overrides, rels, {"xl/worksheets/_rels/sheet1.xml.rels": big}), (set(), set()))
+        dtd = '<!DOCTYPE r [<!ENTITY a "b">]><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+        self.assertEqual(self._exemptions(overrides, rels, {"xl/worksheets/_rels/sheet1.xml.rels": dtd}), (set(), set()))
+
+    def test_relationships_nonexact_type_is_not_worksheet(self):
+        overrides, _ = self._good()
+        out = self._exemptions(overrides, [(self.REL + "chartsheet/worksheet", "worksheets/sheet1.xml")])
+        self.assertEqual(out[0], set())
+
+    def test_relationships_duplicate_partname_denies_all(self):
+        overrides, rels = self._good()
+        dup = [("/xl/wb.xml", self.CT_MAIN), ("/xl/wb.xml", self.CT_SHEET)] + overrides[1:]
+        self.assertEqual(self._exemptions(dup, rels), (set(), set()))
+
+    def test_relationships_partname_without_exact_leading_slash_denies_all(self):
+        overrides, rels = self._good()
+        self.assertEqual(self._exemptions([("xl/workbook.xml", self.CT_MAIN)] + overrides[1:], rels), (set(), set()))
+        self.assertEqual(self._exemptions([("//xl/workbook.xml", self.CT_MAIN)] + overrides[1:], rels), (set(), set()))
+
+    def test_relationships_sharedstrings_match_is_case_sensitive(self):
+        overrides, rels = self._good()
+        lowered = overrides[:2] + [("/xl/sharedStrings.xml", self.CT_SHARED.replace("sharedStrings", "sharedstrings"))]
+        self.assertEqual(self._exemptions(lowered, rels)[1], set())
+
     def test_xlsx_chartsheet_is_not_exempt(self):
         # A chartsheet relationship is not a worksheet: the part gets the 32 MiB cap.
         make_large_sheet_xlsx(
