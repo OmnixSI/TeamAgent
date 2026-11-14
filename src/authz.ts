@@ -1,5 +1,6 @@
 import { UNTRUSTED_MARK } from "./untrusted";
 import { extraUntrustedNames } from "./toolkit";
+import { isAutoSender } from "./feature-request-core";
 import { evidenceText, metaOf, quoteEvidence, quoteIn } from "./view";
 
 export type WriteTool = "create_file_task" | "prepare_project_task" | "remember_correction" | "request_feature";
@@ -170,4 +171,64 @@ export function authorizeFeature(quote: unknown, source: any, context: any, mess
   if ([...quoteEvidence(String(source.body || ""), quote).replace(/[\s\p{P}]/gu, "")].length < 6)
     return { ok: false, reason: "原话太短" };
   return { ok: true, tainted: tainted(context, messages) };
+}
+
+// ---- D1 records write authorization (design §5.9 授权表) -------------------
+// D4 wires these operations into WRITE_TOOLS; D1 tools call this directly.
+export type RecordsAuthOp = "read" | "define_type" | "add" | "undo" | "quote_update" | "quote_delete" | "confirm";
+export interface RecordsAuthInput {
+  e: any;
+  source: any;
+  context: any;
+  messages: any[];
+  request_quote?: unknown;
+  recordId?: string;
+  token?: string;
+  /** ToolCtx.isTainted(): the turn's authoritative taint flag. */
+  tainted?: boolean;
+}
+
+/** records_read is open to every member; writes need the speaker's own words, and
+ *  change/confirm needs the record creator or an admin (and never tainted material). */
+export async function authorizeRecords(
+  op: RecordsAuthOp,
+  input: RecordsAuthInput,
+): Promise<{ ok: true; tainted: boolean } | { ok: false; reason: string }> {
+  const { e, source, context, messages } = input;
+  if (op === "read") return { ok: true, tainted: input.tainted ?? tainted(context, messages) };
+  const dirty = input.tainted ?? tainted(context, messages);
+  if (!source?.id || !(context?.batch?.some((row: any) => row.id === source.id) || context?.latest?.id === source.id))
+    return { ok: false, reason: "外部资料不能作为记账依据" };
+  if (typeof input.request_quote !== "string" || !input.request_quote.trim())
+    return { ok: false, reason: "需要成员自己的原话" };
+  if (!quoteIn(source, input.request_quote, context.names))
+    return { ok: false, reason: "原话不在成员发言里" };
+  const evidence = quoteEvidence(String(source.body || ""), input.request_quote);
+  if ([...evidence.replace(/[\s\p{P}]/gu, "")].length < 2)
+    return { ok: false, reason: "原话太短" };
+  if (dirty && (op === "quote_update" || op === "quote_delete" || op === "confirm"))
+    return { ok: false, reason: "引用、转发或网页内容不能作为改动依据" };
+  const addressed = source.meta?.direct === true || Number(source.mentioned) === 1 || source.id === context?.latest?.id;
+  if (!addressed) return { ok: false, reason: "需要成员直接对机器人说" };
+  if (op === "quote_update" || op === "quote_delete" || op === "confirm") {
+    const admin = await isAutoSender(e, source.sender);
+    if (admin) return { ok: true, tainted: dirty };
+    const ids: string[] = [];
+    if (input.recordId) ids.push(input.recordId);
+    if (input.token) {
+      const row = await e.DB.prepare("SELECT draft FROM pending_actions WHERE id=? AND group_id=?").bind(input.token, source.group_id).first();
+      if (row?.draft) {
+        try {
+          const draft = JSON.parse(String(row.draft));
+          if (Array.isArray(draft?.recordIds)) ids.push(...draft.recordIds.filter((id: unknown) => typeof id === "string"));
+        } catch { /* a broken draft is rejected later by applyChange */ }
+      }
+    }
+    for (const id of ids) {
+      const row = await e.DB.prepare("SELECT creator FROM records WHERE id=?").bind(id).first();
+      if (row && row.creator !== source.sender)
+        return { ok: false, reason: "只能改自己记的，或请管理员改" };
+    }
+  }
+  return { ok: true, tainted: dirty };
 }

@@ -1415,6 +1415,8 @@
     "src/ui.ts": "看板页面入口（读构建生成物）"
   },
   "uncovered_ok": [
-    "calc"
+    "calc",
+    "records_read",
+    "records_write"
   ]
 }
