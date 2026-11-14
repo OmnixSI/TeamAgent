@@ -21,7 +21,11 @@ set -uo pipefail
 ROOT="${CLEAN_ROOT:-/Users/yanghongming/Projects}"
 RUNTIME="${CLEAN_RUNTIME:-$HOME/.inkboard-team}"
 APPLY=0
-[ "${1:-}" = "--apply" ] && APPLY=1
+case "${1:-}" in
+  --apply) APPLY=1 ;;
+  ""|--dry-run) APPLY=0 ;;
+  *) echo "用法: $0 [--apply|--dry-run]" >&2; exit 2 ;;
+esac
 
 ACTIVE_HOURS=6      # 6 小时内有提交，视为在做，不碰构建残留
 REMOVE_MIN_HOURS=2  # 2 小时内有提交，哪怕已合并也先留着
