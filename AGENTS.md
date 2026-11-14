@@ -26,6 +26,7 @@ npm run check      # 类型检查 + 离线测试，几秒钟
 npm run deploy     # 先 check，通过才部署
 ```
 
+- 构建机用 Node 24（`.node-version`）。本机 Node 更新的话，合并前用 Node 24 再跑一遍 `npm run check`，两个版本的内置 SQLite 行为有差别。
 - 推到 `main` 会自动部署：Cloudflare Workers Builds 先跑 `npm run check`，通过才 `npx wrangler deploy`（2026-11-15 接通）。结果在 GitHub 提交的检查项里看。`npm run deploy` 仍可手动用。
 - 部署后 Hub 会在两分钟内自己发现版本变了并重启换上（想立刻生效：`POST /admin/restart`）。云电脑对象不一样：机器开着的时候它一直用旧代码，要等机器空闲关机一次（约 90 秒没人用）才换上。
 - 行为改动先在测试房间试：`POST /admin/dry {"room":"x","text":"…"}` 或 `POST /admin/tool`，带真实记忆和设置，不发群。测试画图、发消息一律用 `t:` 房间，不要直接往真群发。

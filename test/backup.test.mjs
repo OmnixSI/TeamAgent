@@ -42,7 +42,8 @@ function fakeHub() {
   `);
   const kvs = new Map(), waits = [], used = {};
   const hub = {
-    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA|WITH)/i.test(q) || /RETURNING/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
+    // Node 24's node:sqlite refuses a bare ArrayBuffer as a parameter (the real Durable Object takes one).
+    sql: { exec(q, ...b) { b = b.map(x => x instanceof ArrayBuffer ? new Uint8Array(x) : x); const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA|WITH)/i.test(q) || /RETURNING/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
     env: { FILES: fakeBucket(), VERSION: { id: "v-test" } },
     ctx: { waitUntil: p => waits.push(p), storage: { transactionSync(f) { db.exec("BEGIN"); try { f(); db.exec("COMMIT"); } catch (e) { db.exec("ROLLBACK"); throw e; } } } },
     plan: { used, fits: (n, a = 0) => (used[n] || 0) + a <= (hub.cap ?? 1e9), take(n, a) { if (!this.fits(n, a)) return false; used[n] = (used[n] || 0) + a; return true; }, add(n, a) { used[n] = (used[n] || 0) + a; } },
