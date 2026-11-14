@@ -8,6 +8,7 @@ import { generateImageTool } from "./generate-image";
 import { recallEpisodeTool } from "./episodes";
 import { searchKbTool } from "./kb";
 import { forgetProfileTool, getProfileTool } from "./profile";
+import { getQuotaTool } from "./quota";
 import { newsSearchTool } from "./news-search";
 import { readDocumentTool } from "./read-document";
 import { readImageTextTool } from "./read-image-text";
@@ -24,6 +25,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   forgetProfileTool,
   generateImageTool,
   getProfileTool,
+  getQuotaTool,
   newsSearchTool,
   readDocumentTool,
   readImageTextTool,

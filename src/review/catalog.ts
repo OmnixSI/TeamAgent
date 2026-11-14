@@ -24,6 +24,10 @@ export const TOOLS_CATALOG: CatalogTool[] = [
   { name: "search_web", readonly: true, needs: [] },
   { name: "read_web", readonly: true, needs: [] },
   { name: "get_project", readonly: true, needs: [] },
+  // A-quota: read-only, no external need. Its presence does not change any C8
+  // verdict, so CATALOG_VERSION stays cat-v1 (bumping would mark every stored
+  // turn_offer as unknown).
+  { name: "get_quota", readonly: true, needs: [] },
   { name: "repo_changes", readonly: true, needs: ["github_token", "switch"] },
   { name: "repo_commit", readonly: true, needs: ["github_token", "switch"] },
   { name: "repo_file", readonly: true, needs: ["github_token", "switch"] },
