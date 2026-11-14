@@ -329,19 +329,31 @@ def _number(value):
     return str(value)
 
 
-def _merged_ranges(worksheet):
-    """Merged ranges for a read-only worksheet, streamed without building the sheet."""
-    import xml.etree.ElementTree as ElementTree
+def _merged_ranges(worksheet, limit=1000):
+    """Merged ranges for a read-only worksheet, scanned with bounded memory.
 
+    openpyxl drops merged ranges in read-only mode. Walk the sheet XML in fixed chunks
+    (no element tree, no full-sheet buffer) and keep at most `limit` references.
+    """
     ranges = []
+    seen = set()
+    window = b""
     try:
         with worksheet._get_source() as source:
-            for _event, element in ElementTree.iterparse(source, events=("end",)):
-                if element.tag.endswith("}mergeCell") or element.tag == "mergeCell":
-                    reference = element.get("ref")
-                    if reference:
-                        ranges.append(reference)
-                element.clear()
+            while len(ranges) < limit:
+                chunk = source.read(65536)
+                if not chunk:
+                    break
+                data = window + chunk
+                for match in re.finditer(rb'<mergeCell\b[^>]*?\bref="([^"]+)"', data):
+                    reference = match.group(1).decode("ascii", "replace")
+                    if reference in seen:
+                        continue
+                    seen.add(reference)
+                    ranges.append(reference)
+                    if len(ranges) >= limit:
+                        break
+                window = data[-1024:]
     except Exception:
         return []
     return ranges
