@@ -199,6 +199,28 @@ test("the tool grants exact numbers only to an owner who directly asked", async 
   }
 });
 
+test("owner recognised from the members table when the QQ payload has no member_role", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  await e.DB.prepare("INSERT INTO members(id,name,token_hash,role,revoked) VALUES(?,?,?,?,?)").bind("qq:oid-owner", "o", "h1", "owner", 0).run();
+  await e.DB.prepare("INSERT INTO members(id,name,token_hash,role,revoked) VALUES(?,?,?,?,?)").bind("qq:oid-gone", "g", "h2", "owner", 1).run();
+  const stub = stubFetch(balancePayload("8.88"));
+  try {
+    const ctx = (sender, mentioned = true) => ({ context: { mentioned, latest: { group_id: "g1", sender, meta: {} } }, messages: [], isTainted: () => false });
+    const owner = await api.getQuotaTool.run(e, {}, ctx("oid-owner"));
+    assert.match(owner.text, /DeepSeek 余额：¥8\.88/);
+    const notDirect = await api.getQuotaTool.run(e, {}, ctx("oid-owner", false));
+    assert.match(notDirect.text, /^额度：/);
+    assert.doesNotMatch(notDirect.text, /¥/);
+    const revoked = await api.getQuotaTool.run(e, {}, ctx("oid-gone"));
+    assert.doesNotMatch(revoked.text, /¥/);
+    const stranger = await api.getQuotaTool.run(e, {}, ctx("oid-x"));
+    assert.doesNotMatch(stranger.text, /¥/);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("non-owner gets only one coarse band word, never numbers", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   await seedUsage(e);

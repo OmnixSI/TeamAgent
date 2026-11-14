@@ -4,6 +4,7 @@
 // gets exact amounts; everyone else gets one of three coarse words.
 import type { BotTool, ToolCtx } from "../toolkit";
 import { renderQuota } from "../quota";
+import { isAutoSender } from "../feature-request-core";
 
 export const getQuotaTool: BotTool = {
   name: "get_quota",
@@ -25,7 +26,11 @@ export const getQuotaTool: BotTool = {
   async run(e: any, _args: any, ctx: ToolCtx): Promise<any> {
     const latest = ctx?.context?.latest || {};
     const meta = latest?.meta || {};
-    const owner = String(meta.memberRole || "").toLowerCase() === "owner";
+    // QQ group events carry no member_role: owner = members row (id or qq:id,
+    // role=owner, not revoked) or config auto_senders, same rule as request_feature.
+    const owner =
+      String(meta.memberRole || "").toLowerCase() === "owner" ||
+      (await isAutoSender(e, String(latest?.sender || "")));
     const direct = !!(ctx?.context?.mentioned || meta.direct === true);
     return renderQuota(e, {
       owner: owner && direct,
