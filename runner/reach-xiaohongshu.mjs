@@ -9,6 +9,7 @@
  */
 import {createRequire} from 'node:module';
 import {readFileSync} from 'node:fs';
+import {readlink,unlink as unlinkFile} from 'node:fs/promises';
 import {mkdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {dirname,resolve} from 'node:path';
@@ -299,7 +300,8 @@ function xhsValidator(raw,request){
  return null;
 }
 validators.set('xiaohongshu',xhsValidator);
-nextActions.set('xiaohongshu',{login_required:'请在 Edge 里登录 xiaohongshu.com 后主动重试；本次没有读取内容。'});
+nextActions.set('xiaohongshu',{login_required:'请在 Edge 里登录 xiaohongshu.com 后主动重试；本次没有读取内容。',
+ unsupported:'小红书笔记要带 xsec_token 的完整链接（从搜索结果或原分享链接复制）；裸 explore 链接读不了。'});
 export {xhsValidator,validators,nextActions};
 
 const script=fileURLToPath(new URL('./reach-xiaohongshu.mjs',import.meta.url));
@@ -323,12 +325,29 @@ function allowedHost(host){
   ||host==='xhscdn.com'||host.endsWith('.xhscdn.com')
   ||host==='rednote.com'||host.endsWith('.rednote.com')||host==='rednotecdn.com'||host.endsWith('.rednotecdn.com');
 }
+/** Production installs the SDK flat next to this file; a worktree replay falls back to ~/.inkboard-team. */
+function playwrightModule(){
+ const require=createRequire(import.meta.url);
+ for(const dir of [resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'),resolve(homedir(),'.inkboard-team/sdk/node_modules/playwright')]){
+  try{return require(dir);}catch{}
+ }
+ throw Error('TOOL_NOT_READY');
+}
+function alive(pid){try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}}
+/** A killed Chromium leaves SingletonLock; remove it only when the owning pid is gone. */
+async function clearStaleLock(profile){
+ const lock=resolve(profile,'SingletonLock');let held=false;
+ try{const pid=Number(String(await readlink(lock)).split('-').pop());held=Number.isFinite(pid)&&pid>0&&alive(pid);}catch{}
+ if(!held)for(const name of ['SingletonLock','SingletonSocket','SingletonCookie'])await unlinkFile(resolve(profile,name)).catch(()=>{});
+}
+
 async function launch(home){
  const require=createRequire(import.meta.url);
- const {chromium}=require(resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'));
+ const {chromium}=playwrightModule();
  const {browserOptions,browserLaunchOptions}=await import('./browser-auth.mjs');
  const profile=resolve(home,'browser/xiaohongshu');
  await mkdir(profile,{recursive:true,mode:0o700});
+ await clearStaleLock(profile);
  const browser=await browserOptions(chromium);
  const context=await chromium.launchPersistentContext(profile,{...browserLaunchOptions(browser,true),serviceWorkers:'block'});
  await context.route('**/*',route=>{
@@ -339,7 +358,8 @@ async function launch(home){
  });
  return context;
 }
-function emit(result){process.stdout.write(JSON.stringify(result)+'\n');}
+let flushed=Promise.resolve();
+function emit(result){flushed=new Promise(done=>process.stdout.write(JSON.stringify(result)+'\n',done));}
 
 async function main(){
  const action=process.argv[2],target=process.argv[3];
@@ -357,7 +377,7 @@ async function main(){
   const page=context.pages()[0]||await context.newPage();
   emit(await readXhsPage({page,action:internal,target,limit:COMMENT_LIMIT}));
  }catch{emit(fail('UPSTREAM_BROKEN'));}
- finally{await context.close().catch(()=>{});}
+ finally{await context.close().catch(()=>{});await flushed;process.exit(0);}
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(()=>emit(fail('UPSTREAM_BROKEN')));

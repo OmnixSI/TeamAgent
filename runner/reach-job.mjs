@@ -7,7 +7,7 @@ export async function runReachJob(job,cloud,options={}){
  });
  try{
   const signal=options.signal?AbortSignal.any([options.signal,controller.signal]):controller.signal;
-  const result=await (options.adapter||adapter).run({id:job.id,lease:p.lease,version:p.version,channel:p.channel,action:p.action,target:p.target,backend:p.backend,deadline_ms:p.deadline_ms,cooldown_ms:p.cooldown_ms},{signal});
+  const result=await (options.adapter||adapter).run({id:job.id,lease:p.lease,version:p.version,channel:p.channel,action:p.action,target:p.target,backend:p.backend,source_url:p.source_url,deadline_ms:p.deadline_ms,cooldown_ms:p.cooldown_ms},{signal});
   if(!interrupted)await cloud('report',{id:job.id,lease:p.lease,source:'reach',result});
   return result;
  }finally{

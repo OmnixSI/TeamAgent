@@ -281,7 +281,8 @@ export function parseUserProfile(payload){
  const user=result.user||result,legacy=user.legacy||{};
  const created=Date.parse(legacy.created_at);
  return {
-  id:user.rest_id||'',handle:legacy.screen_name||'',name:legacy.name||'',bio:legacy.description||'',
+  id:user.rest_id||result.rest_id||'',handle:legacy.screen_name||user.core?.screen_name||user.screen_name||'',
+  name:legacy.name||user.core?.name||user.name||'',bio:legacy.description||user.core?.description||'',
   location:legacy.location||'',url:legacy.entities?.url?.urls?.[0]?.expanded_url||'',
   followers:Number(legacy.followers_count)||0,following:Number(legacy.friends_count)||0,
   tweets:Number(legacy.statuses_count)||0,protected:legacy.protected===true,

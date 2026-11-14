@@ -11,7 +11,7 @@
  */
 import {spawn} from 'node:child_process';
 import {existsSync} from 'node:fs';
-import {mkdir,unlink} from 'node:fs/promises';
+import {mkdir,readlink,unlink} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {createRequire} from 'node:module';
 import {homedir} from 'node:os';
@@ -29,12 +29,23 @@ import {
 const LIMITS=Object.freeze({thread:20,tweets:20,search:10});
 const BUDGET_MS=38000;
 const sleep=ms=>new Promise(done=>setTimeout(done,ms));
-let emitted=false;
+let emitted=false,live=null,closing=null;
 
+/** Production installs the SDK flat next to this file; a worktree replay falls back to ~/.inkboard-team. */
+export function playwrightModule(){
+ const require=createRequire(import.meta.url);
+ for(const dir of [resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'),resolve(homedir(),'.inkboard-team/sdk/node_modules/playwright')]){
+  try{return require(dir);}catch{}
+ }
+ throw Error('TOOL_NOT_READY');
+}
+
+let flushed=Promise.resolve();
 function emit(envelope){
  if(emitted)return;
  emitted=true;
- process.stdout.write(JSON.stringify(envelope)+'\n');
+ const line=JSON.stringify(envelope)+'\n';
+ flushed=new Promise(done=>process.stdout.write(line,done));
 }
 const fail=code=>({ok:false,error:{code}});
 export const xEnvelope=(request,raw)=>normalizeReachResult(request,raw);
@@ -172,6 +183,15 @@ function freePort(){
  });
 }
 
+/** A killed Edge can leave SingletonLock behind; only remove it when its owner pid is gone. */
+export async function clearStaleLock(profile){
+ const lock=join(profile,'SingletonLock');let held=false;
+ try{const pid=Number(String(await readlink(lock)).split('-').pop());held=Number.isFinite(pid)&&pid>0&&alive(pid);}catch{}
+ if(!held)for(const name of ['SingletonLock','SingletonSocket','SingletonCookie'])await unlink(join(profile,name)).catch(()=>{});
+ await unlink(join(profile,'DevToolsActivePort')).catch(()=>{});
+}
+function alive(pid){try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}}
+
 async function launch(deadline){
  let executable;
  try{executable=nativeXExecutable();}catch{throw Error('TOOL_NOT_READY');}
@@ -179,37 +199,60 @@ async function launch(deadline){
  if(!existsSync(profile))throw Error('NEED_LOGIN');
  await mkdir(profile,{recursive:true,mode:0o700});
  const port=await freePort();
- await unlink(join(profile,'DevToolsActivePort')).catch(()=>{});
+ await clearStaleLock(profile);
  const child=spawn(executable,[
   `--user-data-dir=${profile}`,'--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${port}`,
   // X returns HTTP 403 to HeadlessChrome; a short-lived visible Edge window keeps the real session.
   '--window-size=960,720','--no-first-run','--no-default-browser-check','https://x.com/home',
  ],{detached:true,stdio:'ignore'});
- let exited=false;child.once('exit',()=>{exited=true;});
- let endpoint=null;
- while(Date.now()<deadline-9000&&!exited){
-  try{endpoint=await discoverX(profile,{port});break;}catch{}
-  await sleep(200);
+ live={browser:null,child};
+ try{
+  let exited=false;child.once('exit',()=>{exited=true;});
+  let endpoint=null;
+  while(Date.now()<deadline-9000&&!exited){
+   try{endpoint=await discoverX(profile,{port});break;}catch{}
+   await sleep(200);
+  }
+  if(!endpoint)throw Error(exited?'BUSY':'TIMEOUT');
+  const {chromium}=playwrightModule();
+  const browser=await chromium.connectOverCDP(endpoint,{timeout:5000});
+  live={browser,child};
+  return {browser,child};
+ }catch(error){
+  await close(live.browser,live.child);
+  live=null;
+  throw error;
  }
- if(!endpoint){
-  try{process.kill(child.pid,'SIGTERM');}catch{}
-  throw Error(exited?'BUSY':'TIMEOUT');
- }
- const require=createRequire(import.meta.url);
- const {chromium}=require(resolve(dirname(fileURLToPath(import.meta.url)),'sdk/node_modules/playwright'));
- const browser=await chromium.connectOverCDP(endpoint,{timeout:5000});
- return {browser,child};
 }
 
 async function close(browser,child){
  if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(2000)]);
- if(child&&child.exitCode===null){
+ if(child&&child.exitCode===null&&child.signalCode===null){
+  const kill=sig=>{try{process.kill(-child.pid,sig);}catch{try{child.kill(sig);}catch{}}};
   await new Promise(done=>{
-   const timer=setTimeout(()=>{try{child.kill('SIGKILL');}catch{}done();},2500);
+   const timer=setTimeout(()=>{kill('SIGKILL');done();},2500);
    child.once('exit',()=>{clearTimeout(timer);done();});
-   try{child.kill('SIGTERM');}catch{clearTimeout(timer);done();}
+   kill('SIGTERM');
   });
  }
+}
+
+/** Graceful exit: close what we started, then exit instead of waiting on a socket or child handle. */
+async function shutdown(code){
+ if(closing)return closing;
+ closing=(async()=>{const current=live;live=null;if(current)await close(current.browser,current.child);await flushed;process.exit(code);})();
+ return closing;
+}
+
+/** Timeout/signal exit: the adapter is waiting, so kill our own browser group at once and leave. */
+async function fastShutdown(code){
+ if(closing)return closing;
+ closing=(async()=>{
+  const current=live;live=null;
+  if(current?.child){try{process.kill(-current.child.pid,'SIGKILL');}catch{try{current.child.kill('SIGKILL');}catch{}}}
+  await flushed;process.exit(code);
+ })();
+ return closing;
 }
 
 function thrownCode(error){
@@ -230,8 +273,9 @@ export async function main(argv=process.argv.slice(2)){
  const started=Date.now();
  const watchdog=setTimeout(()=>{
   emit(xEnvelope(request,fail('TIMEOUT')));
-  process.exit(0);
+  void fastShutdown(0);
  },BUDGET_MS);
+ for(const [name,code] of [['SIGINT',1],['SIGTERM',1]])process.once(name,()=>{void fastShutdown(code);});
  let browser=null,child=null;
  try{
   if(!['thread','profile','tweets','search'].includes(action)||!validTarget('x',action,target))throw Error('BAD_INPUT');
@@ -253,7 +297,8 @@ export async function main(argv=process.argv.slice(2)){
   emit(xEnvelope(request,fail(code)));
  }finally{
   clearTimeout(watchdog);
-  await close(browser,child);
+  live=live||{browser,child};
+  await shutdown(0);
  }
 }
 
