@@ -11,6 +11,8 @@ import { selectForSecond, secondJudge } from './second';
 import { applyJudgment, checkPromises } from './apply';
 import { proposeTasks, renderDigest } from './publish';
 import { applyRequirements, advanceRules, approveRule, revokeRule } from './rules';
+import { learningsPhase } from './learnings';
+import { reportPhase } from './report';
 import type { Trace, Snapshot, JudgeCall, JudgeResult } from './types';
 
 type Env = { DB: any; [key: string]: any };
@@ -230,7 +232,7 @@ export async function reviewTick(env: Env, options: TickOptions = {}) {
         else { stats.phase = 'requirements'; stats.requirement_offset = 0; await advance(ctx, run, stats, 'publish', now); }
       }
     } else if (run.step === 'publish') {
-      await publishTick(ctx, run, stats, now);
+      await publishTick(ctx, run, stats, now, options);
     } else throw Error('unknown_step');
     return { status: 'progress', used: e.meter.used };
   } catch (error) {
@@ -355,8 +357,11 @@ async function imageSources(e: Env, traces: Trace[]) {
   const rows = await reviewRead(e, 'SELECT id,json FROM message_meta WHERE id IN (SELECT value FROM json_each(?))', [JSON.stringify(ids)]);
   return rows.flatMap(row => (parse(row.json).attachments ?? []).map((a: any, idx: number) => ({ message_id: row.id, idx, url: a.url }))).filter(a => typeof a.url === 'string');
 }
-async function publishTick(e: Env, run: Row, stats: Row, now: number) {
+const PUBLISH_PHASES = ['requirements', 'promises', 'tasks', 'rules', 'learnings', 'report'];
+async function publishTick(e: Env, run: Row, stats: Row, now: number, options: TickOptions = {}) {
   if (stats.plan) { await planTick(e, run, stats, now, async () => [], ''); return; }
+  // 旧 run（或未来版本写的未知子阶段）不再跑新阶段，直接收尾到 done；不拿新规则改写历史。
+  if (stats.phase && !PUBLISH_PHASES.includes(stats.phase)) stats.phase = undefined;
   if (stats.phase === 'requirements') {
     const judgments = await reviewRead(e, "SELECT raw FROM review_judgments WHERE run_id=? AND role='primary' AND state='ok' ORDER BY created_at,id", [run.id]);
     const reqs = judgments.flatMap(j => parse(j.raw).requirements ?? []), offset = stats.requirement_offset ?? 0;
@@ -370,14 +375,21 @@ async function publishTick(e: Env, run: Row, stats: Row, now: number) {
   } else if (stats.phase === 'tasks') {
     await planTick(e, run, stats, now, () => run.mode === 'shadow' ? Promise.resolve([]) : capture(e, ctx => proposeTasks(ctx, { id: run.id, group_id: run.group_id, gen: run.gen, now })), 'rules');
   } else if (stats.phase === 'rules') {
-    await planTick(e, run, stats, now, () => run.mode === 'full' ? capture(e, ctx => advanceRules(ctx, { id: run.id, group_id: run.group_id, now })) : Promise.resolve([]), 'done');
-  } else {
-    const [unfinished] = await reviewRead(e, "SELECT COUNT(*) AS n FROM review_traces WHERE state='pending' AND (run_id=? OR id IN(SELECT value FROM json_each(?)))", [run.id,JSON.stringify(stats.review_targets ?? [])]);
-    stats.unreviewed = Number(unfinished.n);
-    const spend = await reviewRead(e, 'SELECT provider,SUM(used) AS used FROM review_judgments WHERE run_id=? GROUP BY provider', [run.id]);
-    const spendJson = Object.fromEntries(spend.map(r => [r.provider, r.used ?? 0]));
-    await advance(e, run, stats, 'done', now, [{ sql: 'UPDATE review_runs SET spend_json=? WHERE id=? AND step=? AND gen=?', params: [JSON.stringify(spendJson), run.id, run.step, run.gen] }, { sql: `UPDATE review_cursors SET judged_at=built_at,judged_id=built_id,updated_at=? WHERE group_id=? AND NOT EXISTS(SELECT 1 FROM review_traces WHERE group_id=? AND state NOT IN ('judged','skipped','expired'))`, params: [now, run.group_id, run.group_id] }]);
-  }
+    await planTick(e, run, stats, now, () => run.mode === 'full' ? capture(e, ctx => advanceRules(ctx, { id: run.id, group_id: run.group_id, now })) : Promise.resolve([]), 'learnings');
+  } else if (stats.phase === 'learnings') {
+    await learningsPhase(e, run, stats, now, extra => advance(e, run, stats, run.step, now, extra));
+  } else if (stats.phase === 'report') {
+    const report = await reportPhase(e, run, stats, now, options);
+    stats.report = report.skipped ? { state: 'skipped', reason: report.skipped } : { state: 'ready', id: report.id, items: report.items.length };
+    await finishRun(e, run, stats, now, report.statements);
+  } else await finishRun(e, run, stats, now);
+}
+async function finishRun(e: Env, run: Row, stats: Row, now: number, extra: ReviewStatement[] = []) {
+  const [unfinished] = await reviewRead(e, "SELECT COUNT(*) AS n FROM review_traces WHERE state='pending' AND (run_id=? OR id IN(SELECT value FROM json_each(?)))", [run.id,JSON.stringify(stats.review_targets ?? [])]);
+  stats.unreviewed = Number(unfinished.n);
+  const spend = await reviewRead(e, 'SELECT provider,SUM(used) AS used FROM review_judgments WHERE run_id=? GROUP BY provider', [run.id]);
+  const spendJson = Object.fromEntries(spend.map(r => [r.provider, r.used ?? 0]));
+  await advance(e, run, stats, 'done', now, [...extra, { sql: 'UPDATE review_runs SET spend_json=? WHERE id=? AND step=? AND gen=?', params: [JSON.stringify(spendJson), run.id, run.step, run.gen] }, { sql: `UPDATE review_cursors SET judged_at=built_at,judged_id=built_id,updated_at=? WHERE group_id=? AND NOT EXISTS(SELECT 1 FROM review_traces WHERE group_id=? AND state NOT IN ('judged','skipped','expired'))`, params: [now, run.group_id, run.group_id] }]);
 }
 
 async function identity(r: Request, e: Env) {
