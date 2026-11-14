@@ -20,10 +20,21 @@
 - 验收溯源校验（不依赖 `/tmp`，直接用夹具）：
   ```bash
   python3 replay/check-acceptance.py \
-    --acceptance ../TeamAgent-p4b-login/.agent/releases/V-D-learning/acceptance.json \
-    --fixtures replay/fixtures
+    --acceptance .agent/releases/V-D-learning/acceptance.json \
+    --fixtures replay/fixtures --post
   ```
-  本次 → entries 20、rid 引用 38、逐字引用 13、errors 0。
+  默认模式校验“验收前 passes=false / evidence 为空”；`--post` 校验验收后每条 evidence 非空，并打印 passes true/false 计数。
+  本次 → entries 20、passes true 19 / false 1、rid 引用 38、逐字引用 13、errors 0。
+
+## 验收运行
+
+```bash
+node --test test/learning-accept.mjs
+```
+
+VL-1…VL-20 各一条；当前 27 个 test / 26 通过 / 1 失败（VL-6，见 `l9-acceptance-report.md` P1-1）。
+VL-6 的最小复现（不依赖测试框架，修复后退出码应为 0）：`node replay/vl6-repro.mjs`。
+每次运行写 `replay/out/learning-accept.tap`（可加 `--test-reporter=tap`）、`replay/out/latest.json` 和 `replay/out/learning-accept-*.log`。
 
 ## 文件
 
@@ -44,9 +55,9 @@
 ## 零发送/零写入
 
 - 导出端：`scripts/review-export.py` 对每条响应断言 `rows_written==0 && changes==0`；`export-audit.json` 里全部为 0。
-- 回放端：`test/learning-accept.mjs` 把 `globalThis.fetch` 换成计数桩，QQ / Cloudflare / DeepSeek 任何网络调用都会计数并报错；本地库是 `node:sqlite` 临时文件，不提供任何线上令牌。
+- 回放端：`test/learning-accept.mjs` 把 `globalThis.fetch` 换成计数桩，只放行 `api.deepseek.com` / `api.openai.com`，QQ / Cloudflare 调用计数为 0；本地库是每用例独立的 `node:sqlite` 内存库，不提供任何线上令牌。
 - 每次运行结束写 `replay/out/latest.json` 和 `replay/out/learning-accept-*.log`，固定一行：`QQ 真实发送 0 次、线上 D1 写入 0 行`。
 
 ## 模型响应
 
-`replay/fixtures/deepseek-recorded.json` 是**待录制**占位：L1–L8 合入、L3 的新 judge 输出（`schedule_requests` / `avoid_phrase` / `address_as`）可用后，用一次真实 DeepSeek 只读评分录制并写入；在此之前，骨架只用明确标注为 `canned` 的确定性桩跑管线，不把桩输出冒充真实模型结果。
+`replay/fixtures/deepseek-recorded.json` 是**待录制**占位：L1–L8 合入、L3 的新 judge 输出（`schedule_requests` / `avoid_phrase` / `address_as`）可用后，用一次真实 DeepSeek 只读评分录制并写入；在此之前，验收只用明确标注的确定性桩跑管线，不把桩输出冒充真实模型结果；VL-4/8/19 的模型依赖项因此只证明管线行为，不证明真实模型质量。

@@ -266,3 +266,26 @@ test('P16 address_as 只能称呼原话发送者本人，冒名写入被拒', as
   assert.equal(await reply(e, '1 可以'), false);
   assert.equal((await rows(e, 'behavior_rules')).length, 0);
 });
+
+// ---- B-fix-cancel：日推回复只在明确停发时取消 ----
+
+test('P17 日推回复里的纠正/否定不算取消，交回聊天模型', async () => {
+  for (const [text, mid] of [['不对，PR #47 已经合了', 'n1'], ['不行，这条不准', 'n2'], ['算了吧这条有错', 'n3']]) {
+    const e = await fixture([], []);
+    const sid = 'sched-digest_daily-' + mid;
+    const out = await schedule(e, sid, 'U1', sid + '-1');
+    assert.equal(await reply(e, text, { messageId: mid, replyTo: replyTo(out) }), false);
+    assert.equal((await one(e, 'SELECT status FROM schedules WHERE id=?', sid)).status, 'active');
+    assert.equal(await one(e, "SELECT id FROM outbox WHERE id='sched-cancel:" + mid + "'"), null);
+  }
+});
+
+test('P18 明确停发的说法仍取消日推', async () => {
+  for (const [text, mid] of [['别发了', 'c1'], ['取消这个', 'c2'], ['不用再发了', 'c3'], ['停了吧', 'c4']]) {
+    const e = await fixture([], []);
+    const sid = 'sched-digest_daily-' + mid;
+    const out = await schedule(e, sid, 'U1', sid + '-1');
+    assert.equal(await reply(e, text, { messageId: mid, replyTo: replyTo(out) }), true);
+    assert.equal((await one(e, 'SELECT status FROM schedules WHERE id=?', sid)).status, 'cancelled');
+  }
+});

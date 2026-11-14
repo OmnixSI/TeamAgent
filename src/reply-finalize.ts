@@ -128,6 +128,8 @@ function promiseSentence(text: string) {
   SENTENCE_RE.lastIndex = 0;
   for (let m = SENTENCE_RE.exec(text); m; m = SENTENCE_RE.exec(text)) {
     const sentence = m[0];
+    // 疑问句是在征求同意（「每天早 8 点推送，要吗？」），不是承诺。
+    if (/[？?]\s*$/.test(sentence) || /吗|要不要|好不好|行不行|是不是|是否|怎么|如何/.test(sentence)) continue;
     if (RECURRING_RE.test(sentence) && CLOCK_RE.test(sentence) && PUSH_VERB_RE.test(sentence))
       return sentence;
   }
