@@ -17,6 +17,7 @@ export const REACH_COMMANDS={
  'zhihu:hot:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('hot'),argv:publicReader('zhihu','hot')},
  'zhihu:search:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('search'),argv:publicReader('zhihu','search')},
  'zhihu:read:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('read'),argv:publicReader('zhihu','read')},
+ 'douyin:read:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('read'),argv:publicReader('douyin','read')},
 };
 const MAX_BYTES=1024*1024;
 const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);
