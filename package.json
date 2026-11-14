@@ -5,7 +5,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mjs\"",
-    "check": "npm run typecheck && npm test",
+    "check": "node scripts/ci-check.mjs",
     "deploy": "npm run check && wrangler deploy"
   },
   "dependencies": {
