@@ -45,7 +45,7 @@ export function isSwitchOff(live: SelfLive, name: string): boolean {
   return switchOff(live?.switches?.["off:" + name]);
 }
 
-const POSITIVE_GATES: Record<string, string> = { docread: "docread:enabled" };
+const POSITIVE_GATES: Record<string, string> = { docread: "docread:enabled", reach: "reach:mode" };
 function gateOn(live: SelfLive, name: string): boolean | undefined {
   const key = POSITIVE_GATES[name], value = key ? live?.switches?.[key] : undefined;
   return key ? value !== undefined && value.length > 0 && value !== "0" && value !== "false" : undefined;
