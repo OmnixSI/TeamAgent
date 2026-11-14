@@ -423,16 +423,36 @@ export function describeSchedule(schedule: any) {
   const spec = specOf(schedule);
   const topic = String(spec.topic || "").trim();
   const time = spec.time || "08:00";
+  const zone = schedule?.tz || DEFAULT_TZ;
+  const label = tzLabel(zone);
   if (schedule?.kind === "digest_daily")
-    return topic ? `每天 ${time}（悉尼）发${topic}` : `每天 ${time}（悉尼）昨日总结`;
+    return topic ? `每天 ${time}（${label}）发${topic}` : `每天 ${time}（${label}）昨日总结`;
   if (schedule?.kind === "digest_weekly") {
     const days = (spec.weekdays || [0])
       .map((d: number) => String(WEEKDAY_NAMES[d] ?? d).replace(/^周/, ""))
       .join("、");
-    return topic ? `每周${days} ${time}（悉尼）发${topic}` : `每周${days} ${time}（悉尼）周报`;
+    return topic ? `每周${days} ${time}（${label}）发${topic}` : `每周${days} ${time}（${label}）周报`;
   }
   if (schedule?.kind === "reminder") return `提醒：${spec.text || "未写内容"}`;
-  if (schedule?.kind === "mute") return `闭嘴到 ${sydneyText(Number(spec.run_at) || null)}`;
+  if (schedule?.kind === "mute") return `闭嘴到 ${dualText(Number(spec.run_at) || null, zone)}`;
+  if (schedule?.kind === "agent_task") {
+    const title = String(spec.title || spec.topic || "定时任务");
+    const cadence = cadenceOf(spec);
+    if (cadence === "every")
+      return `每 ${Number(spec.every_minutes) || 5} 分钟${spec.window ? `（${spec.window[0]}–${spec.window[1]}）` : ""}（${label}）发${title}`;
+    if (cadence === "once") return `一次：${dualText(Number(spec.run_at) || null, zone)} 发${title}`;
+    if (cadence === "monthly") {
+      const days = (spec.month_days || [1]).map((d: number) => (d === -1 ? "最后一天" : `${d}日`)).join("、");
+      return `每月${days} ${time}（${label}）发${title}`;
+    }
+    if (cadence === "weekly") {
+      const days = (spec.weekdays || [])
+        .map((d: number) => String(WEEKDAY_NAMES[d] ?? d).replace(/^周/, ""))
+        .join("、");
+      return `每周${days} ${time}（${label}）发${title}`;
+    }
+    return `每天 ${time}（${label}）发${title}`;
+  }
   return String(schedule?.kind || "日程");
 }
 
@@ -917,8 +937,6 @@ async function overSendCap(e: any, schedule: any, now: number) {
 export async function runSchedules(e: any, now = Date.now()) {
   // 一次摘要要查到期、抢占、读消息、写出站和回写；预算不够就留到下一分钟。
   if (left(e) < 24) return;
-  // §10：迁移 schedules 表期间的保险丝，交付前置 1、迁移后置 0。
-  if (await switchedOff(e, "schedules_cron")) return;
   // 上次执行到一半进程被杀会留下 started_at 的 running 行；十分钟后由同一 due 重跑，
   // 出站 id 固定为 sched-<id>-<due>，重跑不会多出一条消息。
   await e.DB.prepare(
@@ -933,6 +951,10 @@ export async function runSchedules(e: any, now = Date.now()) {
       .bind(now)
       .all()
   ).results;
+  // 没有到期的就到此为止：cron 的 D1 预算是给维护工作留的，别为一个开关多花一次查询。
+  if (!due.length) return;
+  // §10：迁移 schedules 表期间的保险丝，交付前置 1、迁移后置 0。
+  if (await switchedOff(e, "schedules_cron")) return;
   // 每 tick 最多 MAX_AGENT_MODEL_PER_TICK 个要调模型的任务，其余顺延到下一分钟。
   let modelTasks = 0;
   for (const schedule of due) {
@@ -1014,7 +1036,7 @@ export async function runSchedules(e: any, now = Date.now()) {
         };
         const results = await runSteps(ctx, checked.steps);
         if (!results.length) throw Error("动作层没有返回结果");
-        if (results.every((r: any) => !r.ok)) throw Error(`denied：全部步骤失败（${results[0]?.error_kind || "unknown"}）`);
+        if (results.every((r: any) => !r.ok)) throw Error(`全部步骤失败（${results[0]?.error_kind || "unknown"}）`);
         const note = String(spec.note || "").trim();
         body = note
           ? await composeWithNote(ctx, results, note)

@@ -54,10 +54,7 @@
     "report_window": [
       "08:40",
       "10:00"
-    ],
-    "agent_model_calls_per_tick": 2,
-    "agent_runs_per_group_day": 24,
-    "fail_pause_after": 9
+    ]
   },
   "repositories": [
     "OmnixSI/NextThought",
