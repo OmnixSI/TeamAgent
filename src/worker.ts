@@ -636,7 +636,33 @@ async function processJob(e: Env, id: string) {
         }
         p.messages = loaded.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
       }
-      await analyse(e, p, semanticServices(e));
+      const started = Date.now();
+      const outcome = await analyse(e, p, semanticServices(e));
+      // D-7 自检：完成必须同时留下 model_run 与 dream 行，条数要与本批一致；
+      // 否则按失败重试，第 3 次 failed，绝不「done 了但什么都没有」。
+      if (!outcome.ran) {
+        await activity(
+          e,
+          "memory.skipped",
+          p.key || id,
+          "Bot",
+          `夜间整理跳过 ${(p.messages || []).length} 条：${DREAM_SKIP[outcome.reason || ""] || "原因未明"}`,
+          "memory-skipped:" + (p.key || id),
+        );
+      } else {
+        const runs = await e.DB.prepare(
+          "SELECT COUNT(*) AS n FROM model_runs WHERE kind='memory' AND created_at>=?",
+        ).bind(started).first();
+        const dream = await e.DB.prepare("SELECT message_count FROM dreams WHERE id=?")
+          .bind(p.key).first();
+        const expected = outcome.count ?? (p.messages || []).length;
+        if (!Number(runs?.n) || !dream || dream.message_count !== expected)
+          throw Error(
+            `dream self-check failed: model_runs=${Number(runs?.n) || 0} dream=${
+              dream ? dream.message_count : "missing"
+            } expect=${expected}`,
+          );
+      }
       const done = (p.messages || []).map((m: any) => m.id);
       for (const part of chunks(done))
         await e.DB.prepare(
@@ -1280,6 +1306,12 @@ export async function optionalCron(e: any, fn: () => Promise<any>, cost: number)
   if (left(e) < cost + COST.tail) return;
   await fn();
 }
+/** D-7：夜间跳过的原因要写进 activity，不能只是少了一行。 */
+const DREAM_SKIP: Record<string, string> = {
+  tainted: "本批含转发、引用或外部材料，整批不送模型",
+  filtered: "本批全是非本人直发或含疑似凭据，已过滤",
+  empty: "本批没有可整理的消息",
+};
 const VIDEO_CRON = "*/5 * * * *";
 async function scheduled(e: Env, cron = "") {
   // The dedicated five-minute trigger runs only the video fallback. The main
@@ -1334,13 +1366,23 @@ async function scheduled(e: Env, cron = "") {
     (!lastMessage ||
       Date.now() - lastMessage > TEAM.memory.quiet_minutes * 60000)
   ) {
-    const rows = (
+    // D-7：按群取批。一个忙群不能把其他群永远排在 ts 后面。
+    const groups = (
       await e.DB.prepare(
-        "SELECT id,group_id,ts FROM messages WHERE processed=0 ORDER BY ts LIMIT ?",
-      )
-        .bind(TEAM.memory.messages_per_batch)
-        .all()
-    ).results;
+        "SELECT group_id,MIN(ts) AS first_ts FROM messages WHERE processed=0 GROUP BY group_id ORDER BY first_ts,group_id LIMIT 20",
+      ).all()
+    ).results as any[];
+    const cursor = (await setting(e, "dream_group_cursor")) || "";
+    const next = groups.find((g: any) => `${g.first_ts}|${g.group_id}` > cursor) || groups[0];
+    const rows = next
+      ? (
+          await e.DB.prepare(
+            "SELECT id,group_id,ts FROM messages WHERE processed=0 AND group_id=? ORDER BY ts LIMIT ?",
+          )
+            .bind(next.group_id, TEAM.memory.messages_per_batch)
+            .all()
+        ).results
+      : [];
     const batches = Number((await setting(e, "dream_batches_" + date)) || 0);
     const busy = await e.DB.prepare(
       "SELECT id FROM jobs WHERE kind='dream' AND status IN ('pending','running') LIMIT 1",
@@ -1355,6 +1397,7 @@ async function scheduled(e: Env, cron = "") {
       });
 
       await set(e, "dream_batches_" + date, String(batches + 1));
+      await set(e, "dream_group_cursor", `${next.first_ts}|${next.group_id}`);
     }
   }
   // Manual and test invocations keep the sweep; the deployed main trigger
