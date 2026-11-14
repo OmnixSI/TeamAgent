@@ -10,6 +10,7 @@ import { biliSearch, biliVideo, hot, readRelayed, stock, ttsSilk, tweet, xSearch
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
+import { PRICE, meter } from "./meter.ts";
 import type { LiveStatus } from "./self.ts";
 
 /** What tools need from the place they run in (the Durable Object, or a stub in replay). */
@@ -26,6 +27,7 @@ export interface Host {
   savedNames(): string[];
   members(): string[];
   status(): LiveStatus;
+  usage(days: number): Promise<any>;
   cfg(key: string): number | string;
   play(slot: string): string;
   selfUpdate(args: any): Promise<any>;
@@ -177,6 +179,7 @@ async function ocr(env: Env, url: string) {
   });
   const data: any = await r.json().catch(() => ({}));
   if (!r.ok || data.error || !Array.isArray(data.pages)) throw new Error("识别失败" + (data.error?.message ? "：" + clip(data.error.message, 120) : "（" + r.status + "），这种格式可能不支持"));
+  meter({ provider: "deepseek", item: "文档识别", units: Number(data.page_count || data.pages.length), unit: "页", usd: Number(data.page_count || data.pages.length) * PRICE.dsOcrPage });
   const text = data.pages.map((p: any) => String(p.text || "").replace(/<box>.*?<\/box>/gs, "").replace(/<\/?ref>/g, "")).join("\n\n— 分页 —\n\n");
   return { pages: data.page_count, content: clip(text, 30000) };
 }
@@ -253,7 +256,7 @@ export function buildTools(host: Host): Tool[] {
             { role: "user", content: String(a.question || "") },
           ],
           tools: [{ type: "deepseek_web_search" }, { type: "deepseek_read_url" }],
-          max_tokens: 4000,
+          max_tokens: 4000, label: "联网调研",
         }, "max", 230000);
         const cites = [...new Set((r.message.annotations || []).map((x: any) => x.url_citation?.url?.split("#")[0]).filter(Boolean))].slice(0, 8);
         return { note: EXTERNAL, answer: r.message.content, sources: cites };
@@ -269,7 +272,7 @@ export function buildTools(host: Host): Tool[] {
             { role: "system", content: "你是资深工程师兼顾问。给出能直接执行的答案：先结论，再理由，再具体步骤和风险。不写套话。用中文。" },
             { role: "user", content: String(a.task || "") + (a.material ? "\n\n材料：\n" + String(a.material) : "") },
           ],
-          max_tokens: 8000,
+          max_tokens: 8000, label: "深度思考",
         }, "max", 280000);
         return { answer: r.message.content };
       },
@@ -494,6 +497,12 @@ export function buildTools(host: Host): Tool[] {
         const all = await host.ledger(a.op, a.name, Number(a.amount), a.note);
         return { ok: true, balances: all, total: Math.round(all.reduce((n, x) => n + x.balance, 0) * 100) / 100 };
       },
+    },
+    {
+      name: "usage",
+      description: "你自己的账：最近几天每天花了多少、各花在哪（聊天、画图、跑代码、调研、搜索、语音……），每项的调用次数和 token 数。DeepSeek 那部分同时给出按价格表的估算和账户余额的真实变化；OpenAI 那部分是按用量估算的美元。有人问花了多少钱、用了多少 token、哪块最费钱，调它，照数字说，说清哪些是估算。",
+      parameters: obj({ days: { type: "integer", description: "看最近几天，默认 3，最多 30" } }),
+      run: async a => host.usage(Math.min(Math.max(Number(a.days) || 3, 1), 30)),
     },
     {
       name: "balance",

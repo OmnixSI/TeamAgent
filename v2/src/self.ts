@@ -24,12 +24,14 @@ const PIPELINE = [
 
 const CONNECTED = (env: Env & { CODE_MODEL?: string }) => [
   "DeepSeek（主力）：对话和识图都用 " + (env.CHAT_MODEL || "deepseek-flash") + "；另外用它的联网搜索、网页抓取、服务端多轮联网调研、文档识别（OCR）、语音合成、余额查询。",
-  "OpenAI：画图和改图（" + (env.IMAGE_MODEL || "gpt-image-2.5-flare") + "）、长音频转文字（gpt-4o-mini-transcribe，B 站无字幕视频用）、Python 代码沙箱（" + (env.CODE_MODEL || "gpt-5.4-mini") + " 带代码解释器）。",
+  "OpenAI：画图和改图（" + (env.IMAGE_MODEL || "gpt-image-2.5-flare") + "）、长音频转文字（gpt-4o-mini-transcribe，B 站无字幕视频用）、Python 代码沙箱（" + (env.CODE_MODEL || "gpt-6.1-terra") + " 带代码解释器）。",
   "香港中转：部署在 Vercel 香港的一个带密钥的小函数。B 站接口、小红书、知乎、微博、抖音这些拒绝 Cloudflare 出口地址的站点走它，能带登录态；QQ 语音要的 SILK 编码也在它上面做。",
   "GitHub：只读访问 " + (env.GITHUB_ORG || "OmnixSI") + " 组织的仓库。",
   "其他数据源：腾讯行情（A 股、港股、美股）、fxtwitter（单条推文）、X 的网页接口（搜索，用保存的登录）、百度和 Hacker News 的公开接口、GitHub Trending。",
   "QQ 官方机器人接口：长连接收消息，HTTP 接口发消息和上传图片、语音、文件。",
 ];
+
+const BOOKS = "我给自己记账：每次调 DeepSeek 和 OpenAI，都把 token 数、次数和按官方价格估的花费按天、按用途记下来（聊天、画图构思、画图、跑代码、联网调研、搜索、抓网页、语音合成、文档识别、音频转写、夜间记忆整理）。DeepSeek 另外每天记一次账户余额，用余额变化对账。用 usage 工具查。OpenAI 的真实账单我查不到，只有估算。";
 
 const STORAGE = "都在 Hub 自带的 SQLite 里：全部聊天记录、长期记忆文档、白天的随手笔记、每日小结、定时任务、群内账本、我发过的图和保存的形象参考图、各站点的登录态、每一轮的耗时和用了哪些工具。没有用外部数据库。";
 
@@ -59,6 +61,7 @@ const CODE_MAP = [
   "v2/src/qq.ts QQ 接口和消息解析",
   "v2/src/self.ts 这份自述",
   "v2/src/config.ts 我能自己改的参数和做法说明的范围",
+  "v2/src/meter.ts 记账：价格表和每次调用的花费估算",
   "relay/ 香港中转（站点转发和 SILK 编码）",
 ];
 
@@ -85,6 +88,7 @@ export function selfCard(env: Env, tools: Tool[], status: LiveStatus, selfEdit?:
     how_a_message_flows: PIPELINE,
     connected_services: CONNECTED(env as any),
     storage: STORAGE,
+    my_own_books: BOOKS,
     memory: MEMORY,
     drawing: DRAWING,
     capabilities: tools.filter(t => t.name !== "about_self").map(t => t.name + "：" + (t.description.length > 130 ? t.description.slice(0, 130) + "…" : t.description)),

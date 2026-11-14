@@ -3,6 +3,7 @@
 //   relay   – a small keyed function in Hong Kong (relay/), can carry login cookies
 //   dsFetch – DeepSeek's own page reader, no cookies, good at public pages
 import { dsJson } from "./llm.ts";
+import { PRICE, meter } from "./meter.ts";
 import { clip, unb64, b64 } from "./util.ts";
 import type { Env } from "./util.ts";
 import { X_BEARER_TOKEN, buildSearchTimelineRequest, formatTweetText, parseSearchTimeline, parseStatusId } from "./xgraphql.mjs";
@@ -156,7 +157,7 @@ export async function biliResolve(input: string) {
 }
 const stamp = (sec: number) => Math.floor(sec / 60) + ":" + String(Math.floor(sec % 60)).padStart(2, "0");
 
-async function transcribe(env: Env, audio: Uint8Array) {
+async function transcribe(env: Env, audio: Uint8Array, seconds = 0) {
   if (!env.OPENAI_API_KEY) throw new Error("没有配置转写用的 OpenAI 密钥");
   const form = new FormData();
   form.append("model", "gpt-4o-mini-transcribe");
@@ -165,6 +166,9 @@ async function transcribe(env: Env, audio: Uint8Array) {
   const r = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form, signal: AbortSignal.timeout(170000) });
   const d: any = await r.json().catch(() => ({}));
   if (!r.ok || typeof d.text !== "string") throw new Error("转写失败（" + r.status + "）");
+  // 64 kbit/s audio is about 480 KB a minute when the index gave no duration.
+  const minutes = (seconds || audio.length / 8000) / 60;
+  meter({ provider: "openai", item: "音频转文字", units: Math.round(minutes * 10) / 10, unit: "分钟", usd: minutes * PRICE.transcribePerMinute });
   return d.text as string;
 }
 async function range(url: string, from: number, to: number) {
@@ -210,7 +214,7 @@ async function biliTranscript(net: Net, query: string, cid: number, maxMinutes: 
       const i = next++; if (i >= pieces.length) return;
       const body = await range(url, pieces[i].from, pieces[i].to);
       const joined = new Uint8Array(initBytes.length + body.length); joined.set(initBytes); joined.set(body, initBytes.length);
-      out[i] = "[" + stamp(pieces[i].start) + "] " + await transcribe(net.env, joined).catch(e => "（这一段没转出来：" + e.message + "）");
+      out[i] = "[" + stamp(pieces[i].start) + "] " + await transcribe(net.env, joined, pieces[i].dur).catch(e => "（这一段没转出来：" + e.message + "）");
     }
   }));
   return out.join("\n");

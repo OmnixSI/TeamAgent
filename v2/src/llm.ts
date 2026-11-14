@@ -1,5 +1,6 @@
 // Model boundary for DeepSeek: chat, tools and the application APIs. Image and sandbox calls live in draw.ts.
 import type { Env } from "./util.ts";
+import { PRICE, flashUsage, meter } from "./meter.ts";
 
 export type Effort = "none" | "low" | "high" | "max";
 export type ChatResult = { message: any; usage: any; ms: number; annotations?: any[] };
@@ -8,7 +9,7 @@ const DS = "https://api.deepseek.com";
 
 export async function dsChat(
   env: Env,
-  body: { messages: any[]; tools?: any[]; max_tokens?: number; model?: string },
+  body: { messages: any[]; tools?: any[]; max_tokens?: number; model?: string; label?: string },
   effort: Effort = "none",
   timeoutMs = 60000,
 ): Promise<ChatResult> {
@@ -31,6 +32,7 @@ export async function dsChat(
   const data: any = await r.json();
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error("model returned no message");
+  meter({ provider: "deepseek", item: body.label || "聊天", ...flashUsage(data.usage) });
   return { message, usage: data.usage || {}, ms: Date.now() - started };
 }
 
@@ -42,6 +44,14 @@ export async function dsJson(env: Env, path: string, body: any, timeoutMs = 2500
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (r.ok) {
+    if (path.endsWith("/search")) meter({ provider: "deepseek", item: "联网搜索", units: 1, unit: "次", usd: PRICE.dsSearch });
+    else if (path.endsWith("/fetch")) meter({ provider: "deepseek", item: "网页抓取", units: 1, unit: "次", usd: PRICE.dsFetch });
+    else if (path.endsWith("/tts")) {
+      const text = String(body?.text || ""), chars = text.length + (text.match(/[\u4e00-\u9fff]/g) || []).length;   // a Chinese character is billed as two
+      meter({ provider: "deepseek", item: "语音合成", units: chars, unit: "计费字符", usd: chars / 10000 * PRICE.dsTtsPer10k });
+    }
+  }
   return r;
 }
 
