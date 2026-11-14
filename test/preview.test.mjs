@@ -141,14 +141,14 @@ describe("commands", () => {
     assert.doesNotMatch(clone, /x-access-token:[^%]/);
     assert.doesNotMatch(clone, /remote add|config /);
     const cmds = P.prepareCommands("OmnixSI/peiwan-club-saas", t, P.RECIPES["peiwan-club-saas"]);
-    assert.equal(cmds.length, 6, "stop, clone, install, build, seed, start");
+    assert.equal(cmds.length, 5, "stop, clone, install, seed, start (no build: it does not fit in 1 GiB)");
     for (const c of cmds.slice(2)) assert.match(c, /^unset GH_TOKEN; set -o pipefail; export NODE_OPTIONS=--max-old-space-size=\d+ && cd '\/work\/preview\/pr44' && /);
-    assert.match(cmds[3], /max-old-space-size=700/);
-    assert.match(cmds[5], /max-old-space-size=320/);
-    assert.match(cmds[5], /\(setsid nohup bash -c '.*' > '\/work\/preview\/pr44\.log' 2>&1 < \/dev\/null & echo \$! > '\/work\/preview\/pr44\.pid'\); /, "launched from a subshell");
-    assert.match(cmds[5], /port 4173 is taken/);
+    assert.match(cmds[2], /max-old-space-size=700/);
+    assert.match(cmds[4], /max-old-space-size=640/);
+    assert.match(cmds[4], /\(setsid nohup bash -c '.*' > '\/work\/preview\/pr44\.log' 2>&1 < \/dev\/null & echo \$! > '\/work\/preview\/pr44\.pid'\); /, "launched from a subshell");
+    assert.match(cmds[4], /port 4173 is taken/);
     assert.match(cmds[0], /readlink \$p\/cwd/, "stop also sweeps processes left in the preview directory");
-    assert.match(cmds[5], /curl -s -o \/dev\/null -m 2 http:\/\/127\.0\.0\.1:4173\//);
+    assert.match(cmds[4], /curl -s -o \/dev\/null -m 2 http:\/\/127\.0\.0\.1:4173\//);
   });
   test("generated scripts parse in bash", () => {
     const t = { label: "x", slot: "ref", refspec: "refs/heads/it's" };

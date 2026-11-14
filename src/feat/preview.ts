@@ -78,6 +78,7 @@ export type Recipe = {
   install?: string; build?: string; setup?: string;
   start?: string; port?: number;
   heap?: number;               // MB for the build; the server gets a smaller heap
+  serverHeap?: number;         // MB for the running server, when 320 is not enough (a dev server compiles on demand)
   login?: Login[];
   routes?: string;             // what pages exist, for the model
   warn?: string;               // the preview works only partly
@@ -87,12 +88,13 @@ export type Recipe = {
 const PNPM = "(command -v pnpm >/dev/null || npm i -g -s pnpm@10 >/dev/null 2>&1)";
 export const RECIPES: Record<string, Recipe> = {
   "peiwan-club-saas": {
-    how: "pnpm 安装 → 只打包前端（vite build，跳过类型检查和 UI 规范检查）→ 写演示数据 → 后端 :8787 + vite preview :4173（/api 转给后端）→ 用演示账号登录后截图",
+    // A production build of the three entry points is killed for memory in the 1 GiB machine (measured:
+    // 115 s, then "Killed"), so the pages are served by the dev server, which compiles only what is opened.
+    how: "pnpm 安装 → 写演示数据 → 后端 :8787 + 前端开发服务器 :4173（/api 转给后端；整包打包在 1 GB 内存里会被杀掉，所以不打包）→ 用演示账号登录后截图",
     pm: "pnpm", install: PNPM + " && pnpm install --frozen-lockfile --reporter=silent",
-    build: "cd web && npx vite build --logLevel warn",
     setup: "mkdir -p .pv && DB_PATH=$PWD/.pv/app.db SEED_PASSWORD=\"$PREVIEW_PASSWORD\" node server/src/seed.ts | tail -3",
-    start: "(cd server && PORT=8787 DB_PATH=$PWD/../.pv/app.db UPLOAD_DIR=$PWD/../.pv/uploads node src/index.ts) & (cd web && npx vite preview --host 0.0.0.0 --port 4173 --strictPort) & wait",
-    port: 4173, heap: 700,
+    start: "(cd server && PORT=8787 DB_PATH=$PWD/../.pv/app.db UPLOAD_DIR=$PWD/../.pv/uploads node src/index.ts) & (cd web && npx vite --host 0.0.0.0 --port 4173 --strictPort --logLevel warn) & wait",
+    port: 4173, heap: 700, serverHeap: 640,
     login: [
       { when: "^/platform\\.html", endpoint: "/api/platform/auth/login", body: { username: "admin", password: "{password}" }, key: "pw_platform_token" },
       { when: "^/client\\.html", endpoint: "/api/client/auth/login", body: { phone: "13800000000", password: "{password}" }, key: "pw_client_token" },
@@ -209,7 +211,7 @@ export function cloneCommand(full: string, t: Target) {
 /** Commands that turn a fresh checkout into a running server; the last one waits until the port answers. */
 export function prepareCommands(full: string, t: Target, r: Recipe, waitSeconds = 90) {
   const dir = ROOT + "/" + t.slot, app = dir + (r.dir && r.dir !== "." ? "/" + r.dir : ""), log = ROOT + "/" + t.slot + ".log", pid = ROOT + "/" + t.slot + ".pid";
-  const heap = r.heap || 512, serverHeap = Math.min(heap, 320);
+  const heap = r.heap || 512, serverHeap = r.serverHeap || Math.min(heap, 320);
   const at = (cmd: string, h = heap) => CLEAN + "export NODE_OPTIONS=--max-old-space-size=" + h + " && cd " + q(app) + " && " + cmd;
   const cmds = [stopCommand(), cloneCommand(full, t)];
   if (r.install) cmds.push(at("(" + r.install + ") 2>&1 | tail -25"));

@@ -11,6 +11,7 @@ import { VOICES, edgeSpeak, pickVoice } from "./feat/voice.ts";
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
+import { PACKS } from "./packs.ts";
 import { PRICE, meter } from "./meter.ts";
 import { buildPage } from "./show.ts";
 import { bookHtml, illustrate, planBook } from "./book.ts";
@@ -628,6 +629,8 @@ export function buildTools(host: Host): Tool[] {
         files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },
         collect: { type: "array", items: { type: "string" }, description: "跑完要取回的文件，如 \"out/report.pdf\"、\"frames/*.jpg\"" },
         timeout_seconds: { type: "integer", description: "整批命令的总时限，默认 300，最多 1800" },
+        packs: { type: "array", items: { type: "string" }, description: "要用到的大件工具包，会先装好再跑命令：" + (Object.entries(PACKS).map(([k, p]) => k + "（" + p.what + "）").join("；") || "暂无") },
+        workspace: { type: "string", description: "要跨天接着干的活，起个英文名：/work/<名字> 这个目录会在关机前存起来、下次自动恢复（最多 300 MB）。一次性的活不用填" },
         deliver: { type: "boolean", description: "默认 true，取回的图和文件直接发群里。只是中间素材时填 false：不发群，只返回编号" },
       }, ["commands"]),
       run: async a => {
@@ -636,7 +639,7 @@ export function buildTools(host: Host): Tool[] {
         for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) files.push(f); }
         const commands = (Array.isArray(a.commands) ? a.commands : [a.commands]).map(String).filter(Boolean).slice(0, 20);
         if (!commands.length) return { ok: false, error: "没有要跑的命令" };
-        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300 });
+        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300, ...(Array.isArray(a.packs) && a.packs.length ? { packs: a.packs.map(String).filter((p: string) => PACKS[p]) } : {}), ...(a.workspace ? { workspace: String(a.workspace) } : {}) });
         return {
           ok: out.ok, ...(out.error ? { error: out.error } : {}), seconds: out.seconds, ...(out.bootstrap_seconds ? { note_boot: "电脑刚开机，装软件用了 " + out.bootstrap_seconds + " 秒" } : {}),
           steps: out.steps.map(st => ({ command: clip(st.command, 200), exit: st.exit, seconds: st.seconds, stdout: clip(st.stdout, 5000), ...(st.stderr.trim() ? { stderr: clip(st.stderr, 2000) } : {}) })),

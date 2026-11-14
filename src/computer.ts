@@ -102,6 +102,8 @@ export type ComputerRequest = {
   env?: Record<string, string>;
   /** Keeps /work/<workspace> across sleeps: restored from R2 before the commands, saved after them (≤ 300 MB). */
   workspace?: string;
+  /** Tool packs (names from src/packs.ts) that must be present before the commands run. */
+  packs?: string[];
 };
 export type Workspace = { name: string; restored: boolean; saved_bytes?: number; left_out?: string[]; error?: string };
 export type ComputerResult = {
