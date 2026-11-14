@@ -252,9 +252,13 @@ export function buildChecks(facts) {
     "tts.fallback": anyOf("语音合成回退厂商", [facts.tts.fallback]),
     "tts.silk": anyOf("QQ 语音 SILK", [facts.tts.silk]),
     "tts.files": anyOf("语音合成关键文件", [facts.tts.primaryFile, "tts.mjs"]),
-    "tts.not_wired": {
-      label: "语音合成还没接进群里",
-      pattern: /(?:还没接进|未接进|没接进|不会主动发|尚未接入|没有接进)/,
+    "tts.wired": {
+      label: "语音合成已接进群里的发送流程",
+      pattern: /(?:已接进|接进|接入|能发语音|会发语音|语音回复由|走\s*outbox)/,
+    },
+    "tts.mode": {
+      label: "默认 auto：语音消息或明确要求时才发",
+      pattern: /auto[^。；\n]{0,40}(?:语音消息|明确要求)|(?:语音消息)[^。；\n]{0,30}(?:明确要求)/,
     },
     "repo.entry": anyOf("Worker 入口", [facts.repo.entry, "worker.ts"]),
     "repo.dirs": custom(

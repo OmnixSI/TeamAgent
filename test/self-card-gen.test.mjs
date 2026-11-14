@@ -146,6 +146,36 @@ test("S5 the generated card carries no key value, only names", () => {
   }
 });
 
+test("S6b voice, vision, document and fetch descriptions match the wired code paths", () => {
+  // DS-ASR is called from src/voice-asr.ts (Worker) and runner/cloud-asr.mjs (B站音轨);
+  // the old card claimed the cloud channel had no caller. TTS runs through the
+  // gateway's voice outbox, so the old "never sends voice" sentence is false too.
+  const asr = capability("voice_asr");
+  assert.ok(!/还没有调用方|未接调用方|没有调用方/.test(asr.how), asr.how);
+  for (const token of ["asr_refer_text", "DeepSeek", "SILK", "X-ASR"]) assert.ok(asr.how.includes(token), `${token} missing: ${asr.how}`);
+  assert.ok(asr.providers.some((p) => p.vendor === "DeepSeek" && !/未接/.test(p.role)), "DeepSeek ASR must be described as wired");
+  assert.ok(asr.files.some((f) => f.path === "src/voice-asr.ts"), "voice-asr.ts must be a key file");
+
+  const tts = capability("voice_tts");
+  assert.ok(!/还没接进|不会主动发|未接进/.test(tts.how), tts.how);
+  for (const token of ["auto", "语音消息", "明确要求", "edge-tts", "SILK", "DEEPSEEK_API_KEY"]) assert.ok(tts.how.includes(token), `${token} missing: ${tts.how}`);
+  assert.ok(tts.files.some((f) => f.path === "runner/qq-gateway.mjs"), "gateway outbox loop must be a key file");
+  assert.equal(tts.default_state, "on", "enqueueVoice forces tts enabled; the card cannot call it off by default");
+  assert.deepEqual(tts.requires_env, [], "edge-tts is the main path; the DeepSeek key is only the backup");
+
+  const vision = capability("image_vision");
+  assert.ok(vision.how.includes("DeepSeek") && vision.how.includes("Workers AI"), vision.how);
+  assert.ok(vision.providers.some((p) => p.vendor === "DeepSeek"), "DeepSeek is the auto-chain primary");
+
+  const doc = capability("document_reading");
+  assert.ok(doc.how.includes("docread:enabled"), doc.how);
+  assert.ok(!/目前没有 OCR 接入/.test(doc.how), doc.how);
+
+  const fetch = capability("web_fetch");
+  assert.deepEqual(fetch.requires_env, [], "Jina and fetch_page work without the DeepSeek key");
+  assert.ok(fetch.how.includes("DEEPSEEK_API_KEY"), "the DeepSeek fallback's key must still be named");
+});
+
 test("S6 repo_map matches schema.sql, migrations and wrangler.toml independently", () => {
   const map = card.repo_map;
   assert.equal(map.repo, "OmnixSI/TeamAgent");
