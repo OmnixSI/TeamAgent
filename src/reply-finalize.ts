@@ -6,7 +6,6 @@ import type { NewSchedule, ScheduleSpec } from "./schedules";
 
 const ACK = "记下了";
 const GUARD_FALLBACK = "这个我还没登记上，你说一下每天几点、发什么，我马上建。";
-const TEN_MINUTES = 10 * 60000;
 
 export type FinalizeAction = {
   tool?: string;
@@ -36,12 +35,12 @@ export function scrubAvoided(text: string, phrases: string[]): { text: string; c
   return { text, count: 0 };
 }
 
-function parseSpoken(spoken: string): { value: Record<string, any>; json: boolean } {
+function parseSpoken(spoken: string): Record<string, any> {
   try {
     const value = JSON.parse(spoken);
-    if (value && typeof value === "object" && !Array.isArray(value)) return { value, json: true };
+    if (value && typeof value === "object" && !Array.isArray(value)) return value;
   } catch {}
-  return { value: { mode: "banter", text: spoken }, json: false };
+  return { mode: "banter", text: spoken };
 }
 
 function withSpecString(row: any) {
@@ -86,7 +85,7 @@ function promiseSentence(text: string) {
 export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): Promise<string> {
   if (!spoken) return spoken;
   if (spoken.trim() === "[[SILENT]]") return spoken;
-  const { value } = parseSpoken(spoken);
+  const value = parseSpoken(spoken);
   const originalText = typeof value.text === "string" ? value.text : "";
   if (originalText.trim() === "[[SILENT]]") return spoken;
   let text = originalText;
