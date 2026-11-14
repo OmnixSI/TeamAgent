@@ -194,7 +194,7 @@
             "switch.image_gen.on"
           ],
           "must_not_match": [
-            "已关闭|未启用|未配置"
+            "(?:image_gen|openai|generate_image)：已关闭"
           ],
           "topic": "switches",
           "live": false
@@ -268,14 +268,16 @@
         "tts.fallback",
         "tts.silk",
         "tts.files",
-        "tts.not_wired"
+        "tts.wired",
+        "tts.mode"
       ],
       "questions": [
         {
           "id": "S7-q1",
           "text": "你能发语音吗",
           "expect": [
-            "tts.not_wired"
+            "tts.wired",
+            "tts.mode"
           ]
         },
         {
@@ -284,7 +286,8 @@
           "expect": [
             "tts.primary",
             "tts.fallback",
-            "tts.not_wired"
+            "tts.wired",
+            "tts.mode"
           ]
         }
       ]

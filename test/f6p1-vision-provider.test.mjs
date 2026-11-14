@@ -268,20 +268,20 @@ test("F6P1-V7 失败文案如实说看不了 + error_kind，不编内容", () =>
   assert.doesNotMatch(notes.get("m2")[0], /图片：/);
 });
 
-test("F6P1-V8 显式 luna 在 F8-V1 合入前如实报不支持", async () => {
+test("F6P1-V8 显式 luna 缺 OpenAI 密钥时跳过 Luna、回退原链", async () => {
   const e = env();
   await setting(e, "vision:provider", "luna");
-  let http = 0;
+  let openai = 0;
   e.AI = { async run() { return { response: "{}" }; } };
   const events = [];
   const note = await withFetch(
-    async () => {
-      http++;
+    async url => {
+      if (String(url).includes("api.openai.com")) openai++;
       return dsResponse();
     },
     () => v.describeBytes(e, png, "image/png", "", signal(), "v1", event => events.push(event)),
   );
-  assert.equal(note, null);
-  assert.equal(http, 0);
-  assert.equal(events.at(-1)?.reason, "unsupported");
+  assert.equal(note?.desc, answer.desc);
+  assert.equal(openai, 0, "缺密钥时不能向 OpenAI 发请求");
+  assert.ok(!events.some(ev => ev.reason === "provider_auth"));
 });

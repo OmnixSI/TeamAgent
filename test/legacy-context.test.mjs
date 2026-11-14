@@ -20,7 +20,7 @@ test('2.5 chunks and 130 image-note ids stay within D1 binding limit',async()=>{
   assert.deepEqual(d1.chunks([1,2,3],2),[[1,2],[3]]);
   const e=env(),ids=Array.from({length:130},(_,i)=>'image-'+i);
   for(const i of [0,129]){
-    await e.DB.prepare('INSERT INTO image_notes VALUES(?,?,?,?,?,?)').bind('sha'+i,'图'+i,'[]',0,null,Date.now()).run();
+    await e.DB.prepare('INSERT INTO image_notes(sha,desc,tags,sticker_like,text,created_at) VALUES(?,?,?,?,?,?)').bind('sha'+i,'图'+i,'[]',0,null,Date.now()).run();
     await e.DB.prepare('INSERT INTO message_images VALUES(?,?,?)').bind(ids[i],0,'sha'+i).run();
   }
   const prepare=e.DB.prepare.bind(e.DB);

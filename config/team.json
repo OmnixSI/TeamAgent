@@ -29,7 +29,7 @@
     "end_hour": 6,
     "quiet_minutes": 20,
     "batches_per_night": 8,
-    "messages_per_batch": 60
+    "messages_per_batch": 120
   },
   "scout": {
     "enabled": true,
@@ -137,11 +137,24 @@
     "send_gif": true,
     "min_senders": 2,
     "max_bytes": 400000,
-    "max_rows": 1000,
+    "max_rows": 5000,
     "caps": {
       "tag": 40,
       "send": 20
     }
+  },
+  "feature_requests": {
+    "enabled": true,
+    "auto_senders": ["0FC1E8A8BD28981E86866125AC3FCEFF"],
+    "daily_auto_cap": 5,
+    "daily_cap_per_sender": 10,
+    "group_daily_cap": 30,
+    "max_developing": 2,
+    "lease_hours": 6,
+    "stale_hours": 72,
+    "quote_max": 600,
+    "title_max": 80,
+    "detail_max": 2000
   },
   "voice": {
     "tts": {

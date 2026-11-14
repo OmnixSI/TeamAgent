@@ -5,6 +5,7 @@ import shutil, subprocess, json, sys, os, plistlib, re, shlex, hashlib
 
 root = Path(__file__).resolve().parents[1]
 FETCH_LABEL = "com.inkboard.team-fetch"
+RUNNER_DEPENDENCY = "silk-wasm"
 
 def find_node():
     candidates = []
@@ -92,6 +93,69 @@ def remove_media_service():
 
 def asr_config():
     return {"python": str(Path.home()/".inkboard-team/xasr-venv/bin/python"), "model_dir": str(Path.home()/"Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03")}
+
+def runner_deps_changed(home, source_root):
+    if not (home/"node_modules"/RUNNER_DEPENDENCY/"package.json").exists():
+        return True
+    for name in ["package.json", "package-lock.json"]:
+        target = home/name
+        source = source_root/"runner"/name
+        if not target.exists() or target.read_bytes() != source.read_bytes():
+            return True
+    return False
+
+def check_runner_deps(home, node=None):
+    node = node or find_node()
+    if not node:
+        return {"ok": False, "error_kind": "tts_silk_missing", "error": "缺 Node ≥22，无法加载 silk-wasm"}
+    script = (
+        "import { createRequire } from 'node:module';\n"
+        "import { realpathSync } from 'node:fs';\n"
+        "import { pathToFileURL } from 'node:url';\n"
+        "const root = realpathSync(process.cwd());\n"
+        "const require = createRequire(root + '/package.json');\n"
+        "let resolved;\n"
+        "try { resolved = require.resolve('silk-wasm'); }\n"
+        "catch (error) { console.error((error && (error.code || error.message)) || String(error)); process.exit(1); }\n"
+        "if (!resolved.startsWith(root + '/node_modules/')) { console.error('silk-wasm resolved outside runtime: ' + resolved); process.exit(3); }\n"
+        "import(pathToFileURL(resolved).href).then((m) => {\n"
+        "  const api = m && typeof m.encode === 'function' ? m : (m && m.default) || {};\n"
+        "  if (typeof api.encode !== 'function' || typeof api.decode !== 'function') { console.error('silk-wasm missing encode/decode'); process.exit(2); }\n"
+        "}).catch((error) => { console.error((error && (error.code || error.message)) || String(error)); process.exit(1); });\n"
+    )
+    try:
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            cwd=home, capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"ok": False, "error_kind": "tts_silk_missing", "error": "加载 silk-wasm 失败："+str(error)}
+    if result.returncode != 0:
+        detail = [line for line in (result.stderr or "").splitlines() if line.strip()]
+        return {"ok": False, "error_kind": "tts_silk_missing", "error": "silk-wasm 不可用："+(detail[-1] if detail else "import failed")}
+    return {"ok": True, "error_kind": "", "error": ""}
+
+def ensure_runner_deps(home, source_root):
+    """Install the runner's own dependencies into ~/.inkboard-team and prove they load."""
+    node = find_node()
+    if not node:
+        print("runner 依赖未安装：缺 Node ≥22，silk-wasm 无法加载；QQ 语音会回退文字。")
+        return False
+    changed = runner_deps_changed(home, source_root)
+    for name in ["package.json", "package-lock.json"]:
+        shutil.copy2(source_root/"runner"/name, home/name)
+    if changed:
+        try:
+            subprocess.run(["npm", "ci", "--ignore-scripts", "--prefix", str(home)], check=True)
+        except (OSError, subprocess.SubprocessError) as error:
+            print("runner 依赖安装失败（"+RUNNER_DEPENDENCY+"）："+str(error)+"；QQ 语音会回退文字。")
+            return False
+    check = check_runner_deps(home, node)
+    if not check["ok"]:
+        print("runner 依赖自检失败（"+check["error_kind"]+"）："+check["error"]+"；QQ 语音会回退文字。")
+        return False
+    print("runner 依赖自检通过："+RUNNER_DEPENDENCY+" 可用")
+    return True
 
 def ensure_xasr(source_root):
     venv = Path.home()/".inkboard-team/xasr-venv"
@@ -181,6 +245,7 @@ def main():
         for path in (root/"runner").glob("*"):
             if path.suffix in [".py",".mjs"]:shutil.copy2(path,stage/"runner"/path.name)
         shutil.copy2(root/"runner/requirements-xasr.txt",stage/"runner/requirements-xasr.txt")
+        for name in ["package.json","package-lock.json"]:shutil.copy2(root/"runner"/name,stage/"runner"/name)
         ensure_xasr(root)
         for name in ["package.json","package-lock.json"]:shutil.copy2(root/"runner/sdk"/name,stage/"runner/sdk"/name)
         for path in (root/"config").glob("*.json"):shutil.copy2(path,stage/"config"/path.name)
@@ -215,6 +280,7 @@ def main():
     if sdk_changed: subprocess.run(
         ["npm", "ci", "--ignore-scripts", "--prefix", str(home / "sdk")], check=True
     )
+    ensure_runner_deps(home, root)
     config = json.loads((home / "config.json").read_text())
     config["repos"] = parameters["repositories"]
     config["asr"] = asr_config()

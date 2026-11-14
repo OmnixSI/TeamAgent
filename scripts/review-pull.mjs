@@ -31,6 +31,9 @@ import { pathToFileURL } from 'node:url';
 const SYDNEY = 'Australia/Sydney';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const OPEN_STATUSES = new Set(['open', 'proposed', 'regression', 'candidate', 'canary', 'active']);
+// A-quota: quota:morning is written daily by the main Worker; older lines are
+// dropped so a stopped job cannot keep printing an old balance.
+const QUOTA_LINE_FRESH_MS = 36 * 60 * 60 * 1000;
 
 const FIELD_MAP = {
   指纹: 'fingerprint',
@@ -651,7 +654,7 @@ function assignmentText(gaps) {
 }
 
 export function buildMorningReport({
-  date, digest, gaps = [], baseUrl = '', mirrorPath = '', ledgerPath = '', safety = {},
+  date, digest, gaps = [], baseUrl = '', mirrorPath = '', ledgerPath = '', safety = {}, now = Date.now(),
 }) {
   const d = digest || {};
   const qqSent = num(safety?.qq_sent ?? claimedQqSent(d));
@@ -692,6 +695,11 @@ export function buildMorningReport({
     `建议派给：${assignmentText(gaps)}`,
     `镜像：${relativePath(mirrorPath || '-')} + ${relativePath(ledgerPath || '-')}（${gaps.length} 条）`,
   ];
+  const quotaLine = text(d?.quota?.line).trim();
+  const quotaAt = num(d?.quota?.at);
+  if (quotaLine && quotaAt > 0 && now - quotaAt >= 0 && now - quotaAt < QUOTA_LINE_FRESH_MS) {
+    lines.splice(3, 0, `额度：${quotaLine}`);
+  }
   return lines.slice(0, 15).join('\n');
 }
 

@@ -119,6 +119,26 @@ test("fake gateway replay: a tts failure falls back to the original text", async
   }
 });
 
+test("voiceReply names a missing ffmpeg toolchain instead of pretending TTS ran", async () => {
+  const bot = fakeBot();
+  let synthesized = 0;
+  const result = await voiceReply({
+    bot,
+    group: "g1",
+    text: "我在。",
+    cfg,
+    deps: {
+      ffmpegToolchain: () => ({ ok: false, error: "ffmpeg not found" }),
+      synthesize: async () => ((synthesized += 1), null),
+      wavToSilk: fakeSilk,
+    },
+  });
+  assert.equal(result.via, "text");
+  assert.equal(result.reason, "tool_missing");
+  assert.equal(synthesized, 0, "missing ffmpeg must not start a TTS render");
+  assert.deepEqual(bot.calls.map((c) => c.kind), ["text"]);
+});
+
 test("fake gateway replay: a throwing synth or failed voice upload falls back to text", async () => {
   const s = scratch();
   try {
@@ -160,7 +180,7 @@ function fakeCli({ fail = null, onCall } = {}) {
     onCall?.(command, args);
     if (fail === "timeout") throw Object.assign(new Error("tts_timeout"), { reason: "tts_timeout" });
     if (fail === "missing") throw Object.assign(new Error("spawn edge-tts ENOENT"), { code: "ENOENT" });
-    if (command === "ffmpeg") fs.writeFileSync(args.at(-1), "RIFFwav");
+    if (path.basename(command) === "ffmpeg") fs.writeFileSync(args.at(-1), "RIFFwav");
     else fs.writeFileSync(args[args.indexOf("--write-media") + 1], "ID3mp3");
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -180,7 +200,7 @@ test("synthesize renders 24 kHz mono wav through the edge-tts CLI and leaves no 
     assert.equal(result.cached, false);
     assert.equal(path.dirname(result.path), s.cacheDir);
     assert.equal(fs.readFileSync(result.path, "utf8"), "RIFFwav");
-    const ffmpeg = cli.calls.find((c) => c.command === "ffmpeg");
+    const ffmpeg = cli.calls.find((c) => path.basename(c.command) === "ffmpeg");
     assert.ok(ffmpeg, "ffmpeg must be called");
     for (const arg of ["-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le"])
       assert.ok(ffmpeg.args.includes(arg), arg);

@@ -11,9 +11,13 @@ export type Meter = { used: number; limit: number; left(): number };
  *  Chat/HTTP stays at 48 to protect reply latency; cron and background queues get 200. */
 export const D1_BUDGET: { chat: number; background: number } = { chat: 48, background: 200 };
 /** Queue name decides the budget without an extra D1 query. Only the two background
- *  lanes get 200; the chat lane and any unknown name stay at the conservative 48. */
+ *  lanes and their dead-letter queues get 200; the chat lane and any unknown name stay
+ *  at the conservative 48. */
+export const DLQ_QUEUES = ["inkboard-team-dlq", "team-agent-tools-dlq"];
 export function queueLimit(queue: string | undefined): number {
-  return queue === "inkboard-team" || queue === "team-agent-tools" ? D1_BUDGET.background : D1_BUDGET.chat;
+  return queue === "inkboard-team" || queue === "team-agent-tools" || DLQ_QUEUES.includes(String(queue))
+    ? D1_BUDGET.background
+    : D1_BUDGET.chat;
 }
 
 /** Count actual D1 executions; optional work decides how to use the remaining budget. */

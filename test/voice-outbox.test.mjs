@@ -33,6 +33,14 @@ test('enqueue preserves text/reference, honors group override, claims once and r
  await req(e,'/api/runner/voice-outbox/report',{id:'v1',status:'failed'},'runner-secret');assert.equal((await row(e,'v1')).status,'sent');
  await seed(e,'off',{switches:{'voice:mode':'always',['voice:mode:'+group]:'off'}});assert.equal((await row(e,'off')).status,'pending');
 });
+test('a missing TTS toolchain is reported as tool_missing, not upstream',async()=>{
+ const e=await voiceEnv();await seed(e,'tools');
+ const a=await pull(e);assert.equal(a.items.length,1);
+ const r=await req(e,'/api/runner/voice-outbox/report',{id:'tools',status:'sent',via:'text',reason:'tool_missing'},'runner-secret');
+ assert.equal(r.status,200);
+ const usage=await e.DB.prepare('SELECT error_kind FROM ds_usage WHERE id=?').bind('voice:tools').first();
+ assert.equal(usage.error_kind,'tool_missing');
+});
 test('ordinary text stays text, model voice flag enables explicit request without keywords',async()=>{
  const e=await voiceEnv();await seed(e,'plain',{opts:{source:{meta:{media:[]}}}});assert.equal((await row(e,'plain')).status,'pending');
  await seed(e,'explicit',{reply:{voice:true},opts:{source:{meta:{media:[]}}}});assert.equal((await row(e,'explicit')).status,'voice');
@@ -78,4 +86,11 @@ test('stale claimed voice is unknown and never returned; concurrent pulls claim 
  assert.equal(pulls.reduce((n,p)=>n+p.items.length,0),1);
  await e.DB.prepare('UPDATE outbox_attempts SET started_at=?').bind(Date.now()-241000).run();
  assert.equal((await pull(e)).items.length,0);assert.equal((await row(e,'v1')).status,'unknown');
+});
+test('proactive voice without msg_id (self-test) is delivered, not skipped as expired',async()=>{
+ const e=await voiceEnv();
+ await e.DB.prepare("INSERT INTO outbox(id,group_id,body,status,msg_id,created_at) VALUES('selftest',?,?,'voice',NULL,?)").bind(group,'自测语音',Date.now()).run();
+ const items=(await pull(e)).items;
+ assert.equal(items.length,1);assert.equal(items[0].msg_id,null);assert.equal(items[0].expires_at,undefined);
+ assert.equal((await row(e,'selftest')).status,'voice_sending');
 });

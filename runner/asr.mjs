@@ -29,7 +29,7 @@ export function parseAsrOutput(lines){
 export function runCommand(command,args,options={},deps={}){
  return new Promise((resolve,reject)=>{
   if(options.signal?.aborted){reject(fault('cancelled'));return;}
-  let child,done=false,stdout='',stderr='',nice=15,peak=0,timer,watch,pending='';
+  let child,done=false,stdout='',stderr='',nice=15,peak=0,timer,watch,pending='',missing=options.missingReason||'asr_unavailable';
   const outputDecoder=new StringDecoder('utf8'),errorDecoder=new StringDecoder('utf8');
   const kill=()=>{if(child?.pid)try{(deps.kill||process.kill)(-child.pid,'SIGKILL')}catch{}};
   const finish=(reason,code)=>{
@@ -39,7 +39,7 @@ export function runCommand(command,args,options={},deps={}){
   const abort=()=>finish(options.signal?.reason?.reason||'cancelled');
   try{
    child=(deps.spawn||spawnChild)(command,args,{env:childEnv(),detached:true,stdio:['ignore','pipe','pipe']});
-   child.on('error',error=>finish(error.code==='ENOENT'?'asr_unavailable':'asr_failed'));
+   child.on('error',error=>finish(error.code==='ENOENT'?missing:'asr_failed'));
    child.on('close',code=>finish(null,code));
    if(child.pid){(deps.setPriority||setPriority)(child.pid,15);nice=(deps.getPriority||getPriority)(child.pid);options.onChild?.(child.pid,nice);}
    child.stdout.on('data',buffer=>{
@@ -53,7 +53,7 @@ export function runCommand(command,args,options={},deps={}){
     if(done)return;
     try{const value=await (deps.rss||rss)(child.pid);peak=Math.max(peak,value);if(value>options.memCapMb)finish('mem_limit')}catch{}
    },5000);
-  }catch(error){finish(error.code==='ENOENT'?'asr_unavailable':'asr_failed')}
+  }catch(error){finish(error.code==='ENOENT'?missing:'asr_failed')}
  });
 }
 export async function runAsr(wav,{python,modelDir,memCapMb=1300,timeoutMs=120000,signal,onProgress,onChild}={},deps={}){

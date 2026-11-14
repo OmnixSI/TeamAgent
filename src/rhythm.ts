@@ -60,7 +60,7 @@ export async function recordDecision(e: any, row: any): Promise<void> {
       row.mentioned ? 1 : 0, row.forced ? 1 : 0, row.waited ? 1 : 0, row.gate || "model", row.action || "stop", row.spoken_kind || null,
       row.target_id || null, row.wait_seconds ?? null, row.reason || null, row.outbox_id || null, row.policy || "live", row.model_ms ?? null, row.created_at ?? Date.now()).run();
 }
-export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "gate:mode", "gate:config", "vision:provider", "vision:ds_model", "workers_ai:neurons_cap", "off:review", "off:review_rules", "off:review_report", "learn:mode"] as const;
+export const SWITCH_KEYS = ["off:wait", "off:quote", "off:sticker_send", "off:sticker_collect", "sticker_paused_until", "self_note", "team_reflection", "auth:bili", "auth:x", "off:repo_tools", "gate:mode", "gate:config", "vision:provider", "vision:ds_model", "workers_ai:neurons_cap", "off:review", "off:review_rules", "off:review_report", "learn:mode", "off:feature_request", "vision:openai_model", "vision:per_image_deadline_ms", "vision:turn_deadline_ms", "vision:daily_cap", "docread:enabled"] as const;
 export async function loadSwitches(e: any): Promise<Record<string, string | undefined>> {
   // SK-2: off:* is loaded in the same statement so the self card sees every kill
   // switch without spending another D1 query in the turn budget.

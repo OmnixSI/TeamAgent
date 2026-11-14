@@ -72,7 +72,7 @@ test('D6b actual cron clears three days of 90 real traces with 20 percent signal
 });
 test('D6b only ten first-night ticks resume the same run next night without duplicate effects',{skip:!existsSync(sourceFile)},async(t)=>{
   const {e,db,addDay}=densityFixture(t);addDay(0);e.REVIEW_MODE='propose';
-  for(const row of db.prepare('SELECT id FROM messages').all()) db.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,created_at) VALUES(?,?,?,'[]','cat-v1','{}',1,?)").run(row.id,group,row.id,start-DAY);
+  for(const row of db.prepare('SELECT id FROM messages').all()) db.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,created_at) VALUES(?,?,?,'[]','cat-v2','{}',1,?)").run(row.id,group,row.id,start-DAY);
   const fetch=fakeFetch([],{gap:true});
   const first=await window(e,start,10,{fetch});assert.notEqual(first.row.step,'done');
   const before=db.prepare('SELECT id,gen FROM review_runs').get();

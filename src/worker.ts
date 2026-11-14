@@ -13,12 +13,14 @@ import { isDirectRequest } from "./engagement";
 import { MAX_DELIVERY_ATTEMPTS, recordDeliveryFailure, recordDeliveryRetry, readStuckDeliveries, sweepStuckDeliveries, utilityResultText, utilityStatusText } from "./delivery-retry";
 import { stage } from "./timing";
 import { quoteRef, quoteOutcome } from "./quote";
-import { metered, COST, left, D1_BUDGET, queueLimit } from "./d1";
+import { metered, COST, left, D1_BUDGET, chunks } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
+import { docRoute } from "./docjobs";
 import { runCronExtras } from "./cron-extra";
+import { runQueueBatch } from "./queue-batch";
 import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { SELF_CARD } from "./self-card.generated";
@@ -33,6 +35,7 @@ import {
   tokenRoute,
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
+import { featureRequestRoute, sweepFeatureRequests } from "./feature-request-api";
 import { queueFor } from "./lanes";
 import { runSchedules, planSchedule, createSchedule, backfillSchedule, publicSchedule, sydneyText } from "./schedules";
 import { proposeLearning } from "./learning-backfill";
@@ -57,6 +60,7 @@ import {
   SELFTEST_PNG,
 } from "./vision";
 import { imagegenSelftest } from "./imagegen-selftest";
+import { cacheMessageImages, imageCacheEntries } from "./imagecache";
 import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
@@ -114,6 +118,25 @@ async function set(e: Env, k: string, v: string) {
   )
     .bind(k, v)
     .run();
+}
+/** One tool's startup preflight, reduced to what the dashboard may show. */
+function gatewayTool(value: any) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    ok: value.ok === true,
+    path: String(value.path || "").slice(0, 200),
+    ...(value.ok === true
+      ? {}
+      : {
+          ...(value.error_kind
+            ? { error_kind: String(value.error_kind).slice(0, 80) }
+            : {}),
+          ...(value.missing
+            ? { missing: String(value.missing).slice(0, 80) }
+            : {}),
+          error: String(value.error || "unavailable").slice(0, 150),
+        }),
+  };
 }
 async function getChatCursor(e: Env, groupId: string) {
   const key = "chat_cursor:" + groupId;
@@ -360,6 +383,7 @@ async function receive(r: Request, e: Env) {
       JSON.stringify(
         promptData({
           direct,
+          memberRole: String(m.author.member_role || ""),
           attachments: m.attachments || [],
           senderName: m.author.username || "",
           forwarded: m.msg_elements || [],
@@ -405,6 +429,11 @@ async function receive(r: Request, e: Env) {
     const candidates = ib.media.map((media: any, idx: number) => ({media, idx})).filter(({media}: any) => looksLikeSticker(media, !!withoutFaces(text).trim(), hasFace(text))).slice(0,2);
     if (candidates.length && (await setting(e, "off:sticker_collect")) !== "1")
       for (const {media, idx} of candidates) await job(e, "sticker-"+m.id+"-"+idx, "sticker", {url:media.url,sender:ib.senderId,message:m.id,idx});
+  }
+  // F8-V2: cache inbound images right away; the download runs in the queue, never on this request.
+  if (inserted && ib.media.some((x: any) => x.kind === "image")) {
+    const images = imageCacheEntries(ib.media);
+    if (images.length) await job(e, "image-cache-" + m.id, "image_cache", { group: m.group_openid, message: m.id, images });
   }
   // Video links are read through fetchjobs (subtitles/comments), never as an automatic heavy media job.
   // Audio transcription is deferred to the local X-ASR path; this version starts no local transcription work.
@@ -573,7 +602,7 @@ async function processJob(e: Env, id: string) {
       lease_until=CASE WHEN ${expired} THEN lease_until ELSE ?1 END,
       attempts=CASE WHEN ${expired} THEN attempts ELSE attempts+1 END,
       error=CASE WHEN ${expired} THEN 'expired' ELSE error END
-      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner')
+      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner','docread')
       AND (status='pending' OR (status='running' AND lease_until<?4))
       AND (${expired} OR (attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=?4)) RETURNING *`,
   )
@@ -583,6 +612,7 @@ async function processJob(e: Env, id: string) {
   try {
     const p = JSON.parse(claim.payload);
     (e as any).timingTurn = p.latestId || p.message || (claim.kind === "video_reply" ? p.wait?.slice(3) : undefined);
+    if (claim.kind === "image_cache") await cacheMessageImages(e, p);
     if (claim.kind === "discussion") {
       for (const m of p.messages || [])
         await e.DB.prepare("UPDATE messages SET processed=0 WHERE id=?")
@@ -590,24 +620,31 @@ async function processJob(e: Env, id: string) {
           .run();
     }
     if (claim.kind === "dream") {
-      if (p.messageIds?.length)
-        p.messages = (
-          await e.DB.prepare(
+      if (p.messageIds?.length) {
+        // D1 accepts at most 100 bound parameters per statement; a paid-tier night
+        // batch is 120 messages, so read and mark them in chunks.
+        const loaded: any[] = [];
+        for (const part of chunks(p.messageIds)) {
+          const result = await e.DB.prepare(
             "SELECT id,group_id,sender,substr(body,1,3000) AS body,ts FROM messages WHERE id IN (" +
-              p.messageIds.map(() => "?").join(",") +
-              ") ORDER BY ts",
+              part.map(() => "?").join(",") +
+              ")",
           )
-            .bind(...p.messageIds)
-            .all()
-        ).results;
+            .bind(...part)
+            .all();
+          loaded.push(...result.results);
+        }
+        p.messages = loaded.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+      }
       await analyse(e, p, semanticServices(e));
-      if (p.messages?.length)
+      const done = (p.messages || []).map((m: any) => m.id);
+      for (const part of chunks(done))
         await e.DB.prepare(
           "UPDATE messages SET processed=1 WHERE id IN (" +
-            p.messages.map(() => "?").join(",") +
+            part.map(() => "?").join(",") +
             ")",
         )
-          .bind(...p.messages.map((m: any) => m.id))
+          .bind(...part)
           .run();
     }
     if (claim.kind === "ci_triage") {
@@ -805,7 +842,7 @@ async function processJob(e: Env, id: string) {
         : [];
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
-        const imageOutcomes = await annotateTurn(e, cold, TEAM.vision?.turn_deadline_ms ?? 12000);
+        const imageOutcomes = await annotateTurn(e, cold);
         await job(e, p.voiceResume ? id + ":vision" : "chat-v-" + m.id, "chat", { ...(p.voiceResume ? p : {}), message: m.id, annotated: true, imageOutcomes });
         await e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE id=?").bind(id).run();
         return;
@@ -1014,13 +1051,13 @@ async function processJob(e: Env, id: string) {
       const payload = JSON.parse(claim.payload);
       const ids =
         payload.messageIds || (payload.messages || []).map((m: any) => m.id);
-      if (ids.length)
+      for (const part of chunks(ids))
         await e.DB.prepare(
           "UPDATE messages SET processed=-1 WHERE processed=0 AND id IN (" +
-            ids.map(() => "?").join(",") +
+            part.map(() => "?").join(",") +
             ")",
         )
-          .bind(...ids)
+          .bind(...part)
           .run();
     }
     if (claim.attempts >= 3)
@@ -1328,7 +1365,7 @@ async function scheduled(e: Env, cron = "") {
     .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner','docread') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1377,7 +1414,7 @@ async function scheduled(e: Env, cron = "") {
       .bind(Date.now() - 30 * 86400000)
       .run();
     await e.DB.prepare(
-      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
+      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner','docread') AND created_at<?",
     )
       .bind(Date.now() - 7 * 86400000)
       .run();
@@ -1405,6 +1442,8 @@ async function scheduled(e: Env, cron = "") {
   // Guarantee cheap discovery before the sender and optional extras spend the
   // remaining budget. Schedules and daily repo pruning have already run.
   const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
+  // Keep timing/cache flush capacity while F11 shares the background budget.
+  await sweepFeatureRequests(e, Date.now(), COST.tail);
   await sendOutbox(e, 10);
   // Give scheduled replies first use of the sending budget, then fit each
   // retry/failure to the actual remainder. New notices go out next tick.
@@ -1416,6 +1455,7 @@ async function scheduled(e: Env, cron = "") {
 function requestBodyLimit(r: Request) {
   const path = new URL(r.url).pathname;
   if (r.method === 'POST' && path === '/api/team/stickers') return 4 * Math.ceil(TEAM.stickers.max_bytes / 3) + 1024;
+  if (r.method === 'POST' && path.startsWith('/api/team/feature-requests')) return 16384;
   // Paired with runner/repo_index.py's 900_000-byte JSON batching limit.
   if (r.method === 'POST' && path === '/api/runner/repo_index') return 1048576;
   return 262144;
@@ -1572,6 +1612,8 @@ async function api(r: Request, e: Env) {
 
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
+    if (path.startsWith("/api/runner/doc/") && method === "POST")
+      return docRoute(e, path, await r.json());
     if (path.startsWith("/api/runner/voice/") && method === "POST")
       return voiceRoute(e, path, await r.json());
 
@@ -1586,6 +1628,14 @@ async function api(r: Request, e: Env) {
           at: iso(),
           connected: b.connected === true,
           blocked: String(b.blocked || "").slice(0, 150),
+          tools:
+            b.tools && typeof b.tools === "object"
+              ? {
+                  ffmpeg: gatewayTool(b.tools.ffmpeg),
+                  ffprobe: gatewayTool(b.tools.ffprobe),
+                  silk: gatewayTool(b.tools.silk),
+                }
+              : null,
         }),
       );
       return json({ ok: true, voice: await voiceAvailable(e) });
@@ -2070,6 +2120,8 @@ async function api(r: Request, e: Env) {
       403,
     );
   if (path === "/api/team/ai-tokens") return tokenRoute(r, e, who);
+  const fr = await featureRequestRoute(r, e, who, path, method);
+  if (fr) return fr;
   if (path === "/api/team/tasks" && method === "GET")
     return listTasks(e, u, who);
   if (path === "/api/team/task/claim" && method === "POST")
@@ -2756,18 +2808,12 @@ export default {
     }
   },
   async queue(batch: any, e: Env) {
-    const base = e;
-    const limit = queueLimit(batch?.queue);
-    e = metered(base, limit);
-    for (let i = 0; i < batch.messages.length; i++) {
-      const m = batch.messages[i];
-      e = metered(base, limit);
-      await processJob(e, m.body.id);
-      if (i < batch.messages.length - 1) await flushTail(e);
-      m.ack();
-    }
-    await sendOutbox(e);
-    await flushTail(e);
+    return runQueueBatch(
+      batch,
+      e,
+      (scoped: any, id: string) => processJob(scoped, id),
+      (scoped: any) => sendOutbox(scoped),
+    );
   },
   async scheduled(c: any, e: Env, ctx: any) {
     e = metered(e, D1_BUDGET.background);

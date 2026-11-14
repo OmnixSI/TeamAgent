@@ -157,7 +157,7 @@
       "tools": [
         "generate_image"
       ],
-      "how": "成员明确要求时 generate_image 先查每人/每群 24 小时滚动额度，再把描述发给 OpenAI 图片接口，拿到 b64 图片存进 D1，经 QQ 富媒体接口上传并发送；被内容安全拒绝会如实告知，每人每天限 5 张。",
+      "how": "默认关闭；off:image_gen=1 时 generate_image 直接不可用，额度回答也不列生图行。管理员开启后，成员明确要求时 generate_image 先查每人/每群 24 小时滚动额度，再把描述发给 OpenAI 图片接口，拿到 b64 图片存进 D1，经 QQ 富媒体接口上传并发送；被内容安全拒绝会如实告知，每人每天限 5 张。",
       "files": [
         {
           "path": "src/tools/generate-image.ts",
@@ -203,7 +203,7 @@
         "file": "src/tools/generate-image.ts",
         "pattern": "DEFAULT_USER_DAILY = (\\d+)"
       },
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "image_vision",
@@ -218,7 +218,7 @@
         "表情包识别"
       ],
       "tools": [],
-      "how": "群里发来的图片由 vision.ts 下载并限流，交给 Cloudflare Workers AI 的 llama-3.2-11b-vision-instruct 只描述看得见的内容，结果缓存进 D1 并在提示词里作为外部资料带上来源。",
+      "how": "群里发来的图片由 vision.ts 下载并限流，按 vision:provider 选通道：auto（默认）先交给 DeepSeek deepseek-flash 描述（需要 DEEPSEEK_API_KEY，未绑定或调用失败会自动回退），失败再回退 Cloudflare Workers AI 的 llama-3.2-11b-vision-instruct；表情包等低价值图固定先走 Workers AI。结果只描述看得见的内容，缓存进 D1 并作为外部资料带上来源。",
       "files": [
         {
           "path": "src/vision.ts",
@@ -233,7 +233,14 @@
       ],
       "providers": [
         {
-          "role": "图片理解",
+          "role": "图片描述主路",
+          "vendor": "DeepSeek",
+          "file": "src/vision.ts",
+          "host_pattern": "(api\\.deepseek\\.com)/chat/completions",
+          "model_pattern": "DS_VISION_MODEL = \"(deepseek-flash)\""
+        },
+        {
+          "role": "图片理解回退（表情包先走这里）",
           "vendor": "Cloudflare",
           "file": "src/runtime.ts",
           "model_pattern": "(@cf/meta/llama-3\\.2-11b-vision-instruct)"
@@ -258,12 +265,27 @@
         "音频转文字"
       ],
       "tools": [],
-      "how": "QQ 语音消息直接用平台随消息下发的 asr_refer_text 转写；B站视频没有字幕时由本机 media.mjs 下载音轨、ffmpeg 切片后交给本机 X-ASR 转写；云端 DeepSeek /v1/tools/asr 通道已实现（路径与额度在 deepseek-tools.ts），但还没有调用方接入。",
+      "how": "QQ 语音消息优先用平台随消息下发的 asr_refer_text；缺转写时走云端 DeepSeek /v1/tools/asr：ogg/opus 和小 WAV 由 Worker 直接上传，SILK/AMR 或较大的 WAV 由本机 runner 解码（SILK 用 silk-wasm）、ffmpeg 规整成 16 kHz WAV 后上传，云端失败只回文字提示、不转本机。B站无字幕视频的音轨由 runner/media.mjs 交 cloud-asr.mjs 按 100 秒分段调 DeepSeek，失败段回退本机 X-ASR。云端路径受 dstools/ds_asr 开关、每人/每群每日次数和 DeepSeek 每日预算约束。",
       "files": [
         {
           "path": "src/inbound.ts",
           "anchor": "asr_refer_text",
           "role": "读取 QQ 平台下发的语音转写"
+        },
+        {
+          "path": "src/voice-asr.ts",
+          "anchor": "export async function enqueueVoiceJobs",
+          "role": "语音附件排队、云端转写与结果回写"
+        },
+        {
+          "path": "runner/voice.mjs",
+          "anchor": "export async function runVoiceJob",
+          "role": "本机解码 SILK/AMR、规整 WAV 后交云端转写"
+        },
+        {
+          "path": "runner/cloud-asr.mjs",
+          "anchor": "export async function transcribeAudio",
+          "role": "B站音轨分段云端转写，失败回退本机"
         },
         {
           "path": "runner/asr.mjs",
@@ -289,16 +311,16 @@
           "evidence_pattern": "asr_refer_text"
         },
         {
-          "role": "B站音轨的本机转写",
-          "vendor": "X-ASR",
-          "file": "runner/xasr_transcribe.py",
-          "model_pattern": "(X-ASR)"
-        },
-        {
-          "role": "云端语音识别通道（已实现，未接调用）",
+          "role": "QQ 语音与 B站音轨的云端转写",
           "vendor": "DeepSeek",
           "file": "src/deepseek-tools.ts",
           "host_pattern": "(api\\.deepseek\\.com)"
+        },
+        {
+          "role": "B站音轨的云端回退（本机）",
+          "vendor": "X-ASR",
+          "file": "runner/xasr_transcribe.py",
+          "model_pattern": "(X-ASR)"
         }
       ],
       "switches": [],
@@ -319,8 +341,28 @@
         "SILK"
       ],
       "tools": [],
-      "how": "本机 runner/tts.mjs 把回复合成 WAV：edge-tts 是免费主路，DeepSeek /v1/tools/tts 是备用；再由 silk.mjs 转成 QQ 只接受的 SILK，经 qq-voice.mjs 上传并发送。整条链路已在测试里跑通，但还没接进群里的实际发送流程，目前不会主动发语音。",
+      "how": "群里的语音回复由 src/voice.ts 按 voice:mode 判断（默认 auto，可按群覆盖）：auto 只在回复语音消息或成员明确要求时发，always 每条都发，off 不发；要发的回复写进 outbox 的 voice 行，runner/qq-gateway.mjs 每 10 秒拉取，runner/voice-delivery.mjs 逐条交给 tts.mjs 合成——edge-tts 是免费主路，DeepSeek /v1/tools/tts 是备路（需要 DEEPSEEK_API_KEY，受 dstools/ds_tts 开关和额度约束）；合成后由 silk.mjs 转成 QQ 的 SILK，经 qq-voice.mjs 上传发送。代码块、链接、超 300 字和分多条回复保持文字；合成、转码或发送失败回退原文文字。",
       "files": [
+        {
+          "path": "src/voice.ts",
+          "anchor": "export async function enqueueVoice",
+          "role": "按 voice:mode 决定是否发语音并写入 outbox"
+        },
+        {
+          "path": "src/voice-outbox.ts",
+          "anchor": "export async function pullVoiceOutbox",
+          "role": "出站语音队列、领取与记账"
+        },
+        {
+          "path": "runner/qq-gateway.mjs",
+          "anchor": "processVoiceOutbox",
+          "role": "每 10 秒领取待发语音"
+        },
+        {
+          "path": "runner/voice-delivery.mjs",
+          "anchor": "processVoiceOutbox",
+          "role": "逐条发送并回报结果"
+        },
         {
           "path": "runner/tts.mjs",
           "anchor": "出站语音（TTS）",
@@ -357,12 +399,10 @@
         }
       ],
       "switches": [],
-      "requires_env": [
-        "DEEPSEEK_API_KEY"
-      ],
+      "requires_env": [],
       "runs_on": "local",
       "local_component": "runner/tts.mjs",
-      "default_state": "off_by_default"
+      "default_state": "on"
     },
     {
       "id": "web_search",
@@ -381,7 +421,7 @@
         "news_search",
         "web_search"
       ],
-      "how": "search_web 与 web_search 都调 DeepSeek /v1/tools/search 检索公开资料（web_search 返回 title/url/snippet/summary/date/site，回答须逐条引用 url）；news_search 先试 Google News 与 Bing News 的免费 RSS，拿不到再回退 DeepSeek 搜索，结果都按外部资料包起来，不当作指令。",
+      "how": "search_web 与 web_search 都调 DeepSeek /v1/tools/search 检索公开资料（web_search 返回 title/url/snippet/summary/date/site，回答须逐条引用 url；受 dstools/ds_search 开关、每人/每群每日次数和 DeepSeek 每日预算约束）；news_search 先试 Google News 与 Bing News 的免费 RSS，拿不到再回退 DeepSeek 搜索，结果都按外部资料包起来，不当作指令。",
       "files": [
         {
           "path": "src/semantic.ts",
@@ -429,7 +469,7 @@
         "read_web",
         "fetch_page"
       ],
-      "how": "read_web 先用 Jina Reader 抓网页正文，失败或太短再回退 DeepSeek /v1/tools/fetch；fetch_page 直接抓单个公开网页的 Markdown（最多 6000 字，超长标 truncated），B 站/X 走专用读取，内网、localhost、带账号密码和 QQ 内部链接不抓；正文按外部资料包起来，长度和超时都有上限。",
+      "how": "read_web 先用 Jina Reader 抓网页正文，失败或太短再回退 DeepSeek /v1/tools/fetch（回退需要 DEEPSEEK_API_KEY，Jina 本身不需要）；fetch_page 直接抓单个公开网页的 Markdown（最多 6000 字，超长标 truncated），B 站/X 走专用读取，内网、localhost、带账号密码和 QQ 内部链接不抓；正文按外部资料包起来，长度和超时都有上限。",
       "files": [
         {
           "path": "src/semantic.ts",
@@ -462,9 +502,7 @@
         }
       ],
       "switches": [],
-      "requires_env": [
-        "DEEPSEEK_API_KEY"
-      ],
+      "requires_env": [],
       "runs_on": "cloud",
       "default_state": "on"
     },
@@ -542,7 +580,7 @@
       "tools": [
         "read_document"
       ],
-      "how": "read_document 只解析本群成员发来的 PDF/DOCX/XLSX/PPTX/CSV，云端登记任务后由本机 runner/docread.py 在 inputs/ 目录内只读解析，按页码、sheet 和原文回答；扫描件目前没有 OCR 接入（见 ocr 能力）。",
+      "how": "read_document 只解析本群成员发来的 PDF/DOCX/XLSX/PPTX/CSV，云端登记任务后由本机 runner/docread.py 在 inputs/ 目录内只读解析，按页码、sheet 和原文回答；工具开关 docread 关掉时直接不可用，排队读取还要求设置项 docread:enabled 已打开（没打开会明说本机读取端没开启）。PDF 没有文字层（扫描件）时只给提示、不自动 OCR；要读扫描件可以把页面截图发到群里用 read_image_text 识别。",
       "files": [
         {
           "path": "src/tools/read-document.ts",
@@ -569,7 +607,7 @@
       "requires_env": [],
       "runs_on": "both",
       "local_component": "runner/docread.py",
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "ocr",
@@ -584,7 +622,7 @@
       "tools": [
         "read_image_text"
       ],
-      "how": "read_image_text 从本群图片通道取图（域名校验、重定向与大小上限同看图），调云端 DeepSeek /v1/tools/ocr 做文字识别；结果异常（finish_reason=length、超过 8000 字、重复刷屏、字符多样性过低）时回退现有看图模型 vision 的描述通道；输出按外部资料处理。",
+      "how": "read_image_text 从本群图片通道取图（域名校验、重定向与大小上限同看图），调云端 DeepSeek /v1/tools/ocr 做文字识别（受 dstools/ds_ocr 开关、每人/每群每日额度和 DeepSeek 每日预算约束）；结果异常（finish_reason=length、超过 8000 字、重复刷屏、字符多样性过低）时回退看图通道 vision 的描述；输出按外部资料处理。",
       "files": [
         {
           "path": "src/tools/read-image-text.ts",
@@ -979,6 +1017,44 @@
       "default_state": "on"
     },
     {
+      "id": "feature_request",
+      "title": "功能需求登记与开发接力",
+      "aliases": [
+        "提需求",
+        "加功能",
+        "自动开发",
+        "request_feature"
+      ],
+      "tools": [
+        "request_feature"
+      ],
+      "how": "成员直接 @ 提出功能或行为需求，request_feature 只登记到独立于聊天任务的 D1 feature_request 表，由工作室领取、报告上线并回复原消息；敏感需求和非授权成员需求需要管理员确认，proposal 只出方案，绝不自动批准。",
+      "files": [
+        {
+          "path": "src/feature-request.ts",
+          "anchor": "export async function createRequest",
+          "role": "需求登记、风险分级与原子限额"
+        },
+        {
+          "path": "src/feature-request-api.ts",
+          "anchor": "export async function featureRequestRoute",
+          "role": "工作室领取、人工确认与上线回执"
+        },
+        {
+          "path": "scripts/fr-pull.mjs",
+          "anchor": "#!/usr/bin/env node",
+          "role": "工作室拉单入口"
+        }
+      ],
+      "providers": [],
+      "switches": [
+        "feature_request"
+      ],
+      "requires_env": [],
+      "runs_on": "both",
+      "default_state": "on"
+    },
+    {
       "id": "tasks",
       "title": "任务与本机执行",
       "aliases": [
@@ -1136,6 +1212,55 @@
       "requires_env": [],
       "runs_on": "cloud",
       "default_state": "on"
+    },
+    {
+      "id": "quota",
+      "title": "额度自知（余额与每日用量）",
+      "aliases": [
+        "额度",
+        "余额",
+        "还剩多少",
+        "今天用了多少",
+        "quota",
+        "get_quota"
+      ],
+      "tools": [
+        "get_quota"
+      ],
+      "how": "被问额度时 get_quota 读 DeepSeek 余额接口（D1 缓存十分钟）、ds_usage 的今天/本月次数与估算花费、openai_usage 的每日预算闸门（团队自设，不是 OpenAI 账户余额）、生图开放后的生图每日限额和 Workers AI 的 UTC 日 neurons；每次真实取数后把纯数字快照（含赠送/充值余额）写进 settings 的 quota:last_snapshot，并在回答里加一行「较上次」的余额、赠送/充值余额、调用/neurons 变化（首次说第一次记录，缓存命中不覆盖快照）；群里任何成员问都给具体余额和较上次变化，不用 @。低于 ¥10 或不足 3 天用量时，每天 08:00 写一行进开发室晨报，不发群。",
+      "files": [
+        {
+          "path": "src/quota.ts",
+          "anchor": "export async function renderQuota",
+          "role": "额度读取、缓存、分档与晨报行"
+        },
+        {
+          "path": "src/tools/quota.ts",
+          "anchor": "export const getQuotaTool",
+          "role": "工具入口"
+        },
+        {
+          "path": "scripts/review-pull.mjs",
+          "anchor": "export function buildMorningReport",
+          "role": "开发室晨报带额度行"
+        }
+      ],
+      "providers": [
+        {
+          "role": "余额查询",
+          "vendor": "DeepSeek",
+          "file": "src/quota.ts",
+          "host_pattern": "(api\\.deepseek\\.com)"
+        }
+      ],
+      "switches": [
+        "get_quota"
+      ],
+      "requires_env": [
+        "DEEPSEEK_API_KEY"
+      ],
+      "runs_on": "cloud",
+      "default_state": "on"
     }
   ],
   "vendors": [
@@ -1207,6 +1332,7 @@
     "src/inbound.ts": "QQ 事件解析：消息、附件、语音转写、卡片与引用",
     "src/fetchjobs.ts": "视频/链接任务识别与等待",
     "src/mediajobs.ts": "视频素材与音轨转写写回",
+    "src/docjobs.ts": "文档读取作业的云端端点：领取、租约与回写",
     "src/vision.ts": "图片下载、限流、描述与缓存",
     "src/voice.ts": "按人格生成回复文本、分条与表情",
     "src/stickers.ts": "表情收集、标签与 QQ 富媒体发送",
@@ -1218,6 +1344,7 @@
     "runner/bridge.py": "本机任务桥：租约、上下文回填、仓库索引",
     "runner/execute.py": "本机执行入口（dsh/CLI）",
     "runner/docread.py": "本机文档解析（PDF/DOCX/XLSX/PPTX/CSV）",
+    "runner/docread-job.mjs": "本机文档读取作业：下载、调用 docread.py 与回写",
     "runner/asr.mjs": "本机 X-ASR 适配器",
     "runner/tts.mjs": "出站语音合成（edge-tts / DeepSeek）",
     "runner/silk.mjs": "WAV 转 SILK",

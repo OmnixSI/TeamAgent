@@ -12,7 +12,7 @@ export async function pullVoiceOutbox(e:any) {
     WHERE o.status='voice' ORDER BY o.created_at LIMIT 2`).all()).results;
   const items:any[]=[];
   for (const o of rows) {
-    if (!o.ts || !(Date.now()-Date.parse(o.ts)<240000)) {
+    if (o.msg_id && (!o.ts || !(Date.now()-Date.parse(o.ts)<240000))) {
       await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='voice'").bind(o.id).run();continue;
     }
     // Persist the attempt before the claim, so a crash never leaves a claim
@@ -28,7 +28,7 @@ export async function pullVoiceOutbox(e:any) {
         e.DB.prepare("UPDATE outbox_attempts SET code=? WHERE id=?").bind('voice:'+('error_kind' in guard?guard.error_kind:'quota'),o.id),
       ]);continue;
     }
-    items.push({id:o.id,group_id:o.group_id,text:o.body,msg_id:o.msg_id,msg_seq:messageSequence(o.id),expires_at:Date.parse(o.ts)+240000,cfg:{...meta.cfg,enabled:true}});
+    items.push({id:o.id,group_id:o.group_id,text:o.body,msg_id:o.msg_id,msg_seq:messageSequence(o.id),expires_at:o.msg_id?Date.parse(o.ts)+240000:undefined,cfg:{...meta.cfg,enabled:true}});
   }
   return {items};
 }
@@ -44,7 +44,7 @@ export async function reportVoice(e:any,b:any):Promise<Response> {
   const price = row.price != null && Number.isFinite(rawPrice) && rawPrice >= 0 ? rawPrice : DS_PRICES.tts_micro_usd_per_10k_chars;
   const latency = Math.max(0,Math.min(240000,Math.round(Number(b.latency_ms)||0)));
   const ttsOk = b.status === 'sent' && b.via === 'voice';
-  const errorKind = ttsOk ? null : ['quota','auth','timeout','unsupported','too_large','refused','denied'].includes(b.reason) ? b.reason : 'upstream';
+  const errorKind = ttsOk ? null : ['quota','auth','timeout','unsupported','too_large','refused','denied','tool_missing'].includes(b.reason) ? b.reason : 'upstream';
   const via = b.via==='voice'?'voice':b.via==='text'?'text':'unknown';
   const active = "EXISTS(SELECT 1 FROM outbox WHERE id=? AND status='voice_sending')";
   // D1 batch is transactional. Audit, billing and terminal state either all

@@ -39,8 +39,8 @@ export function validateTeamConfig(c) {
     "memory.batches_per_night",
   );
   check(
-    integer(c?.memory?.messages_per_batch, 1, 60),
-    "memory.messages_per_batch <= 60 (D1 budget)",
+    integer(c?.memory?.messages_per_batch, 1, 120),
+    "memory.messages_per_batch <= 120 (D1 budget)",
   );
   check(typeof c?.scout?.enabled === "boolean", "scout.enabled");
   check(
@@ -119,7 +119,7 @@ export function validateTeamConfig(c) {
   check(c?.rhythm?.wait_min <= c?.rhythm?.wait_max, "rhythm.wait_min <= wait_max");
   for (const key of ['enabled','collect','send_gif']) check(typeof c?.stickers?.[key] === 'boolean', 'stickers.'+key);
   // send is deliberately fail-closed at runtime: only literal true enables it.
-  for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
+  for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:5000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
   for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
   // schedules：定时推送上限与晨报窗口（L1/L5 读；缺省即拒绝启动，避免无上限）
   const s = c?.schedules;
@@ -131,6 +131,14 @@ export function validateTeamConfig(c) {
   check(dayCap && integer(s?.max_sends_per_group_day, 1, 50) && s.max_sends_day >= s.max_sends_per_group_day, 'schedules.max_sends_day');
   const clock = (x) => typeof x === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(x);
   check(Array.isArray(s?.report_window) && s.report_window.length === 2 && s.report_window.every(clock) && s.report_window[0] < s.report_window[1], 'schedules.report_window');
+  if (c?.feature_requests !== undefined) {
+    const fr = c.feature_requests;
+    const ok = fr && typeof fr === 'object' && !Array.isArray(fr);
+    check(ok && typeof fr.enabled === 'boolean', 'feature_requests.enabled');
+    check(ok && Array.isArray(fr.auto_senders) && fr.auto_senders.every(x => typeof x === 'string' && x.trim().length > 0), 'feature_requests.auto_senders');
+    for (const key of ['daily_auto_cap','daily_cap_per_sender','group_daily_cap','max_developing','lease_hours','stale_hours','quote_max','title_max','detail_max'])
+      check(ok && integer(fr[key], 1, Number.MAX_SAFE_INTEGER), 'feature_requests.'+key);
+  }
   errors.push(...validateMcpServers(c?.mcp_servers));
   return errors;
 }

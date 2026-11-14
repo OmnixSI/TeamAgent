@@ -1,9 +1,11 @@
 // WAV -> SILK (QQ voice) conversion. The QQ voice upload API only accepts SILK
 // (file_type=3), while both edge-tts and DeepSeek TTS hand us WAV.
 //
-// silk-wasm is MIT licensed and pinned to 3.7.1; the lead installs it into the
-// runner dependencies. It is imported lazily inside the call so the rest of the
-// gateway keeps working (text fallback) on machines without it.
+// silk-wasm is MIT licensed and pinned to 3.7.1 in runner/package.json;
+// install-local.py installs that manifest into ~/.inkboard-team and the
+// gateway preflights the package, so a missing dependency is visible in health.
+// It is imported lazily inside the call so the rest of the gateway keeps
+// working (text fallback) on machines without it.
 //
 // Why ffmpeg normalisation is mandatory: DeepSeek returns a sizeable WAV whose
 // RIFF chunk length does not match the file size. silk-wasm validates that
@@ -13,6 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "./asr.mjs";
+import { ffmpegToolchain, requireTool } from "./toolchain.mjs";
 
 export const SILK_MAGIC = "#!SILK_V3";
 export const SILK_SAMPLE_RATE = 24000;
@@ -44,14 +47,61 @@ export function isSilkData(data) {
   return head.startsWith(SILK_MAGIC) || head.startsWith("\u0002" + SILK_MAGIC);
 }
 
-/** Lazy load, injectable for tests; a missing package is a normal state. */
-export async function loadSilkModule(deps = {}) {
-  if (deps.loadSilk) return deps.loadSilk();
+export const SILK_PACKAGE = "silk-wasm";
+export const SILK_MISSING = "tts_silk_missing";
+
+const silkMissingFault = (error) =>
+  Object.assign(
+    Error(
+      "silk-wasm unavailable" +
+        (error ? ": " + (error.code || error.message || "import failed") : ""),
+    ),
+    { reason: SILK_MISSING, missing: SILK_PACKAGE, cause: error },
+  );
+
+/**
+ * Startup preflight: load the encoder without throwing, so the gateway can
+ * report a missing package in its health beat instead of failing silently.
+ */
+export async function silkToolchain(deps = {}) {
+  let module;
   try {
-    return await import("silk-wasm");
-  } catch {
-    return null;
+    module = deps.loadSilk ? await deps.loadSilk() : await import(SILK_PACKAGE);
+  } catch (error) {
+    return {
+      ok: false,
+      path: null,
+      error_kind: SILK_MISSING,
+      missing: SILK_PACKAGE,
+      error:
+        "silk-wasm 未安装或无法加载：" +
+        (error?.code || error?.message || "import failed"),
+    };
   }
+  if (!module || typeof module.encode !== "function" || typeof module.decode !== "function")
+    return {
+      ok: false,
+      path: null,
+      error_kind: SILK_MISSING,
+      missing: SILK_PACKAGE,
+      error: "silk-wasm 已安装但缺少 encode()/decode()",
+    };
+  return { ok: true, path: SILK_PACKAGE, error_kind: "" };
+}
+
+/**
+ * Load silk-wasm for one conversion. A missing package throws a fault with
+ * reason=tts_silk_missing, so callers label the fallback instead of degrading.
+ */
+export async function loadSilkModule(deps = {}) {
+  let module;
+  try {
+    module = deps.loadSilk ? await deps.loadSilk() : await import(SILK_PACKAGE);
+  } catch (error) {
+    throw silkMissingFault(error);
+  }
+  if (!module) throw silkMissingFault();
+  return module;
 }
 
 const FFMPEG_NORMALIZE = (src, dst) => [
@@ -93,24 +143,40 @@ export async function wavToSilk(wavPath, opts = {}, deps = {}) {
   if (stat.size > SILK_MAX_WAV_BYTES)
     return fail("too_large", "音频文件过大，无法转换成语音");
 
-  const silk = await loadSilkModule(deps);
-  if (!silk || typeof silk.encode !== "function")
-    return fail("tool_not_ready", "本机未安装 silk-wasm，语音先回退文字", {
-      missing: "silk-wasm",
+  let silk;
+  try {
+    silk = await loadSilkModule(deps);
+  } catch (error) {
+    return fail(SILK_MISSING, "本机未安装 silk-wasm（tts_silk_missing），语音先回退文字", {
+      missing: SILK_PACKAGE,
+      error: error?.message || "import failed",
+    });
+  }
+  if (typeof silk.encode !== "function")
+    return fail(SILK_MISSING, "silk-wasm 缺少 encode()（tts_silk_missing），语音先回退文字", {
+      missing: SILK_PACKAGE,
     });
 
   const timeoutMs = Number.isFinite(opts.timeoutMs)
     ? Math.max(1000, Math.min(opts.timeoutMs, 60_000))
     : SILK_DEFAULT_TIMEOUT_MS;
   const run = deps.runCommand || runCommand;
+  let bin;
+  try {
+    bin = requireTool(ffmpegToolchain(deps), "silk_tool_missing");
+  } catch {
+    return fail("tool_missing", "本机缺少 ffmpeg，无法转换成语音", {
+      missing: "ffmpeg",
+    });
+  }
   let work = null;
   try {
     work = fs.mkdtempSync(path.join(opts.tmpDir || os.tmpdir(), "f9ds-silk-"));
     const normalized = path.join(work, "normalized.wav");
     const audio = await run(
-      "ffmpeg",
+      bin,
       FFMPEG_NORMALIZE(wavPath, normalized),
-      { timeoutMs, timeoutReason: "silk_timeout" },
+      { timeoutMs, timeoutReason: "silk_timeout", missingReason: "silk_tool_missing" },
       deps,
     );
     if (audio?.code !== 0) return fail("invalid_audio", "音频无法解码成 24 kHz 单声道 WAV");
@@ -150,9 +216,19 @@ export async function wavToSilk(wavPath, opts = {}, deps = {}) {
 export async function decodeSilkToWav(silkData, opts = {}, deps = {}) {
   const data = asBytes(silkData);
   if (!data?.length) return fail("invalid_audio", "SILK 数据是空的");
-  const silk = await loadSilkModule(deps);
-  if (!silk || typeof silk.decode !== "function")
-    return fail("tool_not_ready", "本机未安装 silk-wasm，无法解码 SILK");
+  let silk;
+  try {
+    silk = await loadSilkModule(deps);
+  } catch (error) {
+    return fail("asr_silk_missing", "本机未安装 silk-wasm（asr_silk_missing），无法解码 SILK", {
+      missing: SILK_PACKAGE,
+      error: error?.message || "import failed",
+    });
+  }
+  if (typeof silk.decode !== "function")
+    return fail("asr_silk_missing", "silk-wasm 缺少 decode()（asr_silk_missing），无法解码 SILK", {
+      missing: SILK_PACKAGE,
+    });
   const sampleRate = Number(opts.sampleRate) || SILK_SAMPLE_RATE;
   try {
     const decoded = await silk.decode(new Uint8Array(data), sampleRate);

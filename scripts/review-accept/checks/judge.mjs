@@ -34,14 +34,14 @@ function synthTrace(patch = {}) {
   const base = {
     id, group_id: "g", kind: "inbound", inbound, context_before: [], after: [],
     replies: [{ outbox_id: "o1", body: "我会每天总结仓库变化。", status: "sent", at: 1000, link: "reply_to" }],
-    tools: [], tools_offered: { names: ["repo_changes"], catalog_version: "cat-v1", switches: { "off:repo_tools": "off" }, runner_ok: 1, turn_id: "turn-1" },
+    tools: [], tools_offered: { names: ["repo_changes"], catalog_version: "cat-v2", switches: { "off:repo_tools": "off" }, runner_ok: 1, turn_id: "turn-1" },
     snapshot_ref: { health_at: 1000, gateway_ok: 1, runner_ok: 1 }, has_image: false, signals: ["S3"],
   };
   return { ...base, ...patch, inbound: { ...inbound, ...(patch.inbound || {}) } };
 }
 const SNAP = () => ({
   at: 1000, switches: { "off:repo_tools": "off" }, runner: { seen_age_s: 0, ok_ratio_24h: 1 },
-  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: "cat-v1", release: "test",
+  gateway: { ok_ratio_24h: 1 }, repo: [], jobs_24h: [], tools_catalog: [], catalog_version: "cat-v2", release: "test",
 });
 function verdict(trace, patch = {}) {
   return {
@@ -250,7 +250,7 @@ export async function vdRCap(ctx) {
     return got;
   };
   // (1) Historically enabled repo_tools must not be judged as switch_or_policy_off.
-  const enabled = synthTrace({ tools_offered: { names: ["repo_changes"], catalog_version: "cat-v1", switches: { "off:repo_tools": "off" }, runner_ok: 1, turn_id: "turn-1" } });
+  const enabled = synthTrace({ tools_offered: { names: ["repo_changes"], catalog_version: "cat-v2", switches: { "off:repo_tools": "off" }, runner_ok: 1, turn_id: "turn-1" } });
   let got = accept(enabled, { gap_type: "tool_missing" }, "enabled");
   equal(got.verdicts[0].gap_type, "tool_not_selected", "offered but not called");
   enabled.tools_offered.switches["off:repo_tools"] = "on";

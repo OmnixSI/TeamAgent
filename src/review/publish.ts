@@ -28,6 +28,16 @@ function dayBounds(date: string): { start: number; end: number } {
   return { start, end: start + 86400000 };
 }
 
+/** A-quota: one developer-room line written by the main Worker's daily job. */
+function morningQuota(value: any): { at: number; line: string } | null {
+  const parsed = parse(value, null);
+  if (!parsed || typeof parsed.line !== 'string') return null;
+  const line = parsed.line.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const at = Number(parsed.at);
+  if (!line || !Number.isFinite(at)) return null;
+  return { at, line };
+}
+
 type Grouped = {
   fingerprint: string; severity: string; fix_layer: string; findings: Row[];
   evidence: any[]; allSingle: boolean; what_happened: string; expected: string;
@@ -145,6 +155,8 @@ export type Digest = {
   findings: { total: number; p0: number; p1: number; p2: number };
   schedules: { date: string; items: any[]; counts: { ok: number; late: number; skipped: number; failed: number; pending: number } };
   learnings: { items: any[]; proposed: number; asked: number; applied: number };
+  /** A-quota: developer-room line from quota:morning; null when absent. */
+  quota: { at: number; line: string } | null;
 };
 
 const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
@@ -205,6 +217,9 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
   const learnings = runIds.length && await table('review_learnings') ? await reviewRead<Row>(ctx,
     'SELECT * FROM review_learnings WHERE run_id IN (SELECT value FROM json_each(?)) ORDER BY created_at,id',
     [JSON.stringify(runIds)]) : [];
+  const [quotaRow] = await reviewRead<Row>(ctx,
+    'SELECT value FROM settings WHERE key=?', ['quota:morning']);
+  const quota = morningQuota(quotaRow?.value);
 
   const counts = { p0: 0, p1: 0, p2: 0 };
   const agreement = { agree: 0, disagree: 0, single: 0, pending: 0, rate: null as number | null };
@@ -330,5 +345,6 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
       asked: learnings.filter(row => row.status === 'asked').length,
       applied: learnings.filter(row => row.status === 'applied').length,
     },
+    quota,
   };
 }

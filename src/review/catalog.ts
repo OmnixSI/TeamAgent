@@ -5,13 +5,13 @@
 import type { Snapshot } from "./types";
 
 // 目录内容变了就递增；快照和 turn_offers 都写它（amendments-v2 D-2）。
-export const CATALOG_VERSION = "cat-v1";
+export const CATALOG_VERSION = "cat-v2";
 
 export type CatalogTool = Snapshot["tools_catalog"][number];
 export type ToolNeed = CatalogTool["needs"][number];
 
 // readonly 与 src/authz.ts 的 WRITE_TOOLS 相反：写工具只有 create_file_task / prepare_project_task /
-// remember_correction 三个。repo_* 一律 readonly，C8 的判定就靠这个字段（design 第 317 行）。
+// remember_correction / request_feature。repo_* 一律 readonly，C8 的判定就靠这个字段（design 第 317 行）。
 // needs 只标工具真正跑不起来缺的东西：私人仓库要 github_token，repo_* 还受 off:repo_tools 开关约束。
 // runner 只影响本机索引新鲜度（快照 repo.cache_age_s），归 data_stale_or_coverage，不算 capability_offline。
 export const TOOLS_CATALOG: CatalogTool[] = [
@@ -20,9 +20,14 @@ export const TOOLS_CATALOG: CatalogTool[] = [
   { name: "recall_memory", readonly: true, needs: [] },
   { name: "create_file_task", readonly: false, needs: ["runner"] },
   { name: "prepare_project_task", readonly: false, needs: [] },
+  { name: "request_feature", readonly: false, needs: ["switch"] },
   { name: "search_web", readonly: true, needs: [] },
   { name: "read_web", readonly: true, needs: [] },
   { name: "get_project", readonly: true, needs: [] },
+  // A-quota: read-only, no external need. Its presence does not change any C8
+  // verdict, so CATALOG_VERSION stays cat-v1 (bumping would mark every stored
+  // turn_offer as unknown).
+  { name: "get_quota", readonly: true, needs: [] },
   { name: "repo_changes", readonly: true, needs: ["github_token", "switch"] },
   { name: "repo_commit", readonly: true, needs: ["github_token", "switch"] },
   { name: "repo_file", readonly: true, needs: ["github_token", "switch"] },

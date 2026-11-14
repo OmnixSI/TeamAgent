@@ -34,18 +34,22 @@ const EXTRA_SUFFIX = "（各只读/需明确要求）";
 
 /** Switch name (without the off: prefix) -> tool names it gates. */
 const TOOL_SWITCHES: Record<string, readonly string[]> = {
+  feature_request: ["request_feature"],
   repo_tools: ["repo_changes", "repo_commit", "repo_file"],
   generate_image: ["generate_image"],
+  image_gen: ["generate_image"],
   openai: ["generate_image"],
 };
 
 /** Card wording that must not depend on the registered tool description. */
 const DESC_OVERRIDES: Record<string, string> = {
+  request_feature: "提需求：被 @ 说『你应该加个…』会自动记下，做好上线后回复原消息",
   generate_image: "按你给的描述生成一张图并发到群里",
 };
 
 /** Constraint half of each row: what the tool cannot do, or what it needs. */
 const LIMITS: Record<string, string> = {
+  request_feature: "只立项，敏感需求需管理员确认",
   get_work_status: "只读",
   recall_memory: "只读",
   get_project: "只读",

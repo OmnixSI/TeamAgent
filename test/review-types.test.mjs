@@ -88,7 +88,7 @@ test('tools catalog marks every repo_* tool readonly and only write tools writab
   assert.deepEqual(tools.map(t => t.name).filter(n => /^repo_/.test(n)).sort(),
     ['repo_changes', 'repo_commit', 'repo_file']);
   assert.deepEqual(tools.filter(t => !t.readonly).map(t => t.name).sort(),
-    ['create_file_task', 'prepare_project_task', 'remember_correction']);
+    ['create_file_task', 'prepare_project_task', 'remember_correction', 'request_feature']);
   const allowed = new Set(['runner', 'github_token', 'switch']);
   for (const tool of tools) {
     assert.ok(Array.isArray(tool.needs), `${tool.name} needs must be an array`);
@@ -143,6 +143,6 @@ test('v2 enum snapshots, CATALOG_VERSION and migrate.mjs list include 0008', () 
   assert.deepEqual([...types.AGREEMENT], ['agree','disagree','single','pending']);
   assert.deepEqual([...types.FINDING_STATUS], ['open','disputed','accepted','rejected','fixed','wontfix','regression']);
   assert.deepEqual([...types.MEMORY_CANDIDATE_STATUS], ['candidate','approved','applied','rejected','blocked','conflict','superseded']);
-  assert.equal(catalog.CATALOG_VERSION, 'cat-v1');
+  assert.equal(catalog.CATALOG_VERSION, 'cat-v2');
   assert.match(readFileSync(new URL('../scripts/migrate.mjs', import.meta.url), 'utf8'), /migrations\/0008_review\.sql/);
 });
