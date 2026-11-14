@@ -45,6 +45,11 @@ export function isSwitchOff(live: SelfLive, name: string): boolean {
   return switchOff(live?.switches?.["off:" + name]);
 }
 
+const POSITIVE_GATES: Record<string, string> = { docread: "docread:enabled" };
+function gateOn(live: SelfLive, name: string): boolean | undefined {
+  const key = POSITIVE_GATES[name], value = key ? live?.switches?.[key] : undefined;
+  return key ? value !== undefined && value.length > 0 && value !== "0" && value !== "false" : undefined;
+}
 /** Every env NAME the card says a capability needs (deduplicated, order kept). */
 export function envNames(card: SelfCard): string[] {
   const names = new Set<string>();
@@ -72,7 +77,7 @@ export async function readLive(
       switches[key] = value === undefined || value === null ? "" : String(value);
   } else if (e?.DB?.prepare) {
     const rows = await e.DB.prepare(
-      "SELECT key,value FROM settings WHERE key LIKE 'off:%'",
+      "SELECT key,value FROM settings WHERE key LIKE 'off:%' OR key IN ('docread:enabled')",
     ).all();
     for (const row of rows?.results || []) {
       const key = text(row?.key);
@@ -94,6 +99,8 @@ function explicitlyOn(cap: SelfCapability, live: SelfLive): boolean {
   // off-by-default capability on leaves its switch row explicitly at 0/false;
   // a capability with no switch cannot be turned on this way.
   return (cap.switches || []).some((name) => {
+    const positive = gateOn(live, name);
+    if (positive !== undefined) return positive;
     const value = live?.switches?.["off:" + name];
     return value !== undefined && !switchOff(value);
   });
@@ -108,8 +115,10 @@ export function capabilityState(
   if (off.length) return { state: "switched_off", reason: `开关 ${off.join("、")} 已关闭` };
   const missing = (cap.requires_env || []).filter((name) => !live?.envPresent?.[name]);
   if (missing.length) return { state: "not_configured", reason: `未配置环境变量 ${missing.join("、")}` };
-  if (cap.default_state === "off_by_default" && !explicitlyOn(cap, live))
-    return { state: "off_by_default", reason: "默认关闭，需要管理员显式开启" };
+  if (cap.default_state === "off_by_default" && !explicitlyOn(cap, live)) {
+    const gate = (cap.switches || []).map((name) => POSITIVE_GATES[name]).filter(Boolean)[0];
+    return { state: "off_by_default", reason: gate ? `默认关闭，由 ${gate} 打开` : "默认关闭，需要管理员显式开启" };
+  }
   if (cap.runs_on === "local" || cap.runs_on === "both")
     return { state: "local_unverified", reason: "依赖本机服务，云端无法确认它此刻在线" };
   return { state: "enabled", reason: "已启用" };
@@ -283,10 +292,9 @@ function switches(card: SelfCard, live: SelfLive): string {
   const names = [...new Set((card.capabilities || []).flatMap((cap) => cap.switches || []))];
   if (!names.length) return "卡里没有登记开关。";
   const rows = names.map((name) => {
-    const value = live?.switches?.["off:" + name];
-    return isSwitchOff(live, name)
-      ? `- ${name}：已关闭（off:${name}=${value}）`
-      : `- ${name}：开启${value !== undefined ? `（off:${name}=${value}）` : ""}`;
+    const key = POSITIVE_GATES[name] || "off:" + name, value = live?.switches?.[key];
+    const on = POSITIVE_GATES[name] ? gateOn(live, name) === true : !isSwitchOff(live, name);
+    return `- ${name}：${on ? "开启" : "已关闭"}${value !== undefined ? `（${key}=${value}）` : on ? "" : "（未设置）"}`;
   });
   return ["开关（卡里登记的）：", ...rows].join("\n");
 }

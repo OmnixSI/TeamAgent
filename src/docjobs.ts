@@ -26,13 +26,9 @@ function successBody(r: any, filename: unknown): any {
     truncated: r.truncated === true,
   };
 }
-function failureBody(r: any): any {
-  return {
-    ok: false,
-    error_kind: str(r.error_kind, 40) || "unreadable",
-    error: str(r.error, 500),
-    retryable: r.retryable === true,
-  };
+function noTextWarnings(r: any): boolean {
+  const warnings = Array.isArray(r?.warnings) ? r.warnings.map((w: any) => String(w)) : [];
+  return warnings.some((w: string) => w.includes("没有可提取的文字层") || w.includes("文档没有可读文字"));
 }
 
 /** Claim one pending docread job and put it under a fresh lease. Also retires jobs whose two attempts died. */
@@ -62,7 +58,7 @@ export async function heartbeatDoc(e: any, id: unknown, lease: unknown, now = Da
     .first());
 }
 
-/** Store the extraction under the tool's key and finish the job under the same lease fence. */
+/** Finish a docread job under the lease fence: success goes to media_notes, failure stays on the job. */
 export async function reportDoc(e: any, b: any, now = Date.now()): Promise<Response> {
   if (!b || typeof b.id !== "string" || typeof b.lease !== "string")
     return Response.json({ error: "invalid report" }, { status: 400 });
@@ -73,7 +69,8 @@ export async function reportDoc(e: any, b: any, now = Date.now()): Promise<Respo
   const p = JSON.parse(row.payload);
   if (p.lease !== b.lease) return Response.json({ error: "lease conflict" }, { status: 409 });
   const stored = await e.DB.prepare("SELECT body FROM media_notes WHERE id=?").bind(p.key).first();
-  if ((row.status === "done" || row.status === "failed") && (stored || b.success === false))
+  if (row.status === "done" && stored) return Response.json({ ok: true, already: true });
+  if (row.status === "failed" && (stored || p.failed_at !== undefined))
     return Response.json({ ok: true, already: true });
   if (row.status !== "running" || row.lease_until <= now)
     return Response.json({ error: "lease conflict" }, { status: 409 });
@@ -81,35 +78,43 @@ export async function reportDoc(e: any, b: any, now = Date.now()): Promise<Respo
   const guard =
     "id=? AND kind='docread' AND json_extract(payload,'$.lease')=? AND status='running' AND lease_until>?";
   const args = [b.id, b.lease, now];
-  if (b.success === false) {
-    const reason = str(b.reason, 40) || "runner_failed";
-    await e.DB.prepare("UPDATE jobs SET status='failed',error=? WHERE " + guard).bind(reason, ...args).run();
+  // Failures are not content: keep media_notes for successful extractions only, and let the tool
+  // retry the same question after a cooldown instead of caching a broken read forever.
+  const markFailed = async (errorKind: string, detail: unknown) => {
+    const reason = str(errorKind, 40) || "unreadable";
+    await e.DB.prepare(
+      "UPDATE jobs SET status='failed',error=?,payload=json_set(payload,'$.failed_at',?,'$.failure_detail',?) WHERE " + guard,
+    )
+      .bind(reason, now, str(detail, 300), ...args)
+      .run();
     const committed = await e.DB.prepare(
       "SELECT status FROM jobs WHERE id=? AND json_extract(payload,'$.lease')=? AND status='failed'",
     )
       .bind(b.id, b.lease)
       .first();
     return committed ? Response.json({ ok: true }) : Response.json({ error: "lease conflict" }, { status: 409 });
-  }
-
+  };
+  if (b.success === false) return markFailed(str(b.reason, 40) || "runner_failed", b.reason);
   const r = b.result;
-  const ok = r?.ok === true;
-  if (!r || typeof r !== "object" || (ok ? typeof r.text !== "string" : typeof r.error_kind !== "string"))
-    return Response.json({ error: "invalid result" }, { status: 400 });
-  const body = JSON.stringify(ok ? successBody(r, p.filename) : failureBody(r));
+  if (!r || typeof r !== "object") return Response.json({ error: "invalid result" }, { status: 400 });
+  if (r.ok !== true) return markFailed(str(r.error_kind, 40) || "unreadable", r.error);
+  if (typeof r.text !== "string") return Response.json({ error: "invalid result" }, { status: 400 });
+  if (noTextWarnings(r)) {
+    const warning = list(r.warnings, 30).map((w) => String(w)).find((w) => w.includes("没有可提取的文字层") || w.includes("文档没有可读文字"));
+    return markFailed("no_text", warning || "没有可提取的文字层，可能是扫描件");
+  }
+  const body = JSON.stringify(successBody(r, p.filename));
   if (body.length > MAX_RESULT_BYTES) return Response.json({ error: "result too large" }, { status: 413 });
-  const status = ok ? "done" : "failed";
-  const error = ok ? null : str(r.error_kind, 80) || "unreadable";
   await e.DB.batch([
     e.DB.prepare(
       "INSERT OR REPLACE INTO media_notes SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE " + guard + ")",
     ).bind(p.key, body, new Date(now).toISOString(), ...args),
-    e.DB.prepare("UPDATE jobs SET status=?,error=? WHERE " + guard).bind(status, error, ...args),
+    e.DB.prepare("UPDATE jobs SET status='done',error=NULL WHERE " + guard).bind(...args),
   ]);
   const committed = await e.DB.prepare(
-    "SELECT status FROM jobs WHERE id=? AND json_extract(payload,'$.lease')=? AND status=?",
+    "SELECT status FROM jobs WHERE id=? AND json_extract(payload,'$.lease')=? AND status='done'",
   )
-    .bind(b.id, b.lease, status)
+    .bind(b.id, b.lease)
     .first();
   return committed ? Response.json({ ok: true }) : Response.json({ error: "lease conflict" }, { status: 409 });
 }

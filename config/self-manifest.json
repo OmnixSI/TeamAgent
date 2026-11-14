@@ -569,7 +569,7 @@
       "requires_env": [],
       "runs_on": "both",
       "local_component": "runner/docread.py",
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "ocr",

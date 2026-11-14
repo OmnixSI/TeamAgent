@@ -98,7 +98,9 @@ test("a repeated report is idempotent and a stale lease cannot overwrite evidenc
   assert.match(JSON.parse(note(e, claimed.payload.key).body).text, /12,345\.67/);
 });
 
-test("a parser failure is cached and reported instead of returning pending forever", async () => {
+const payloadOf = (e, id) => JSON.parse(jobRow(e, id).payload);
+
+test("a parser failure is not cached and the same question retries after the cooldown", async () => {
   const e = env(); seed(e);
   const first = await tool.run(e, { question: "金额" }, ctx());
   const claimed = await doc.claimDoc(e);
@@ -106,25 +108,46 @@ test("a parser failure is cached and reported instead of returning pending forev
   assert.equal((await doc.reportDoc(e, { id: claimed.id, lease: claimed.payload.lease, success: true, result: failed })).status, 200);
   assert.equal(jobRow(e, first.job_id).status, "failed");
   assert.equal(jobRow(e, first.job_id).error, "missing_library");
+  assert.equal(e.raw.prepare("SELECT COUNT(*) AS n FROM media_notes").get().n, 0, "a failure is not content");
+  assert.ok(payloadOf(e, first.job_id).failed_at > 0);
+
   const second = await tool.run(e, { question: "金额" }, ctx());
   assert.equal(second.ok, false);
   assert.equal(second.error_kind, "missing_library");
-  assert.match(second.next_action, /不要猜|不能/);
+  assert.match(second.next_action, /10|分钟|不要猜/);
+  assert.equal(jobRow(e, first.job_id).status, "failed", "an immediate retry must not requeue");
+
+  // Simulate the 10-minute cooldown passing, then the library getting fixed.
+  e.raw.prepare("UPDATE jobs SET payload=json_set(payload,'$.failed_at',?) WHERE id=?")
+    .run(Date.now() - 11 * 60 * 1000, first.job_id);
+  const retry = await tool.run(e, { question: "金额" }, ctx());
+  assert.equal(retry.error_kind, "pending");
+  assert.equal(jobRow(e, first.job_id).status, "pending");
+  assert.equal(jobRow(e, first.job_id).attempts, 0);
+  const again = await doc.claimDoc(e);
+  assert.ok(again, "the retried job must be claimable again");
+  assert.equal((await doc.reportDoc(e, { id: again.id, lease: again.payload.lease, success: true, result: parsed })).status, 200);
+  const done = await tool.run(e, { question: "金额" }, ctx());
+  assert.equal(done.ok, true);
+  assert.match(done.text, /12,345\.67/);
 });
 
-test("a scanned PDF with no text layer is returned as no_text, never as a fake read", async () => {
+test("a scanned PDF is recorded as no_text, not cached as a fake read", async () => {
   const e = env(); seed(e);
-  await tool.run(e, { question: "第1页写了什么" }, ctx());
+  const first = await tool.run(e, { question: "第1页写了什么" }, ctx());
   const claimed = await doc.claimDoc(e);
   const scanned = {
     ...parsed, text: "===== 第 1 页 =====\n(空)", pages: [{ page: 1, chars: 0 }], hits: [],
     warnings: ["没有可提取的文字层，可能是扫描件；需要渲染成图片交给视觉模型"],
   };
   assert.equal((await doc.reportDoc(e, { id: claimed.id, lease: claimed.payload.lease, success: true, result: scanned })).status, 200);
+  assert.equal(jobRow(e, first.job_id).status, "failed");
+  assert.equal(jobRow(e, first.job_id).error, "no_text");
+  assert.equal(e.raw.prepare("SELECT COUNT(*) AS n FROM media_notes").get().n, 0);
   const second = await tool.run(e, { question: "第1页写了什么" }, ctx());
   assert.equal(second.ok, false);
   assert.equal(second.error_kind, "no_text");
-  assert.match(second.next_action, /扫描件|OCR|图片/);
+  assert.match(second.next_action, /扫描件|OCR|10|分钟/);
   assert.doesNotMatch(JSON.stringify(second), /\(空\)/);
 });
 
@@ -159,6 +182,7 @@ test("a runner download failure is recorded and surfaced, never left running", a
   assert.equal((await doc.reportDoc(e, report)).status, 200);
   assert.equal(jobRow(e, first.job_id).status, "failed");
   assert.equal(jobRow(e, first.job_id).error, "download_failed");
+  assert.equal(e.raw.prepare("SELECT COUNT(*) AS n FROM media_notes").get().n, 0);
   assert.equal((await doc.reportDoc(e, report)).status, 200, "a repeated failure report is idempotent");
   assert.equal((await doc.reportDoc(e, { ...report, lease: "00000000-0000-4000-8000-000000000000" })).status, 409);
   const second = await tool.run(e, { question: "金额" }, ctx());
@@ -176,4 +200,21 @@ test("a done job whose extraction is missing is requeued instead of pending fore
   const row = jobRow(e, first.job_id);
   assert.equal(row.status, "pending");
   assert.equal(row.attempts, 0);
+});
+
+test("a failed question stops requeueing after three retries", async () => {
+  const e = env(); seed(e);
+  const first = await tool.run(e, { question: "金额" }, ctx());
+  const claimed = await doc.claimDoc(e);
+  const failed = { id: claimed.id, lease: claimed.payload.lease, success: false, reason: "download_failed" };
+  assert.equal((await doc.reportDoc(e, failed)).status, 200);
+  e.raw.prepare("UPDATE jobs SET payload=json_set(json_set(payload,'$.failed_at',?),'$.retries',3) WHERE id=?")
+    .run(Date.now() - 11 * 60 * 1000, first.job_id);
+  const out = await tool.run(e, { question: "金额" }, ctx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error_kind, "download_failed");
+  assert.equal(out.retryable, false);
+  assert.match(out.next_action, /重新发/);
+  assert.equal(jobRow(e, first.job_id).status, "failed");
+  assert.equal(e.raw.prepare("SELECT COUNT(*) AS n FROM jobs").get().n, 1);
 });

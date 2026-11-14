@@ -9,6 +9,8 @@ export const DOC_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx
 export const MAX_DOC_BYTES = 20 * 1024 * 1024;
 export const MAX_QUESTION = 200;
 const MAX_RESULT_TEXT = 24000;
+const FAILED_RETRY_MS = 10 * 60 * 1000;
+const MAX_FAILED_RETRIES = 3;
 
 const MIME_EXTENSION: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -108,7 +110,7 @@ function unreadable(kind: string, detail: unknown, extra: Record<string, any> = 
       : kind === "missing_library"
         ? "让维护者补上 runner 的文档解析依赖后再读；不要猜内容。"
         : "让成员稍后再问或重新发一次文件；不要猜内容。";
-  return fail(kind || "unreadable", `${why}：${text(detail) || kind}。${help}`, {
+  return fail(kind || "unreadable", `${why}${text(detail) ? `：${text(detail)}` : ""}。${help}`, {
     ...(detail ? { detail: text(detail).slice(0, 300) } : {}),
     ...extra,
   });
@@ -219,25 +221,44 @@ export const readDocumentTool: BotTool = {
         filename: chosen.filename,
       });
     }
-    // A job whose runner lease expired is requeued once per ask; a permanent failure is reported as-is.
-    const previous = await e.DB.prepare("SELECT status,error FROM jobs WHERE id=?").bind(jobId).first();
+    // Failed reads are retried after a cooldown, never cached as terminal content.
+    const previous = await e.DB.prepare("SELECT status,error,payload FROM jobs WHERE id=?").bind(jobId).first();
     if (previous?.status === "done") {
       // The job says done but its extraction is gone; run it once more instead of pending forever.
       await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL WHERE id=? AND status='done'")
         .bind(jobId)
         .run();
     } else if (previous?.status === "failed") {
-      if (text(previous.error) === "expired") {
-        await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL WHERE id=? AND status='failed' AND error='expired'")
-          .bind(jobId)
-          .run();
-      } else {
-        return fail(text(previous.error) || "unavailable", "本机读取没有完成（超时或失败）；不要猜内容，让成员稍后再问或重新发一次文件。", {
+      let saved: any = {};
+      try {
+        saved = JSON.parse(previous.payload || "{}");
+      } catch {
+        saved = {};
+      }
+      const failedAt = Number(saved?.failed_at) || 0;
+      const retries = Number(saved?.retries) || 0;
+      const kind = text(previous.error) || "unreadable";
+      const detail = text(saved?.failure_detail);
+      if (retries >= MAX_FAILED_RETRIES) {
+        return fail(kind, `本机读取已重试 ${retries} 次仍未成功${detail ? `：${detail}` : ""}；不要猜内容，让成员重新发一次文件。`, {
+          filename: chosen.filename,
+          job_id: jobId,
+          retryable: false,
+        });
+      }
+      const retryIn = failedAt ? failedAt + FAILED_RETRY_MS - Date.now() : 0;
+      if (retryIn > 0) {
+        const minutes = Math.max(1, Math.ceil(retryIn / 60000));
+        return fail(kind, `上次读取失败${detail ? `：${detail}` : ""}。为避免反复解析，至少 ${minutes} 分钟后再用同一问法重试；不要猜内容。`, {
           filename: chosen.filename,
           job_id: jobId,
           retryable: true,
+          retry_after_ms: retryIn,
         });
       }
+      await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL,payload=json_set(json_remove(payload,'$.failed_at','$.failure_detail'),'$.retries',?) WHERE id=? AND status='failed'")
+        .bind(retries + 1, jobId)
+        .run();
     }
     const payload = {
       message_id: messageId,
