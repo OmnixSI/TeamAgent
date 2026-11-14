@@ -1,6 +1,6 @@
 # D-emoji 回放：真实消息前后对比
 
-来源：online D1 inkboard-team, read-only export 2026-11-14 17:2x Sydney。本地独立库，模型为确定性审查桩（304/475 使用同一张图的线上识图描述；499 的 desc 来自线上 image_notes）。
+来源：online D1 inkboard-team, read-only export 2026-11-14 17:2x Sydney。本地独立库，模型为确定性审查桩（304/475 使用同一张图的线上识图描述；499 的 desc 来自线上 image_notes；480 的 desc 由回放按真实截图人工核对后固定，不是新的 provider 调用）。
 
 | 类别 | rid | 回放前 bot 看到 | 回放后 bot 看到 |
 |---|---|---|---|
@@ -14,9 +14,10 @@
 | 表情包图片 | 499 | {"text":"[图片]","media":["图片：圆形黄色表情，弯弯笑眼，粉色脸颊，嘴角伸出红色舌头；识图来源：deepseek/deepseek-flash"]} | {"text":"[图片]","media":["表情包：圆形黄色表情，弯弯笑眼，粉色脸颊，嘴角伸出红色舌头；表达/梗：调皮、坏笑；识图来源：deepseek/deepseek-flash"],"quoteMedia":[]} |
 | 表情包图片 | 500 | {"text":"[图片]","media":["图片 80×80"]} | {"text":"[图片]","media":["表情包：圆形黄色表情，半睁眼，额头一滴汗；表达/梗：无语、流汗；识图来源：deepseek/deepseek-flash"],"quoteMedia":[]} |
 | 引用图片（kind=unknown） | 518 | {"text":"你个蠢货，这是我现在的表情\n你再看看你明明能读图的","media":["只有下载链接，没有识图结果"]} | {"text":"你个蠢货，这是我现在的表情\n你再看看你明明能读图的","media":[],"quoteMedia":["引用图片：圆形黄色表情，半睁眼，额头一滴汗；表达/梗：无语、流汗；识图来源：deepseek/deepseek-flash"]} |
-| 跨批次补图 | 502 | — | pickImages 回看最近 24 条，取到 4 张：r500、r499、r498、r497 |
+| 普通图片（非表情） | 480 | {"text":"[图片]","media":["图片 1920×1080"]} | {"text":"[图片]","media":["图片：显示器上的 DeepSeek 用量看板：余额 ¥77.66，累计消费 ¥432.84，近30天 ¥400.07、请求 42,911 次、Tokens 76.39 亿；识图来源：deepseek/deepseek-flash"],"quoteMedia":[]} |
+| 跨批次补图 | 502 | — | 回看最近 24 条，取到 4 张：r500、r499、r498、r497；其中已识图 4 张（r497、r498、r499、r500） |
 
-统计：emoji_note 完成 6 个；image_notes 5 条；message_images 7 条。
+统计：emoji_note 完成 3 个；image_notes 6 条；message_images 8 条。
 零写入/零发送：线上 D1 写入 0 行、QQ 真实发送 0 次、Cloudflare API 调用 0 次。
 
 回放前的真实 bot 回复（线上）：

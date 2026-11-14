@@ -178,6 +178,54 @@
    "mentioned": 0
   },
   {
+   "rowid": 480,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT1MHIvIdVdeXSupNfsEMpCwPWWYgYXPxlEVABwA6VUfCPttC0pQcBvOGX.S6S11kZefc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:09:05+08:00",
+   "body": "",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "C91B58130A64D53C8BA6854333321F9C.jpg",
+      "height": 1080,
+      "size": 118358,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSNYul-G2g5BRaIozIfKX7UYeFbjRjWnAcg_woojezXjeaGmAMyBHByb2RQgL2jAVoQS1KluDBF4Clvi1m5znHpm3oCNtaCAQJuag&rkey=CAQSODOc_jvbthUjFHNefzZAHzQjErll6ezAT2nVnCyQGn7uHTgB4H6wlAxrpRoR6DEv72VZypAT_2aT&spec=0",
+      "width": 1920
+     }
+    ],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": false,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_luFzg+MQcUxvoCPiUtGZxkN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSNYul-G2g5BRaIozIfKX7UYeFbjRjWnAcg_woojezXjeaGmAMyBHByb2RQgL2jAVoQS1KluDBF4Clvi1m5znHpm3oCNtaCAQJuag&rkey=CAQSODOc_jvbthUjFHNefzZAHzQjErll6ezAT2nVnCyQGn7uHTgB4H6wlAxrpRoR6DEv72VZypAT_2aT&spec=0",
+      "contentType": "image/jpeg",
+      "width": 1920,
+      "height": 1080,
+      "size": 118358,
+      "filename": "C91B58130A64D53C8BA6854333321F9C.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": "[图片]"
+   },
+   "mentioned": 0
+  },
+  {
    "rowid": 497,
    "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT1Ey0R3ERr6bJ6.R1dxTY22UfE36cK6wyuj92PPjRfO-A52IJuy.ASJdmg3Q89nYaefc9CcD.q-wjum3kSu84kM!",
    "group_id": "9968A083EE07797A987010E64CD421B9",
