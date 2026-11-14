@@ -73,6 +73,7 @@ node ~/.inkboard-team/fetcher.mjs login x     # 已登录可跳过
 ## 资源与清理
 
 - 一次请求一个短命进程，最长 45 秒；浏览器全局 1 路、同站 1 路，普通接口 2 路，超出返回 `busy`。
+- X 读取会在本机短暂打开一个 Edge 窗口（X 对 HeadlessChrome 返回 403），读完立即关闭；小红书同样用自己的 profile，不碰日常浏览器。
 - 浏览器读完立即关闭自己启动的进程；不常驻 daemon、不装额外浏览器内核、不复制用户日常 Chrome 配置。
 - 不下载音视频，临时文件为 0；登录 profile 是唯一持久化数据，换账号时删对应 `browser/<service>/` 即可。
 - 风控冷却写在 `~/.inkboard-team/state/reach/cooldowns.json`（0600），过期自动失效。

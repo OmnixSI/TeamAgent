@@ -237,10 +237,21 @@ async function close(browser,child){
  }
 }
 
-/** One shutdown path: close what we started, then exit instead of waiting on a socket or child handle. */
+/** Graceful exit: close what we started, then exit instead of waiting on a socket or child handle. */
 async function shutdown(code){
  if(closing)return closing;
  closing=(async()=>{const current=live;live=null;if(current)await close(current.browser,current.child);await flushed;process.exit(code);})();
+ return closing;
+}
+
+/** Timeout/signal exit: the adapter is waiting, so kill our own browser group at once and leave. */
+async function fastShutdown(code){
+ if(closing)return closing;
+ closing=(async()=>{
+  const current=live;live=null;
+  if(current?.child){try{process.kill(-current.child.pid,'SIGKILL');}catch{try{current.child.kill('SIGKILL');}catch{}}}
+  await flushed;process.exit(code);
+ })();
  return closing;
 }
 
@@ -262,9 +273,9 @@ export async function main(argv=process.argv.slice(2)){
  const started=Date.now();
  const watchdog=setTimeout(()=>{
   emit(xEnvelope(request,fail('TIMEOUT')));
-  void shutdown(0);
+  void fastShutdown(0);
  },BUDGET_MS);
- for(const [name,code] of [['SIGINT',1],['SIGTERM',1]])process.once(name,()=>{void shutdown(code);});
+ for(const [name,code] of [['SIGINT',1],['SIGTERM',1]])process.once(name,()=>{void fastShutdown(code);});
  let browser=null,child=null;
  try{
   if(!['thread','profile','tweets','search'].includes(action)||!validTarget('x',action,target))throw Error('BAD_INPUT');
