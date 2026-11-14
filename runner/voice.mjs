@@ -10,6 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand, fault } from "./asr.mjs";
+import { ffmpegToolchain, ffprobeToolchain, requireTool } from "./toolchain.mjs";
 
 export const MAX_BYTES = 20 * 1024 * 1024;
 export const MAX_ASR_BYTES = 8 * 1024 * 1024;
@@ -52,6 +53,10 @@ const FAILURES = {
   asr_failed: {
     reason_text: "语音识别失败",
     next_action: "再说一次，或打字补充",
+  },
+  asr_tool_missing: {
+    reason_text: "本机缺少 ffmpeg，语音暂时转不了",
+    next_action: "让管理员补装 ffmpeg 或配置 FFMPEG_BIN",
   },
 };
 
@@ -181,8 +186,9 @@ async function download(url, dest, deps = {}) {
 }
 
 async function ffmpegNormalize(src, dst, deps = {}) {
+  const bin = requireTool(ffmpegToolchain(deps), "asr_tool_missing");
   const result = await runCommand(
-    "ffmpeg",
+    bin,
     [
       "-nostdin",
       "-hide_banner",
@@ -202,7 +208,7 @@ async function ffmpegNormalize(src, dst, deps = {}) {
       "-y",
       dst,
     ],
-    { timeoutMs: 60000, timeoutReason: "unsupported" },
+    { timeoutMs: 60000, timeoutReason: "unsupported", missingReason: "asr_tool_missing" },
     deps,
   );
   if (result.code !== 0) throw fault("unsupported");
@@ -210,8 +216,14 @@ async function ffmpegNormalize(src, dst, deps = {}) {
 }
 
 async function probeDuration(file, deps = {}) {
+  const tool = ffprobeToolchain(deps);
+  // Duration is advisory: a missing probe must not reject the whole voice.
+  if (!tool.ok) {
+    deps.log?.("ffprobe unavailable: " + tool.error);
+    return 0;
+  }
   const result = await runCommand(
-    "ffprobe",
+    tool.path,
     [
       "-v",
       "error",
@@ -221,7 +233,7 @@ async function probeDuration(file, deps = {}) {
       "default=nw=1:nk=1",
       file,
     ],
-    { timeoutMs: 15000, timeoutReason: "asr_failed" },
+    { timeoutMs: 15000, timeoutReason: "asr_failed", missingReason: "asr_tool_missing" },
     deps,
   );
   const value = Number(String(result.stdout || "").trim());

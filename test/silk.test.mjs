@@ -58,7 +58,8 @@ const fakeSilk = ({ fail = false } = {}) => {
 };
 
 const fakeFfmpeg = ({ fail = false, out = canonicalWav } = {}) => async (command, args) => {
-  assert.equal(command, "ffmpeg");
+  assert.equal(path.basename(command), "ffmpeg");
+  assert.ok(path.isAbsolute(command));
   if (fail) return { code: 2, stderr: "boom" };
   fs.writeFileSync(args.at(-1), out);
   return { code: 0, stdout: "", stderr: "" };

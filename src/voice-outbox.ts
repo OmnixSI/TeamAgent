@@ -44,7 +44,7 @@ export async function reportVoice(e:any,b:any):Promise<Response> {
   const price = row.price != null && Number.isFinite(rawPrice) && rawPrice >= 0 ? rawPrice : DS_PRICES.tts_micro_usd_per_10k_chars;
   const latency = Math.max(0,Math.min(240000,Math.round(Number(b.latency_ms)||0)));
   const ttsOk = b.status === 'sent' && b.via === 'voice';
-  const errorKind = ttsOk ? null : ['quota','auth','timeout','unsupported','too_large','refused','denied'].includes(b.reason) ? b.reason : 'upstream';
+  const errorKind = ttsOk ? null : ['quota','auth','timeout','unsupported','too_large','refused','denied','tool_missing'].includes(b.reason) ? b.reason : 'upstream';
   const via = b.via==='voice'?'voice':b.via==='text'?'text':'unknown';
   const active = "EXISTS(SELECT 1 FROM outbox WHERE id=? AND status='voice_sending')";
   // D1 batch is transactional. Audit, billing and terminal state either all

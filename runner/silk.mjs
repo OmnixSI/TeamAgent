@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "./asr.mjs";
+import { ffmpegToolchain, requireTool } from "./toolchain.mjs";
 
 export const SILK_MAGIC = "#!SILK_V3";
 export const SILK_SAMPLE_RATE = 24000;
@@ -103,14 +104,22 @@ export async function wavToSilk(wavPath, opts = {}, deps = {}) {
     ? Math.max(1000, Math.min(opts.timeoutMs, 60_000))
     : SILK_DEFAULT_TIMEOUT_MS;
   const run = deps.runCommand || runCommand;
+  let bin;
+  try {
+    bin = requireTool(ffmpegToolchain(deps), "silk_tool_missing");
+  } catch {
+    return fail("tool_missing", "本机缺少 ffmpeg，无法转换成语音", {
+      missing: "ffmpeg",
+    });
+  }
   let work = null;
   try {
     work = fs.mkdtempSync(path.join(opts.tmpDir || os.tmpdir(), "f9ds-silk-"));
     const normalized = path.join(work, "normalized.wav");
     const audio = await run(
-      "ffmpeg",
+      bin,
       FFMPEG_NORMALIZE(wavPath, normalized),
-      { timeoutMs, timeoutReason: "silk_timeout" },
+      { timeoutMs, timeoutReason: "silk_timeout", missingReason: "silk_tool_missing" },
       deps,
     );
     if (audio?.code !== 0) return fail("invalid_audio", "音频无法解码成 24 kHz 单声道 WAV");

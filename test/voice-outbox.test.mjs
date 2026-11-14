@@ -33,6 +33,14 @@ test('enqueue preserves text/reference, honors group override, claims once and r
  await req(e,'/api/runner/voice-outbox/report',{id:'v1',status:'failed'},'runner-secret');assert.equal((await row(e,'v1')).status,'sent');
  await seed(e,'off',{switches:{'voice:mode':'always',['voice:mode:'+group]:'off'}});assert.equal((await row(e,'off')).status,'pending');
 });
+test('a missing TTS toolchain is reported as tool_missing, not upstream',async()=>{
+ const e=await voiceEnv();await seed(e,'tools');
+ const a=await pull(e);assert.equal(a.items.length,1);
+ const r=await req(e,'/api/runner/voice-outbox/report',{id:'tools',status:'sent',via:'text',reason:'tool_missing'},'runner-secret');
+ assert.equal(r.status,200);
+ const usage=await e.DB.prepare('SELECT error_kind FROM ds_usage WHERE id=?').bind('voice:tools').first();
+ assert.equal(usage.error_kind,'tool_missing');
+});
 test('ordinary text stays text, model voice flag enables explicit request without keywords',async()=>{
  const e=await voiceEnv();await seed(e,'plain',{opts:{source:{meta:{media:[]}}}});assert.equal((await row(e,'plain')).status,'pending');
  await seed(e,'explicit',{reply:{voice:true},opts:{source:{meta:{media:[]}}}});assert.equal((await row(e,'explicit')).status,'voice');
