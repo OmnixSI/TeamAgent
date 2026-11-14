@@ -262,7 +262,8 @@ export async function readDeepSeekBalance(
   const infos = Array.isArray(body?.balance_infos) ? body.balance_infos : [];
   const info =
     infos.find((entry: any) => String(entry?.currency || "").toUpperCase() === "CNY") || infos[0];
-  const total = Number(String(info?.total_balance ?? "").replace(/,/g, ""));
+  const rawTotal = String(info?.total_balance ?? "").replace(/,/g, "").trim();
+  const total = rawTotal === "" ? NaN : Number(rawTotal);
   if (!info || !Number.isFinite(total)) return store({ ok: false, at, kind: "invalid" });
 
   const number = (value: any) => {
