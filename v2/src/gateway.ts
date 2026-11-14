@@ -14,7 +14,9 @@ export class Gateway {
   connecting = false;
   error = "";
 
-  constructor(private hub: Hub) {
+  private hub: Hub;
+  constructor(hub: Hub) {
+    this.hub = hub;
     const saved = hub.get("gw");
     if (saved) { try { const s = JSON.parse(saved); this.session = s.session; this.lastSeq = s.seq; } catch {} }
   }

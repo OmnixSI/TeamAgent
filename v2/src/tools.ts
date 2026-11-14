@@ -1,7 +1,7 @@
 // Everything the bot can do besides talk. Each tool returns plain data the model reads;
 // actions report what really happened, so the reply can only be as optimistic as the result.
 import { dsChat, dsJson } from "./llm.ts";
-import { design, draw, findImages, runPython, scout } from "./draw.ts";
+import { design, draw, findImages, runPython } from "./draw.ts";
 import type { Ref } from "./draw.ts";
 import type { Row, Tool } from "./core.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
@@ -50,9 +50,9 @@ export interface Host {
   cancelJob(id: number): boolean;
   /** Small state a long tool keeps between attempts, so a retry after a restart does not start over. `null` clears it. */
   scratch(key: string, value?: any): any;
-  stickerNames(): string[];
+  stickers(): { name: string; mood: string }[];
   sendSticker(name: string): Promise<{ ok: boolean; error?: string }>;
-  saveSticker(ref: string, name: string): Promise<boolean>;
+  saveSticker(ref: string, name: string, mood?: string): Promise<boolean>;
   cfg(key: string): number | string;
   play(slot: string): string;
   selfUpdate(args: any): Promise<any>;
@@ -386,49 +386,55 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "generate_image", slow: true,
-      description: "画图或改图，直接发到群里。request 里把群友的要求原样写全（要画什么、给谁、什么梗、特别要求），不要自己压缩成几个词，也不用写英文提示词：后面会先揣摩意图、自动找参考图（保存过的形象和网上的图）、再设计画面，整个过程要半分钟到一分多钟。要参考或修改某张图，把编号填进 references：聊天里的图是 [图片 123-0] 里的 123-0，你发过的图是 g12 这种，保存过的形象直接写名字（如 奶蛙）。群友提了尺寸、比例或清晰度（4K、2K、16:9、具体分辨率）就填进 size，越大越清楚也越贵越慢，没提就不填。返回 sent=true 才算发出去了。",
+      description: "画图或改图，直接发到群里。request：把群友的要求原样写全（要画什么、给谁、什么梗、特别要求），不要压缩成几个词，也不用写英文提示词。intent：用你自己的话说清这张图给谁、干什么用、笑点或重点在哪、画的具体是谁或什么——聊天里的代称、梗、上文提到的东西要还原成具体所指；你看得到全天的聊天，后面设计画面的那一步只看得到你写的这些和最近十几行，所以要写够。references：要参考或修改的图——聊天里的图是 [图片 123-0] 里的 123-0，你画过的图是 g12 这种，保存过的形象直接写名字（如 奶蛙）；画你自己就带上你的形象；改一张你画过的图时，它当初的提示词会自动带上，只改被要求的部分。look_up：画面里凡是要知道真实长相才能画对、手头又没有参考图的对象（具体的角色、梗图形象、游戏动漫人物、明星网红、产品、地标、某个作品的画风），每个写一个带出处的搜索词（如“鸣潮 菲比 立绘”），最多 3 个，会先上网找它长什么样再画；拿不准长什么样的一律查，别凭印象；猫、办公室这类谁都知道的不用查；群友的昵称不要查，他们是真人。群友提了尺寸、比例或清晰度（4K、2K、16:9、具体分辨率）就填进 size，越大越清楚也越贵越慢，没提就不填。整个过程半分钟到一分多钟。返回 sent=true 才算发出去了。",
       parameters: obj({
         request: str("群友的完整要求和相关上下文"),
+        intent: str("你对这张图的理解：给谁、干什么用、重点或笑点、具体画的是谁或什么"),
         references: { type: "array", items: { type: "string" }, description: "参考图或要修改的图，最多 4 张" },
-        look_up: str("要画的是现成的东西（某个角色、梗图形象、真实的人、产品、地点）而手头没有它的参考图时，填它的名字，会先上网找它长什么样再画"),
+        look_up: { type: "array", items: { type: "string" }, description: "要先上网看清长相的对象，每个一个搜索词，最多 3 个" },
         size: str("群友对尺寸、比例、清晰度提了要求才填，照原话写，如“4K”“2K”“16:9”“1920x1080”“手机壁纸”“竖版”。最高支持 4K（3840x2160）"),
         quality: { type: "string", enum: ["low", "medium", "high"], description: "群友要高清、最好的画质填 high，说随便画画填 low；没提就不填" },
         deliver: { type: "boolean", description: "默认 true，画完直接发群里。这张图只是素材、之后要排进文档/海报/书里时填 false：不发群，只返回编号" },
-      }, ["request"]),
+      }, ["request", "intent"]),
       run: async a => {
         if (!(await host.quota("image", Number(host.cfg("image_daily"))))) return { ok: false, sent: false, error: "今天画图次数用完了，明天再画" };
-        const refs: Ref[] = [], missing: string[] = [];
+        const t0 = host.now(), request = String(a.request || ""), intent = clip(a.intent || "", 500);
+        const refs: (Ref & { made?: Made })[] = [], missing: string[] = [];
         for (const label of (Array.isArray(a.references) ? a.references : []).slice(0, 4)) {
           const ref = await host.imageRef(String(label)).catch(() => null);
           if (ref) refs.push(ref); else missing.push(String(label));
         }
         if (missing.length && !refs.length) return { ok: false, sent: false, error: "参考图 " + missing.join("、") + " 取不到（可能过期了），让群友重发一次图" };
-        // Every drawing starts the same way: understand the ask, then look at the things it mentions.
-        const request = String(a.request || ""), context = host.recentLines(16), memory = host.memory();
-        const extra = host.play("drawing");
-        const brief = await scout(env, { request, context, memory, saved: host.savedNames(), members: host.members(), extra });
-        for (const name of brief.use_saved) {
+        // Saved characters that the request names are always looked at, whether or not they were listed.
+        const saved = host.savedNames(), named = saved.filter(n => (request + intent).includes(n));
+        for (const name of saved.filter(n => named.some(m => n.startsWith(m)))) {
           if (refs.length >= 4 || refs.some(r => r.label === name)) continue;
-          const saved = await host.imageRef(name).catch(() => null);
-          if (saved) refs.push(saved);
+          const ref = await host.imageRef(name).catch(() => null);
+          if (ref) refs.push(ref);
         }
-        const queries = [...new Set([...(a.look_up ? [String(a.look_up)] : []), ...brief.look_up])].slice(0, 3);
+        const members = host.members();
+        const asked: string[] = (Array.isArray(a.look_up) ? a.look_up : a.look_up ? [a.look_up] : []).map((q: any) => String(q).trim()).filter(Boolean);
+        const queries = [...new Set(asked)].filter(q => !members.some(m => m.length >= 2 && q.includes(m))).slice(0, 3);
         const found = await Promise.all(queries.map(q => findImages(env, q, 2).catch(() => [])));
         for (const group of found) for (const ref of group) if (refs.length < 6) refs.push(ref);
+        const t1 = host.now(), context = host.recentLines(16), memory = host.memory(), extra = host.play("drawing");
+        const earlier = refs.filter(r => r.made?.prompt).map(r => ({ label: r.label, idea: r.made!.idea || "", prompt: r.made!.prompt! }));
         // If the image service turns a version down, redesign toward the closest picture it will accept
         // and try again, instead of giving up on the first refusal.
         const rejected: { idea: string; prompt: string; reason: string }[] = [];
-        let plan: any, image: Uint8Array | null = null;
+        let plan: any, image: Uint8Array | null = null, designMs = 0, drawMs = 0;
         for (let attempt = 0; attempt < 3 && !image; attempt++) {
-          plan = await design(env, { request, intent: brief.intent, context, memory, refs, size: a.size, quality: a.quality, extra, defaultQuality: String(host.cfg("image_quality")), members: host.members(), rejected });
+          const t = host.now();
+          plan = await design(env, { request, intent, context, memory, refs, size: a.size, quality: a.quality, extra, defaultQuality: String(host.cfg("image_quality")), members, rejected, earlier });
+          const mid = host.now(); designMs += mid - t;
           try { image = await draw(env, plan, plan.use.map((i: number) => refs[i]).filter(Boolean)); }
           catch (e: any) {
             if (!e?.blocked) throw e;
             rejected.push({ idea: plan.idea, prompt: plan.prompt, reason: e.detail || "" });
-          }
+          } finally { drawMs += host.now() - mid; }
         }
         if (!image) return { ok: false, sent: false, error: "画图接口连着三版都拒了", tried: rejected.map(r => r.idea), service_reason: rejected[rejected.length - 1]?.reason || "" };
-        const made: Made = { request: clip(request, 600), idea: plan.idea, prompt: plan.prompt, size: plan.size, quality: plan.quality, refs: plan.use.map((i: number) => refs[i]?.label).filter(Boolean) };
+        const made: Made = { request: clip(request, 600), idea: plan.idea, prompt: plan.prompt, size: plan.size, quality: plan.quality, refs: plan.use.map((i: number) => refs[i]?.label).filter(Boolean), ms: { references: t1 - t0, design: designMs, draw: drawMs } };
         if (a.deliver === false) {
           const kept = await host.sendImage(image, plan.idea, "image/jpeg", true, made);
           return kept.id ? { ok: true, sent: false, id: kept.id, drew: plan.idea, size: plan.size, note: "没发群里，素材编号 " + kept.id + "，排版时用 img:" + kept.id } : { ok: false, error: "图太大，存不下来当素材，换小一点的尺寸" };
@@ -438,16 +444,16 @@ export function buildTools(host: Host): Tool[] {
         // Very large pictures can be more than QQ takes as an inline image; a file keeps the full resolution.
         if (!sent.ok && image.length > 2_000_000) { const f = await host.sendFile("image-" + plan.size + "-" + host.now() + ".jpg", image); if (f.ok) { sent = { ok: true, id: sent.id }; asFile = true; } }
         return sent.ok
-          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, size: plan.size, quality: plan.quality, ...(sent.queued ? { delivery: QUEUED } : {}), ...(asFile ? { note: "图太大，QQ 不收成图片，已经按原画质当文件发了" } : {}), ...(rejected.length ? { adjusted: "照原话画被画图接口拒了 " + rejected.length + " 次，这张是改过的最接近的一版。回话时说清哪里跟要求不一样", refused_versions: rejected.map(r => r.idea), service_reason: rejected[0].reason } : {}), looked_up: queries, references_used: plan.use.map(i => refs[i]?.label).filter(Boolean), ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
+          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, size: plan.size, quality: plan.quality, ...(sent.queued ? { delivery: QUEUED } : {}), ...(asFile ? { note: "图太大，QQ 不收成图片，已经按原画质当文件发了" } : {}), ...(rejected.length ? { adjusted: "照原话画被画图接口拒了 " + rejected.length + " 次，这张是改过的最接近的一版。回话时说清哪里跟要求不一样", refused_versions: rejected.map(r => r.idea), service_reason: rejected[0].reason } : {}), looked_up: queries, references_used: made.refs, ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
           : { ok: false, sent: false, error: "图生成了但发到 QQ 失败：" + (sent.error || "未知原因") };
       },
     },
     {
       name: "sticker",
-      description: "发表情包。op=send 发一张你存着的表情包（name 从这里选：" + (host.stickerNames().join("、") || "还没有存货") + "）；op=save 把群友发的一张好用的表情包存下来以后用（image 是图的编号，name 起个能看出情绪的名字）。聊天时情绪到位就来一张，别每句都发。",
-      parameters: obj({ op: { type: "string", enum: ["send", "save"] }, name: str("表情包名字"), image: str("op=save 时要存的图的编号，如 123-0") }, ["op", "name"]),
+      description: "发表情包。op=send 发一张你存着的表情包，name 从这里选（括号里是它适合的情绪）：" + (host.stickers().map(x => x.name + (x.mood ? "（" + x.mood + "）" : "")).join("、") || "还没有存货") + "。op=save 把群友发的一张好用的表情包存下来以后用（image 是图的编号，name 起个短名字，mood 写它适合什么情绪和场合）。闲聊时情绪到位就来一张，可以只发表情包不配字，别每句都发。",
+      parameters: obj({ op: { type: "string", enum: ["send", "save"] }, name: str("表情包名字"), image: str("op=save 时要存的图的编号，如 123-0"), mood: str("op=save 时：适合的情绪和场合，十个字以内") }, ["op", "name"]),
       run: async a => {
-        if (a.op === "save") return (await host.saveSticker(String(a.image || ""), String(a.name))) ? { ok: true, saved: a.name } : { ok: false, error: "这张图取不到或太大" };
+        if (a.op === "save") return (await host.saveSticker(String(a.image || ""), String(a.name), a.mood ? String(a.mood) : "")) ? { ok: true, saved: a.name } : { ok: false, error: "这张图取不到或太大" };
         const r = await host.sendSticker(String(a.name));
         return r.ok ? { ok: true, sent: true } : { ok: false, sent: false, error: r.error };
       },

@@ -29,6 +29,7 @@ export function checkTunable(key: string, value: unknown): { ok: true; value: nu
   const t = TUNABLES[key];
   if (!t) return { ok: false, error: "没有这个参数。能改的有：" + Object.keys(TUNABLES).join("、") };
   if (t.options) return t.options.includes(String(value)) ? { ok: true, value: String(value) } : { ok: false, error: "只能是 " + t.options.join(" / ") };
+  if (value === null || value === undefined || String(value).trim() === "") return { ok: false, error: "要给一个数" };
   const n = Number(value);
   if (!Number.isFinite(n) || n < t.min! || n > t.max!) return { ok: false, error: "要在 " + t.min + " 到 " + t.max + " 之间" };
   return { ok: true, value: Math.round(n) };

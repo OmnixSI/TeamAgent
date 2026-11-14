@@ -28,16 +28,16 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
       return !!img && !!(await hub.store.putImage(conv, img.bytes, img.mime, "参考图", { name }));
     },
     savedNames: () => hub.store.names(conv, false),
-    stickerNames: () => hub.store.names(conv, true),
+    stickers: () => hub.store.stickers(conv),
     sendSticker: async name => {
       const lib = hub.store.names(conv, true), pick = lib.includes(name) ? name : lib.find(x => x.includes(name) || name.includes(x));
       const img = pick ? await hub.store.imageRef(conv, "sticker:" + pick) : null;
       if (!img) return { ok: false, error: "没有叫这个名字的表情包，现有的：" + lib.join("、") };
       return hub.sendMediaMessage(conv, 1, img.bytes, "[你发了表情包：" + pick + "]");
     },
-    saveSticker: async (ref, name) => {
+    saveSticker: async (ref, name, mood) => {
       const img = await hub.store.imageRef(conv, ref), clean = name.trim().slice(0, 16);
-      return !!img && !!clean && img.bytes.length <= 1_500_000 && !!(await hub.store.putImage(conv, img.bytes, img.mime, "表情包", { name: "sticker:" + clean }));
+      return !!img && !!clean && img.bytes.length <= 1_500_000 && !!(await hub.store.putImage(conv, img.bytes, img.mime, clip(mood || "", 30) || "表情包", { name: "sticker:" + clean }));
     },
     // rendering and browsing
     render: page => render(hub, page),

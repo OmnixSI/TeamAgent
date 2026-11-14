@@ -16,6 +16,10 @@ export async function route(hub: Hub, req: Request): Promise<Response> {
     // A deploy does not replace an object that is holding a live connection, so it steps aside itself
     // when the Worker (which always runs the newest version) reports a different one.
     const want = url.searchParams.get("build");
+    if (path === "/admin/restart" && url.searchParams.get("force")) {   // testing recovery: cut running work off
+      hub.running.clear(); hub.restartSince = 1; hub.restartWanted = "forced"; hub.maybeRestart();
+      return json({ ok: true, forced: true });
+    }
     if (path === "/admin/restart" || (want && want !== hub.build())) {
       const waiting = hub.wantRestart("version " + (want || "manual"));
       if (waiting) return json({ ok: true, build: hub.build(), restart: "after " + waiting + " running turn(s) or job(s)" });
@@ -94,6 +98,8 @@ export async function route(hub: Hub, req: Request): Promise<Response> {
   if (path === "/admin/changes") return json(hub.sql.exec("SELECT * FROM change ORDER BY id DESC LIMIT ?", limit).toArray());
   if (path === "/admin/img") {
     if (body.delete) { hub.sql.exec("DELETE FROM img WHERE id=?", Number(body.delete)); return json({ ok: true }); }
+    if (body.id && typeof body.note === "string") { hub.sql.exec("UPDATE img SET note=? WHERE id=?", body.note, Number(body.id)); return json({ ok: true }); }
+    if (url.searchParams.get("stickers")) return json(hub.sql.exec("SELECT id,name,note FROM img WHERE conv=? AND name LIKE 'sticker:%' ORDER BY name", conv).toArray());
     if (body.name && body.url) {
       const got = await hub.fetchBytes(String(body.url), 8 * 1024 * 1024);
       if (!got) return json({ error: "fetch failed" }, 400);

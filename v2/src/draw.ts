@@ -1,5 +1,6 @@
-// Image generation in two steps: an art-director pass decides what the picture should be and writes
-// the prompt, then the image model draws it. Reference images are passed to both.
+// Image generation. The chat model says what is wanted and which things must be looked at first; an
+// art-director pass (max reasoning, sees every reference picture) decides the picture and writes the
+// prompt; then the image model draws it. Reference pictures are passed to both.
 import { dsChat, dsJson } from "./llm.ts";
 import { PRICE, meter } from "./meter.ts";
 import { clip, unb64 } from "./util.ts";
@@ -29,37 +30,6 @@ const DIRECTOR = `你是给图像模型写提示词的美术指导。群友在 Q
 只输出一个 JSON 对象：
 {"idea":"一句中文，说这张图画的是什么","prompt":"给图像模型的提示词","size":"1024x1024","quality":"low|medium|high","use_refs":[0]}`;
 
-const SCOUT = `你是美术指导的前期调研。读群友的要求和聊天上下文，先弄明白他到底要什么，再列出画之前必须看到的参考。
-
-判断三件事：
-1. 意图：一句话说清这张图给谁、干什么用、重点或笑点在哪、指的是哪个人或哪个东西。聊天里的代称、梗、上文提到的东西要还原成具体所指。
-2. 已保存的形象里（名单会给你）哪些跟这张图有关，就列出来；画 Bot 自己时用它的形象。
-3. 画面里还有哪些对象必须知道真实长相才能画对：具体的角色、梗图形象、游戏或动漫人物、真人、产品、地标、某个作品的画风。给每个写一个搜索词，越具体越好，带上出处（如“鸣潮 菲比 立绘”“奶蛙 表情包”）。最多 3 个。猫、办公室、键盘这类谁都知道长什么样的不用查。拿不准长什么样的一律查，不要凭印象。
-
-只输出一个 JSON 对象：{"intent":"…","use_saved":["名字"],"look_up":["搜索词"]}`;
-
-/** Step one of every drawing: work out what is really being asked and what must be looked at first. */
-export async function scout(env: Env, input: { request: string; context: string; memory: string; saved: string[]; members?: string[]; extra?: string }) {
-  const empty = { intent: "", use_saved: [] as string[], look_up: [] as string[] };
-  try {
-    const r = await dsChat(env, {
-      messages: [
-        { role: "system", content: SCOUT + (input.extra ? "\n\n【群里对画图的额外要求】\n" + input.extra : "") },
-        { role: "user", content: "【群友的要求】\n" + input.request + "\n\n【最近的聊天】\n" + clip(input.context, 3000) + "\n\n【Bot 记得的事】\n" + clip(input.memory, 2500) + "\n\n【已保存的形象】" + (input.saved.join("、") || "（无）") +
-          "\n\n【群友的昵称】" + ((input.members || []).join("、") || "（未知）") + "。这些是群里的真人，不是网上的角色或梗，绝对不要拿他们的昵称去搜图；他们的样子只能来自保存的形象、他们发过的照片，或记忆里的描述。" },
-      ],
-      max_tokens: 3000, label: "画图构思",
-    }, "high", 45000);
-    const raw = String(r.message.content || ""), d = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-    return {
-      intent: clip(d.intent || "", 300),
-      use_saved: (Array.isArray(d.use_saved) ? d.use_saved : []).map(String).filter((n: string) => input.saved.includes(n)).slice(0, 3),
-      look_up: (Array.isArray(d.look_up) ? d.look_up : []).map(String).filter(Boolean)
-        .filter((q: string) => !(input.members || []).some(m => m.length >= 2 && q.includes(m))).slice(0, 3),
-    };
-  } catch { return empty; }
-}
-
 const SIZES: Record<string, string> = { square: "1024x1024", portrait: "1024x1536", landscape: "1536x1024" };
 /** Turns whatever came back ("3840x2160", "landscape", "4k") into a size the image API accepts. */
 export function fitSize(raw: unknown): string {
@@ -75,7 +45,16 @@ export function fitSize(raw: unknown): string {
   if (grow > 1) { w *= grow; h *= grow; }
   if (w / h > 3) h = w / 3; else if (h / w > 3) w = h / 3;
   const snap = (n: number) => Math.max(256, Math.min(3840, Math.round(n / 16) * 16));
-  return snap(w) + "x" + snap(h);
+  let W = snap(w), H = snap(h);
+  // Rounding to multiples of 16 can step back over a limit; nudge one side a step at a time until all three hold.
+  for (let i = 0; i < 400; i++) {
+    const wide = W >= H;
+    if (W > 3 * H) H += 16; else if (H > 3 * W) W += 16;
+    else if (W * H < 655_360) { if (wide && W + 16 <= 3840) W += 16; else H += 16; }
+    else if (W * H > 8_294_400) { if (wide) W -= 16; else H -= 16; }
+    else break;
+  }
+  return W + "x" + H;
 }
 const dataUrl = (r: Ref) => {
   let s = "";
@@ -83,8 +62,9 @@ const dataUrl = (r: Ref) => {
   return "data:" + r.mime + ";base64," + btoa(s);
 };
 
-export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string; members?: string[]; rejected?: { idea: string; prompt: string; reason: string }[] }): Promise<Design> {
-  const text = "【群友的要求】\n" + input.request + (input.intent ? "\n\n【调研后对意图的理解】\n" + input.intent : "") +
+export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string; members?: string[]; rejected?: { idea: string; prompt: string; reason: string }[]; earlier?: { label: string; idea: string; prompt: string }[] }): Promise<Design> {
+  const text = "【群友的要求】\n" + input.request + (input.intent ? "\n\n【Bot 对这张图的理解（它看得到全天的聊天）】\n" + input.intent : "") +
+    (input.earlier?.length ? "\n\n【参考图里有 Bot 以前画的，当初的提示词如下。群友要的是在它上面改：没被要求改的部分照原样保留，沿用原提示词的写法】\n" + input.earlier.map(e => e.label + "（" + e.idea + "）：" + clip(e.prompt, 1500)).join("\n\n") : "") +
     (input.size || input.quality ? "\n\n【群友对尺寸和清晰度的要求】" + [input.size, input.quality].filter(Boolean).join("；") + "（照这个定 size 和 quality）" : "") +
     "\n\n【最近的聊天】\n" + clip(input.context, 3000) +
     "\n\n【Bot 记得的事（人物、梗、形象设定）】\n" + clip(input.memory, 2500) +

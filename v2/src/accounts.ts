@@ -7,7 +7,8 @@ import type { Use } from "./meter.ts";
 import { BJ, fmtDate } from "./util.ts";
 
 export class Accounts {
-  constructor(private hub: Hub) {}
+  private hub: Hub;
+  constructor(hub: Hub) { this.hub = hub; }
   record(u: Use) {
     this.hub.sql.exec(
       "INSERT INTO spend(day,provider,item,unit,calls,in_tok,cached_tok,out_tok,units,usd) VALUES(?,?,?,?,1,?,?,?,?,?) " +

@@ -8,7 +8,8 @@ export type Asker = { id: string; name: string };
 type Member = { id: string; name: string };
 
 export class SelfEdit {
-  constructor(private hub: Hub) {}
+  private hub: Hub;
+  constructor(hub: Hub) { this.hub = hub; }
   /** Test rooms read the main group's values unless they have their own. */
   private scoped(prefix: string, conv: string, key: string) {
     const shadow = this.hub.shadow(conv);

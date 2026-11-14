@@ -25,7 +25,8 @@ export function cycleStart(now: number) {
 }
 
 export class Plan {
-  constructor(private hub: Hub) {}
+  private hub: Hub;
+  constructor(hub: Hub) { this.hub = hub; }
   private key(name: string, now = Date.now()) { return "plan:" + new Date(cycleStart(now)).toISOString().slice(0, 10) + ":" + name; }
   used(name: string) { return Number(this.hub.get(this.key(name)) || 0); }
   /** Whether `amount` more of this still fits under the stop line. */

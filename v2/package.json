@@ -2,6 +2,11 @@
   "name": "teamagent-v2",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "npm run typecheck && npm test"
+  },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.0.4"
   },

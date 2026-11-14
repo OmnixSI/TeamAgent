@@ -8,11 +8,14 @@ const INLINE_MAX = 1_500_000;            // a SQLite value tops out at 2 MB
 const ITEM_MAX = 40 * 1024 * 1024;
 const DAY = 86400000;
 
-export type Made = { request?: string; idea?: string; prompt?: string; size?: string; quality?: string; refs?: string[] };
+/** How a picture was made, kept with it so it can be explained, debugged and revised faithfully. */
+export type Made = { request?: string; idea?: string; prompt?: string; size?: string; quality?: string; refs?: string[]; ms?: Record<string, number> };
 
 export class Store {
   private puts = 0;
-  constructor(private hub: Hub) {
+  private hub: Hub;
+  constructor(hub: Hub) {
+    this.hub = hub;
     for (const ddl of [
       "ALTER TABLE img ADD COLUMN r2 TEXT", "ALTER TABLE img ADD COLUMN size INTEGER", "ALTER TABLE img ADD COLUMN src TEXT", "ALTER TABLE img ADD COLUMN made TEXT",
       "ALTER TABLE blob ADD COLUMN r2 TEXT", "ALTER TABLE blob ADD COLUMN size INTEGER", "ALTER TABLE blob ADD COLUMN src TEXT",
@@ -134,6 +137,13 @@ export class Store {
       const got = await this.hub.fetchBytes(String(f.url), 20 * 1024 * 1024).catch(() => null);
       if (got) await this.putFile(conv, String(f.name || "file"), got.bytes, String(f.url));
     }
+  }
+  /** Stickers with the mood each one is for (kept in the picture's note). */
+  stickers(conv: string): { name: string; mood: string }[] {
+    const of = (c: string) => this.hub.sql.exec("SELECT name, note FROM img WHERE conv=? AND name LIKE 'sticker:%' GROUP BY name ORDER BY name", c).toArray()
+      .map((r: any) => ({ name: String(r.name).slice(8), mood: String(r.note || "") === "表情包" ? "" : String(r.note || "") }));
+    const mine = of(conv), seen = new Set(mine.map(x => x.name));
+    return [...mine, ...(this.hub.shadow(conv) ? of(this.hub.shadow(conv)).filter(x => !seen.has(x.name)) : [])];
   }
   names(conv: string, stickers: boolean): string[] {
     const of = (c: string) => this.hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL AND name " + (stickers ? "LIKE" : "NOT LIKE") + " 'sticker:%' ORDER BY name", c)
