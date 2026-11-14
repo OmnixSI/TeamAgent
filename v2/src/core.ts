@@ -10,8 +10,9 @@ export type Row = {
 };
 export type Tool = {
   name: string; description: string; parameters: any;
-  /** slow tools may get a short "on it" line first; work tools switch the model to careful mode */
-  slow?: boolean; work?: boolean;
+  /** slow tools may get a short "on it" line first; work tools switch the model to careful mode;
+   *  long tools take minutes, so the turn moves to the background and the chat stays responsive */
+  slow?: boolean; work?: boolean; long?: boolean;
   run(args: any): Promise<any>;
 };
 export type TurnInput = {
@@ -26,12 +27,15 @@ export type TurnInput = {
   rules?: string;           // self-added persona playbook
   askers?: string[];        // who addressed the bot in this batch
   talkative?: string;       // quiet | normal | chatty
+  job?: string;             // a long job of yours that is still running in the background
   splitMax?: number;
 };
 export type TurnDeps = {
   chat(body: { messages: any[]; tools?: any[]; max_tokens?: number }, effort: Effort, timeoutMs?: number): Promise<ChatResult>;
   tools: Tool[];
   interim?(text: string): Promise<void>;
+  /** Called once when the turn turns into a long job; the host lets other turns run meanwhile. */
+  detach?(what: string): void;
 };
 export type TurnResult = {
   replies: string[]; silent: boolean;
@@ -39,6 +43,7 @@ export type TurnResult = {
 };
 
 const MAX_ROUNDS = 8;
+const PROJECT_ROUNDS = 30;   // once a plan is laid out, a production may take many steps
 
 export function displayName(r: Row) {
   return r.name || (r.sender ? "成员" + r.sender.slice(-4) : "成员");
@@ -93,6 +98,7 @@ export function buildMessages(input: TurnInput) {
     const idle = input.talkative === "quiet" ? "没人叫你。除非有非说不可的新信息，否则只输出 PASS。"
       : input.talkative === "chatty" ? "没人叫你。有能接的话、能抖的机灵就接一句，实在没什么可说才输出 PASS。"
       : "没人叫你。值得接就接一句，不值得就只输出 PASS。";
+    if (input.job) pending.push("\n[你有一个后台任务正在做：" + input.job + "。别重复开工；有人问进度就照实说还在做，做完会自己发出来。]");
     pending.push("\n[" + when + (input.mentioned
       ? "有人在叫你或对你说话，必须回应，不能 PASS。" + (who.length > 1 ? "这批新消息里找你的有 " + who.join("、") + "，每个人的事都要办、都要回应，别只办其中一个。" : "")
       : idle) + "]");
@@ -136,7 +142,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   const messages = buildMessages(input);
   const defs = toolDefs(deps.tools);
   const mustReply = input.mentioned || !!input.task;
-  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false, engaged = false, vetoed = false;
+  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false, engaged = false, vetoed = false, maxRounds = MAX_ROUNDS;
   const wantsDrawing = input.rows.some(r => r.role === "user" && r.seq > input.cursor && DRAW_ASK.test(r.text));
 
   const call = async (withTools: boolean, effort: Effort, maxTokens: number) => {
@@ -150,8 +156,8 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   };
 
   try {
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      const lastRound = round === MAX_ROUNDS - 1;
+    for (let round = 0; round < maxRounds; round++) {
+      const lastRound = round === maxRounds - 1;
       if (lastRound) messages.push({ role: "user", content: "[工具次数用完了。就用手上已有的结果把话说完，没查到的照实说。]" });
       // Replies are written with high reasoning and real work with max. Only the "is this even for me?"
       // glance at chatter nobody addressed to you runs without thinking, so staying silent is instant.
@@ -190,6 +196,9 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
         const lead = tidy(msg.content);
         if (lead && lead.length <= 40 && !isPass(lead)) { interimSent = true; await deps.interim(cleanReply(lead)).catch(() => {}); }
       }
+      if (calls.some(c => c.function?.name === "plan")) { maxRounds = PROJECT_ROUNDS; careful = true; }
+      const longOne = used.find(t => t?.long);
+      if (longOne) deps.detach?.(longOne.name === "plan" ? "按计划做一个多步骤的成品" : longOne.name === "make_book" ? "做一本插画书" : longOne.name);
       // Thinking mode requires the reasoning of earlier tool-call turns to be passed back.
       messages.push({ role: "assistant", content: msg.content || "", reasoning_content: msg.reasoning_content || "", tool_calls: calls });
       const results = await Promise.all(calls.map(async (c, i) => {

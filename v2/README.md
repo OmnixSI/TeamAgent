@@ -46,6 +46,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | `src/config.ts` | 它被允许自己改的参数和做法说明 |
 | `src/meter.ts` | 记账：价格表、每次调用的用量和花费估算 |
 | `src/show.ts` | 文档、思维导图、流程图、网页的排版模板 |
+| `src/book.ts` | 做书：写故事定画风、逐页画插图、排版 |
 | `src/hub.ts` | Durable Object：QQ 连接、存储、发送、定时、夜间整理、管理接口 |
 | `src/memory.ts` | 每晚把当天聊天整理成长期记忆、教训和小结 |
 | `src/qq.ts` | QQ 接口与消息解析 |
@@ -59,7 +60,8 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | 查资料 | `web_search` `read_url`（网页、推文、小红书笔记、知乎、公众号） `research`（多轮联网调研） `think_hard`（最高推理档） |
 | 平台 | `bilibili`（视频字幕/无字幕转写/热评/搜索） `hot`（微博、抖音、B站、知乎、百度、GitHub、HN 热榜） `x_search` `stock`（A股/港股/美股行情） |
 | 团队 | `github`（只读） `ledger`（群内账本） `balance`（DeepSeek 余额） `usage`（它自己每天花了多少、花在哪） |
-| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图，可指定尺寸到 4K） `save_reference` `view_image` `speak`（语音回复） `sticker`（表情包） `show`（文档、思维导图、流程图、网页） |
+| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图，可指定尺寸到 4K） `save_reference` `view_image` `speak`（语音回复） `sticker`（表情包） `show`（文档、思维导图、流程图、网页，可出 PDF） `make_book`（插画书） |
+| 组合 | `plan`（多步任务：定步骤、攒素材、合成成品，后台运行） |
 | 计算 | `run_python`（云端沙箱：算数据、画图表、生成 Excel/CSV/PDF，产物直接发群） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 | 自身 | `about_self`（链路、接入、能力、状态） `self_update`（改自己的参数和做法说明，或写代码改进提议） |
@@ -81,6 +83,14 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 - **表情包**：Hub 里存着一套奶蛙表情（来自公开素材库 Orliss/nailong），`sticker` 工具按名字发；群友发的好用的表情包它也能存下来。人设里限定了频率，情绪到位才发。
 - **`show`**：把成块的内容做成图发到群里，并附上源文件。四种：`doc`（Markdown 文档排成长图）、`mindmap`（Markdown 层级渲染成思维导图）、`diagram`（Mermaid）、`html`（自写网页，可用 ECharts 等）。模板在 `src/show.ts`，渲染用 Cloudflare 的无头浏览器（`[browser]` 绑定，Workers Paid 自带额度）。
 - **画图尺寸**：群友提了 2K、4K、具体分辨率或比例就传给接口，最高 3840x2160；没提用 1024 级别。太大发不成图片时按文件发。
+
+## 多步任务和大作品
+
+- **`plan`**：需要好几步、好几个工具才能做成的东西，模型先调它定步骤。之后这一轮可以连续做 30 步（平时 8 步），全程最高推理，并转到后台跑：群里照常聊天，问进度它知道自己在做什么，做完自己发出来。
+- **中间素材不刷屏**：`generate_image` 和 `run_python` 带 `deliver=false` 时只存不发，返回编号（图 `g12`、文件 `f12`）。图用 `img:g12` 排进 `show` 的网页，文件编号可以作为下一次 `run_python` 的输入。
+- **`show` 可以导出 PDF**（`pdf=true`），网页里能嵌入它画过的图。
+- **`make_book`**（`src/book.ts`）：一条龙做插画书。先用最高推理写故事、定画风和角色设定，再画封面，然后带着形象参考图和封面并行画每一页（保证角色前后一致），排成横版页面，输出 PDF 和一张预览长图。6 页约 100 秒，花费约等于画 7 张图。
+- 这类长任务期间部署重启会等它做完。
 
 ## 它怎么回答“你是怎么实现的”
 

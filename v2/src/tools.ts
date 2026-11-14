@@ -12,6 +12,7 @@ import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
 import { PRICE, meter } from "./meter.ts";
 import { buildPage } from "./show.ts";
+import { bookHtml, illustrate, planBook } from "./book.ts";
 import type { Page } from "./show.ts";
 import type { LiveStatus } from "./self.ts";
 
@@ -20,7 +21,9 @@ export interface Host {
   env: Env;
   now(): number;
   /** Sends a picture to the chat and keeps it; `id` (like "g12") can be used later as a reference. */
-  sendImage(bytes: Uint8Array, note: string, mime?: string): Promise<{ ok: boolean; error?: string; id?: string }>;
+  sendImage(bytes: Uint8Array, note: string, mime?: string, silent?: boolean): Promise<{ ok: boolean; error?: string; id?: string }>;
+  /** Keeps a file for later steps without sending it; returns an id like "f12". */
+  keepFile(name: string, bytes: Uint8Array): string;
   sendFile(name: string, bytes: Uint8Array): Promise<{ ok: boolean; error?: string }>;
   /** Resolves "123-0" (a picture in the chat), "g12" (one you sent), a saved name, or a URL. */
   imageRef(ref: string): Promise<Ref | null>;
@@ -34,6 +37,9 @@ export interface Host {
   sandbox(id?: string, opened?: boolean): string;
   /** Renders a web page to a JPEG in a headless browser. */
   render(page: Page): Promise<{ bytes: Uint8Array; truncated: boolean }>;
+  renderPdf(html: string, width: number, height: number): Promise<Uint8Array>;
+  /** A short progress line to the chat during a long job. */
+  say(text: string): Promise<boolean>;
   stickerNames(): string[];
   sendSticker(name: string): Promise<{ ok: boolean; error?: string }>;
   saveSticker(ref: string, name: string): Promise<boolean>;
@@ -222,6 +228,30 @@ export function buildTools(host: Host): Tool[] {
       run: async () => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" })); },
     },
     {
+      name: "plan", work: true, long: true,
+      description: "要做的东西得分好几步、用到好几个工具才能做成时（带配图和图表的调研报告、数据分析加图文长页、一组海报、图文攻略、把视频或一堆链接整理成一份带图的材料……），先调这个把步骤定下来。调了之后你可以连续做最多 30 步，任务转到后台，群里照常聊天。steps 写每一步用什么工具、产出什么；deliverable 写最后交付的是什么。",
+      parameters: obj({
+        goal: str("要做成什么"),
+        steps: { type: "array", items: { type: "string" }, description: "按顺序的步骤，每步写清用哪个工具、产出什么" },
+        deliverable: str("最后发到群里的成品是什么形式"),
+      }, ["goal", "steps", "deliverable"]),
+      run: async a => {
+        const steps = (Array.isArray(a.steps) ? a.steps : []).map(String).slice(0, 20);
+        await host.say("开工：" + clip(a.goal, 60) + "（" + steps.length + " 步，做完发出来）").catch(() => false);
+        return {
+          ok: true, steps,
+          how_to_work: [
+            "按步骤一步步做，每步看清工具的真实返回再进下一步；哪步失败就换办法，别跳过也别编结果。",
+            "中间素材不要发群里：generate_image 和 run_python 都填 deliver=false，只拿编号（图 g12、文件 f12）。",
+            "素材之间这样接：查到的资料写进后面步骤的输入；图表和配图用 img:编号 排进 show 的 html；数据文件编号放进下一次 run_python 的 files。",
+            "最后一步合成并交付：show（doc/html，可加 pdf）、make_book 或 run_python（deliver=true）。",
+            "交付后用 view_image 看一眼成品图，有明显问题（空白、乱码、图没出来）就修一次重发。",
+            "全部做完，用两三句话说做了什么、成品是什么。",
+          ],
+        };
+      },
+    },
+    {
       name: "self_update", work: true,
       description: "改你自己的小毛病，立刻生效、可撤销。能改三样：参数（op=set_config，key 和 value）、做法说明（op=set_playbook，slot 是 " + Object.keys(PLAYBOOKS).join("/") + "，text 是要加的一条；mode=replace 时整段替换）、别人叫你的名字（op=add_alias / remove_alias）。op=status 看现在的参数、做法说明和改动记录；op=revert 按编号撤销；op=apply 让群主批准过的提议生效；op=propose_code 是需要改代码的问题，写清分析和建议改法留给维护的人。做法说明只能改变你怎么用已有的能力，变不出新能力：对方要的效果如果靠你现有的工具和发消息方式根本做不到，那就是代码问题，用 propose_code，并照实说还没修好。每次都要写 reason：问题是什么、你查到的原因、为什么这样改。一次只改一处。可改的参数：" + Object.entries(TUNABLES).map(([k, t]) => k + "（" + t.what + "）").join("；") + "。",
       parameters: obj({
@@ -349,6 +379,7 @@ export function buildTools(host: Host): Tool[] {
         look_up: str("要画的是现成的东西（某个角色、梗图形象、真实的人、产品、地点）而手头没有它的参考图时，填它的名字，会先上网找它长什么样再画"),
         size: str("群友对尺寸、比例、清晰度提了要求才填，照原话写，如“4K”“2K”“16:9”“1920x1080”“手机壁纸”“竖版”。最高支持 4K（3840x2160）"),
         quality: { type: "string", enum: ["low", "medium", "high"], description: "群友要高清、最好的画质填 high，说随便画画填 low；没提就不填" },
+        deliver: { type: "boolean", description: "默认 true，画完直接发群里。这张图只是素材、之后要排进文档/海报/书里时填 false：不发群，只返回编号" },
       }, ["request"]),
       run: async a => {
         if (!(await host.quota("image", Number(host.cfg("image_daily"))))) return { ok: false, sent: false, error: "今天画图次数用完了，明天再画" };
@@ -383,6 +414,10 @@ export function buildTools(host: Host): Tool[] {
           }
         }
         if (!image) return { ok: false, sent: false, error: "画图接口连着三版都拒了", tried: rejected.map(r => r.idea), service_reason: rejected[rejected.length - 1]?.reason || "" };
+        if (a.deliver === false) {
+          const kept = await host.sendImage(image, plan.idea, "image/jpeg", true);
+          return kept.id ? { ok: true, sent: false, id: kept.id, drew: plan.idea, size: plan.size, note: "没发群里，素材编号 " + kept.id + "，排版时用 img:" + kept.id } : { ok: false, error: "图太大，存不下来当素材，换小一点的尺寸" };
+        }
         let sent = await host.sendImage(image, plan.idea);
         let asFile = false;
         // Very large pictures can be more than QQ takes as an inline image; a file keeps the full resolution.
@@ -404,19 +439,67 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "show", work: true, slow: true,
-      description: "把成块的内容做成排版好的图发到群里，同时把源文件发出去。kind=doc：Markdown 文档（方案、总结、对比表、教程、清单），渲染成一张长图；kind=mindmap：思维导图，content 用 Markdown 的标题和列表层级写；kind=diagram：Mermaid 图（流程图、时序图、架构图、甘特图、状态图），content 只写 Mermaid 代码；kind=html：你自己写网页（数据看板、卡片、时间线、任何自定义排版，可以用 CDN 上的库如 ECharts；动画要关掉），最外层用一个定宽 860px 的 div 包住全部内容，会按这个块截图。内容超过两三百字、有结构、有表格、有层级时用它，不要把一大段 Markdown 直接发在聊天里。",
+      description: "把成块的内容做成排版好的图发到群里，同时把源文件发出去。kind=doc：Markdown 文档（方案、总结、对比表、教程、清单），渲染成一张长图；kind=mindmap：思维导图，content 用 Markdown 的标题和列表层级写；kind=diagram：Mermaid 图（流程图、时序图、架构图、甘特图、状态图），content 只写 Mermaid 代码；kind=html：你自己写网页（数据看板、卡片、时间线、海报、图文排版，可以用 CDN 上的库如 ECharts；动画要关掉），最外层用一个定宽 860px 的 div 包住全部内容，会按这个块截图；要放你画过的图就写 <img src=\"img:g12\">（聊天里的图用编号，保存的形象用名字）。内容超过两三百字、有结构、有表格、有层级时用它，不要把一大段 Markdown 直接发在聊天里。",
       parameters: obj({
         kind: { type: "string", enum: ["doc", "mindmap", "diagram", "html"] },
         title: str("标题，也用作文件名"), content: str("Markdown / Mermaid 代码 / 完整 HTML"),
         attach_source: { type: "boolean", description: "要不要把源文件也发到群里，默认发" },
+        pdf: { type: "boolean", description: "同时发一份 PDF（要打印、要存档、内容很长时）" },
       }, ["kind", "title", "content"]),
       run: async a => {
-        const page = buildPage(String(a.kind), clip(a.title, 60), String(a.content || ""), fmtFull(host.now(), BJ));
+        // src="img:g12" (or a chat picture number, or a saved name) puts one of your own pictures into the page.
+        let content = String(a.content || "");
+        const wanted = [...new Set([...content.matchAll(/img:([^"'\s)>]+)/g)].map(m => m[1]))].slice(0, 16);
+        for (const ref of wanted) {
+          const im = await host.imageRef(ref).catch(() => null);
+          if (im) content = content.split("img:" + ref).join(toDataUrl(im));
+        }
+        const page = buildPage(String(a.kind), clip(a.title, 60), content, fmtFull(host.now(), BJ));
         const shot = await host.render(page);
         const sent = await host.sendImage(shot.bytes, String(a.kind) + "：" + clip(a.title, 40), "image/jpeg");
         if (!sent.ok) return { ok: false, sent: false, error: "图渲染好了但发到 QQ 失败：" + (sent.error || "未知原因") };
-        const file = a.attach_source === false ? null : await host.sendFile(page.file.name, new TextEncoder().encode(page.file.text));
-        return { ok: true, sent: true, id: sent.id, ...(shot.truncated ? { note: "内容太长，图只截了前面一段，完整内容在源文件里" } : {}), source_file: file ? (file.ok ? page.file.name + " 已发" : "源文件没发出去：" + file.error) : "没发" };
+        const pdf = a.pdf ? await host.sendFile(page.file.name.replace(/\.[a-z]+$/, "") + ".pdf", await host.renderPdf(page.html, page.width, a.kind === "doc" ? 1160 : page.height)).catch(() => ({ ok: false, error: "PDF 没生成出来" })) : null;
+        const file = a.attach_source === false || wanted.length ? null : await host.sendFile(page.file.name, new TextEncoder().encode(page.file.text));
+        return { ok: true, sent: true, id: sent.id, ...(shot.truncated ? { note: "内容太长，图只截了前面一段，完整内容在源文件里" } : {}), source_file: file ? (file.ok ? page.file.name + " 已发" : "源文件没发出去：" + file.error) : "没发", ...(pdf ? { pdf: pdf.ok ? "PDF 已发" : "PDF 没发出去：" + (pdf as any).error } : {}) };
+      },
+    },
+    {
+      name: "make_book", work: true, slow: true, long: true,
+      description: "做一本带插图的小书：绘本、故事书、图文纪念册、带图的小传。你只要给要求，它会自己写故事、定画风和角色、逐页画插图（角色前后保持一致）、排成书，把 PDF 和一张预览长图发到群里。brief 写清讲什么、给谁、什么调性、主角是谁、要用上哪些群里的人和事；要用保存的形象就在 characters 里写名字；pages 是正文页数（默认 8，最多 12）。整本要三到六分钟，花费约等于画 pages+1 张图。开工前先在群里说一声在做。",
+      parameters: obj({
+        brief: str("这本书的要求，越具体越好"),
+        pages: { type: "integer", description: "正文页数，默认 8" },
+        characters: { type: "array", items: { type: "string" }, description: "要出场并保持长相的形象：保存的名字（如 奶蛙）、聊天图片编号、你画过的图 g12" },
+        style: str("群友指定了画风才填，如 水彩、黑白漫画、吉卜力感、像素风"),
+        quality: { type: "string", enum: ["low", "medium", "high"], description: "默认 medium" },
+      }, ["brief"]),
+      run: async a => {
+        const pages = Math.min(Math.max(Number(a.pages) || 8, 3), 12);
+        if (!(await host.quota("book", 6))) return { ok: false, error: "今天做书的次数用完了" };
+        const refs: Ref[] = [];
+        for (const name of [...(Array.isArray(a.characters) ? a.characters : []), ...host.savedNames()].slice(0, 6)) {
+          if (refs.length >= 3 || refs.some(r => r.label === name)) continue;
+          const ref = await host.imageRef(String(name)).catch(() => null);
+          if (ref) refs.push(ref);
+        }
+        const plan = await planBook(env, { brief: String(a.brief || ""), pages, memory: host.memory(), context: host.recentLines(20), refs, style: a.style, extra: host.play("drawing") });
+        await host.say("《" + plan.title + "》写好了，共 " + plan.pages.length + " 页，开始画插图").catch(() => false);
+        const art = await illustrate(env, plan, refs, ["low", "medium", "high"].includes(a.quality) ? a.quality : "medium");
+        const missing = art.images.filter(x => !x).length + (art.cover ? 0 : 1);
+        if (missing > plan.pages.length / 2) return { ok: false, error: "插图大半没画出来（画图接口拒绝或出错），书没做成", title: plan.title };
+        const byline = "Bot 绘 · " + fmtDate(host.now(), BJ);
+        const pdf = await host.renderPdf(bookHtml(plan, art.cover, art.images, byline), 1200, 800);
+        const strip = await host.render({ html: bookHtml(plan, art.cover, art.images, byline, 0.5), width: 600, height: 400, full: true, settle: 600, maxHeight: 12000, file: { name: "", text: "" } });
+        const name = plan.title.replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 40) || "book";
+        const preview = await host.sendImage(strip.bytes, "绘本《" + plan.title + "》预览", "image/jpeg");
+        const file = await host.sendFile(name + ".pdf", pdf);
+        return {
+          ok: preview.ok || file.ok, title: plan.title, subtitle: plan.subtitle, pages: plan.pages.length,
+          preview_image: preview.ok ? "已发 " + (preview.id || "") : "没发出去：" + preview.error,
+          pdf: file.ok ? name + ".pdf 已发（" + Math.round(pdf.length / 1024) + " KB）" : "PDF 没发出去：" + file.error,
+          ...(missing ? { note: missing + " 页的插图没画出来，留了空白底" } : {}),
+          story: plan.pages.map(p => p.text),
+        };
       },
     },
     {
@@ -440,8 +523,9 @@ export function buildTools(host: Host): Tool[] {
       description: "在云端沙箱里跑 Python：算数据、统计、画图表、处理表格、转换格式、生成 Excel/CSV/PDF/图片。task 写清要算什么、要什么产物；需要的数据直接写进 task，或把群友发的文件、图片的编号/链接填进 files。产出的图和文件会直接发到群里。",
       parameters: obj({
         task: str("要做的事，包含必要的数据"),
-        files: { type: "array", items: { type: "string" }, description: "输入文件：[文件 名字 链接] 里的链接，或图片编号" },
+        files: { type: "array", items: { type: "string" }, description: "输入文件：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },
         chat_days: { type: "integer", description: "要分析群聊本身（字数、时段、关键词、词云）时填：把最近这么多天的聊天记录作为 chat.csv 放进沙箱" },
+        deliver: { type: "boolean", description: "默认 true，产出的图和文件直接发群里。产物只是中间素材（要排进文档的图表、给下一步用的数据文件）时填 false：不发群，只返回编号" },
       }, ["task"]),
       run: async a => {
         if (!(await host.quota("python", Number(host.cfg("python_daily"))))) return { ok: false, error: "今天跑代码的次数用完了" };
@@ -450,13 +534,19 @@ export function buildTools(host: Host): Tool[] {
         if (Number(a.chat_days) > 0) inputs.push({ name: "chat.csv", bytes: host.chatCsv(Math.min(Number(a.chat_days), 60)) });
         const out = await runPython(env as any, String(a.task || ""), inputs, host.play("python"), host.sandbox());
         host.sandbox(out.container, out.opened);
-        const sent: string[] = [], failed: string[] = [];
+        const sent: string[] = [], failed: string[] = [], kept: string[] = [];
         for (const f of out.files) {
-          const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name);
-          const r = isImage ? await host.sendImage(f.bytes, f.name, "image/" + (f.name.split(".").pop() || "png").toLowerCase().replace("jpg", "jpeg")) : await host.sendFile(f.name, f.bytes);
-          (r.ok ? sent : failed).push(f.name + (r.ok ? "" : "（" + (r.error || "发送失败") + "）"));
+          const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name), mime = "image/" + (f.name.split(".").pop() || "png").toLowerCase().replace("jpg", "jpeg");
+          if (a.deliver === false) {
+            const id = isImage ? (await host.sendImage(f.bytes, f.name, mime, true)).id : host.keepFile(f.name, f.bytes);
+            kept.push(f.name + " → " + (id || "太大没存下"));
+            continue;
+          }
+          const r = isImage ? await host.sendImage(f.bytes, f.name, mime) : await host.sendFile(f.name, f.bytes);
+          if (!isImage && r.ok) host.keepFile(f.name, f.bytes);
+          (r.ok ? sent : failed).push(f.name + (r.ok ? (isImage && (r as any).id ? " → " + (r as any).id : "") : "（" + (r.error || "发送失败") + "）"));
         }
-        return { ok: true, answer: clip(out.text, 6000), files_sent: sent, ...(failed.length ? { files_not_sent: failed } : {}), code: out.code };
+        return { ok: true, answer: clip(out.text, 6000), ...(a.deliver === false ? { kept_as_materials: kept, note: "没发群里。图用 img:编号 排进 show 的网页，文件编号可以放进下一次 run_python 的 files" } : { files_sent: sent }), ...(failed.length ? { files_not_sent: failed } : {}), code: out.code };
       },
     },
     {

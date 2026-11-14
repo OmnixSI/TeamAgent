@@ -36,6 +36,7 @@ export class Hub extends DurableObject<Env> {
   firstPending = new Map<string, number>();
   anchorUse = new Map<string, number>();
   restartWanted = "";
+  jobs = new Map<string, { what: string; since: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -58,6 +59,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS change(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, by TEXT, kind TEXT, key TEXT, before TEXT, after TEXT, reason TEXT, status TEXT);
       CREATE TABLE IF NOT EXISTS spend(day TEXT, provider TEXT, item TEXT, unit TEXT, calls INTEGER DEFAULT 0, in_tok INTEGER DEFAULT 0, cached_tok INTEGER DEFAULT 0, out_tok INTEGER DEFAULT 0, units REAL DEFAULT 0, usd REAL DEFAULT 0, PRIMARY KEY(day, provider, item));
       CREATE TABLE IF NOT EXISTS snap(day TEXT PRIMARY KEY, cny REAL, ts INTEGER);
+      CREATE TABLE IF NOT EXISTS blob(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, name TEXT, data BLOB);
       CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, body TEXT, ts INTEGER);
     `);
     setMeter(u => this.record(u));
@@ -86,7 +88,7 @@ export class Hub extends DurableObject<Env> {
     const of = (c: string) => this.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name LIKE 'sticker:%' ORDER BY name", c).toArray().map((r: any) => String(r.name).slice(8));
     return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(this.get("main") || "") : [])])];
   }
-  async render(page: { html: string; width: number; height: number; full: boolean; selector?: string; settle: number }) {
+  async render(page: { html: string; width: number; height: number; full: boolean; selector?: string; settle: number; maxHeight?: number }) {
     const browser = await puppeteer.launch((this.env as any).BROWSER);
     try {
       const tab = await browser.newPage();
@@ -101,8 +103,9 @@ export class Hub extends DurableObject<Env> {
         }
         if (!clipBox && page.full) {
           const h = Number(await tab.evaluate("document.documentElement.scrollHeight"));
-          truncated = h > 7000;
-          clipBox = { x: 0, y: 0, width: page.width, height: Math.min(h, 7000) };
+          const cap = (page as any).maxHeight || 7000;
+          truncated = h > cap;
+          clipBox = { x: 0, y: 0, width: page.width, height: Math.min(h, cap) };
         }
         const shot = await tab.screenshot({ type: "jpeg", quality, ...(clipBox ? { clip: clipBox } : {}) });
         return { bytes: new Uint8Array(shot as ArrayBuffer), truncated };
@@ -110,6 +113,19 @@ export class Hub extends DurableObject<Env> {
       let out = await shoot(2, 86);
       if (out.bytes.length > 3_500_000) out = await shoot(1, 80);   // very long pages: trade sharpness for a size QQ accepts
       return out;
+    } finally { await browser.close().catch(() => {}); }
+  }
+
+  /** Prints a page-laid-out document to PDF; `width`/`height` are the page size in CSS pixels. */
+  async renderPdf(html: string, width: number, height: number) {
+    const browser = await puppeteer.launch((this.env as any).BROWSER);
+    try {
+      const tab = await browser.newPage();
+      await tab.setViewport({ width, height, deviceScaleFactor: 1 });
+      await tab.setContent(html, { waitUntil: "networkidle0", timeout: 40000 }).catch(() => {});
+      await sleep(600);
+      const pdf = await tab.pdf({ width: width + "px", height: height + "px", printBackground: true, preferCSSPageSize: true, margin: { top: 0, right: 0, bottom: 0, left: 0 } });
+      return new Uint8Array(pdf as ArrayBuffer);
     } finally { await browser.close().catch(() => {}); }
   }
 
@@ -369,8 +385,9 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM img WHERE conv=? AND name IS NULL AND id NOT IN (SELECT id FROM img WHERE conv=? AND name IS NULL ORDER BY id DESC LIMIT 40)", conv, conv);
     return "g" + row.id;
   }
-  async sendImage(conv: string, bytes: Uint8Array, note: string, mime = "image/jpeg") {
+  async sendImage(conv: string, bytes: Uint8Array, note: string, mime = "image/jpeg", silent = false) {
     const id = this.keepImage(conv, bytes, mime, note);
+    if (silent) return { ok: !!id, id };
     const r = await this.sendMediaMessage(conv, 1, b64(bytes), "[你发了一张图" + (id ? " " + id : "") + "：" + clip(note, 60) + "]");
     return { ...r, id };
   }
@@ -413,6 +430,8 @@ export class Hub extends DurableObject<Env> {
         return Date.now() - Number(hub.get("sandbox:at") || 0) < 17 * 60000 ? hub.get("sandbox:id") || "" : "";
       },
       render: page => hub.render(page),
+      renderPdf: (html, width, height) => hub.renderPdf(html, width, height),
+      say: text => hub.say(conv, text, { queue: false }),
       stickerNames: () => hub.stickerNames(conv),
       sendSticker: async name => {
         const lib = hub.stickerNames(conv), pick = lib.includes(name) ? name : lib.find(n => n.includes(name) || name.includes(n));
@@ -437,7 +456,13 @@ export class Hub extends DurableObject<Env> {
         return new TextEncoder().encode("\ufefftime,name,text\n" + rows.map((r: any) => [fmtDate(Number(r.ts), BJ) + " " + new Date(Number(r.ts) + 8 * 3600000).toISOString().slice(11, 19), r.role === "bot" ? "Bot" : String(r.name || "成员"), String(r.text || "")].map(cell).join(",")).join("\n"));
       },
       env: this.env, now: () => Date.now(),
-      sendImage: (bytes, note, mime) => hub.sendImage(conv, bytes, note, mime),
+      sendImage: (bytes, note, mime, silent) => hub.sendImage(conv, bytes, note, mime, silent),
+      keepFile: (name, bytes) => {
+        if (bytes.length > 1_800_000) return "";
+        const row = hub.sql.exec("INSERT INTO blob(conv,ts,name,data) VALUES(?,?,?,?) RETURNING id", conv, Date.now(), name, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)).toArray()[0];
+        hub.sql.exec("DELETE FROM blob WHERE conv=? AND id NOT IN (SELECT id FROM blob WHERE conv=? ORDER BY id DESC LIMIT 40)", conv, conv);
+        return "f" + row.id;
+      },
       sendFile: (name, bytes) => hub.sendMediaMessage(conv, 4, b64(bytes), "[你发了一个文件：" + name + "]", name),
       imageRef: ref => hub.imageRef(conv, ref),
       nameImage: async (ref, name) => {
@@ -448,6 +473,11 @@ export class Hub extends DurableObject<Env> {
         return true;
       },
       fileRef: async ref => {
+        const kept = ref.trim().match(/^f(\d+)$/i);
+        if (kept) {
+          const row = hub.sql.exec("SELECT name,data FROM blob WHERE id=?", Number(kept[1])).toArray()[0];
+          return row ? { name: String(row.name), bytes: new Uint8Array(row.data as ArrayBuffer) } : null;
+        }
         if (/^https?:\/\//.test(ref.trim())) {
           const got = await hub.fetchBytes(ref.trim(), 30 * 1024 * 1024);
           const named = hub.sql.exec("SELECT meta FROM msg WHERE conv=? AND meta LIKE ? ORDER BY seq DESC LIMIT 1", conv, "%" + ref.trim().slice(0, 80) + "%").toArray()[0];
@@ -489,7 +519,7 @@ export class Hub extends DurableObject<Env> {
         "SELECT date(ts/1000 + 28800, 'unixepoch') d, COALESCE(NULLIF(name,''), '成员') n, COUNT(*) c, SUM(length(text)) ch FROM msg WHERE conv=? AND role='user' AND ts>? GROUP BY d, n ORDER BY d DESC, c DESC",
         conv, Date.now() - days * 86400000).toArray().map((r: any) => ({ date: String(r.d), name: String(r.n), count: Number(r.c), chars: Number(r.ch) })),
       recentLines: n => hub.recent(conv, n).map(r => (r.role === "bot" ? "Bot" : displayName(r)) + "：" + clip(r.text, 300)).join("\n"),
-      memory: () => hub.get("memory:" + conv) || "",
+      memory: () => hub.get("memory:" + conv) || (conv.startsWith("t:") ? hub.get("memory:" + (hub.get("main") || "")) || "" : ""),
       quota: async (kind, limit) => {
         const k = "quota:" + kind + ":" + fmtDate(Date.now(), SYD), n = Number(hub.get(k) || 0);
         if (n >= limit) return false;
@@ -572,8 +602,9 @@ export class Hub extends DurableObject<Env> {
       conv, Date.now(), kind, s.ms, s.firstMs, s.calls, s.tools.join(","), s.inTok, s.outTok, s.cached, res.silent ? "" : clip(res.replies.join(" ‖ "), 300), s.error || null);
     this.sql.exec("DELETE FROM turn WHERE id < (SELECT MAX(id) FROM turn) - 3000");
   }
-  deps(conv: string, interim: boolean, askers: { id: string; name: string }[] = []) {
+  deps(conv: string, interim: boolean, askers: { id: string; name: string }[] = [], detach?: (what: string) => void) {
     return {
+      ...(detach ? { detach } : {}),
       chat: (body: any, effort: any, timeout?: number) => dsChat(this.env, { ...body, label: "聊天" }, effort, timeout),
       tools: buildTools(this.host(conv, askers)),
       ...(interim ? { interim: async (text: string) => { await this.say(conv, text, { queue: false }); } } : {}),
@@ -582,7 +613,7 @@ export class Hub extends DurableObject<Env> {
   async runConv(conv: string): Promise<TurnResult | null> {
     if (this.running.has(conv)) { this.wake.set(conv, Date.now() + 1500); setTimeout(() => this.poke(conv), 1510); return null; }
     this.running.add(conv);
-    let top = 0;
+    let top = 0, detached = false;
     try {
       const cursor = Number(this.get("cursor:" + conv) || 0);
       const rows = this.window(conv);
@@ -592,17 +623,27 @@ export class Hub extends DurableObject<Env> {
       const mentioned = fresh.some(r => r.mentioned);
       const images = await this.loadImages(fresh);
       const askers = fresh.filter(r => r.mentioned).map(r => ({ id: String(r.sender || ""), name: displayName(r) }));
+      // A long job lets go of the conversation: the chat moves on, and the result is posted when it is done.
+      const detach = (what: string) => {
+        if (detached) return;
+        detached = true;
+        this.jobs.set(conv, { what, since: Date.now() });
+        this.set("cursor:" + conv, String(top));
+        this.running.delete(conv);
+      };
+      const job = this.jobs.get(conv);
       const res = await runTurn(
         {
           rows, cursor, mentioned, memory: this.get("memory:" + conv) || "", notes: this.notes(conv), now: Date.now(), images,
           rules: this.play(conv, "persona"), askers: askers.map(a => a.name), talkative: String(this.cfg(conv, "talkative")), splitMax: Number(this.cfg(conv, "reply_split_max")),
+          ...(job ? { job: job.what + "（已经做了 " + Math.max(1, Math.round((Date.now() - job.since) / 60000)) + " 分钟）" } : {}),
         },
-        this.deps(conv, true, askers),
+        this.deps(conv, true, askers, detach),
       );
-      this.set("cursor:" + conv, String(top));
+      if (!detached) this.set("cursor:" + conv, String(top));
       // A casual remark that the chat has already moved past is dropped; the next turn sees everything.
       const newer = Number(this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, top).toArray()[0].n);
-      const stale = !mentioned && (newer >= 3 || (newer >= 1 && res.stats.ms > 9000));
+      const stale = !detached && !mentioned && (newer >= 3 || (newer >= 1 && res.stats.ms > 9000));
       if (!res.silent && !stale) {
         // When one person asked and the chat has moved on since, quote their message so it is clear who is being answered.
         const asked = fresh.filter(r => r.mentioned);
@@ -614,15 +655,16 @@ export class Hub extends DurableObject<Env> {
           await this.say(conv, res.replies[i], { queue: mentioned, quote: i === 0 ? quote : undefined });
         }
       }
-      this.logTurn(conv, stale ? "stale" : mentioned ? "called" : "chat", res);
+      this.logTurn(conv, detached ? "job" : stale ? "stale" : mentioned ? "called" : "chat", res);
       if (images.length) this.ctx.waitUntil(this.captionImages(images));
       return res;
     } catch (e: any) {
       console.log("turn failed", e?.message);
-      if (top) this.set("cursor:" + conv, String(top));
+      if (top && !detached) this.set("cursor:" + conv, String(top));
+      if (detached) await this.say(conv, "刚才那个活做到一半出错了，没做完：" + clip(e?.message || "未知错误", 80)).catch(() => {});
       return null;
     } finally {
-      this.running.delete(conv);
+      if (detached) this.jobs.delete(conv); else this.running.delete(conv);
       this.maybeRestart();
       const cursor = Number(this.get("cursor:" + conv) || 0);
       const more = this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0].n;
@@ -659,7 +701,7 @@ export class Hub extends DurableObject<Env> {
   }
   /** A new build waits for the turns in flight to finish, so nobody's answer is cut off. */
   maybeRestart() {
-    if (!this.restartWanted || this.running.size) return;
+    if (!this.restartWanted || this.running.size || this.jobs.size) return;
     const why = this.restartWanted; this.restartWanted = "";
     this.closeWs();
     this.ctx.storage.setAlarm(Date.now() + 1500).then(() => this.ctx.abort("restart for " + why));
@@ -742,7 +784,7 @@ export class Hub extends DurableObject<Env> {
       const want = url.searchParams.get("build");
       if (path === "/admin/restart" || (want && want !== BUILD)) {
         this.restartWanted = "build " + (want || "manual");
-        if (this.running.size) return json({ ok: true, build: BUILD, restart: "after " + this.running.size + " running turn(s)" });
+        if (this.running.size || this.jobs.size) return json({ ok: true, build: BUILD, restart: "after " + (this.running.size + this.jobs.size) + " running turn(s)" });
         this.maybeRestart();
       }
       await this.tick();

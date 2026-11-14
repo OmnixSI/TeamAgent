@@ -1,6 +1,6 @@
 // Things too big or too structured for a chat bubble — documents, mind maps, diagrams, custom pages —
 // are built as a web page here, rendered to a picture by a headless browser, and sent with the source file.
-export type Page = { html: string; width: number; height: number; full: boolean; selector?: string; settle: number; file: { name: string; text: string } };
+export type Page = { html: string; width: number; height: number; full: boolean; selector?: string; settle: number; maxHeight?: number; file: { name: string; text: string } };
 
 const FONT = `"Noto Sans CJK SC","Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
