@@ -7,7 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "get_quota", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";

@@ -198,3 +198,11 @@ CREATE TABLE IF NOT EXISTS image_gen_log(
 CREATE INDEX IF NOT EXISTS image_gen_log_group_turn ON image_gen_log(group_id, turn_id);
 CREATE INDEX IF NOT EXISTS image_gen_log_group_time ON image_gen_log(group_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS image_gen_log_turn_live ON image_gen_log(group_id, turn_id) WHERE status IN ('pending', 'ok');
+CREATE TABLE IF NOT EXISTS ds_balance_snapshots(
+  scope TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  total_balance TEXT NOT NULL,
+  granted_balance TEXT NOT NULL,
+  topped_up_balance TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(scope, currency));
