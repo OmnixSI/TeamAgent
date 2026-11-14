@@ -1,3 +1,4 @@
+// 单独跑这个文件：node --test test/pure.test.mjs
 // Offline tests for the pure helpers: text, time, QQ event parsing, image sizes, prices, config, pages.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
