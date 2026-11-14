@@ -2,11 +2,22 @@ import { processVoiceOutbox } from "./voice-delivery.mjs";
 import { recoverDeliveries, deliverFiles } from "./delivery.mjs";
 import { sampleCardEvent, sweepCardSamples } from "./card-samples.mjs";
 import { mentionsBili, writeFetchWake } from "./fetch-wake.mjs";
+import { preflightTools } from "./toolchain.mjs";
 // Local official QQ gateway. No model runs here; all business processing remains in the team Worker.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+const tools = preflightTools();
+if (tools.ffmpeg.ok) console.log("TTS toolchain ready: " + tools.ffmpeg.path);
+else
+  console.log(
+    "TTS toolchain unavailable: " +
+      tools.ffmpeg.error +
+      "；语音回复会回退为文字",
+  );
+if (!tools.ffprobe.ok)
+  console.log("ASR probe unavailable: " + tools.ffprobe.error);
 const home = path.join(os.homedir(), ".inkboard-team");
 const config = JSON.parse(fs.readFileSync(path.join(home, "config.json")));
 const cardConfig = () => {
@@ -200,7 +211,7 @@ setInterval(async () => {
         Authorization: "Bearer " + config.runnerToken,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ connected, blocked }),
+      body: JSON.stringify({ connected, blocked, tools }),
       signal: AbortSignal.timeout(15000),
     });
     if (response.ok) voiceReady = (await response.json()).voice === true;

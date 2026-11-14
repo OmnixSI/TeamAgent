@@ -38,6 +38,14 @@ class UtilityTranscribeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_audio_tools_are_configurable_and_absolute_without_path(self):
+        with patch.dict(os.environ, {"FFMPEG_BIN": "/custom/ffmpeg"}, clear=False):
+            self.assertEqual(self.u.tool_binary("ffmpeg"), "/custom/ffmpeg")
+        if os.access("/opt/homebrew/bin/ffmpeg", os.X_OK):
+            with patch.dict(os.environ, {"PATH": ""}, clear=False):
+                os.environ.pop("FFMPEG_BIN", None)
+                self.assertEqual(self.u.tool_binary("ffmpeg"), "/opt/homebrew/bin/ffmpeg")
+
     def audio(self, name="audio-BV1ab4111111.m4a"):
         path = self.inputs / name
         path.write_bytes(b"fake-audio")

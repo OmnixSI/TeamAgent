@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runCommand, fault } from "./asr.mjs";
+import { ffmpegToolchain, requireTool } from "./toolchain.mjs";
 import { wavToSilk } from "./silk.mjs";
 import { sendQQVoice } from "./qq-voice.mjs";
 
@@ -44,6 +45,27 @@ const FFMPEG_ARGS = (src, dst) => [
   "-y",
   dst,
 ];
+
+/**
+ * The exact conversion both TTS providers share: any decodable input becomes
+ * 24 kHz mono 16-bit PCM WAV. Resolving ffmpeg here (instead of spawning a
+ * bare name) keeps voice working under launchd's minimal PATH.
+ */
+export async function normalizeAudio(src, dst, options = {}, deps = {}) {
+  const bin = requireTool(ffmpegToolchain(deps), "tts_tool_missing");
+  const run = deps.runCommand || runCommand;
+  const result = await run(
+    bin,
+    FFMPEG_ARGS(src, dst),
+    {
+      timeoutMs: options.timeoutMs,
+      timeoutReason: "tts_timeout",
+      missingReason: "tts_tool_missing",
+    },
+    deps,
+  );
+  return { ...result, bin };
+}
 
 export const defaultCacheDir = (home = homedir()) =>
   join(home, ".inkboard-team", "tts-cache");
@@ -210,10 +232,7 @@ async function renderEdge(body, opts, deps, work, remaining) {
     deps,
   );
   if (speech?.code !== 0) throw fault("tts_failed");
-  const audio = await run("ffmpeg", FFMPEG_ARGS(mp3, wav), {
-    timeoutMs: remaining(),
-    timeoutReason: "tts_timeout",
-  }, deps);
+  const audio = await normalizeAudio(mp3, wav, { timeoutMs: remaining() }, deps);
   if (audio?.code !== 0) throw fault("tts_failed");
   assertWav(wav);
   return wav;
@@ -239,12 +258,7 @@ async function renderDeepSeek(body, opts, deps, work, remaining) {
   fs.writeFileSync(raw, bytes);
   // Normalise the RIFF header: DeepSeek streaming WAVs do not always match
   // their declared chunk length, which silk-wasm rejects later.
-  const audio = await (deps.runCommand || runCommand)(
-    "ffmpeg",
-    FFMPEG_ARGS(raw, wav),
-    { timeoutMs: remaining(), timeoutReason: "tts_timeout" },
-    deps,
-  );
+  const audio = await normalizeAudio(raw, wav, { timeoutMs: remaining() }, deps);
   if (audio?.code !== 0) throw fault("tts_failed");
   assertWav(wav);
   return wav;
@@ -327,6 +341,11 @@ export async function voiceReply({ bot, group, text, cfg = {}, deps = {} } = {})
     return { via: "text", reason, ...extra };
   };
   if (!opts.enabled || !body) return say(opts.enabled ? "empty" : "disabled");
+  const tool = (deps.ffmpegToolchain || ffmpegToolchain)(deps);
+  if (!tool.ok) {
+    deps.log?.(`tts toolchain unavailable: ${tool.error}`);
+    return say("tool_missing");
+  }
   const synth = deps.synthesize || synthesize;
   let audio = null;
   try {

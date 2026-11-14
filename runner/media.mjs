@@ -8,6 +8,7 @@ import {execFileSync} from 'node:child_process';
 import {createFetchClient,createSafeLookup,sanitize,classifyMedia} from './fetcher.mjs';
 import {loadBiliCookies} from './browser-auth.mjs';
 import {runCommand,expandHome,fault} from './asr.mjs';
+import {ffmpegToolchain,requireTool} from './toolchain.mjs';
 import {runVoiceCycle} from './voice.mjs';
 import {transcribeAudio} from './cloud-asr.mjs';
 const DAY=86400000,MAX_TMP=2048*1024**2,BV=/^BV[0-9A-Za-z]{10}$/;
@@ -67,7 +68,8 @@ export function downloadAudio(raw,dest,options={}){
 }
 export const ffmpegArgs=(src,dst,maxMin=90)=>['-nostdin','-hide_banner','-loglevel','error','-i',src,'-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-t',String(maxMin*60),'-y',dst];
 export async function ffmpegAudio(src,dst,{maxMinutes=90,signal,onChild}={},deps={}){
- const r=await runCommand('ffmpeg',ffmpegArgs(src,dst,maxMinutes),{timeoutMs:120000,timeoutReason:'download_failed',signal,onChild},deps);
+ const bin=requireTool(ffmpegToolchain(deps),'asr_unavailable');
+ const r=await runCommand(bin,ffmpegArgs(src,dst,maxMinutes),{timeoutMs:120000,timeoutReason:'download_failed',signal,onChild,missingReason:'asr_unavailable'},deps);
  if(r.code!==0)throw fault('download_failed');return r;
 }
 export async function makeClient(home,deps={}){

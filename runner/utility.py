@@ -17,6 +17,17 @@ TLS = ssl.create_default_context(
 )
 
 
+def tool_binary(name):
+    """Resolve an external audio tool without relying on launchd's PATH."""
+    configured = str(os.environ.get(name.upper() + "_BIN", "")).strip()
+    if configured:
+        return configured
+    for candidate in ("/opt/homebrew/bin/" + name, "/usr/local/bin/" + name):
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return shutil.which(name) or name
+
+
 def cloud(path, body):
     r = urllib.request.Request(
         C["url"] + "/api/runner/" + path,
@@ -399,7 +410,7 @@ def release_media_lock():
 def media_duration(path):
     result = subprocess.run(
         [
-            "ffprobe",
+            tool_binary("ffprobe"),
             "-v",
             "error",
             "-show_entries",
@@ -424,7 +435,7 @@ def to_wav(source, target, max_minutes, work):
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     code = audio_process(
         [
-            "ffmpeg",
+            tool_binary("ffmpeg"),
             "-nostdin",
             "-hide_banner",
             "-loglevel",

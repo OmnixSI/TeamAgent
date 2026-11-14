@@ -329,6 +329,8 @@ function renderStatus() {
     ),
   );
   if (g?.blocked) $("connection").append(badge(g.blocked, "bad"));
+  if (g?.tools?.ffmpeg && g.tools.ffmpeg.ok === false)
+    $("connection").append(badge("本机缺 ffmpeg · 语音自动回文字", "bad"));
   if (c.chatTiming)
     $("connection").append(
       badge(

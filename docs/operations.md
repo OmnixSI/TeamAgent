@@ -44,6 +44,8 @@ QQ SDK单独锁定在 runner/sdk/，安装到私密运行目录，不再依赖 D
 
 当前 launchd 服务：com.inkboard.team-qq、com.inkboard.team-runner、com.inkboard.team-owner、com.inkboard.team-utility、com.inkboard.team-utility-quick、com.inkboard.team-fetch。用户登录后运行；退出桌面窗口不影响服务。按需用 launchctl kickstart -k gui/$(id -u)/服务名 重启，避免处理中途重启。
 
+语音与音轨用的 ffmpeg/ffprobe 由 runner/toolchain.mjs 解析：FFMPEG_BIN / FFPROBE_BIN 优先，其次 /opt/homebrew/bin、/usr/local/bin，最后 PATH，不依赖 launchd 的 PATH。qq 服务的 plist 若缺 PATH，用 python3 scripts/patch-qq-plist.py --apply 只补 EnvironmentVariables.PATH（不动其他键、不重启），再由交付步骤 bootout/bootstrap。
+
 电脑需登录、联网、保持唤醒。当前 QQ 入口仍是本机官方长连接；电脑离线时，QQ收信、文件与代码执行均暂停。Web端与已保存资料留在Cloudflare。
 
 ## B 站 / X 一次性登录

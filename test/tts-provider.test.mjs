@@ -19,7 +19,7 @@ const WAV = Buffer.concat([
 
 const fakeRun = (log, { edgeFails = false } = {}) => async (command, args) => {
   log.push({ command, args: args.slice() });
-  if (command === "ffmpeg") {
+  if (path.basename(command) === "ffmpeg") {
     fs.writeFileSync(args.at(-1), WAV);
     return { code: 0, stdout: "", stderr: "" };
   }
@@ -51,7 +51,7 @@ test("auto prefers the free edge path and never calls DeepSeek when edge works",
     );
     assert.equal(result.provider, "edge");
     assert.equal(result.cached, false);
-    assert.ok(calls.some((c) => c.command === "ffmpeg"));
+    assert.ok(calls.some((c) => path.basename(c.command) === "ffmpeg"));
     assert.deepEqual(fs.readdirSync(s.cacheDir), [path.basename(result.path)]);
   } finally {
     s.clean();

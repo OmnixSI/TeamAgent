@@ -171,6 +171,22 @@ test("owner sees exact balance, usage, OpenAI, image and neuron numbers", async 
   }
 });
 
+test("the image quota line disappears when image generation is switched off", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  await set(e, "off:image_gen", "1");
+  const stub = stubFetch(balancePayload());
+  try {
+    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    assert.equal(result.ok, true);
+    assert.equal(result.text.includes("生图"), false);
+    assert.match(result.text, /OpenAI：今天 2 次/);
+    assert.match(result.text, /Workers AI：/);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("the tool grants exact numbers only to an owner who directly asked", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   await seedUsage(e);

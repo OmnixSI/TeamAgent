@@ -92,6 +92,8 @@ export type QuotaSnapshot = {
     remainingMicroUsd: number;
   };
   images: { group: number; groupCap: number; user: number; userCap: number };
+  /** False when off:image_gen=1; the owner report then omits the image row. */
+  imageGenEnabled: boolean;
   ai: { used: number; cap: number };
 };
 
@@ -415,6 +417,7 @@ export async function quotaSnapshot(
     "openai:daily_cap_micro_usd",
     "imagegen:user_daily",
     "imagegen:group_daily",
+    "off:image_gen",
     aiKey,
     "workers_ai:neurons_cap",
   ]);
@@ -480,6 +483,7 @@ export async function quotaSnapshot(
       user: Number(images.mine) || 0,
       userCap: positive(settings["imagegen:user_daily"], IMAGE_USER_DAILY_DEFAULT),
     },
+    imageGenEnabled: settings["off:image_gen"] !== "1",
     ai: { used: aiUsed, cap: aiCap },
   };
 }
@@ -679,17 +683,18 @@ export function ownerQuotaText(snapshot: QuotaSnapshot): string {
       "，剩 " +
       usdMicro(snapshot.openai.remainingMicroUsd),
   );
-  parts.push(
-    "生图：近 24 小时本群 " +
-      snapshot.images.group +
-      " / " +
-      snapshot.images.groupCap +
-      " 张，你 " +
-      snapshot.images.user +
-      " / " +
-      snapshot.images.userCap +
-      " 张",
-  );
+  if (snapshot.imageGenEnabled)
+    parts.push(
+      "生图：近 24 小时本群 " +
+        snapshot.images.group +
+        " / " +
+        snapshot.images.groupCap +
+        " 张，你 " +
+        snapshot.images.user +
+        " / " +
+        snapshot.images.userCap +
+        " 张",
+    );
   parts.push(
     "Workers AI：今天 " + snapshot.ai.used + " / " + snapshot.ai.cap + " neurons（UTC 日）",
   );
