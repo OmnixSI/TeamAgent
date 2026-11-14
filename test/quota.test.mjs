@@ -13,7 +13,7 @@ await build({
       'export { getQuotaTool } from "./src/tools/quota";' +
       'export { EXTRA_TOOLS } from "./src/tools/index";' +
       'export { TOOLS_CATALOG } from "./src/review/catalog";' +
-      'export { agentAnswer, LOCAL_TOOLS } from "./src/semantic";',
+      'export { agentAnswer, LOCAL_TOOLS, isQuotaQuestion } from "./src/semantic";',
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -622,4 +622,123 @@ test("inbound message metadata still records the QQ member role", async () => {
   await qq(e, msg("quota-role-1", "你还有多少额度"));
   const row = await e.DB.prepare("SELECT json FROM message_meta WHERE id='quota-role-1'").first();
   assert.equal(JSON.parse(row.json).memberRole, "owner");
+});
+
+test("A3b: quota-question detection covers the replay fixtures without widening chat", () => {
+  assert.equal(api.isQuotaQuestion("DeepSeek 还有多少余额"), true);
+  assert.equal(api.isQuotaQuestion("你还有多少额度"), true);
+  assert.equal(api.isQuotaQuestion("查下你的api额度"), true);
+  assert.equal(api.isQuotaQuestion("今天余额只有30了，我就又充了一些，过两天你们充一充"), false);
+  assert.equal(api.isQuotaQuestion("今天群里好安静"), false);
+});
+
+// The no-@ path spends 19 of the 48 chat statements before the model, so only
+// 29 are left: below the normal 32-statement tool floor. A plain quota question
+// must still be answered from get_quota, and only get_quota.
+test("A3b: a no-@ quota question gets the exact balance with 29 statements left", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  await seedUsage(e);
+  const row = {
+    id: "quota-budget-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "DeepSeek 还有多少余额",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  await e.DB.prepare("INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,0)")
+    .bind(row.id, row.group_id, row.sender, row.body, row.ts)
+    .run();
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: false };
+  const requests = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (url, opt) => {
+    if (String(url) === api.DEEPSEEK_BALANCE_URL)
+      return new Response(JSON.stringify(balancePayload("8.88")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const body = JSON.parse(opt.body);
+    requests.push(body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块")) {
+      const facts = String(JSON.parse(body.messages[1].content).brief?.facts ?? "");
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        mode: "work",
+        text: facts.includes("8.88") ? "DeepSeek 余额：¥8.88（较上次 −1.23 元）" : "【模型桩】按真实结果回答。",
+      }) } }] });
+    }
+    if (body.tools) {
+      return Response.json({ choices: [{ message: { role: "assistant", tool_calls: [
+        { id: "quota-budget-call", type: "function", function: { name: "get_quota", arguments: "{}" } },
+      ] } }] });
+    }
+    const tool = [...(body.messages || [])].reverse().find((m) => m.role === "tool");
+    const hasBalance = /8\.88/.test(String(tool?.content ?? ""));
+    return Response.json({ choices: [{ message: { content: JSON.stringify({
+      action: "reply",
+      kind: "direct",
+      brief: hasBalance ? "当前余额 ¥8.88，较上次少 1.23 元。" : "按真实结果回答。",
+    }) } }] });
+  };
+  try {
+    const answer = await api.agentAnswer(e, context);
+    const toolRequests = requests.filter((r) => Array.isArray(r.tools));
+    assert.equal(toolRequests.length, 1);
+    assert.deepEqual(toolRequests[0].tools.map((t) => t.function.name), ["get_quota"]);
+    assert.match(answer, /¥8\.88/);
+    const audit = await e.DB.prepare("SELECT name,ok,error_kind,offered FROM turn_tools").all();
+    assert.deepEqual(audit.results.map((r) => ({ ...r })), [{ name: "get_quota", ok: 1, error_kind: null, offered: 1 }]);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: ordinary chat with 29 statements left still gets no tools", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  const row = {
+    id: "chat-budget-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "今天群里好安静",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: false };
+  const requests = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (_url, opt) => {
+    const body = JSON.parse(opt.body);
+    requests.push(body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+      return Response.json({ choices: [{ message: { content: '{"mode":"banter","text":"是挺安静。"}' } }] });
+    return Response.json({ choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"是挺安静。"}' } }] });
+  };
+  try {
+    await api.agentAnswer(e, context);
+    assert.equal(requests.some((r) => Array.isArray(r.tools)), false);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: a failed balance read never overwrites the last good snapshot", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  const good = stubFetch(balancePayload("50.00", { granted: "2.00", toppedUp: "48.00" }));
+  await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
+  good.restore();
+  const before = await get(e, api.QUOTA_LAST_KEY);
+  assert.match(before, /"total":"50.00"|"deepseek":\{"CNY":"50\.00"\}/);
+  const bad = stubFetch(null, { fail: new Error("upstream 503") });
+  try {
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW + 11 * 60000 });
+    assert.match(result.text, /DeepSeek 余额：暂时查不到/);
+    assert.equal(await get(e, api.QUOTA_LAST_KEY), before);
+  } finally {
+    bad.restore();
+  }
 });
