@@ -220,6 +220,77 @@ def make_many_rows_xlsx(path, rows=6000, dimension=True):
         z.writestr("xl/worksheets/sheet1.xml", sheet)
 
 
+def xlsx_column(index):
+    name = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
+def write_single_sheet_xlsx(path, sheet_xml):
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+    rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    workbook = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="表1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"""
+    workbook_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+
+
+def make_wide_row_xlsx(path, cells=16_385):
+    cell_xml = "".join(
+        f'<c r="{xlsx_column(i)}1"><v>{i}</v></c>' for i in range(1, cells + 1)
+    )
+    sheet = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1:{xlsx_column(cells)}1"/><sheetData><row r="1">{cell_xml}</row></sheetData></worksheet>"""
+    write_single_sheet_xlsx(path, sheet)
+
+
+def make_out_of_row_xlsx(path, count=100_001):
+    sheet = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1"/><sheetData/>{'<x/>' * count}</worksheet>"""
+    write_single_sheet_xlsx(path, sheet)
+
+
+def make_docx_many_elements(path, count=2_000_001):
+    """A docx-shaped zip with >2M small elements and low compression (random attrs)."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        with z.open("word/document.xml", "w") as entry:
+            entry.write(b"<document>")
+            batch = 10000
+            for base in range(0, count, batch):
+                take = min(batch, count - base)
+                raw = os.urandom(take * 2)
+                entry.write(b"".join(
+                    b'<p a="' + raw[i * 2:i * 2 + 2].hex().encode("ascii") + b'"/>'
+                    for i in range(take)
+                ))
+            entry.write(b"</document>")
+
+
 class DocReadTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -383,7 +454,9 @@ class DocReadTests(unittest.TestCase):
         self.assertIn("合计", out["error"])
         self.assertIn("48", out["error"])
 
-    def test_xlsx_sheet_xml_over_32_mib_is_rejected(self):
+    def test_guard_allows_large_worksheet_member(self):
+        # Worksheets are exempt from the 32/48 MiB XML caps: a real 60k x 10 sheet
+        # is 28.6 MiB and must reach the 5000-row truncation path.
         make_low_ratio_zip(
             self.root / "wide.xlsx",
             [("xl/worksheets/sheet1.xml", 40 * 1024 * 1024)],
@@ -391,12 +464,44 @@ class DocReadTests(unittest.TestCase):
         )
         with zipfile.ZipFile(self.root / "wide.xlsx") as archive:
             info = archive.getinfo("xl/worksheets/sheet1.xml")
+        self.assertGreater(info.file_size, 32 * 1024 * 1024)
         self.assertLess(info.compress_size, 4 * 1024 * 1024)
         self.assertLess(info.file_size / info.compress_size, 100)
-        out = self.read("wide.xlsx")
+        self.assertGreater(docread._guard_ooxml(self.root / "wide.xlsx"), 40 * 1024 * 1024)
+
+    def test_docx_with_too_many_xml_elements_is_rejected(self):
+        make_docx_many_elements(self.root / "elements.docx")
+        out = self.read("elements.docx")
         self.assertFalse(out["ok"], out)
         self.assertEqual(out["error_kind"], "too_large")
-        self.assertIn("XML 单文件上限", out["error"])
+        self.assertIn("XML 元素", out["error"])
+        self.assertIn("2000000", out["error"])
+
+    def test_xlsx_wide_row_is_rejected(self):
+        make_wide_row_xlsx(self.root / "wide-row.xlsx", cells=16_385)
+        out = self.read("wide-row.xlsx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("16384", out["error"])
+        self.assertIn("格", out["error"])
+
+    def test_xlsx_out_of_row_elements_are_rejected(self):
+        make_out_of_row_xlsx(self.root / "out-of-row.xlsx")
+        out = self.read("out-of-row.xlsx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("行外元素", out["error"])
+        self.assertIn("100000", out["error"])
+
+    def test_xlsx_stdlib_caps_columns_at_200(self):
+        make_wide_row_xlsx(self.root / "wide-cols.xlsx", cells=1000)
+        sections, sheets = docread._xlsx_stdlib(self.root / "wide-cols.xlsx")
+        self.assertEqual(sheets[0]["cols"], 200)
+        self.assertTrue(sheets[0]["columns_truncated"])
+        self.assertEqual(len(sections[0]["text"].splitlines()[0].split(" | ")), 200)
+        out = self.read("wide-cols.xlsx")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(any("超过 200 列" in warning for warning in out["warnings"]))
 
     def test_xlsx_caps_rows_when_dimension_is_missing(self):
         make_many_rows_xlsx(self.root / "nodim.xlsx", rows=6000, dimension=False)
@@ -415,7 +520,7 @@ class DocReadTests(unittest.TestCase):
         self.assertIn("备注", sections[1]["text"])
 
     def test_xlsx_stdlib_truncates_rows_and_warns(self):
-        make_many_rows_xlsx(self.root / "many.xlsx", rows=6000)
+        make_many_rows_xlsx(self.root / "many.xlsx", rows=70_000)
         sections, sheets = docread._xlsx_stdlib(self.root / "many.xlsx")
         self.assertEqual(sheets[0]["rows"], 5000)
         self.assertTrue(sheets[0]["truncated"])
