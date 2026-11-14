@@ -24,6 +24,7 @@ import { recordsReadTool, recordsWriteTool } from "./records";
 import { repoSearchTools } from "./repo-search";
 import { runStepsTool, runTaskTool } from "./run";
 import { searchHistoryTool } from "./search-history";
+import { skillDisableTool, skillListTool, skillRunTool, skillSaveTool } from "./skills";
 import { stockQuoteTool } from "./stock-quote";
 import { summarizeChatTool } from "./summarize-chat";
 import { webSearchTool } from "./web-search";
@@ -48,6 +49,10 @@ export const EXTRA_TOOLS: BotTool[] = [
   runTaskTool,
   searchHistoryTool,
   searchKbTool,
+  skillDisableTool,
+  skillListTool,
+  skillRunTool,
+  skillSaveTool,
   stockQuoteTool,
   summarizeChatTool,
   webSearchTool,

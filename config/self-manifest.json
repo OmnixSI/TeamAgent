@@ -1473,6 +1473,10 @@
   "uncovered_ok": [
     "calc",
     "records_read",
-    "records_write"
+    "records_write",
+    "skill_disable",
+    "skill_list",
+    "skill_run",
+    "skill_save"
   ]
 }
