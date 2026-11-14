@@ -11,6 +11,7 @@ import {runCommand,expandHome,fault} from './asr.mjs';
 import {ffmpegToolchain,requireTool} from './toolchain.mjs';
 import {runVoiceCycle} from './voice.mjs';
 import {transcribeAudio} from './cloud-asr.mjs';
+import {sweepDue} from './tmpclean.mjs';
 const DAY=86400000,MAX_TMP=2048*1024**2,BV=/^BV[0-9A-Za-z]{10}$/;
 const MEDIA_JOB=/^bmedia-BV[0-9A-Za-z]{10}(?:-p(?:[2-9]|[1-9]\d{1,2}))?$/;
 const DEFAULT={enabled:false,max_minutes:90,rtf:0.05,deadline_cap_minutes:40,mem_cap_mb:1300,tmp_cap_mb:2048};
@@ -215,7 +216,11 @@ function settings(home){
  const repo=fileURLToPath(new URL('../config/team.json',import.meta.url)),path=exists(repo)?repo:join(home,'agent-settings.json');const config=JSON.parse(fs.readFileSync(path,'utf8'));return {...DEFAULT,...config.settings,...config.bili?.media};
 }
 export async function main(argv=process.argv.slice(2)){
- const home=homes(),cfg=settings(home),client=await makeClient(home);
+ const home=homes();
+ // launchd restarts this worker every minute; sweep leftovers at most once an hour.
+ let capMb;try{capMb=Number(JSON.parse(fs.readFileSync(join(home,'config.json'),'utf8'))?.cleanup?.tmp_cap_mb)}catch{}
+ sweepDue({home,log:s=>console.error(s),...(Number.isFinite(capMb)&&capMb>0?{capBytes:capMb*1024**2}:{})});
+ const cfg=settings(home),client=await makeClient(home);
  if(argv[0]==='once'){
   const bvid=argv[1];if(!BV.test(bvid||'')){console.log(JSON.stringify({error:'not_found',cleanup:{residue:0,paths:[]}}));return 1;}
   const release=acquireLock(home);if(!release){console.log(JSON.stringify({bvid,error:'local_busy',cleanup:{residue:0,paths:[]}}));return 1;}

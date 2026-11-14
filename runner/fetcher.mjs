@@ -4,6 +4,7 @@ import {runLoginFlow} from './qr-login.mjs';
 import {biliByTitle} from './bili-title.mjs';
 import {createWakePort} from './fetch-wake.mjs';
 import {runDocLoop,pickPython} from './docread-job.mjs';
+import {startTempSweeper} from './tmpclean.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -267,6 +268,9 @@ async function main(){
  const config=JSON.parse(await readFile(resolve(home,'config.json'),'utf8'));
  const base=new URL(config.url);if(base.protocol!=='https:'||base.username||base.password)throw Error('invalid cloud URL');
  const log=x=>console.log(safeLogText(x));
+ // Scratch cleanup: once now, then hourly. Each job still removes its own files.
+ const capMb=Number(config?.cleanup?.tmp_cap_mb);
+ const sweeper=startTempSweeper({home,log,...(Number.isFinite(capMb)&&capMb>0?{capBytes:capMb*1024**2}:{})});
  const client=createFetchClient({log,riskPath:resolve(home,'state/bili-risk.json')});
  log('fetcher start '+createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).digest('hex').slice(0,12));
  const cloud=async(path,body)=>{
@@ -278,7 +282,7 @@ async function main(){
    const r=await fetch(new URL('/api/runner/doc/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
    if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
  };
- const docStop=new AbortController();process.once('SIGTERM',()=>docStop.abort());
+ const docStop=new AbortController();process.once('SIGTERM',()=>{sweeper.stop();docStop.abort();});
  const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
  if(process.argv[2]==='login'){
    const state=await auth.login(process.argv[3]);
