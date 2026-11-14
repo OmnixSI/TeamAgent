@@ -28,8 +28,11 @@ MAX_TEXT = 60000
 MAX_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 500
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
+MAX_XML_BYTES = 32 * 1024 * 1024
+MAX_XML_TOTAL_BYTES = 48 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100
 MIN_RATIO_CHECK_BYTES = 1024 * 1024
+MAX_MERGED_RANGES = 1000
 OOXML_SUFFIXES = {".docx", ".xlsx", ".xlsm", ".pptx"}
 SUPPORTED = {".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx", ".csv", ".tsv", ".zip"}
 STOP_TERMS = {
@@ -102,7 +105,18 @@ def _guard_ooxml(path):
             "too_large",
             f"压缩包解压后 {total} 字节，超过上限 {MAX_ARCHIVE_BYTES} 字节（200 MiB），不解压",
         )
+    xml_total = 0
     for info in infos:
+        is_xml = info.filename.lower().endswith((".xml", ".rels"))
+        if is_xml:
+            xml_total += info.file_size
+            # python-docx/openpyxl build an ElementTree from XML parts; an 80 MiB
+            # document.xml was measured at 1.65 GB RSS, so XML gets a much tighter cap.
+            if info.file_size > MAX_XML_BYTES:
+                raise DocReadError(
+                    "too_large",
+                    f"{info.filename} 解压后 {info.file_size} 字节，超过 XML 单文件上限 {MAX_XML_BYTES} 字节（32 MiB），不解压",
+                )
         if info.file_size > MAX_ARCHIVE_BYTES:
             raise DocReadError(
                 "too_large",
@@ -118,6 +132,11 @@ def _guard_ooxml(path):
                 "too_large",
                 f"{info.filename} 压缩比 {ratio:.0f} 超过 {MAX_COMPRESSION_RATIO}，疑似压缩炸弹，不解压",
             )
+    if xml_total > MAX_XML_TOTAL_BYTES:
+        raise DocReadError(
+            "too_large",
+            f"XML/rels 解压后合计 {xml_total} 字节，超过上限 {MAX_XML_TOTAL_BYTES} 字节（48 MiB），不解压",
+        )
     return total
 
 
@@ -329,7 +348,7 @@ def _number(value):
     return str(value)
 
 
-def _merged_ranges(worksheet, limit=1000):
+def _merged_ranges(worksheet, limit=MAX_MERGED_RANGES):
     """Merged ranges for a read-only worksheet, scanned with bounded memory.
 
     openpyxl drops merged ranges in read-only mode. Walk the sheet XML in fixed chunks
@@ -370,11 +389,18 @@ def _xlsx_openpyxl(path):
             formulas, lines = [], []
             merged = _merged_ranges(worksheet)
             rows = 0
-            max_row = min(worksheet.max_row or 0, 5000)
+            processed = 0
+            raw_max_row = worksheet.max_row
+            max_row = min(raw_max_row, 5000) if raw_max_row else None
             max_column = min(worksheet.max_column or 0, 200)
+            truncated = bool(raw_max_row and raw_max_row > 5000)
             for row in worksheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column):
+                if processed >= 5000:
+                    truncated = True
+                    break
+                processed += 1
                 cells = []
-                for cell in row:
+                for cell in row[:200]:
                     if cell.value is None:
                         continue
                     value = cell.value
@@ -391,13 +417,16 @@ def _xlsx_openpyxl(path):
             if merged:
                 lines.append("[合并单元格] " + ", ".join(merged))
             sections.append({"label": worksheet.title, "text": "\n".join(lines)})
-            sheets.append({
+            sheet = {
                 "name": worksheet.title,
                 "rows": rows,
                 "cols": max_column,
                 "formulas": formulas,
                 "merged": merged,
-            })
+            }
+            if truncated:
+                sheet["truncated"] = True
+            sheets.append(sheet)
     finally:
         workbook.close()
     return sections, sheets
@@ -417,6 +446,95 @@ def _column_number(reference):
     return number
 
 
+def _local_name(tag):
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def _shared_strings(archive, name, namespace):
+    """Collect shared strings without building the whole sst tree."""
+    import xml.etree.ElementTree as ElementTree
+
+    shared = []
+    with archive.open(name) as source:
+        context = ElementTree.iterparse(source, events=("end",))
+        for _event, element in context:
+            if _local_name(element.tag) == "si":
+                shared.append(_xml_text(element, namespace))
+                element.clear()
+                if len(shared) % 500 == 0 and context.root is not None:
+                    context.root.clear()
+    return shared
+
+
+def _stream_sheet(archive, entry, sheet_name, shared, namespace, row_limit=5000):
+    """Stream one worksheet, keeping at most `row_limit` rows in the output."""
+    import xml.etree.ElementTree as ElementTree
+
+    formulas, lines, merged = [], [], []
+    rows = 0
+    columns = 0
+    processed = 0
+    truncated = False
+    with archive.open(entry) as source:
+        context = ElementTree.iterparse(source, events=("end",))
+        for _event, element in context:
+            tag = _local_name(element.tag)
+            if tag == "row":
+                if processed >= row_limit:
+                    truncated = True
+                    break
+                processed += 1
+                cells = []
+                for cell in list(element):
+                    if _local_name(cell.tag) != "c":
+                        continue
+                    reference = cell.get("r") or ""
+                    columns = max(columns, _column_number(reference))
+                    formula = value_node = None
+                    for child in cell:
+                        child_name = _local_name(child.tag)
+                        if child_name == "f":
+                            formula = child
+                        elif child_name == "v":
+                            value_node = child
+                    if formula is not None and formula.text:
+                        equation = "=" + formula.text.strip()
+                        formulas.append({"cell": reference, "formula": equation})
+                        cells.append(f"{sheet_name}!{reference} 公式 {equation}")
+                    else:
+                        kind = cell.get("t")
+                        value = None
+                        if kind == "inlineStr":
+                            value = _xml_text(cell, namespace)
+                        elif kind == "s" and value_node is not None:
+                            try:
+                                index = int(value_node.text or "0")
+                            except ValueError:
+                                index = -1
+                            value = shared[index] if 0 <= index < len(shared) else ""
+                        elif kind == "str":
+                            value = value_node.text if value_node is not None else ""
+                        elif kind == "b":
+                            value = "TRUE" if value_node is not None and value_node.text == "1" else "FALSE"
+                        elif value_node is not None:
+                            value = value_node.text or ""
+                        if value not in (None, ""):
+                            cells.append(f"{reference} {value}")
+                    cell.clear()
+                if cells:
+                    rows += 1
+                    lines.append(" | ".join(cells))
+                element.clear()
+                if processed % 100 == 0 and context.root is not None:
+                    context.root.clear()
+            elif tag == "mergeCell":
+                reference = element.get("ref")
+                if reference and len(merged) < MAX_MERGED_RANGES:
+                    merged.append(reference)
+                element.clear()
+    return formulas, lines, merged, rows, columns, truncated
+
+
 def _xlsx_stdlib(path):
     import posixpath
     import xml.etree.ElementTree as ElementTree
@@ -431,11 +549,7 @@ def _xlsx_stdlib(path):
         names = set(archive.namelist())
         if "xl/workbook.xml" not in names:
             raise DocReadError("corrupted", "XLSX 缺 workbook.xml")
-        shared = []
-        if "xl/sharedStrings.xml" in names:
-            root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
-            for item in root.findall("m:si", namespace):
-                shared.append(_xml_text(item, namespace))
+        shared = _shared_strings(archive, "xl/sharedStrings.xml", namespace) if "xl/sharedStrings.xml" in names else []
         relationships = {}
         if "xl/_rels/workbook.xml.rels" in names:
             root = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
@@ -456,47 +570,16 @@ def _xlsx_stdlib(path):
                 sections.append({"label": name, "text": ""})
                 sheets.append({"name": name, "rows": 0, "cols": 0, "formulas": [], "merged": []})
                 continue
-            root = ElementTree.fromstring(archive.read(entry))
-            formulas, lines, merged = [], [], []
-            rows = 0
-            columns = 0
-            for row in root.iterfind(".//m:sheetData/m:row", namespace):
-                cells = []
-                for cell in row.findall("m:c", namespace):
-                    reference = cell.get("r") or ""
-                    columns = max(columns, _column_number(reference))
-                    formula = cell.find("m:f", namespace)
-                    value_node = cell.find("m:v", namespace)
-                    if formula is not None and formula.text:
-                        equation = "=" + formula.text.strip()
-                        formulas.append({"cell": reference, "formula": equation})
-                        cells.append(f"{name}!{reference} 公式 {equation}")
-                        continue
-                    kind = cell.get("t")
-                    value = None
-                    if kind == "inlineStr":
-                        value = _xml_text(cell, namespace)
-                    elif kind == "s" and value_node is not None:
-                        index = int(value_node.text or "0")
-                        value = shared[index] if 0 <= index < len(shared) else ""
-                    elif kind == "str":
-                        value = value_node.text if value_node is not None else ""
-                    elif kind == "b":
-                        value = "TRUE" if value_node is not None and value_node.text == "1" else "FALSE"
-                    elif value_node is not None:
-                        value = value_node.text or ""
-                    if value not in (None, ""):
-                        cells.append(f"{reference} {value}")
-                if cells:
-                    rows += 1
-                    lines.append(" | ".join(cells))
-            for merge in root.iterfind(".//m:mergeCells/m:mergeCell", namespace):
-                if merge.get("ref"):
-                    merged.append(merge.get("ref"))
+            formulas, lines, merged, rows, columns, truncated = _stream_sheet(
+                archive, entry, name, shared, namespace,
+            )
             if merged:
                 lines.append("[合并单元格] " + ", ".join(merged))
             sections.append({"label": name, "text": "\n".join(lines)})
-            sheets.append({"name": name, "rows": rows, "cols": columns, "formulas": formulas, "merged": merged})
+            result = {"name": name, "rows": rows, "cols": columns, "formulas": formulas, "merged": merged}
+            if truncated:
+                result["truncated"] = True
+            sheets.append(result)
         return sections, sheets
 
 
@@ -509,7 +592,12 @@ def _xlsx(path, _question):
         raise
     except Exception as error:
         raise DocReadError("corrupted", f"XLSX 解析失败（{type(error).__name__}）")
-    warnings = [] if any(item["rows"] for item in sheets) else ["工作簿没有可读的单元格"]
+    warnings = []
+    truncated = [item.get("name") or "sheet" for item in sheets if item.get("truncated")]
+    if truncated:
+        warnings.append(f"工作表 {', '.join(truncated)} 超过 5000 行，已截断")
+    if not any(item["rows"] for item in sheets):
+        warnings.append("工作簿没有可读的单元格")
     return {
         "kind": "xlsx",
         "sections": sections,
