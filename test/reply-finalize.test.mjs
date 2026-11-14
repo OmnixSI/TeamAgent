@@ -126,6 +126,21 @@ test("F1 accepted schedule_create with say prepends the ack once", async () => {
   assert.ok(JSON.parse(out2).text.includes("每天 8:00 发总结。"));
 });
 
+test("F1b accepted request_feature with say prepends an honest ack once", async () => {
+  const say = "已立项，只回一句：收到，已记下，做好了告诉你。";
+  const out = await api.finalizeSpoken(JSON.stringify({ mode: "banter", text: "行，以后该阴阳就阴阳。" }), {
+    acceptedActions: [{ tool: "request_feature", accepted: true, say }],
+    avoid: [],
+  });
+  assert.equal(JSON.parse(out).text, "收到，已记下，做好了告诉你。行，以后该阴阳就阴阳。");
+  const same = JSON.stringify({ mode: "banter", text: "收到，已记下，做好了告诉你。" });
+  assert.equal(
+    await api.finalizeSpoken(same, { acceptedActions: [{ tool: "request_feature", accepted: true, say }], avoid: [] }),
+    same,
+    "an existing 已记下 must not be duplicated",
+  );
+});
+
 test("F2 no actions and no avoid is byte-identical (JSON and plain text)", async () => {
   const json = JSON.stringify({ mode: "care", text: "早点睡。", voice: true });
   assert.equal(await api.finalizeSpoken(json, { acceptedActions: [], avoid: [] }), json);
