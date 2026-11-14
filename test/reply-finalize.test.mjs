@@ -455,7 +455,7 @@ test("F8 假回执：没有 generate_image 成功记录时，不许发「画好�
   assert.ok(v.text.includes("图片服务暂时没有成功返回"));
 });
 
-test("F8 假回执：补图成功就保留原话；已有成功记录不重复调用", async () => {
+test("F8 假回执：补图成功后只留一句回执；已有成功记录不重复调用", async () => {
   const spoken = JSON.stringify({ mode: "work", text: "[图片] 画好了。" });
   let calls = 0;
   const out = await api.finalizeSpoken(spoken, {
@@ -466,7 +466,7 @@ test("F8 假回执：补图成功就保留原话；已有成功记录不重复�
     },
   });
   assert.equal(calls, 1);
-  assert.equal(JSON.parse(out).text, "[图片] 画好了。");
+  assert.equal(JSON.parse(out).text, "画好了，图单独发。");
 
   const backed = JSON.stringify({ mode: "work", text: "[图片] 画好了。" });
   const same = await api.finalizeSpoken(backed, {
@@ -554,4 +554,71 @@ test("F8 假回执：画饼/图表/「你单独发图」都不触发生图", asy
     });
     assert.equal(calls, 0, body);
   }
+});
+
+test("F8 漏调工具：群友明确要图但模型只回「没图」时，代码用原话补图", async () => {
+  let asked = "";
+  const out = await api.finalizeSpoken(
+    JSON.stringify({ mode: "work", text: "草，这次还是没图。我这边没拿到生图完成的回执。" }),
+    {
+      userText: "你把你的奶娃形象画出来发群里",
+      generateImage: async (prompt) => {
+        asked = prompt;
+        return { ok: true, status: "queued", accepted: true };
+      },
+    },
+  );
+  assert.equal(asked, "你把你的奶娃形象画出来发群里");
+  assert.equal(JSON.parse(out).text, "画好了，图单独发。");
+});
+
+test("F8 漏调工具：补图被安全拒绝时保留模型的拒绝话术，不改写成画好了", async () => {
+  const spoken = JSON.stringify({ mode: "work", text: "这个不画，涉黄的内容直接挡了。" });
+  const out = await api.finalizeSpoken(spoken, {
+    userText: "画个卡特龙吃几把",
+    generateImage: async () => ({ ok: false, error_kind: "refused", reason_text: "图片内容安全系统拒绝了" }),
+  });
+  assert.equal(out, spoken);
+});
+
+test("F8 漏调工具：别画了/画饼/画个屁 不触发", async () => {
+  for (const body of ["别画了", "你又画饼", "画个屁"]) {
+    let calls = 0;
+    await api.finalizeSpoken(JSON.stringify({ mode: "work", text: "行。" }), {
+      userText: body,
+      generateImage: async () => {
+        calls++;
+        return { ok: true };
+      },
+    });
+    assert.equal(calls, 0, body);
+  }
+});
+
+test("F8 漏调工具：本轮已经调过 generate_image 且失败，不再花第二次钱", async () => {
+  let calls = 0;
+  const claimed = await api.finalizeSpoken(JSON.stringify({ mode: "work", text: "[图片] 画好了。" }), {
+    userText: "画一张猫",
+    imageAttempted: true,
+    generateImage: async () => {
+      calls++;
+      return { ok: true };
+    },
+  });
+  assert.equal(calls, 0);
+  assert.ok(!JSON.parse(claimed).text.includes("画好了"));
+
+  const plain = JSON.stringify({ mode: "work", text: "这次没画成，稍后再试。" });
+  assert.equal(
+    await api.finalizeSpoken(plain, {
+      userText: "画一张猫",
+      imageAttempted: true,
+      generateImage: async () => {
+        calls++;
+        return { ok: true };
+      },
+    }),
+    plain,
+  );
+  assert.equal(calls, 0, "失败后的说明不能被第二次调用覆盖");
 });
