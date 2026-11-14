@@ -145,20 +145,21 @@ export function vet(raw: any[], kind: string, material: string, known: { id: num
 }
 
 /** Cuts material at paragraph breaks into pieces the model can digest in one call. */
-export function chunkText(text: string, size = LIMITS.chunk, max = LIMITS.chunks): { chunks: string[]; used: number } {
+export function chunkText(text: string, size = LIMITS.chunk, max = LIMITS.chunks): { chunks: string[]; used: number; cut: boolean } {
   const chunks: string[] = [];
   let cur = "", used = 0;
   const flush = () => { if (cur.trim()) chunks.push(cur.trim()); cur = ""; };
   for (const para of text.replace(/\r/g, "").split(/\n+/)) {
     for (let p = para; p.length; ) {
-      if (chunks.length >= max) return { chunks, used };
+      if (chunks.length >= max) return { chunks, used, cut: true };
       const piece = p.slice(0, size); p = p.slice(piece.length);
-      if (cur.length + piece.length + 1 > size) { flush(); if (chunks.length >= max) return { chunks, used }; }
+      if (cur.length + piece.length + 1 > size) { flush(); if (chunks.length >= max) return { chunks, used, cut: true }; }
       cur += (cur ? "\n" : "") + piece; used += piece.length;
     }
   }
   flush();
-  return { chunks: chunks.slice(0, max), used };
+  // `used` leaves out line breaks, so it cannot be compared with the text's length to tell whether anything was dropped.
+  return { chunks: chunks.slice(0, max), used, cut: chunks.length > max };
 }
 
 // ---------- Anki export ----------
@@ -467,7 +468,7 @@ function makeTool(ctx: Ctx): Tool {
     if (m.text.length < LIMITS.materialMin) return { ok: false, error: "资料太短了（不到 " + LIMITS.materialMin + " 字），做不出像样的卡片" };
     if (!(await host.quota("cards_make", cfg("cards_make_daily")))) return { ok: false, error: "今天做卡片的次数用完了，明天再做" };
 
-    const { chunks, used } = chunkText(m.text);
+    const { chunks, used, cut } = chunkText(m.text);
     const want = Math.min(n, room), lang = String(a.lang || "").trim();
     const known = deck ? (rows(hub, "SELECT id,front FROM fc_card WHERE deck=?", deck.id) as any[]).map(r => ({ id: Number(r.id), front: String(r.front), norm: norm(r.front) })) : [];
     const ask = Math.ceil(want * 1.3), size = chunks.reduce((n, c) => n + c.length, 0), share = chunks.map(c => Math.max(3, Math.ceil(ask * c.length / size)));
@@ -493,7 +494,7 @@ function makeTool(ctx: Ctx): Tool {
     return {
       ok: true, deck: name, deck_id: deck!.id, added: keep.length, total: have + keep.length, style: STYLE_NAMES[style],
       dropped, ...(keep.length < want ? { note: "只做出了 " + keep.length + " 张（要 " + want + " 张）；资料里能出的题大概就这些，或者有些被去重、被拿掉了" } : {}),
-      ...(used < m.text.length ? { truncated: "资料很长，只用了前 " + used + " 字；要覆盖后面的部分，分段再 make 一次" } : {}),
+      ...(cut ? { truncated: "资料很长，只用了前 " + used + " 字；要覆盖后面的部分，分段再 make 一次" } : {}),
       sample: keep.slice(0, 3).map(c => ({ front: c.front, back: c.back })),
     };
   }
