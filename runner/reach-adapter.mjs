@@ -22,6 +22,9 @@ export const REACH_COMMANDS={
  'weibo:hot:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('hot'),argv:publicReader('weibo','hot')},
  'weibo:search:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('search'),argv:publicReader('weibo','search')},
  'weibo:profile:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('profile'),argv:publicReader('weibo','profile')},
+ 'zhihu:hot:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('hot'),argv:publicReader('zhihu','hot')},
+ 'zhihu:search:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('search'),argv:publicReader('zhihu','search')},
+ 'zhihu:read:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('read'),argv:publicReader('zhihu','read')},
 };
 const MAX_BYTES=1024*1024;
 const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);

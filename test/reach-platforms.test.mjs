@@ -48,8 +48,39 @@ test('weibo profile: redirect to passport is login_required; profile JSON is bou
   assert.equal(items[0].author, '示例用户');
 });
 
+test('zhihu hot/search: fixture shapes parse and 401/captcha map to login_required/platform_blocked', async () => {
+  const hot = parseZhihuHot(JSON.parse(await fixture('zhihu-hot.json')), 10);
+  assert.equal(hot.length, 10);
+  assert.match(hot[0].source_url, /^https:\/\/www\.zhihu\.com\/question\/101$/);
+  assert.equal(reach('zhihu', 'hot', '热榜', {ok: true, items: hot}).content_scope, 'search_results');
+  const search = parseZhihuSearch(JSON.parse(await fixture('zhihu-search.json')), 10);
+  assert.equal(search.length, 3);
+  assert.match(search[0].source_url, /^https:\/\/www\.zhihu\.com\/answer\/201$/);
+  const login = await runPublicRead({channel: 'zhihu', action: 'hot', target: '热榜'}, {fetchImpl: async () => new Response(await fixture('zhihu-login.json'), {status: 401, headers: {'content-type': 'application/json'}})});
+  assert.equal(login.error.code, 'NEED_LOGIN');
+  const blocked = await runPublicRead({channel: 'zhihu', action: 'hot', target: '热榜'}, {fetchImpl: async () => reply(await fixture('zhihu-blocked.html'))});
+  assert.equal(blocked.error.code, 'SECURITY_BLOCK');
+});
+
+test('zhihu read: answer body and question detail stay post_text and route to the right API', async () => {
+  const answer = parseZhihuAnswer(JSON.parse(await fixture('zhihu-answer.json')));
+  assert.match(answer.text, /输入过滤/);
+  assert.equal(answer.author, '示例答主');
+  assert.ok(answer.text.includes('321'));
+  const result = reach('zhihu', 'read', 'https://www.zhihu.com/question/301/answer/401', {ok: true, items: [answer]});
+  assert.equal(result.content_scope, 'post_text');
+  const seen = [];
+  const ok = await runPublicRead({channel: 'zhihu', action: 'read', target: 'https://www.zhihu.com/question/301/answer/401'}, {fetchImpl: async url => {seen.push(url); return json(JSON.parse(await fixture('zhihu-answer.json')));}});
+  assert.equal(ok.ok, true);
+  assert.match(seen[0], /\/api\/v4\/answers\/401/);
+  const q = await runPublicRead({channel: 'zhihu', action: 'read', target: 'https://www.zhihu.com/question/301'}, {fetchImpl: async url => {seen.push(url); return json(JSON.parse(await fixture('zhihu-question.json')));}});
+  assert.equal(q.ok, true);
+  assert.match(seen[1], /\/api\/v4\/questions\/301/);
+  assert.ok(parseZhihuQuestion(JSON.parse(await fixture('zhihu-question.json'))).text.includes('内存和功耗'));
+});
+
 test('registered commands are read-only and API-bound', () => {
-  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile'];
+  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile', 'zhihu:hot', 'zhihu:search', 'zhihu:read'];
   for (const key of expected) {
     const entry = REACH_COMMANDS[key + ':local'];
     assert.ok(entry, key);
