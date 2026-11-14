@@ -122,10 +122,16 @@ async function put(hub: Hub, req: Request, url: URL, key: string) {
 }
 
 /** Streams the parts of a finished object one after another as one body. */
-async function get(hub: Hub, key: string) {
+async function get(hub: Hub, key: string, planOnly = false) {
   const r = row(hub, key);
   if (!r || !r.done) return json({ error: "not found" }, 404);
   if (!hub.plan.fits("r2_reads", r.parts)) return json({ error: "R2 read allowance used up" }, 503);
+  // The Worker in front asks for the list of parts and streams them from R2 itself, so hundreds of
+  // megabytes do not pass through the Hub (which is busy being the bot).
+  if (planOnly) {
+    hub.plan.add("r2_reads", r.parts);
+    return json({ size: r.size, keys: Array.from({ length: r.parts }, (_x, i) => partKey(key, i)) });
+  }
   const { readable, writable } = fixed(r.size);
   const pump = (async () => {
     for (let i = 0; i < r.parts; i++) {
@@ -150,7 +156,7 @@ export async function route(hub: Hub, req: Request, url: URL): Promise<Response 
   const g = grant(hub, m[2]), key = allowed(g, mode, name);
   if (!key) return json({ error: "not found" }, 404);
   if (!hub.env.FILES) return json({ error: "no bucket" }, 503);
-  return mode === "put" ? put(hub, req, url, key) : get(hub, key);
+  return mode === "put" ? put(hub, req, url, key) : get(hub, key, url.searchParams.get("plan") === "1");
 }
 
 /** Drops expired tokens and uploads that stopped halfway, at most once an hour. */
