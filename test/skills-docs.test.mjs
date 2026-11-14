@@ -471,7 +471,7 @@ open("ocr-args.txt", "w").write(" ".join(a))
 shutil.copyfile(a[-2], a[-1])
 `, { mode: 0o755 });
   const env = { PYTHONPATH: stubs, PATH: stubs + path.delimiter + process.env.PATH };
-  const langStub = has("tesseract");
+  const langStub = REAL && has("tesseract");
 
   test("pdf-to-docx: page range, report, and no-text-layer warning", () => {
     const r = exec(pdfToDocx, { pages: "2-3" }, { "a.pdf": pdfs.six }, env);

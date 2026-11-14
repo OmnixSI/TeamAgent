@@ -23,7 +23,9 @@ const probe = (py, code) => { try { return spawnSync(py, ["-c", code], { stdio: 
 const PY = process.env.TEST_PYTHON || "python3";
 const HAS_PIL = probe(PY, "import PIL");
 const HAS_SEGNO = HAS_PIL && probe(PY, "import segno");
-const HAS_FFMPEG = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0 && spawnSync("ffprobe", ["-version"], { stdio: "ignore" }).status === 0;
+// Real runs of programs that happen to be installed (ffmpeg, tesseract) only when asked for with SKILLS_REAL=1:
+// another machine may carry an old build of them, and the normal check must not depend on that.
+const HAS_FFMPEG = process.env.SKILLS_REAL === "1" && spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0 && spawnSync("ffprobe", ["-version"], { stdio: "ignore" }).status === 0;
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "skills-media-"));
 const run = (cmds, cwd, env = {}) => cmds.map(c => spawnSync("bash", ["-c", c], { cwd, encoding: "utf8", env: { ...process.env, PYTHON: PY, ...env } }));

@@ -15,7 +15,9 @@ import { Plan, DAILY } from "../src/budget.ts";
 
 const HOSTILE = `a'b "c" $(touch PWNED) \`touch PWNED\` ;touch PWNED; 奶蛙 \\ 空 格`;
 const bashOk = c => { const r = spawnSync("bash", ["-n", "-c", c], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr + "\n" + c.slice(0, 400)); };
-const HAS_FF = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0 && spawnSync("ffprobe", ["-version"], { stdio: "ignore" }).status === 0;
+// Real runs of programs that happen to be installed (ffmpeg, tesseract) only when asked for with SKILLS_REAL=1:
+// another machine may carry an old build of them, and the normal check must not depend on that.
+const HAS_FF = process.env.SKILLS_REAL === "1" && spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0 && spawnSync("ffprobe", ["-version"], { stdio: "ignore" }).status === 0;
 const HAS_PY = spawnSync("python3", ["-c", "1"], { stdio: "ignore" }).status === 0;
 const sh = M.shape;
 

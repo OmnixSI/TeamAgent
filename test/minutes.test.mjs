@@ -17,7 +17,9 @@ const feature = M.default;
 const { WHISPER_MODEL } = await import("../src/feat/search.ts");
 
 const bashOk = cmd => spawnSync("bash", ["-n", "-c", cmd]).status === 0;
-const hasFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0 && spawnSync("ffprobe", ["-version"]).status === 0;
+// Real runs of programs that happen to be installed (ffmpeg, tesseract) only when asked for with SKILLS_REAL=1:
+// another machine may carry an old build of them, and the normal check must not depend on that.
+const hasFfmpeg = process.env.SKILLS_REAL === "1" && spawnSync("ffmpeg", ["-version"]).status === 0 && spawnSync("ffprobe", ["-version"]).status === 0;
 
 describe("arguments", () => {
   test("sources: file box, kept file, link; anything else is refused in plain words", () => {

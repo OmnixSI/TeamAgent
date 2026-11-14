@@ -26,7 +26,7 @@ npm run check      # 类型检查 + 离线测试，几秒钟
 npm run deploy     # 先 check，通过才部署
 ```
 
-- 离线测试里要真启动 LibreOffice 的那几条默认跳过，要跑就 `SKILLS_REAL=1 node --test test/skills-docs.test.mjs`。
+- 离线测试里要真跑外部程序（LibreOffice、pandoc、ffmpeg、tesseract）的那几条默认跳过，要跑就 `SKILLS_REAL=1 npm test`。
 - 构建机用 Node 24（`.node-version`）。本机 Node 更新的话，合并前用 Node 24 再跑一遍 `npm run check`，两个版本的内置 SQLite 行为有差别。
 - 推到 `main` 会自动部署：Cloudflare Workers Builds 先跑 `npm run check`，通过才 `npx wrangler deploy`（2026-11-15 接通）。结果在 GitHub 提交的检查项里看。`npm run deploy` 仍可手动用。
 - 部署后 Hub 会在两分钟内自己发现版本变了并重启换上（想立刻生效：`POST /admin/restart`）。云电脑对象不一样：机器开着的时候它一直用旧代码，要等机器空闲关机一次（约 90 秒没人用）才换上。
