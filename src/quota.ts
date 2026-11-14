@@ -734,9 +734,11 @@ export async function renderQuota(
       aiCap: snapshot.ai.cap,
     });
     // A cache hit must not overwrite the previous real fetch; only a fresh
-    // balance read advances the snapshot. The one exception is the very first
-    // record (a cache seeded by the morning job), which initializes it once.
-    if (snapshot.balanceFresh || !previous) {
+    // balance read advances the snapshot. A failed read keeps the last good
+    // numbers instead of replacing them with an empty currency map. The one
+    // exception is the very first record (a cache seeded by the morning job),
+    // which initializes it once.
+    if (snapshot.balance.ok && (snapshot.balanceFresh || !previous)) {
       try {
         await writeSetting(e, QUOTA_LAST_KEY, JSON.stringify(storedFromSnapshot(snapshot, band)));
       } catch {}
