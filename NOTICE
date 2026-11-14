@@ -6,7 +6,7 @@ Agent-Reach — https://github.com/Panniantong/Agent-Reach
 Copyright (c) 2025 Agent Eyes
 License: MIT
 Commit used: c70ae6da5d39bc90e09ad2ae0575ccc89f31e284
-Used in: src/tools/stock-quote.ts
+Used in: src/sites.ts (stock)
 Source: agent_reach/channels/xueqiu.py — _tencent_code (lines 130-158) and
         _tencent_quote / _tencent_search (lines 291-330).
 Borrowed: the Tencent quote/search endpoints, the A-share/HK/US symbol
@@ -66,7 +66,7 @@ OpenCLI — https://github.com/jackwener/OpenCLI
 Copyright (c) 2025 jackwener
 License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
 Commit referenced: 9bc5f5ca132ec4d4e48d7ee517d4303bf159e8e8
-Used in: runner/reach-public.mjs
+Used in: src/sites.ts (hot lists)
 Borrowed: documented read-only command semantics and response field names for
           Weibo hot/search/user, Zhihu hot/search/question/answer-detail and
           Douyin detail; the six-redirect short-link bound.
@@ -290,7 +290,7 @@ Copyright (c) jackwener
 License: Apache-2.0
 Version used: 1.7.22 (npm @jackwener/opencli, already installed on this machine;
              the audited source is commit 9bc5f5ca132ec4d4e48d7ee517d4303bf159e8e8).
-Used in: runner/x-graphql.mjs
+Used in: src/xgraphql.mjs
 Source: clis/twitter/thread.js — extractTweet / parseTweetDetail and the
         TweetDetail query constants;
         clis/twitter/tweets.js — UserTweets / UserByScreenName query constants

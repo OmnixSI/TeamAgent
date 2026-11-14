@@ -1,2 +1,0 @@
-CREATE TABLE IF NOT EXISTS turn_tools(id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, group_id TEXT, name TEXT NOT NULL, args TEXT NOT NULL DEFAULT '{}', ok INTEGER NOT NULL, error_kind TEXT, ms INTEGER NOT NULL, offered INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS turn_tools_turn ON turn_tools(turn_id);

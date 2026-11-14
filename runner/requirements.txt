@@ -1,7 +1,0 @@
-# 文档读取与文件任务（均为宽松许可证，可随 runner 安装）
-pypdf>=6,<7                 # BSD-3-Clause
-openpyxl>=3.1,<4            # MIT
-xlrd>=2,<3                  # BSD-3-Clause，只读旧版 .xls
-python-docx>=1.1,<2         # MIT
-python-pptx>=1.0,<2         # MIT
-reportlab>=4,<6             # BSD-3-Clause，生成 PDF（测试夹具也用它）

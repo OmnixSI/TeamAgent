@@ -1,2 +1,0 @@
-CREATE TABLE IF NOT EXISTS generated_images(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,sender_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mime TEXT NOT NULL,bytes INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,data BLOB NOT NULL,file_info TEXT,file_info_expires INTEGER,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS generated_images_expires ON generated_images(expires_at);

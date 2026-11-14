@@ -1,8 +1,0 @@
-{
-  "name": "teamagent-v2",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@cloudflare/puppeteer": "^1.0.4"
-  }
-}

@@ -1,8 +1,0 @@
-{
-  "name": "team-agent-runner",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "silk-wasm": "3.7.1"
-  }
-}
