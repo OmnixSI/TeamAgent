@@ -1,11 +1,15 @@
 // L2：speakBrief 之后的最后一道代码保底。
-// ① 定时登记成功的回执由代码补；② 模型只口头答应、没调工具时按群友原话补登记；
+// ① 定时登记成功的回执由代码补；② 回执守卫（D4 §5.6）对所有 family 的承诺句对账：
+//   有成功结果就保留，日程能补建就补建，否则换成老实措辞；
 // ③ 口头禅 scrub（L7 填实，本包先留桩）。这里不直接碰 D1，读写都通过调用方传入的回调。
-import { describeSchedule, nextRun, parseScheduleRequest, slug, sydneyText } from "./schedules";
+import { nextRun, parseScheduleRequest, slug, sydneyText } from "./schedules";
 import type { NewSchedule, ScheduleSpec } from "./schedules";
+import { GUARD_FALLBACK, familyOfTool, guardReceipts } from "./receipt-guard";
+import type { Accepted, Family } from "./receipt-guard";
+
+export { GUARD_FALLBACK };
 
 const ACK = "记下了";
-const GUARD_FALLBACK = "这个我还没登记上，你说一下每天几点、发什么，我马上建。";
 
 export type FinalizeAction = {
   tool?: string;
@@ -16,8 +20,10 @@ export type FinalizeAction = {
 
 export type FinalizeOptions = {
   acceptedActions?: FinalizeAction[];
+  /** 本轮失败的工具结果，honest() 用它的 reason 说明为什么没登记上。 */
+  failedActions?: FinalizeAction[];
   avoid?: string[];
-  /** 群友本轮原话，promiseGuard 用它解析「每天/每周 X 点发 XX」。 */
+  /** 群友本轮原话，schedule 补建用它解析「每天/每周 X 点发 XX」。 */
   userText?: string;
   owner?: string;
   groupId?: string;
@@ -27,6 +33,12 @@ export type FinalizeOptions = {
   createSchedule?: (input: NewSchedule) => Promise<any>;
   /** 注入「本群同 kind、时间差 ≤10 分钟的 active 日程」查询。 */
   findDuplicate?: (kind: string, nextRunAt: number) => Promise<any | null>;
+  /** 阶段 2：semantic 注入的补建（parseWhen/parseContent），优先于本地旧解析。 */
+  autoLand?: (family: Family) => Promise<Accepted | null>;
+  /** 阶段 2：semantic 注入的「本群是否已有对应 active 行」。 */
+  existing?: (family: Family) => Promise<boolean>;
+  /** 上一轮 bot 回复：同 family 的兜底句重复时换第二套措辞。 */
+  lastBotText?: string;
   /** L7：口头禅命中后由调用方写 activity rule.violation；本文件不碰 D1。 */
   onViolation?: (phrase: string, count: number) => void;
 };
@@ -99,12 +111,6 @@ function parseSpoken(spoken: string): Record<string, any> {
   return { mode: "banter", text: spoken };
 }
 
-function withSpecString(row: any) {
-  if (row && typeof row.spec === "object" && row.spec !== null)
-    return { ...row, spec: JSON.stringify(row.spec) };
-  return row;
-}
-
 function prefixLead(text: string, lead: string) {
   const s = String(lead || "").trim();
   if (!s) return text;
@@ -112,40 +118,77 @@ function prefixLead(text: string, lead: string) {
   return /[。！？!?；;：:，,、\s]$/.test(s) ? s + text : s + "。" + text;
 }
 
-function replaceOnce(text: string, needle: string, replacement: string) {
-  const i = text.indexOf(needle);
-  if (i < 0) return text;
-  return text.slice(0, i) + replacement + text.slice(i + needle.length);
+/** FinalizeAction → 守卫用的 Accepted；未知工具不参与对账。 */
+function toAccepted(action: FinalizeAction, ok: boolean): Accepted | null {
+  const tool = String(action?.tool || "");
+  const family = (action?.family as Family) || familyOfTool(tool);
+  if (!family) return null;
+  const accepted: Accepted = { tool, family, ok };
+  const id = action?.id ?? action?.row_id ?? action?.schedule_id;
+  if (id !== undefined && id !== null && String(id)) accepted.id = String(id);
+  const reason = action?.reason_text ?? action?.reason;
+  if (reason) accepted.reason = String(reason);
+  const next = action?.next_run_text;
+  if (typeof next === "string" && next.trim()) (accepted as any).next_run_text = next.trim();
+  return accepted;
 }
 
-const SENTENCE_RE = /[^。！？!?；;\n]+[。！？!?；;\n]?/g;
-const RECURRING_RE = /每\s*(?:天|日|早|晚|个?\s*(?:周|星期|礼拜))/;
-const CLOCK_RE = /(?:\d{1,2}\s*[:：]\s*\d{2}|\d{1,2}\s*[点时])/;
-const PUSH_VERB_RE = /(?:发|推|出)/;
-// 整句带这些词才算在承诺；后面的疑问词只是从句（「列出当天是否有新 PR」）。
-const PROMISE_WORD_RE = /(?:我会|我就|记下了|已经(?:设|定|建|安排)|安排好了|设好了|定好了)/;
-// 明显在列待办/征求同意（VL-6 rid=254「…未闭环…」），一律不算承诺。
-const OPEN_ITEM_RE = /(?:未闭环|待确认|还没答复|要我(?:记|设|建|帮|每))/;
-// 只认最后一个分句的句尾疑问语气；不限位置的「是不是/怎么」会放过真承诺。
-const QUESTION_TAIL_RE = /(?:吗|呢|要不要|好不好|行不行|可以吗)[？?。]?\s*$/;
-
-/** 疑问句是在征求同意（「每天早 8 点推送，要吗？」），不是承诺。
- *  只看最后一个分句；整句有承诺词时仍按承诺处理。 */
-function askingForConsent(sentence: string) {
-  const tail = (sentence.split(/[，,：:]/).pop() || "").trim();
-  return /[？?]\s*$/.test(sentence) || QUESTION_TAIL_RE.test(tail);
-}
-
-/** 找回复里那句「每天/每周…X 点…发/推/出」的承诺；只认同句里三样都出现。 */
-function promiseSentence(text: string) {
-  SENTENCE_RE.lastIndex = 0;
-  for (let m = SENTENCE_RE.exec(text); m; m = SENTENCE_RE.exec(text)) {
-    const sentence = m[0];
-    if (OPEN_ITEM_RE.test(sentence) || (!PROMISE_WORD_RE.test(sentence) && askingForConsent(sentence))) continue;
-    if (RECURRING_RE.test(sentence) && CLOCK_RE.test(sentence) && PUSH_VERB_RE.test(sentence))
-      return sentence;
-  }
-  return null;
+/** 阶段 1 的 schedule 补建：沿用旧 parseScheduleRequest + createSchedule；阶段 2 由 semantic 注入新版。 */
+function legacyAutoLand(o: FinalizeOptions) {
+  return async (family: Family): Promise<Accepted | null> => {
+    if (family !== "schedule") return null;
+    const parsed = parseScheduleRequest(o.userText || "");
+    if (!parsed || !o.groupId) return null;
+    const kind = parsed.cadence === "daily" ? "digest_daily" : "digest_weekly";
+    const spec: ScheduleSpec = {
+      time: parsed.time,
+      ...(parsed.weekdays ? { weekdays: parsed.weekdays } : {}),
+      topic: parsed.topic,
+      origin: "chat",
+      request_quote: String(o.userText || "").trim().slice(0, 200),
+      dedup: slug(parsed.topic, o.sourceMsgId || ""),
+    };
+    const now = o.now ?? Date.now();
+    const next = nextRun(spec, now);
+    let duplicate: any = null;
+    if (next !== null && o.findDuplicate) {
+      try {
+        duplicate = await o.findDuplicate(kind, next);
+      } catch {
+        duplicate = null;
+      }
+    }
+    if (duplicate) {
+      const nextText = duplicate.next_run_at ? sydneyText(duplicate.next_run_at, duplicate.tz) : "";
+      return {
+        tool: "schedule_create",
+        family: "schedule",
+        id: duplicate.id,
+        ok: true,
+        ...(nextText ? { next_run_text: nextText } : {}),
+      } as Accepted;
+    }
+    if (next === null || !o.createSchedule) return null;
+    try {
+      const made = await o.createSchedule({
+        group_id: o.groupId,
+        owner: o.owner || "群友",
+        kind,
+        spec,
+        source_msg_id: o.sourceMsgId,
+      });
+      const nextText = made?.next_run_at ? sydneyText(made.next_run_at, made.tz) : "";
+      return {
+        tool: "schedule_create",
+        family: "schedule",
+        id: made?.id,
+        ok: true,
+        ...(nextText ? { next_run_text: nextText } : {}),
+      } as Accepted;
+    } catch {
+      return null;
+    }
+  };
 }
 
 /**
@@ -169,61 +212,30 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
     changed = true;
   }
 
-  // ② promiseGuard：回复在承诺定时推送，但这一轮没有 accepted 的 schedule_create。
-  const hasAccepted = creates.some((a) => a.accepted !== false);
-  if (!hasAccepted && text) {
-    const sentence = promiseSentence(text);
-    if (sentence) {
-      const parsed = parseScheduleRequest(o.userText || "");
-      if (parsed && o.groupId) {
-        const kind = parsed.cadence === "daily" ? "digest_daily" : "digest_weekly";
-        const spec: ScheduleSpec = {
-          time: parsed.time,
-          ...(parsed.weekdays ? { weekdays: parsed.weekdays } : {}),
-          topic: parsed.topic,
-          origin: "chat",
-          request_quote: String(o.userText || "").trim().slice(0, 200),
-          dedup: slug(parsed.topic, o.sourceMsgId || ""),
-        };
-        const now = o.now ?? Date.now();
-        const next = nextRun(spec, now);
-        let duplicate: any = null;
-        if (next !== null && o.findDuplicate) {
-          try {
-            duplicate = await o.findDuplicate(kind, next);
-          } catch {
-            duplicate = null;
-          }
-        }
-        if (duplicate) {
-          text = prefixLead(text, `已经在发了，${describeSchedule(withSpecString(duplicate))}`);
-          changed = true;
-        } else if (next !== null && o.createSchedule) {
-          try {
-            const made = await o.createSchedule({
-              group_id: o.groupId,
-              owner: o.owner || "群友",
-              kind,
-              spec,
-              source_msg_id: o.sourceMsgId,
-            });
-            text = prefixLead(
-              text,
-              `记下了，${describeSchedule(withSpecString(made))}，第一次是 ${sydneyText(made?.next_run_at, made?.tz)}。`,
-            );
-            changed = true;
-          } catch {
-            text = replaceOnce(text, sentence, GUARD_FALLBACK);
-            changed = true;
-          }
-        } else {
-          text = replaceOnce(text, sentence, GUARD_FALLBACK);
-          changed = true;
-        }
-      } else {
-        text = replaceOnce(text, sentence, GUARD_FALLBACK);
-        changed = true;
-      }
+  // ② 回执守卫：所有 family 的承诺句都要有本轮成功结果、库里已有行或补建，否则换老实措辞。
+  if (text) {
+    const accepted: Accepted[] = [];
+    for (const action of o.acceptedActions || []) {
+      const ok = action?.accepted !== false && action?.ok !== false;
+      const mapped = toAccepted(action, ok);
+      if (mapped) accepted.push(mapped);
+    }
+    const failures: Accepted[] = [];
+    for (const action of o.failedActions || []) {
+      const mapped = toAccepted(action, false);
+      if (mapped) failures.push(mapped);
+    }
+    const guarded = await guardReceipts({
+      text,
+      accepted,
+      failures,
+      lastBotText: o.lastBotText,
+      autoLand: o.autoLand || legacyAutoLand(o),
+      existing: o.existing,
+    });
+    if (guarded.text !== text) {
+      text = guarded.text;
+      changed = true;
     }
   }
 

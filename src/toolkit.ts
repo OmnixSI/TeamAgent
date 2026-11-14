@@ -48,6 +48,8 @@ export async function toolSwitchedOff(e: any, t: BotTool): Promise<boolean> {
   const row = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind("off:" + (t.switch || t.name)).first();
   return !!row && String(row.value || "").length > 0 && row.value !== "0" && row.value !== "false";
 }
+/** 写操作工具：调用结果必须落 tool_calls 审计（D 版 §5.9）。 */
+export const AUDITED = new Set(["records_write", "schedule_create", "schedule_update", "schedule_cancel", "skill_save", "run_task"]);
 async function auditTool(e: any, name: string, args: any, ctx: ToolCtx, started: number, result: any) {
   const group = ctx.context?.latest?.group_id, turn = ctx.context?.latest?.id;
   if (!group || !turn) return;
@@ -63,7 +65,7 @@ export async function runExtraTool(e: any, name: string, args: any, ctx: ToolCtx
   if (!t) result = name.startsWith("mcp_") ? mcpFailure(new McpError("denied", "unknown MCP tool")) : { error: "unknown tool" };
   else if (await toolSwitchedOff(e, t)) result = { ok: false, unavailable: true, error_kind: "denied", retryable: false, reason_text: "该功能已被管理员关闭", next_action: "告诉成员该功能当前关闭，不要重试" };
   else result = await t.run(e, args, ctx);
-  if (name === "calc" || name.startsWith("mcp_")) {
+  if (name === "calc" || name.startsWith("mcp_") || AUDITED.has(name)) {
     try { await auditTool(e, name, args, ctx, started, result); }
     catch { return { ok: false, error_kind: "unavailable", retryable: false, reason_text: "工具审计写入失败", next_action: "告知成员审计不可用，停止调用并联系管理员" }; }
   }
