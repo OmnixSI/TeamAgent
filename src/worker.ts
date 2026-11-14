@@ -358,6 +358,7 @@ async function receive(r: Request, e: Env) {
       JSON.stringify(
         promptData({
           direct,
+          memberRole: String(m.author.member_role || ""),
           attachments: m.attachments || [],
           senderName: m.author.username || "",
           forwarded: m.msg_elements || [],

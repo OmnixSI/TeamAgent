@@ -3,9 +3,11 @@ import type { CronJob } from "../cron-extra";
 import { generatedImagesCleanupJob } from "../imagegen";
 import { summaryAutoJob } from "./summary-auto";
 import { profilesNightJob } from "../profiles";
+import { quotaMorningJob } from "../quota";
 
 export const CRON_JOBS: CronJob[] = [
   generatedImagesCleanupJob,
   profilesNightJob,
+  quotaMorningJob,
   summaryAutoJob,
 ];

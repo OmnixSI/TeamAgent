@@ -349,8 +349,10 @@ test('renderDigest carries the five answers, promises, gaps, rules, budget, cove
   await e.DB.prepare("INSERT INTO promises(id,group_id,outbox_id,quote,what,due_at,recurring,status,created_at,checked_at) VALUES('p1',?, 'o1','每天 8:00 推送','日报',NULL,'daily 08:00','broken',?,?)").bind(group, now, now).run();
   await e.DB.prepare("INSERT INTO review_budget(day_utc,provider,unit,cap,reserved,used,calls,updated_at) VALUES('2026-11-13','deepseek','usd_micros',100000,1000,5000,3,?)").bind(now).run();
   await e.DB.prepare("INSERT INTO behavior_rules(id,group_id,rule,scene,evidence_json,source,status,expires_at,created_at,updated_at) VALUES('r1',?, '回复最多200字。','回答','[]','review:x','active',?,?,?)").bind(group, now + day, now, now).run();
+  await e.DB.prepare("INSERT INTO settings(key,value) VALUES('quota:morning',?)").bind(JSON.stringify({ day: '2026-11-14', at: now, line: 'DeepSeek 余额 ¥8.88，低于 ¥10 警戒线。' })).run();
   const digest = await renderDigest(e, '2026-11-14');
   for (const key of ['date', 'groups', 'questions', 'promises', 'gaps', 'rules', 'budget', 'coverage', 'judge_failed', 'disputed', 'agreement', 'tasks', 'findings']) assert.ok(key in digest, key);
+  assert.equal(digest.quota?.line, 'DeepSeek 余额 ¥8.88，低于 ¥10 警戒线。');
   assert.equal(digest.judge_failed, 1);
   assert.equal(digest.coverage.balanced, true);
   assert.equal(digest.questions.unanswered.count, 1);
