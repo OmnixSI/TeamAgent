@@ -653,6 +653,74 @@
       "default_state": "off_by_default"
     },
     {
+      "id": "social_reading",
+      "title": "社交平台只读阅读",
+      "aliases": [
+        "微博",
+        "知乎",
+        "抖音",
+        "公众号",
+        "微信公众号",
+        "小红书",
+        "X",
+        "推特",
+        "Twitter",
+        "社交阅读",
+        "read_social"
+      ],
+      "tools": [
+        "read_social"
+      ],
+      "how": "read_social 只在成员主动给链接或明确提问时，按固定只读命令读取微博（热搜/搜索/主页）、知乎（热榜/搜索/问题/回答）、抖音视频、公众号文章、小红书（笔记/搜索/已加载评论）和 X（推文串/资料/最近推文/搜索）；微博热搜与公众号文章可无登录读取，微博搜索/主页、知乎正文、小红书与 X 需要本机 Edge 已登录，未登录或平台拦截时如实返回 login_required/platform_blocked 等原因和下一步，不编造正文；这些平台有服务条款和账号受限风险，不批量、不定时抓取。管理员把设置 reach:mode 打开后才会真正读取（工具开关是 off:reach）。",
+      "files": [
+        {
+          "path": "src/tools/read-social.ts",
+          "anchor": "export const readSocialTool",
+          "role": "工具入口：成员触发校验、平台解析与开关检查"
+        },
+        {
+          "path": "src/reachjobs.ts",
+          "anchor": "export async function requestReach",
+          "role": "云端排队、租约与回复唤醒"
+        },
+        {
+          "path": "runner/reach-adapter.mjs",
+          "anchor": "export const REACH_COMMANDS",
+          "role": "固定只读命令表白名单"
+        },
+        {
+          "path": "runner/reach-public.mjs",
+          "anchor": "export async function runPublicRead",
+          "role": "微博/知乎/抖音/公众号公开读取"
+        },
+        {
+          "path": "runner/x-reader.mjs",
+          "anchor": "async function launch",
+          "role": "X 本机登录会话读取"
+        },
+        {
+          "path": "runner/reach-xiaohongshu.mjs",
+          "anchor": "export const XHS_COMMANDS",
+          "role": "小红书登录读取"
+        }
+      ],
+      "providers": [
+        {
+          "role": "公开网页/接口与本机登录会话只读",
+          "vendor": "本机",
+          "file": "runner/reach-public.mjs",
+          "evidence_pattern": "Public, read-only readers"
+        }
+      ],
+      "switches": [
+        "reach"
+      ],
+      "requires_env": [],
+      "runs_on": "both",
+      "local_component": "runner/reach-adapter.mjs",
+      "default_state": "off_by_default"
+    },
+    {
       "id": "ocr",
       "title": "文字识别（扫描件）",
       "aliases": [
@@ -1415,8 +1483,6 @@
     "src/ui.ts": "看板页面入口（读构建生成物）"
   },
   "uncovered_ok": [
-    "calc",
-    "read_social",
-    "stock_quote"
+    "calc"
   ]
 }
