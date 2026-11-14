@@ -136,7 +136,7 @@
   },
   "feature_requests": {
     "enabled": true,
-    "auto_senders": [],
+    "auto_senders": ["0FC1E8A8BD28981E86866125AC3FCEFF"],
     "daily_auto_cap": 5,
     "daily_cap_per_sender": 10,
     "group_daily_cap": 30,

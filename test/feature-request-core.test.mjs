@@ -51,14 +51,17 @@ async function loadCore(plugins = []) {
   );
 }
 
+// Shipped config whitelists the bot owner's QQ openid (members.role is 'member' online).
+const SHIPPED = { ...DEFAULTS, auto_senders: ["0FC1E8A8BD28981E86866125AC3FCEFF"] };
+
 const core = await loadCore();
 
 test("loadFrConfig returns the shipped team.json defaults and a fresh copy", () => {
-  assert.deepEqual(core.loadFrConfig(), DEFAULTS);
+  assert.deepEqual(core.loadFrConfig(), SHIPPED);
   const first = core.loadFrConfig();
   first.auto_senders.push("qq:LEAK");
   first.daily_auto_cap = 999;
-  assert.deepEqual(core.loadFrConfig(), DEFAULTS);
+  assert.deepEqual(core.loadFrConfig(), SHIPPED);
 });
 
 test("loadFrConfig falls back to defaults when the section is missing", async () => {
@@ -354,7 +357,7 @@ const settings = JSON.parse(
 
 test("team config ships valid feature request gates and may omit the section", () => {
   assert.deepEqual(validateTeamConfig(settings), []);
-  assert.deepEqual(settings.feature_requests, DEFAULTS);
+  assert.deepEqual(settings.feature_requests, SHIPPED);
   const missing = structuredClone(settings);
   delete missing.feature_requests;
   assert.deepEqual(validateTeamConfig(missing), []);
