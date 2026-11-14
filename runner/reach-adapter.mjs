@@ -30,7 +30,7 @@ export const REACH_COMMANDS={
  'weixin:read:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('read'),argv:publicReader('weixin','read')},
 };
 const MAX_BYTES=1024*1024;
-const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);
+const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms','source_url']);
 function readState(path){try{return JSON.parse(readFileSync(path,'utf8'));}catch{return {};}}
 function live(pid){try{process.kill(pid,0);return true;}catch(e){return e.code==='EPERM';}}
 function lock(dir){

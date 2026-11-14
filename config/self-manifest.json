@@ -550,6 +550,80 @@
       "default_state": "on"
     },
     {
+      "id": "read_social",
+      "title": "社交平台只读",
+      "aliases": [
+        "小红书",
+        "微博",
+        "知乎",
+        "抖音",
+        "微信公众号",
+        "推特",
+        "X",
+        "雪球",
+        "read_social",
+        "社交读取",
+        "读小红书"
+      ],
+      "tools": [
+        "read_social"
+      ],
+      "how": "read_social 只在成员主动给出链接或明确提问时只读：小红书、微博、知乎、抖音、微信公众号走固定 https 端点或本机 Edge 登录会话，X/推特走本机已登录的 Edge 会话，雪球链接按腾讯行情读最新价与涨跌（不读社区帖子）。一次请求一个短命进程，最长 45 秒；失败按未登录、风控、限流、超时、内容不足给真实原因，搜索摘要和已加载评论不冒充全文；Cookie 只留在本机，不批量、不定时抓取，用完关闭自己启动的浏览器。",
+      "files": [
+        {
+          "path": "src/tools/read-social.ts",
+          "anchor": "export const readSocialTool",
+          "role": "工具入口、链接归一与雪球行情桥"
+        },
+        {
+          "path": "src/reachjobs.ts",
+          "anchor": "export async function requestReach",
+          "role": "开关/缓存/租约队列与回报"
+        },
+        {
+          "path": "runner/reach-adapter.mjs",
+          "anchor": "export const REACH_COMMANDS",
+          "role": "只读命令白名单、并发锁与冷却"
+        },
+        {
+          "path": "runner/reach-result.mjs",
+          "anchor": "export function normalizeReachResult",
+          "role": "统一返回契约与错误分类"
+        },
+        {
+          "path": "runner/reach-xiaohongshu.mjs",
+          "anchor": "export function buildNoteUrl",
+          "role": "小红书正文/搜索/评论只读"
+        },
+        {
+          "path": "runner/reach-public.mjs",
+          "anchor": "export async function runPublicRead",
+          "role": "微博/知乎/抖音/微信公开页只读"
+        }
+      ],
+      "providers": [
+        {
+          "role": "小红书/X 本机登录会话（Cookie 只在本机）",
+          "vendor": "本机",
+          "file": "runner/reach-xiaohongshu.mjs",
+          "host_pattern": "www\\.xiaohongshu\\.com"
+        },
+        {
+          "role": "微博/知乎/抖音/微信公开页只读",
+          "vendor": "本机",
+          "file": "runner/reach-public.mjs",
+          "host_pattern": "weibo\\.com"
+        }
+      ],
+      "switches": [
+        "reach"
+      ],
+      "requires_env": [],
+      "runs_on": "both",
+      "local_component": "runner/reach-adapter.mjs",
+      "default_state": "off_by_default"
+    },
+    {
       "id": "bili_video",
       "title": "B站视频理解",
       "aliases": [
@@ -1415,8 +1489,6 @@
     "src/ui.ts": "看板页面入口（读构建生成物）"
   },
   "uncovered_ok": [
-    "calc",
-    "read_social",
-    "stock_quote"
+    "calc"
   ]
 }
