@@ -243,9 +243,16 @@ export async function biliVideo(net: Net, input: string, wantTranscript = true, 
       const subUrl = (sub.subtitle_url.startsWith("//") ? "https:" : "") + sub.subtitle_url;
       let raw = await fetch(subUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.text() : "").catch(() => "");
       if (!raw) raw = (await relay(net, { url: subUrl, headers: { "User-Agent": UA } })).text;
-      let last = -100;
-      info.transcript = clip((JSON.parse(raw).body || []).map((b: any) => { const mark = b.from - last >= 30 ? "\n[" + stamp(b.from) + "] " : ""; if (mark) last = b.from; return mark + b.content; }).join(" ").trim(), 40000);
-      info.transcript_source = "字幕";
+      const lines: any[] = JSON.parse(raw).body || [], length = Number(part.duration || v.duration || 0);
+      const end = lines.length ? Number(lines[lines.length - 1].to || lines[lines.length - 1].from || 0) : 0;
+      // Bilibili sometimes hands back another video's subtitles. Subtitles that run past the end of the
+      // video, or stop long before it, are not this video's: drop them and transcribe the audio instead.
+      const fits = !length || (end <= length + 20 && (length < 90 || end >= length * 0.4));
+      if (fits && lines.length) {
+        let last = -100;
+        info.transcript = clip(lines.map((b: any) => { const mark = b.from - last >= 30 ? "\n[" + stamp(b.from) + "] " : ""; if (mark) last = b.from; return mark + b.content; }).join(" ").trim(), 40000);
+        info.transcript_source = "字幕";
+      } else if (lines.length) info.subtitle_note = "B 站给的字幕对不上这条视频的时长（多半是串了别的视频），没采用，改用音轨转写";
     }
   } catch {}
   if (!info.transcript) {

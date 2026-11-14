@@ -14,10 +14,17 @@ export type Env = {
   RELAY_URL?: string;
   RELAY_KEY?: string;
   CODE_MODEL?: string;
+  OWNERS?: string;
+  BROWSER?: any;
+  /** R2 bucket for anything too large for a SQLite row. */
+  FILES?: any;
+  /** Set by Cloudflare on every deploy. */
+  VERSION?: { id: string; tag?: string; timestamp?: string };
+  SANDBOX?: any;
 };
 
-/** Bumped on every behaviour change; the Hub restarts itself when the Worker reports a newer build. */
-export const BUILD = "2026-11-15.2";
+/** The deployed version this code belongs to; the Hub restarts itself when the Worker reports a newer one. */
+export const buildOf = (env: Env) => env.VERSION?.id || "dev";
 
 export const BJ = "Asia/Shanghai";
 export const SYD = "Australia/Sydney";

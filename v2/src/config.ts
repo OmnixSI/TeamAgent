@@ -14,6 +14,8 @@ export const TUNABLES: Record<string, Tunable> = {
   transcribe_max_minutes: { default: 60, min: 5, max: 120, what: "B 站无字幕视频最多转写多少分钟" },
   history_carry: { default: 150, min: 30, max: 600, what: "夜间整理之前的聊天再多带多少条进上下文" },
   talkative: { default: "normal", options: ["quiet", "normal", "chatty"], what: "没人叫我时主动接话的积极程度" },
+  balance_alert: { default: 20, min: 0, max: 2000, what: "DeepSeek 余额低于多少元时在群里提醒充值" },
+  spend_alert: { default: 30, min: 1, max: 2000, what: "一天估算花费超过多少元时在群里提醒" },
 };
 
 export const PLAYBOOKS: Record<string, string> = {

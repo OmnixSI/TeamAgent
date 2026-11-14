@@ -56,9 +56,13 @@ const artPrompt = (plan: BookPlan, art: string, cover: boolean) =>
   "\nFull-bleed picture-book illustration. Absolutely no text, letters, captions or speech bubbles in the image. " +
   (cover ? "Composition for a book cover: main characters prominent, calm area in the upper third for a title." : "Keep the bottom quarter of the frame calm and uncluttered; a caption will be laid over it.");
 
-/** Draws the cover first, then every page with the same references plus the cover, a few at a time. */
-export async function illustrate(env: Env, plan: BookPlan, refs: Ref[], quality: string, progress?: (done: number, total: number) => void) {
-  const size = "1536x1024", total = plan.pages.length + 1;
+/**
+ * Draws the cover first, then every page with the same references plus the cover, a few at a time.
+ * `have` holds pictures finished in an earlier attempt; `onDone` is told about each new one (index -1 is the cover).
+ */
+export async function illustrate(env: Env, plan: BookPlan, refs: Ref[], quality: string,
+  have: { cover: Uint8Array | null; images: (Uint8Array | null)[] } = { cover: null, images: [] }, onDone?: (index: number, bytes: Uint8Array) => Promise<void>) {
+  const size = "1536x1024";
   const one = async (art: string, cover: boolean, using: Ref[]): Promise<Uint8Array | null> => {
     for (const softer of [false, true]) {
       try {
@@ -67,16 +71,17 @@ export async function illustrate(env: Env, plan: BookPlan, refs: Ref[], quality:
     }
     return null;
   };
-  const cover = await one(plan.cover, true, refs);
-  progress?.(1, total);
+  let cover = have.cover;
+  if (!cover) { cover = await one(plan.cover, true, refs); if (cover) await onDone?.(-1, cover).catch(() => {}); }
   const shared: Ref[] = cover ? [...refs.slice(0, 3), { label: "cover", bytes: cover, mime: "image/jpeg" }] : refs;
-  const images: (Uint8Array | null)[] = new Array(plan.pages.length).fill(null);
-  let next = 0, done = 1;
+  const images: (Uint8Array | null)[] = plan.pages.map((_p, i) => have.images[i] || null);
+  let next = 0;
   await Promise.all([0, 1, 2, 3].map(async () => {
     for (;;) {
       const i = next++; if (i >= plan.pages.length) return;
+      if (images[i]) continue;
       images[i] = await one(plan.pages[i].art, false, shared).catch(() => null);
-      progress?.(++done, total);
+      if (images[i]) await onDone?.(i, images[i]!).catch(() => {});
     }
   }));
   return { cover, images };

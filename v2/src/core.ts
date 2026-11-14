@@ -27,8 +27,10 @@ export type TurnInput = {
   rules?: string;           // self-added persona playbook
   askers?: string[];        // who addressed the bot in this batch
   talkative?: string;       // quiet | normal | chatty
-  job?: string;             // a long job of yours that is still running in the background
+  job?: string;             // long jobs of yours that are still running in the background
   splitMax?: number;
+  /** Saved messages of a job that was cut off by a restart; the turn continues from them. */
+  resume?: any[];
 };
 export type TurnDeps = {
   chat(body: { messages: any[]; tools?: any[]; max_tokens?: number }, effort: Effort, timeoutMs?: number): Promise<ChatResult>;
@@ -36,10 +38,14 @@ export type TurnDeps = {
   interim?(text: string): Promise<void>;
   /** Called once when the turn turns into a long job; the host lets other turns run meanwhile. */
   detach?(what: string): void;
+  /** Called after every round of tool results, so a long job can be picked up again after a restart. */
+  checkpoint?(messages: any[]): Promise<void> | void;
+  cancelled?(): boolean;
 };
+export type ToolRun = { name: string; ms: number; ok: boolean; args: string; error?: string };
 export type TurnResult = {
   replies: string[]; silent: boolean;
-  stats: { calls: number; tools: string[]; inTok: number; outTok: number; cached: number; ms: number; firstMs: number; error?: string };
+  stats: { calls: number; tools: string[]; runs: ToolRun[]; inTok: number; outTok: number; cached: number; ms: number; firstMs: number; error?: string };
 };
 
 const MAX_ROUNDS = 8;
@@ -138,11 +144,14 @@ const isPass = (text: string) => !text || /^\s*[（(【\[]?\s*PASS\b/i.test(text
 
 export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnResult> {
   const started = Date.now();
-  const stats: TurnResult["stats"] = { calls: 0, tools: [], inTok: 0, outTok: 0, cached: 0, ms: 0, firstMs: 0 };
-  const messages = buildMessages(input);
+  const stats: TurnResult["stats"] = { calls: 0, tools: [], runs: [], inTok: 0, outTok: 0, cached: 0, ms: 0, firstMs: 0 };
+  const messages = input.resume ? input.resume.slice() : buildMessages(input);
+  if (input.resume) messages.push({ role: "user", content: "[中途重启过一次。上面是已经做完的步骤和拿到的结果，不要重做；接着把剩下的做完并交付。]" });
   const defs = toolDefs(deps.tools);
   const mustReply = input.mentioned || !!input.task;
-  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false, engaged = false, vetoed = false, maxRounds = MAX_ROUNDS;
+  // A scheduled task or a resumed job runs in the background from the start, so it gets the long budget.
+  const background = !!input.task || !!input.resume;
+  let careful = background, interimSent = false, final = "", nudged = false, promised = false, engaged = false, vetoed = false, maxRounds = background ? PROJECT_ROUNDS : MAX_ROUNDS;
   const wantsDrawing = input.rows.some(r => r.role === "user" && r.seq > input.cursor && DRAW_ASK.test(r.text));
 
   const call = async (withTools: boolean, effort: Effort, maxTokens: number) => {
@@ -157,6 +166,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
 
   try {
     for (let round = 0; round < maxRounds; round++) {
+      if (deps.cancelled?.()) { stats.error = "cancelled"; final = ""; break; }
       const lastRound = round === maxRounds - 1;
       if (lastRound) messages.push({ role: "user", content: "[工具次数用完了。就用手上已有的结果把话说完，没查到的照实说。]" });
       // Replies are written with high reasoning and real work with max. Only the "is this even for me?"
@@ -202,13 +212,18 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
       // Thinking mode requires the reasoning of earlier tool-call turns to be passed back.
       messages.push({ role: "assistant", content: msg.content || "", reasoning_content: msg.reasoning_content || "", tool_calls: calls });
       const results = await Promise.all(calls.map(async (c, i) => {
-        const tool = used[i];
-        stats.tools.push(c.function?.name || "?");
-        if (!tool) return { error: "没有这个工具" };
+        const tool = used[i], name = c.function?.name || "?", at = Date.now();
+        stats.tools.push(name);
+        const done = (result: any) => {
+          const failed = result?.ok === false || (result?.error && result?.ok !== true);
+          stats.runs.push({ name, ms: Date.now() - at, ok: !failed, args: clip(c.function?.arguments || "", 400), ...(failed ? { error: clip(result?.error || "", 300) } : {}) });
+          return result;
+        };
+        if (!tool) return done({ error: "没有这个工具" });
         let args: any = {};
-        try { args = JSON.parse(c.function.arguments || "{}"); } catch { return { error: "参数不是合法 JSON" }; }
-        try { return await tool.run(args); }
-        catch (err: any) { return { ok: false, error: clip(err?.message || String(err), 300) }; }
+        try { args = JSON.parse(c.function.arguments || "{}"); } catch { return done({ error: "参数不是合法 JSON" }); }
+        try { return done(await tool.run(args)); }
+        catch (err: any) { return done({ ok: false, error: clip(err?.message || String(err), 300) }); }
       }));
       // Pictures a tool brought back are shown to the model right after the tool results.
       const pictures: string[] = [];
@@ -222,6 +237,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
         content: [{ type: "text", text: "[上面工具拿回来的图片，共 " + Math.min(pictures.length, 6) + " 张，按顺序]" }, ...pictures.slice(0, 6).map(url => ({ type: "image_url", image_url: { url } }))],
       });
       if (used.some(t => t?.work)) careful = true;
+      await Promise.resolve(deps.checkpoint?.(messages)).catch(() => {});
     }
   } catch (err: any) {
     stats.error = clip(err?.message || String(err), 300);

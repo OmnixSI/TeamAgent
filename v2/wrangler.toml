@@ -29,5 +29,14 @@ RELAY_URL = "https://relay-dusky-five.vercel.app"
 [browser]
 binding = "BROWSER"
 
+# Large files (chat pictures kept before their QQ links expire, big outputs, job checkpoints). R2 free tier.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "teamagent"
+
+# Lets the Hub notice that a newer version was deployed and restart itself onto it.
+[version_metadata]
+binding = "VERSION"
+
 [observability]
 enabled = true
