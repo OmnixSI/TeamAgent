@@ -258,3 +258,11 @@ test('P15 晨报里已生效的编号项回「不用」→ 撤销', async () => 
   assert.equal((await one(e, "SELECT status FROM review_learnings WHERE id='ln-1'")).status, 'declined');
   assert.ok((await one(e, "SELECT body FROM outbox WHERE id='learn-undo:a2'")).body.includes('好，撤回了：'));
 });
+
+test('P16 address_as 只能称呼原话发送者本人，冒名写入被拒', async () => {
+  const e = await fixture([{ no: 1, learning_id: 'ln-1' }], [learning({
+    subkind: 'address_as', params: JSON.stringify({ member: 'U9', name: '小明' }), plain: '叫我小明',
+  })]);
+  assert.equal(await reply(e, '1 可以'), false);
+  assert.equal((await rows(e, 'behavior_rules')).length, 0);
+});

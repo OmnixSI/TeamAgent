@@ -170,6 +170,8 @@ function parseParams(raw: string): Record<string, any> {
 export async function applyLearning(e: any, row: LearningRow, answerer: string): Promise<Applied | null> {
   const now = Date.now(), params = parseParams(row.params);
   if (row.kind === "rule") {
+    // 只能自己定自己的称呼：params.member 必须等于原话发送者，写入前再挡一次冒名。
+    if (row.subkind === "address_as" && String(params.member || "") !== row.requester) return null;
     const rendered = renderRule(row.subkind as any, params, row.plain, 30) || learningRule(row.subkind, params);
     if (!rendered) return null;
     const id = await stable("rule", [row.group_id, "learning", row.id]);
