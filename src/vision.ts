@@ -993,6 +993,33 @@ async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promi
   return out;
 }
 
+async function recordVisionEvents(e: any, picks: ImagePick[], outcomes: ImageOutcome[]) {
+  // Diagnostic-only: the table is migrated but writes stay off unless a local
+  // replay or an operator explicitly sets VISION_EVENTS=1.
+  if (e.VISION_EVENTS !== "1" && String(e.switches?.["vision:events"] || "") !== "1") return;
+  const groups = new Map(picks.map((p) => [p.messageId + ":" + p.idx, p.groupId]));
+  for (const outcome of outcomes) {
+    try {
+      await e.DB.prepare(
+        "INSERT INTO vision_events(trace_id,group_id,message_id,idx,stage,status,reason,http,elapsed_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      ).bind(
+        outcome.traceId || "",
+        groups.get(outcome.messageId + ":" + outcome.idx) || null,
+        outcome.messageId,
+        outcome.idx,
+        outcome.stage,
+        outcome.status,
+        outcome.reason || null,
+        Number.isInteger(outcome.http) ? outcome.http : null,
+        Number.isInteger(outcome.elapsedMs) ? outcome.elapsedMs : null,
+        Date.now(),
+      ).run();
+    } catch {
+      // Diagnostics must never break the vision turn.
+    }
+  }
+}
+
 export async function annotateTurn(
   e: any,
   picks: ImagePick[],
@@ -1004,7 +1031,7 @@ export async function annotateTurn(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs ?? config.turnMs);
   try {
-    return await mapLimit(picks, 2, async (p): Promise<ImageOutcome> => {
+    const outcomes = await mapLimit(picks, 2, async (p): Promise<ImageOutcome> => {
           const started = Date.now();
           const traceId = crypto.randomUUID();
           let outcome: ImageOutcome = { messageId: p.messageId, idx: p.idx, ...(p.sticker ? { sticker: true } : {}), stage: "fetch", status: "failed", reason: "invalid", traceId };
@@ -1055,6 +1082,8 @@ export async function annotateTurn(
             return failureOutcome(outcome);
           }
         });
+    await recordVisionEvents(e, picks, outcomes);
+    return outcomes;
   } finally {
     clearTimeout(timer);
   }
