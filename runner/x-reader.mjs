@@ -17,7 +17,7 @@ import {createRequire} from 'node:module';
 import {homedir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {validTarget} from '../src/reach-contract.mjs';
+import {validTarget} from './reach-contract.mjs';
 import {normalizeReachResult} from './reach-result.mjs';
 import {X_ERRORS,discoverX,nativeXExecutable} from './native-x-browser.mjs';
 import {
