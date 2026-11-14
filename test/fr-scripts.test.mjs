@@ -416,3 +416,50 @@ test('sanitizeReplyLocal applies the server reply rules', () => {
   assert.equal(sanitizeReplyLocal('已经部署好了').ok, false);
   assert.equal(sanitizeReplyLocal('Worker 已经加好了').ok, false);
 });
+
+test('S16 fr-report --dry-run preflights locally and never POSTs (no token needed)', async () => {
+  let fetched = 0;
+  const cap = capture();
+  const code = await runReport([
+    'fr-101', 'shipped', '--release', 'abc1234', '--rollback', 'def5678',
+    '--reply', '已经加好了，现在可以按你说的导出。', '--smoke-passed', '--base', BASE, '--dry-run',
+  ], {
+    fetchImpl: async () => { fetched += 1; throw new Error('dry-run must not POST'); },
+    ...cap,
+  });
+  assert.equal(code, 0);
+  assert.equal(fetched, 0);
+  assert.match(cap.state.out, /dry-run/);
+  assert.match(cap.state.out, /已经加好了/);
+  assert.equal(cap.state.err, '');
+
+  const failed = capture();
+  assert.equal(await runReport([
+    'fr-101', 'failed', '--reason', '这次没做成，因为数据不齐。', '--base', BASE, '--dry-run',
+  ], { fetchImpl: async () => { fetched += 1; throw new Error('dry-run must not POST'); }, ...failed }), 0);
+  assert.equal(fetched, 0);
+  assert.match(failed.state.out, /failed/);
+});
+
+test('S16 fr-report --dry-run still enforces the local preflight and usage rules', async () => {
+  let fetched = 0;
+  const fetchImpl = async () => { fetched += 1; throw new Error('must not POST'); };
+  const url = capture();
+  assert.equal(await runReport([
+    'fr-101', 'shipped', '--release', 'abc1234', '--rollback', 'def5678',
+    '--reply', '看 https://example.com/x', '--smoke-passed', '--base', BASE, '--dry-run',
+  ], { fetchImpl, ...url }), 5);
+  const smoke = capture();
+  assert.equal(await runReport([
+    'fr-101', 'shipped', '--release', 'abc1234', '--rollback', 'def5678',
+    '--reply', '已经加好了。', '--base', BASE, '--dry-run',
+  ], { fetchImpl, ...smoke }), 2);
+  assert.match(smoke.state.err, /smoke-passed/);
+  assert.equal(fetched, 0);
+});
+
+test('S16 fr-report --help documents --dry-run', async () => {
+  const cap = capture();
+  assert.equal(await runReport(['--help'], cap), 0);
+  assert.match(cap.state.out, /dry-run/);
+});

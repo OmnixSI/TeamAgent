@@ -40,6 +40,7 @@ Actions:
 Options:
   --base URL          Worker 地址（默认 FR_BASE → TEAM_BOARD_URL → wrangler.toml → 线上地址）
   --token-file FILE   管理员令牌文件（默认 FR_TOKEN_FILE）
+  --dry-run           只做本地预检并打印将发送的内容，不发任何请求（不需要令牌）
   -h, --help          显示本说明
 
 回复本地预检：≤120 字；不能有链接、代码块、7+ 位十六进制、文件路径、技术词
@@ -55,6 +56,7 @@ export function parseArgs(argv = []) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') { args.help = true; continue; }
     if (arg === '--smoke-passed') { args.smokePassed = true; continue; }
+    if (arg === '--dry-run') { args.dryRun = true; continue; }
     if (!arg.startsWith('--')) { positional.push(arg); continue; }
     const key = arg.slice(2);
     const value = argv[++index];
@@ -133,10 +135,22 @@ export async function reportFeatureRequest(options = {}) {
   if (action === 'heartbeat' && !worker) throw new FrError(2, '--worker 不能是空的');
   // Validate flags and preflight before asking for a token: usage errors win.
   const body = action === 'heartbeat' ? { worker } : buildReport(options);
-  const token = resolveToken(options);
   const base = resolveBase({ baseUrl: options.baseUrl, cwd: options.cwd });
   const route = action === 'heartbeat' ? 'heartbeat' : 'report';
   const url = `${base}/api/team/feature-requests/${id}/${route}`;
+  if (options.dryRun) {
+    // Local preflight only: nothing is sent and no token is read.
+    const preview = body.reply_text || body.reason || body.note
+      || (body.worker ? `worker ${body.worker}` : body.outcome);
+    return {
+      summary: `dry-run：将回写 ${id} ${action}（未发送，不发群）：${oneLine(preview, 160)}`,
+      dryRun: true,
+      status: 0,
+      body,
+      json: null,
+    };
+  }
+  const token = resolveToken(options);
   const result = await requestJson(url, {
     method: 'POST', body, token, fetchImpl: options.fetchImpl,
   });
@@ -180,6 +194,7 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       note: args.note,
       worker: args.worker || deps.worker,
       smokePassed: args.smokePassed || deps.smokePassed,
+      dryRun: args.dryRun || deps.dryRun,
     });
     write(`${result.summary}\n`);
     return 0;
