@@ -32,9 +32,10 @@ export type NewSchedule = {
 
 const MINUTE = 60000;
 const LATE_AFTER = 5 * MINUTE;
-// F6P-3：错过窗口超过 15 分钟不再补发（与 FIX-resend 的补发上界同口径）；
-// mute 到期只解除静默，不受这个上界影响。
-export const MAX_MISSED_AGE_MS = 15 * MINUTE;
+// F6P-3：重启后错过的 08:00 日推在 2 小时内仍补发，之后作废；与 FIX-resend
+// 的日程出站 2 小时窗口（src/recovery-policy.ts）同口径。mute 到期只解除静默，
+// 不受这个上界影响。
+export const MAX_MISSED_AGE_MS = 2 * 60 * MINUTE;
 const RETRY_AFTER = 5 * MINUTE;
 const DEFAULT_TZ = "Australia/Sydney";
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];

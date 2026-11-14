@@ -160,10 +160,11 @@ test("D3 next day 08:00 summarizes 11-13 and advances; both days exactly one pus
   );
 });
 
-test("D4 exactly 15 minutes late still sends with a late note; 15 minutes + 1 ms is skipped without model/outbox", async () => {
+test("D4 90 minutes and exactly 2 hours late still send with a late note; 2 hours + 1 ms is skipped", async () => {
   for (const [lateMs, expectOutbox, expectStatus] of [
-    [15 * 60000, 1, "late"],
-    [15 * 60000 + 1, 0, "skipped"],
+    [90 * 60000, 1, "late"],
+    [2 * 60 * 60000, 1, "late"],
+    [2 * 60 * 60000 + 1, 0, "skipped"],
   ]) {
     const e = env();
     await seed(e);
@@ -176,7 +177,8 @@ test("D4 exactly 15 minutes late still sends with a late note; 15 minutes + 1 ms
     }
     const out = await rows(e, "SELECT * FROM outbox");
     assert.equal(out.length, expectOutbox, `lateMs=${lateMs}`);
-    if (expectOutbox) assert.match(out[0].body, /^（晚了 15 分钟）/);
+    if (expectOutbox)
+      assert.match(out[0].body, new RegExp("^（晚了 " + Math.floor(lateMs / 60000) + " 分钟）"));
     const run = (await rows(e, "SELECT * FROM schedule_runs"))[0];
     assert.equal(run.status, expectStatus, `lateMs=${lateMs}`);
     if (!expectOutbox) {
