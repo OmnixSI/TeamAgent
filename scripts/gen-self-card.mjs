@@ -109,7 +109,7 @@ const lineOf = (text, index) => text.slice(0, index).split("\n").length;
 
 /** Real exported registries, bundled with the project's own esbuild. */
 async function registries() {
-  const dir = mkdtempSync(join(tmpdir(), "selfcard-reg-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-selfcard-reg-"));
   const outfile = join(dir, "registries.mjs");
   try {
     await build({

@@ -42,7 +42,7 @@ test('X detection reads only cookie name/domain and no value, diagnostics hide a
  assert.doesNotMatch(JSON.stringify(n.xMetadata(secret,200,true)),new RegExp(secret));
 });
 test('CDP unavailable offers confirmation, then attaches and closes only its own private instance',async()=>{
- const n=await native(),home=await mkdtemp(join(tmpdir(),'native-x-')),profile=join(home,'browser/x'),states=[],commands=[];
+ const n=await native(),home=await mkdtemp(join(tmpdir(),'teamagent-test-native-x-')),profile=join(home,'browser/x'),states=[],commands=[];
  let now=1000,confirmed=false,closed=0,killed=0;
  const child=new EventEmitter();child.exitCode=null;child.kill=()=>{killed++;};
  const browser={contexts:()=>[{}],close:async()=>{closed++;}};
@@ -77,7 +77,7 @@ for(const [label,domain,path,expected,form=false,marker=true] of [
  ['malformed encoded path','.x.com','/%ZZ','waiting'],
 ])test('native X login requires current x.com session: '+label,async()=>{
  const {createBrowserAuth}=await import('../runner/browser-auth.mjs');
- const home=await mkdtemp(join(tmpdir(),'native-x-auth-')),states=[],reports=[],logs=[];let now=Date.now(),closed=0;
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-native-x-auth-')),states=[],reports=[],logs=[];let now=Date.now(),closed=0;
  const page={url:()=> 'https://x.com'+path,title:async()=> 'X',evaluate:async fn=>fn.toString().includes('hasFocus')?true:200,
   locator:selector=>({first(){return this;},isVisible:async()=>selector.includes('SideNav_AccountSwitcher_Button')?marker:selector.includes('autocomplete')?form:false}),
   goto(){throw Error('native window must navigate itself');}};
@@ -98,7 +98,7 @@ for(const [label,domain,path,expected,form=false,marker=true] of [
 });
 for(const mode of ['active login','no identifiable active page','login tab focused then browser unfocused'])test('native X login ignores background old home: '+mode,async()=>{
  const {createBrowserAuth}=await import('../runner/browser-auth.mjs');
- const home=await mkdtemp(join(tmpdir(),'native-x-tabs-')),states=[],reports=[];let now=Date.now(),focusChecks=0;
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-native-x-tabs-')),states=[],reports=[];let now=Date.now(),focusChecks=0;
  const oldPage={url:()=> 'https://x.com/home',title:async()=> 'X',evaluate:async fn=>fn.toString().includes('hasFocus')?false:200,
   locator(){throw Error('background old home must not be inspected for login markers');}};
  const activePage={url:()=> 'https://x.com/login',title:async()=> '登录 X',evaluate:async fn=>fn.toString().includes('hasFocus')?(mode==='active login'||(mode.includes('then')&&focusChecks++===0)):200,
@@ -116,7 +116,7 @@ for(const mode of ['active login','no identifiable active page','login tab focus
 test('native startup cancellation and request deadlines close the owned process promptly',async()=>{
  const n=await native();
  for(const mode of ['abort','deadline']){
-  const home=await mkdtemp(join(tmpdir(),'native-x-stop-'));let now=1000,killed=0;
+  const home=await mkdtemp(join(tmpdir(),'teamagent-test-native-x-stop-'));let now=1000,killed=0;
   const controller=new AbortController(),child=new EventEmitter();child.exitCode=null;child.kill=()=>killed++;
   try{
    await assert.rejects(n.openNativeX({home,profile:join(home,'browser/x'),port:12345,now:()=>now,deadline:2000,signal:controller.signal,exists:()=>true,spawn:()=>child,publish:async()=>{},discover:async()=>{throw Error('not ready');},sleep:async ms=>{now+=ms;if(mode==='abort')controller.abort();},chromium:{}}));

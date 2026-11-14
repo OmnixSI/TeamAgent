@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { recoverDeliveries, deliverFiles } from "../runner/delivery.mjs";
 function fixture(staged = true) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-delivery-")),
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-delivery-")),
     root = path.join(dir, "utility"),
     outputs = path.join(root, ...(staged ? ["_deliveries", "a".repeat(32)] : ["job"]), "outputs"),
     queue = path.join(dir, "deliveries");

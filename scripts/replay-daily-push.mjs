@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const temp = mkdtempSync(join(tmpdir(), "teamagent-daily-push-"));
+const temp = mkdtempSync(join(tmpdir(), "teamagent-test-daily-push-"));
 const originalFetch = globalThis.fetch;
 let networkCalls = 0;
 let modelCalls = 0;

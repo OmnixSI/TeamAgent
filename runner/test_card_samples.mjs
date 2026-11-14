@@ -14,7 +14,7 @@ import {
 
 const NOW = 1_800_000_000_000;
 const DAY = 86_400_000;
-const temporary = () => fs.mkdtempSync(path.join(os.tmpdir(), "card-samples-"));
+const temporary = () => fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-card-samples-"));
 const cardEvent = {
   content: "",
   author: { member_openid: "openid-secret", union_openid: "union-secret", username: "昵称甲", nickname: "昵称乙", uin: "99887766" },

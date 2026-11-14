@@ -8,7 +8,7 @@ import {createFetchClient,runJob} from './fetcher.mjs';
 
 const values={SESSDATA:'fixture-session-private',bili_jct:'fixture-csrf-private',DedeUserID:'fixture-user-private',buvid3:'fixture-buvid-private'};
 const cookies=()=>[...Object.entries(values).map(([name,value])=>({name,value,expires:2000000000})),{name:'unrelated',value:'never-export',expires:2000000000}];
-async function temp(t){const home=await mkdtemp(join(tmpdir(),'team-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));return home;}
+async function temp(t){const home=await mkdtemp(join(tmpdir(),'teamagent-test-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));return home;}
 function fixture(home,extra={}){
  let time=new Date(2026,10,12,8,59,58).getTime(),closed=0,probes=0,cookieReads=0;
  const reports=[],notices=[],launches=[];

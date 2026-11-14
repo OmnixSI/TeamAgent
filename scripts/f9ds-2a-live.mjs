@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { synthesize } from "../runner/tts.mjs";
 import { wavToSilk, decodeSilkToWav, wavDurationMs, isSilkData } from "../runner/silk.mjs";
 
-const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "f9ds-2a-live-"));
+const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-f9ds-2a-live-"));
 const CASES = [
   { id: "zh", text: "今天的进度我发群里了，你看一下。" },
   { id: "mix", text: "这次改动把 ASR 从本机搬到云端，延迟大概两秒，但不用再占 500MB 内存。" },

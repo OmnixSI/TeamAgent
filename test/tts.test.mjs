@@ -19,7 +19,7 @@ const { synthesize, voiceReply, pruneCache, ttsKey, edgeTtsCommand, EDGE_VOICE }
 const cfg = { enabled: true, max_chars: 300, voice: EDGE_VOICE, rate: "+0%" };
 const FAKE_SILK = Buffer.concat([Buffer.from([0x02]), Buffer.from("#!SILK_V3"), Buffer.alloc(16, 5)]);
 const fakeSilk = async () => ({ ok: true, data: FAKE_SILK, duration_ms: 1000, sample_rate: 24000 });
-const scratch = (prefix = "tts-test-") => {
+const scratch = (prefix = "teamagent-test-tts-") => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   return { dir, cacheDir: path.join(dir, "cache"), clean: () => fs.rmSync(dir, { recursive: true, force: true }) };
 };

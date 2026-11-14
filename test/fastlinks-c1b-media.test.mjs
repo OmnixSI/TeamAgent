@@ -99,7 +99,7 @@ test('C1b an old media runner claim fails page two as runner_outdated without de
 
 
 test('C1b full no-subtitle page-two fetch to audio to report preserves cid and never alters first-page ASR',async()=>{
- const e=env(),f=media.fetchjobs,home=fs.mkdtempSync(path.join(os.tmpdir(),'c1b-e2e-'));
+ const e=env(),f=media.fetchjobs,home=fs.mkdtempSync(path.join(os.tmpdir(),'teamagent-test-c1b-e2e-'));
  try{
   await cache(e,'asr:'+BV,asr(1,'FIRST_PAGE'));
   await f.requestBili(e,BV+'~p2','light','none');

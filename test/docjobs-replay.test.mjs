@@ -37,7 +37,7 @@ const seed=(e,id,attachments)=>{
 const ctx=id=>({context:{latest:{id,group_id:"GROUP1"}},source:{id,group_id:"GROUP1"},messages:[],isTainted:()=>false});
 
 test("real docread.py reads synthetic PDF/DOCX/XLSX through the whole queue", {skip:PY?false:"python3.12 with pypdf/reportlab/python-docx is not installed"},async()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),"docread-replay-"));
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),"teamagent-test-docread-replay-"));
  try{
   const fixtures=path.join(root,"fixtures");fs.mkdirSync(fixtures);
   execFileSync(PY,["-c",`

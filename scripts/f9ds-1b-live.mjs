@@ -8,7 +8,7 @@ import {makeClient,pickAudio,downloadAudio,ffmpegAudio} from '../runner/media.mj
 import {runAsr,runCommand} from '../runner/asr.mjs';
 import {transcribeAudio} from '../runner/cloud-asr.mjs';
 
-const dir=fs.mkdtempSync(join(tmpdir(),'f9ds-1b-live-'));
+const dir=fs.mkdtempSync(join(tmpdir(),'teamagent-test-f9ds-1b-live-'));
 const source=join(dir,'audio.m4a'),wav=join(dir,'audio.wav'),long=join(dir,'long.wav');
 const options={python:join(homedir(),'.inkboard-team/xasr-venv/bin/python'),modelDir:join(homedir(),'Library/Application Support/NextThought/models/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03'),timeoutMs:120000,signal:AbortSignal.timeout(180000)};
 let cost=0;

@@ -32,7 +32,7 @@ if (!fs.existsSync(SAMPLE)) {
 
 const clientDir = process.env.DEEPSEEK_CLIENT_DIR || path.join(ROOT, "runner");
 const silkDir = process.env.SILK_MODULE_DIR || path.join(ROOT, "runner");
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "f9ds-1a-live-"));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-f9ds-1a-live-"));
 const cost = ms => Math.round((Math.max(0, ms) * 58000) / 3600000);
 
 try {

@@ -82,7 +82,7 @@ export function parseArgs(argv = []) {
 
 /** 用 esbuild 把 TS 解析器与 S11 词表打进临时模块；读完立即删，不留临时文件。 */
 export async function loadParser({ rootDir = repoRoot } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "teamagent-backfill-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-backfill-"));
   const outfile = join(dir, "rules.mjs");
   try {
     await build({

@@ -23,7 +23,7 @@ const only = (process.argv.find((arg) => arg.startsWith("--only=")) || "").split
 const want = (section) => !only || only.split(",").includes(section);
 
 const repo = process.cwd();
-const dir = mkdtempSync(join(tmpdir(), "f9ds-4-live-"));
+const dir = mkdtempSync(join(tmpdir(), "teamagent-test-f9ds-4-live-"));
 const outfile = join(dir, "bundle.mjs");
 const fixture = "/Users/yanghongming/Projects/TeamAgent-f7-2-real-fixture-20261114/messages.json";
 

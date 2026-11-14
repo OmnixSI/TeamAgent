@@ -74,7 +74,7 @@ async function seedDelivery(e) {
 }
 
 function runnerFixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "team-delivery-retry-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-delivery-retry-"));
   const root = path.join(dir, "utility");
   const outputs = path.join(root, "_deliveries", "b".repeat(32), "outputs");
   const queue = path.join(dir, "deliveries");

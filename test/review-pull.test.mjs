@@ -183,7 +183,7 @@ function startMockServer({ digest = sampleDigest(), backlog = sampleBacklog(), s
 }
 
 function tempOut() {
-  return mkdtempSync(join(tmpdir(), 'review-pull-'));
+  return mkdtempSync(join(tmpdir(), 'teamagent-test-review-pull-'));
 }
 
 function readIf(path) {

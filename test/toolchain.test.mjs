@@ -90,7 +90,7 @@ test("runCommand maps a missing TTS binary to tts_tool_missing, not asr_unavaila
 });
 
 test("synthesize reports a missing ffmpeg as tts_tool_missing, never asr_unavailable", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-missing-ffmpeg-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-tts-missing-ffmpeg-"));
   const logs = [];
   try {
     const result = await synthesize("你好。", { enabled: true }, {
@@ -134,7 +134,7 @@ function writeWav(file, seconds = 0.1, sampleRate = 24000) {
 test("TTS conversion chain works under env -i with launchd's minimal PATH", () => {
   const ffmpeg = ffmpegToolchain({ env: minimalEnv() });
   if (!ffmpeg.ok) return; // A machine without ffmpeg cannot exercise this path.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-env-i-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-tts-env-i-"));
   try {
     const input = path.join(dir, "in.wav");
     const output = path.join(dir, "out.wav");

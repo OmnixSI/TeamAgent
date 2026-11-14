@@ -12,7 +12,7 @@ const TEAM = "OmnixSI/TeamAgent";
 const NEW = "OmnixSI/peiwan-club-saas";
 
 function fixture(t) {
-  const home = mkdtempSync(path.join(os.tmpdir(), "verify-repo-"));
+  const home = mkdtempSync(path.join(os.tmpdir(), "teamagent-test-verify-repo-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const stateDir = path.join(home, ".inkboard-team");
   mkdirSync(stateDir, { recursive: true });

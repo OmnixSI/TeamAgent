@@ -36,7 +36,7 @@ const capability = (id) => {
 
 /** Every statically registered tool, read independently from the registries. */
 async function registeredTools() {
-  const dir = mkdtempSync(join(tmpdir(), "selfcard-tools-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-selfcard-tools-"));
   const outfile = join(dir, "tools.mjs");
   await build({
     stdin: {
@@ -127,7 +127,7 @@ test("S4 capability files are real, anchored, and give a line number", () => {
 test("S5 the generated card carries no key value, only names", () => {
   const fakeOpenAi = "sk-test-FAKE0123456789012345678901234567890";
   const fakeDeepSeek = "sk-test-FAKEdeepseek012345678901234567890";
-  const dir = mkdtempSync(join(tmpdir(), "selfcard-secret-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-selfcard-secret-"));
   try {
     const out = join(dir, "card.ts");
     const run = generate(["--out", out], { OPENAI_API_KEY: fakeOpenAi, DEEPSEEK_API_KEY: fakeDeepSeek });
@@ -213,7 +213,7 @@ test("S6 repo_map matches schema.sql, migrations and wrangler.toml independently
 });
 
 test("S7 generation is idempotent apart from built_at", () => {
-  const dir = mkdtempSync(join(tmpdir(), "selfcard-idem-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-selfcard-idem-"));
   try {
     const a = join(dir, "a.ts");
     const b = join(dir, "b.ts");
@@ -228,7 +228,7 @@ test("S7 generation is idempotent apart from built_at", () => {
 
 /** A mutated copy of the manifest; the real config file is never touched. */
 function mutant(mutate) {
-  const dir = mkdtempSync(join(tmpdir(), "selfcard-bad-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-selfcard-bad-"));
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
   mutate(manifest);
   const file = join(dir, "manifest.json");
