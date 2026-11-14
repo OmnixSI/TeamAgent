@@ -724,6 +724,57 @@ class DocReadTests(unittest.TestCase):
         (self.root / "big.xlsx").rename(self.root / "big.xlsm")
         self.assertGreater(docread._guard_ooxml(self.root / "big.xlsm"), 40 * 1024 * 1024)
 
+    def _rewrite_big_xlsx(self, name, edit):
+        make_large_sheet_xlsx(self.root / name, rows=75_000, cols=10, text=True)
+        src = self.root / name
+        out = self.root / ("rw-" + name)
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                renamed, data = edit(info.filename, zin.read(info.filename))
+                zout.writestr(renamed, data)
+        return out
+
+    def test_xlsx_renamed_workbook_part_decoy_rels_not_exempt(self):
+        # Workbook lives at xl/wb.xml (per Content_Types / _rels/.rels); the decoy
+        # xl/_rels/workbook.xml.rels must not grant the worksheet exemption.
+        def edit(name, data):
+            if name == "xl/workbook.xml":
+                return "xl/wb.xml", data
+            if name == "[Content_Types].xml":
+                return name, data.replace(b"/xl/workbook.xml", b"/xl/wb.xml")
+            if name == "_rels/.rels":
+                return name, data.replace(b"xl/workbook.xml", b"xl/wb.xml")
+            return name, data
+
+        path = self._rewrite_big_xlsx("renamed-wb.xlsx", edit)
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(path)
+        self.assertEqual(caught.exception.kind, "too_large")
+
+    def _extra_rel_xlsx(self, name, rel_type):
+        def edit(part, data):
+            if part == "xl/_rels/workbook.xml.rels":
+                extra = (
+                    '<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/%s" '
+                    'Target="worksheets/sheet1.xml"/></Relationships>' % rel_type
+                ).encode()
+                return part, data.replace(b"</Relationships>", extra)
+            return part, data
+
+        return self._rewrite_big_xlsx(name, edit)
+
+    def test_xlsx_part_with_second_chartsheet_rel_not_exempt(self):
+        path = self._extra_rel_xlsx("two-rels-chart.xlsx", "chartsheet")
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(path)
+        self.assertEqual(caught.exception.kind, "too_large")
+
+    def test_xlsx_part_with_second_externallink_rel_not_exempt(self):
+        path = self._extra_rel_xlsx("two-rels-ext.xlsx", "externalLink")
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(path)
+        self.assertEqual(caught.exception.kind, "too_large")
+
     def test_xlsx_chartsheet_is_not_exempt(self):
         # A chartsheet relationship is not a worksheet: the part gets the 32 MiB cap.
         make_large_sheet_xlsx(

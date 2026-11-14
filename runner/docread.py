@@ -126,54 +126,88 @@ def _member_is_xml(archive, info):
     return _looks_like_xml(head)
 
 
-_WHOLE_TREE_PARTS = {"xl/styles.xml", "xl/workbook.xml", "[content_types].xml"}
+_CT_WORKBOOKS = (  # openpyxl's lookup order for the workbook part
+    "application/vnd.ms-excel.template.macroEnabled.main+xml",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+    "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+)
+_CT_WORKSHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+_CT_SHARED = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedstrings+xml"
 
 
-def _relationships(archive, infos, extension):
-    """Part names a real .xlsx/.xlsm workbook declares as worksheet/sharedStrings.
-
-    A docx/pptx member that merely sits under xl/worksheets/ is not exempt; only the
-    parts the xlsx readers stream are. Chartsheets are not worksheets.
-    """
-    if extension not in {".xlsx", ".xlsm"}:
-        return set(), set()
-    rels_name = "xl/_rels/workbook.xml.rels"
-    rels_infos = [info for info in infos if info.filename == rels_name]
-    if not rels_infos or any(info.file_size > MAX_RELS_BYTES for info in rels_infos):
-        return set(), set()
-    rels_info = rels_infos[-1]
-    data = archive.read(rels_info)
+def _parse_small_xml(archive, infos, name):
+    """Parse a small package XML part; None when missing, oversized, DTD-bearing or invalid."""
+    found = [info for info in infos if info.filename == name]
+    if not found or any(info.file_size > MAX_RELS_BYTES for info in found):
+        return None
+    data = archive.read(found[-1])
     if b"<!doctype" in data.lower() or b"<!entity" in data.lower():
-        return set(), set()
-    import posixpath
+        return None
     import xml.etree.ElementTree as ElementTree
 
     try:
-        root = ElementTree.fromstring(data)
+        return ElementTree.fromstring(data)
     except Exception:
+        return None
+
+
+def _relationships(archive, infos, extension):
+    """Worksheet / sharedStrings parts of a real .xlsx/.xlsm, decided like openpyxl reads them.
+
+    Whitelist: a part is exempt from the whole-tree caps only when [Content_Types].xml
+    types it as a worksheet (or the one sharedStrings part) AND every workbook
+    relationship pointing at it has that same kind. Anything else (workbook, styles,
+    chartsheets, external links, docProps, parts with a second relationship) gets the
+    normal 32 MiB cap and 2M-element budget. docx/pptx never get an exemption.
+    """
+    if extension not in {".xlsx", ".xlsm"}:
         return set(), set()
-    worksheets, shared = set(), set()
-    for relation in root:
+    import posixpath
+
+    types = _parse_small_xml(archive, infos, "[Content_Types].xml")
+    if types is None:
+        return set(), set()
+    overrides = {}
+    for node in types:
+        if node.tag.endswith("}Override") or node.tag == "Override":
+            part = (node.get("PartName") or "").lstrip("/")
+            overrides[part] = node.get("ContentType") or ""
+    workbook = "xl/workbook.xml"
+    for content_type in _CT_WORKBOOKS:
+        hits = [part for part, kind in overrides.items() if kind == content_type]
+        if hits:
+            workbook = hits[0]
+            break
+    directory, _, base = workbook.rpartition("/")
+    rels_name = f"{directory}/_rels/{base}.rels" if directory else f"_rels/{base}.rels"
+    rels = _parse_small_xml(archive, infos, rels_name)
+    if rels is None:
+        return set(), set()
+    kinds = {}
+    for relation in rels:
         if (relation.get("TargetMode") or "").lower() == "external":
             continue
-        kind = (relation.get("Type") or "").rstrip("/").lower()
         target = relation.get("Target") or ""
         if not target:
             continue
         if target.startswith("/"):
-            part = target.lstrip("/")
-        elif target.startswith("xl/"):
-            part = posixpath.normpath(target)
+            part = posixpath.normpath(target.lstrip("/"))
         else:
-            part = posixpath.normpath(posixpath.join("xl", target))
-        # openpyxl reads these fixed-path parts as whole trees whatever the rels say.
-        if part.lower() in _WHOLE_TREE_PARTS or part.lower().startswith(("docprops/", "xl/_rels/")):
-            continue
-        if kind.endswith("/worksheet"):
-            worksheets.add(part)
-        elif kind.endswith("/sharedstrings"):
-            shared.add(part)
-    return worksheets, shared
+            part = posixpath.normpath(posixpath.join(directory, target))
+        kind = (relation.get("Type") or "").rstrip("/").rsplit("/", 1)[-1].lower()
+        kinds.setdefault(part, set()).add(kind)
+    worksheets = {
+        part for part, found in kinds.items()
+        if found == {"worksheet"} and overrides.get(part) == _CT_WORKSHEET and part != workbook
+    }
+    shared = [part for part, kind in overrides.items() if kind.lower() == _CT_SHARED]
+    shared_ok = set()
+    if shared:
+        first = shared[0]  # openpyxl reads only the first registered sharedStrings part
+        if kinds.get(first, {"sharedstrings"}) == {"sharedstrings"} and first not in worksheets and first != workbook:
+            shared_ok.add(first)
+    return worksheets, shared_ok
 
 
 def _checked_chunks(source, name):
@@ -636,7 +670,9 @@ def _xlsx_openpyxl(path):
     import openpyxl
 
     # Read-only keeps cell values out of memory; a 20 MB sheet otherwise costs hundreds of MB.
-    workbook = openpyxl.load_workbook(filename=str(path), data_only=False, read_only=True)
+    workbook = openpyxl.load_workbook(
+        filename=str(path), data_only=False, read_only=True, keep_links=False,
+    )
     sections, sheets = [], []
     try:
         for worksheet in workbook.worksheets:
