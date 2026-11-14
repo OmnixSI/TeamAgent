@@ -8,6 +8,9 @@ import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 import { biliSearch, biliVideo, hot, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
 import type { Net } from "./sites.ts";
+import { selfCard } from "./self.ts";
+import { PLAYBOOKS, TUNABLES } from "./config.ts";
+import type { LiveStatus } from "./self.ts";
 
 /** What tools need from the place they run in (the Durable Object, or a stub in replay). */
 export interface Host {
@@ -21,8 +24,13 @@ export interface Host {
   nameImage(ref: string, name: string): Promise<boolean>;
   fileRef(ref: string): Promise<{ name: string; bytes: Uint8Array } | null>;
   savedNames(): string[];
+  status(): LiveStatus;
+  cfg(key: string): number | string;
+  play(slot: string): string;
+  selfUpdate(args: any): Promise<any>;
+  chatCsv(days: number): Uint8Array;
   /** Messages per person per day (Beijing date), newest days first. */
-  stats(days: number): { date: string; name: string; count: number }[];
+  stats(days: number): { date: string; name: string; count: number; chars: number }[];
   recentLines(n: number): string;
   memory(): string;
   quota(kind: string, dailyLimit: number): Promise<boolean>;
@@ -192,7 +200,29 @@ const line = (r: Row) => "[" + fmtFull(r.ts, BJ) + "] " + (r.role === "bot" ? "B
 export function buildTools(host: Host): Tool[] {
   const env = host.env;
   const net: Net = { env: env as any, cookie: site => host.cookie(site) };
-  return [
+  let sawSelf = false;
+  const tools: Tool[] = [
+    {
+      name: "about_self",
+      description: "你自己的真实情况：整条链路怎么走、背后接了哪些服务、数据存在哪、记忆和画图怎么做、现在能做的全部事情、做不到的事、代码在哪个文件、当前运行状态。有人问你怎么实现的、接了什么模型、能做什么、现在状态怎样，先调它再答。",
+      parameters: obj({}),
+      run: async () => { sawSelf = true; return selfCard(env, tools, host.status(), await host.selfUpdate({ op: "status" })); },
+    },
+    {
+      name: "self_update", work: true,
+      description: "改你自己的小毛病，立刻生效、可撤销。能改三样：参数（op=set_config，key 和 value）、做法说明（op=set_playbook，slot 是 " + Object.keys(PLAYBOOKS).join("/") + "，text 是要加的一条；mode=replace 时整段替换）、别人叫你的名字（op=add_alias / remove_alias）。op=status 看现在的参数、做法说明和改动记录；op=revert 按编号撤销；op=apply 让群主批准过的提议生效；op=propose_code 是需要改代码的问题，写清分析和建议改法留给维护的人。做法说明只能改变你怎么用已有的能力，变不出新能力：对方要的效果如果靠你现有的工具和发消息方式根本做不到，那就是代码问题，用 propose_code，并照实说还没修好。每次都要写 reason：问题是什么、你查到的原因、为什么这样改。一次只改一处。可改的参数：" + Object.entries(TUNABLES).map(([k, t]) => k + "（" + t.what + "）").join("；") + "。",
+      parameters: obj({
+        op: { type: "string", enum: ["status", "set_config", "set_playbook", "add_alias", "remove_alias", "revert", "apply", "propose_code"] },
+        key: str("参数名"), value: str("参数的新值"), slot: { type: "string", enum: Object.keys(PLAYBOOKS) },
+        text: str("要加进做法说明的一条（或 replace 时的全文）；propose_code 时是建议的改法"), mode: { type: "string", enum: ["append", "replace"] },
+        alias: str("名字"), id: { type: "integer" }, title: str("propose_code 的标题"), reason: str("问题、原因、为什么这样改"),
+      }, ["op"]),
+      run: async a => {
+        // Changing yourself starts with knowing what you are and what is actually wrong.
+        if (!sawSelf && !["status", "revert", "apply"].includes(String(a.op))) return { ok: false, error: "先调 about_self 看清现状、你现在有哪些能力、哪些东西你改得了，再决定怎么改" };
+        return host.selfUpdate(a);
+      },
+    },
     {
       name: "web_search", work: true,
       description: "联网搜索，返回标题、链接、摘要。搜不到就换关键词再搜（去空格、换英文、加站点名）。",
@@ -201,7 +231,7 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "read_url", work: true,
-      description: "读取一个链接的正文：普通网页、GitHub、推文、小红书笔记、知乎、抖音、公众号文章都可以。群友发了链接、或搜索结果需要细看时用。B 站视频用 bilibili。",
+      description: "读取一个链接的正文：普通网页、GitHub、推文、小红书笔记、知乎问题和回答、公众号文章都可以（抖音视频读不了）。群友发了链接、或搜索结果需要细看时用。B 站视频用 bilibili。",
       parameters: obj({ url: str("完整链接") }, ["url"]),
       run: async a => {
         const page: any = await readUrl(net, String(a.url || ""));
@@ -250,7 +280,7 @@ export function buildTools(host: Host): Tool[] {
         op: { type: "string", enum: ["video", "search"] }, target: str("视频链接 / BV 号 / 搜索词"),
         transcript: { type: "boolean", description: "要不要正文内容，默认要；只想看标题数据就给 false" },
       }, ["op", "target"]),
-      run: async a => ({ note: EXTERNAL, ...(a.op === "search" ? { results: await biliSearch(net, String(a.target)) } : await biliVideo(net, String(a.target), a.transcript !== false)) }),
+      run: async a => ({ note: EXTERNAL, ...(a.op === "search" ? { results: await biliSearch(net, String(a.target)) } : await biliVideo(net, String(a.target), a.transcript !== false, Number(host.cfg("transcribe_max_minutes")))) }),
     },
     {
       name: "hot", work: true,
@@ -275,7 +305,7 @@ export function buildTools(host: Host): Tool[] {
       description: "发一条语音到群里（群友让你发语音、念出来、用语音说，或者你觉得这句用嘴说更有意思时）。text 是要说的话，口语，不超过 150 字。返回 sent=true 才算发出去。",
       parameters: obj({ text: str("要说的话"), voice: { type: "string", enum: ["female", "male"] } }, ["text"]),
       run: async a => {
-        if (!(await host.quota("voice", 60))) return { ok: false, sent: false, error: "今天语音发太多了" };
+        if (!(await host.quota("voice", Number(host.cfg("voice_daily"))))) return { ok: false, sent: false, error: "今天语音发太多了" };
         const audio = await ttsSilk(net, clip(a.text, 400), a.voice === "male" ? "male" : "female");
         const sent = await host.sendVoice(audio.silk);
         return sent.ok ? { ok: true, sent: true, seconds: audio.seconds } : { ok: false, sent: false, error: "语音合成好了但发到 QQ 失败：" + (sent.error || "未知原因") };
@@ -308,7 +338,7 @@ export function buildTools(host: Host): Tool[] {
         quality: { type: "string", enum: ["low", "medium", "high"], description: "群友指定了才填" },
       }, ["request"]),
       run: async a => {
-        if (!(await host.quota("image", 40))) return { ok: false, sent: false, error: "今天画图次数用完了，明天再画" };
+        if (!(await host.quota("image", Number(host.cfg("image_daily"))))) return { ok: false, sent: false, error: "今天画图次数用完了，明天再画" };
         const refs: Ref[] = [], missing: string[] = [];
         for (const label of (Array.isArray(a.references) ? a.references : []).slice(0, 4)) {
           const ref = await host.imageRef(String(label)).catch(() => null);
@@ -317,7 +347,8 @@ export function buildTools(host: Host): Tool[] {
         if (missing.length && !refs.length) return { ok: false, sent: false, error: "参考图 " + missing.join("、") + " 取不到（可能过期了），让群友重发一次图" };
         // Every drawing starts the same way: understand the ask, then look at the things it mentions.
         const request = String(a.request || ""), context = host.recentLines(16), memory = host.memory();
-        const brief = await scout(env, { request, context, memory, saved: host.savedNames() });
+        const extra = host.play("drawing");
+        const brief = await scout(env, { request, context, memory, saved: host.savedNames(), extra });
         for (const name of brief.use_saved) {
           if (refs.length >= 4 || refs.some(r => r.label === name)) continue;
           const saved = await host.imageRef(name).catch(() => null);
@@ -326,7 +357,7 @@ export function buildTools(host: Host): Tool[] {
         const queries = [...new Set([...(a.look_up ? [String(a.look_up)] : []), ...brief.look_up])].slice(0, 3);
         const found = await Promise.all(queries.map(q => findImages(env, q, 2).catch(() => [])));
         for (const group of found) for (const ref of group) if (refs.length < 6) refs.push(ref);
-        const plan = await design(env, { request, intent: brief.intent, context, memory, refs, size: a.size, quality: a.quality });
+        const plan = await design(env, { request, intent: brief.intent, context, memory, refs, size: a.size, quality: a.quality, extra, defaultQuality: String(host.cfg("image_quality")) });
         const image = await draw(env, plan, plan.use.map(i => refs[i]).filter(Boolean));
         const sent = await host.sendImage(image, plan.idea);
         return sent.ok
@@ -356,12 +387,14 @@ export function buildTools(host: Host): Tool[] {
       parameters: obj({
         task: str("要做的事，包含必要的数据"),
         files: { type: "array", items: { type: "string" }, description: "输入文件：[文件 名字 链接] 里的链接，或图片编号" },
+        chat_days: { type: "integer", description: "要分析群聊本身（字数、时段、关键词、词云）时填：把最近这么多天的聊天记录作为 chat.csv 放进沙箱" },
       }, ["task"]),
       run: async a => {
-        if (!(await host.quota("python", 40))) return { ok: false, error: "今天跑代码的次数用完了" };
+        if (!(await host.quota("python", Number(host.cfg("python_daily"))))) return { ok: false, error: "今天跑代码的次数用完了" };
         const inputs: { name: string; bytes: Uint8Array }[] = [];
         for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) inputs.push(f); }
-        const out = await runPython(env as any, String(a.task || ""), inputs);
+        if (Number(a.chat_days) > 0) inputs.push({ name: "chat.csv", bytes: host.chatCsv(Math.min(Number(a.chat_days), 60)) });
+        const out = await runPython(env as any, String(a.task || ""), inputs, host.play("python"));
         const sent: string[] = [], failed: string[] = [];
         for (const f of out.files) {
           const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name);
@@ -407,7 +440,7 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "chat_stats",
-      description: "群聊发言统计：最近几天每人每天发了多少条（精确计数，不用自己数聊天记录）。",
+      description: "群聊发言统计：最近几天每人每天发了多少条、多少字（精确计数，不用自己数，也不要估算）。更细的分析用 run_python 加 chat_days。",
       parameters: obj({ days: { type: "integer", description: "最近几天，默认 7" } }),
       run: async a => ({ rows: host.stats(Math.min(Number(a.days) || 7, 60)) }),
     },
@@ -460,4 +493,5 @@ export function buildTools(host: Host): Tool[] {
       },
     },
   ];
+  return tools;
 }

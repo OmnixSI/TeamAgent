@@ -40,7 +40,9 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | `src/core.ts` | 一轮对话：拼上下文、工具循环、出话 |
 | `src/tools.ts` | 全部工具。加能力在这里加一项 |
 | `src/sites.ts` | 各站点的读取：B 站、小红书、知乎、热榜、行情、X、语音合成 |
-| `src/draw.ts` | 画图四步、找参考图、云端 Python 沙箱 |
+| `src/draw.ts` | 画图四步、找参考图、云端 Python 沙箱（含中文字体的固定做法） |
+| `src/self.ts` | 自述：链路、接入、能力清单、运行状态 |
+| `src/config.ts` | 它被允许自己改的参数和做法说明 |
 | `src/hub.ts` | Durable Object：QQ 连接、存储、发送、定时、夜间整理、管理接口 |
 | `src/memory.ts` | 每晚把当天聊天整理成长期记忆、教训和小结 |
 | `src/qq.ts` | QQ 接口与消息解析 |
@@ -57,6 +59,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图） `save_reference` `view_image` `speak`（语音回复） |
 | 计算 | `run_python`（云端沙箱：算数据、画图表、生成 Excel/CSV/PDF，产物直接发群） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
+| 自身 | `about_self`（链路、接入、能力、状态） `self_update`（改自己的参数和做法说明，或写代码改进提议） |
 
 ## 出网的三条路
 
@@ -69,6 +72,19 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 登录态存在 Hub 里（`cookie:<站点>`），用 `scripts/login-cookies.mjs` 刷新：在一个没有自动化标记的普通浏览器窗口里手动登录，脚本从本机调试端口读出 cookie 写进 Hub。小红书在大陆以外会被它自己跳到 rednote.com，账号和内容是同一套，登录态取 rednote.com 的。
 
 中转部署：`cd relay && npx vercel deploy --prod -e RELAY_KEY=<密钥>`，同一个密钥写进 Worker 的 `RELAY_KEY`。
+
+## 它怎么回答“你是怎么实现的”
+
+`about_self` 工具返回一份自述（`src/self.ts`）：消息链路、接入的服务、存储、记忆、画图、做不到的事、源码地图。其中能力清单由实际注册的工具生成，运行状态从 Hub 实时读取，所以不会和现实脱节；文字说明部分要在改架构的同一次提交里一起改。问到具体实现，它用 `github` 读 `v2/` 里的源码。
+
+## 自我迭代
+
+群里让它改自己的毛病时，它用 `self_update`：
+
+- **自己能改**（立即生效，可撤销，每次留记录）：`src/config.ts` 里列出的有上下限的参数（等待时间、每日额度、默认画质、主动接话的积极程度等）、三段做法说明（人设补充 / 画图 / 跑代码，各 1500 字以内，追加到对应的提示词后面）、别人叫它的名字。
+- **自己不能改**：代码逻辑。这类它写成改进提议（`propose_code`），存在 Hub 的 `change` 表里，`GET /admin/changes` 能看到。
+- **权限**：`OWNERS`（`wrangler.toml`）里的成员说的直接生效；其他人提的先记成提议，群主同意后 `apply`。
+- **约束**：改之前必须先调过 `about_self`；一次只改一处；做法说明变不出新能力。
 
 ## 记忆
 
@@ -83,7 +99,7 @@ export CLOUDFLARE_API_TOKEN=...   # 账户级 token
 npx wrangler deploy -c v2/wrangler.toml
 ```
 
-改了行为就把 `src/util.ts` 里的 `BUILD` 加一。Hub 握着 QQ 长连接，部署不会自动替换它；定时触发（每 2 分钟）发现版本不一致会让它自重启，想立刻生效就 `POST /admin/restart`。重启后 QQ 会话自动续上。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `ADMIN_TOKEN` `RELAY_KEY`。
+改了行为就把 `src/util.ts` 里的 `BUILD` 加一。Hub 握着 QQ 长连接，部署不会自动替换它；定时触发（每 2 分钟）发现版本不一致会让它自重启，想立刻生效就 `POST /admin/restart`。重启会等正在进行的对话跑完，重启后 QQ 会话自动续上，期间没回的 @ 消息会补回。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `ADMIN_TOKEN` `RELAY_KEY`。
 
 ## 管理接口
 
@@ -103,6 +119,8 @@ npx wrangler deploy -c v2/wrangler.toml
 | `POST /admin/tool {"name":"…","args":{…}}` | 单独跑一个工具看返回 |
 | `POST /admin/cookie {"site":"…","cookie":"…"}` | 写入某站点的登录态；不带参数时列出已有站点 |
 | `POST /admin/probe {"url":"…"}` | 看一个地址从 Cloudflare 抓是什么结果 |
+| `GET /admin/changes` | 它对自己做过的改动和写下的代码改进提议 |
+| `GET /admin/img` | 它发过的图和保存的形象；`?id=` 取原图 |
 | `POST /admin/sched` | 加/取消定时任务 |
 
 ## 本地回放

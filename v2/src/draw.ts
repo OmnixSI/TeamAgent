@@ -36,12 +36,12 @@ const SCOUT = `你是美术指导的前期调研。读群友的要求和聊天�
 只输出一个 JSON 对象：{"intent":"…","use_saved":["名字"],"look_up":["搜索词"]}`;
 
 /** Step one of every drawing: work out what is really being asked and what must be looked at first. */
-export async function scout(env: Env, input: { request: string; context: string; memory: string; saved: string[] }) {
+export async function scout(env: Env, input: { request: string; context: string; memory: string; saved: string[]; extra?: string }) {
   const empty = { intent: "", use_saved: [] as string[], look_up: [] as string[] };
   try {
     const r = await dsChat(env, {
       messages: [
-        { role: "system", content: SCOUT },
+        { role: "system", content: SCOUT + (input.extra ? "\n\n【群里对画图的额外要求】\n" + input.extra : "") },
         { role: "user", content: "【群友的要求】\n" + input.request + "\n\n【最近的聊天】\n" + clip(input.context, 3000) + "\n\n【Bot 记得的事】\n" + clip(input.memory, 2500) + "\n\n【已保存的形象】" + (input.saved.join("、") || "（无）") },
       ],
       max_tokens: 3000,
@@ -62,7 +62,7 @@ const dataUrl = (r: Ref) => {
   return "data:" + r.mime + ";base64," + btoa(s);
 };
 
-export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string }): Promise<Design> {
+export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string }): Promise<Design> {
   const text = "【群友的要求】\n" + input.request + (input.intent ? "\n\n【调研后对意图的理解】\n" + input.intent : "") +
     "\n\n【最近的聊天】\n" + clip(input.context, 3000) +
     "\n\n【Bot 记得的事（人物、梗、形象设定）】\n" + clip(input.memory, 2500) +
@@ -72,7 +72,7 @@ export async function design(env: Env, input: { request: string; intent?: string
   try {
     const r = await dsChat(env, {
       messages: [
-        { role: "system", content: DIRECTOR },
+        { role: "system", content: DIRECTOR + (input.extra ? "\n\n【群里对画图的额外要求】\n" + input.extra : "") },
         { role: "user", content: input.refs.length ? [{ type: "text", text }, ...input.refs.map(ref => ({ type: "image_url", image_url: { url: dataUrl(ref) } }))] : text },
       ],
       max_tokens: 12000,
@@ -84,7 +84,7 @@ export async function design(env: Env, input: { request: string; intent?: string
       prompt: d.prompt.slice(0, 4000), idea: clip(d.idea || input.request, 80),
       use: [...new Set([...given, ...(Array.isArray(d.use_refs) ? d.use_refs : []).map(Number).filter((i: number) => Number.isInteger(i) && i >= 0 && i < input.refs.length)])].slice(0, 4),
       size: SIZES[input.size || ""] || SIZES[d.size] || SIZES.square,
-      quality: ["low", "medium", "high"].includes(input.quality || "") ? input.quality! : ["low", "medium", "high"].includes(d.quality) ? d.quality : "medium",
+      quality: ["low", "medium", "high"].includes(input.quality || "") ? input.quality! : ["low", "medium", "high"].includes(d.quality) ? d.quality : input.defaultQuality || "medium",
     };
   } catch { return fallback; }
 }
@@ -159,7 +159,22 @@ export async function draw(env: Env, d: Design, refs: Ref[]) {
 }
 
 /** Python in OpenAI's hosted sandbox: computes, plots, converts, and hands back the files it wrote. */
-export async function runPython(env: Env & { CODE_MODEL?: string }, task: string, inputs: { name: string; bytes: Uint8Array }[]) {
+const SANDBOX = `你在一个 Python 沙箱里替 QQ 群里的 Bot 干活。用 python 工具真的把代码跑出来，不要心算，不要只给代码。
+输入文件在 /mnt/data 下。要交付的文件（图表、表格、文档）写到 /mnt/data，并在回答里提到文件名。文件名用英文或拼音。
+
+中文必须能正常显示，沙箱里有字体，但要自己指定：
+- matplotlib / seaborn：每次画图前先执行
+  import matplotlib; matplotlib.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "AR PL UMing CN", "DejaVu Sans"]; matplotlib.rcParams["font.family"] = "sans-serif"; matplotlib.rcParams["axes.unicode_minus"] = False
+  （"Noto Sans CJK JP" 这个名字的字体包含完整的简体中文字形。）
+- PIL、词云：字体文件用 /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc。
+- reportlab 生成 PDF：pdfmetrics.registerFont(TTFont("CN", "/usr/share/fonts/truetype/arphic-gbsn00lp/gbsn00lp.ttf"))，所有文字用这个字体。
+- Excel、Word、PPT 里的中文直接写，不需要特别处理。
+图表做完后自己检查一遍：标题、坐标轴、图例里的中文不能是方块。图要清楚好看：dpi 至少 160，标题说人话，数字标在柱子或点上。
+
+如果给了 chat.csv，它是群聊记录，列是 time（北京时间）、name、text，一行一条消息；要统计字数、时段、关键词就老老实实按它算，不要估算。
+最后用中文说清：结果是什么、关键数字、生成了哪些文件。出错就照实说错在哪。`;
+
+export async function runPython(env: Env & { CODE_MODEL?: string }, task: string, inputs: { name: string; bytes: Uint8Array }[], extra = "") {
   if (!env.OPENAI_API_KEY) throw new Error("没有配置 OpenAI 密钥");
   const auth = { Authorization: "Bearer " + env.OPENAI_API_KEY };
   const fileIds: string[] = [];
@@ -175,10 +190,7 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
     body: JSON.stringify({
       model: env.CODE_MODEL || "gpt-5.4-mini",
       tools: [{ type: "code_interpreter", container: { type: "auto", ...(fileIds.length ? { file_ids: fileIds } : {}) } }],
-      instructions: "你在一个 Python 沙箱里替 QQ 群里的 Bot 干活。用 python 工具真的把代码跑出来，不要心算，不要只给代码。" +
-        "输入文件在 /mnt/data 下。要交付的文件（图表、表格、文档）写到 /mnt/data，并在回答里提到文件名。" +
-        "画图前先确认有没有中文字体（matplotlib.font_manager），没有就用英文标注，别出方块字。" +
-        "最后用中文说清：结果是什么、关键数字、生成了哪些文件。出错就照实说错在哪。",
+      instructions: SANDBOX + (extra ? "\n\n【群里对这类活的额外要求】\n" + extra : ""),
       input: task,
     }),
     signal: AbortSignal.timeout(280000),
