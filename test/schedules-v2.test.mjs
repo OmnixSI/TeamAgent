@@ -4,9 +4,9 @@ import { build } from "esbuild";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-// D3b：日程 v2。依赖 D0 的表、D2 的解析、D3a 的动作层——三个包都可能还没合，
-// 所以这里用 esbuild 插件把 ./schedule-parse 与 ./actions 换成受本测试控制的 stub
-// （签名照 design §5.4/§5.5）。被测代码本身只认真模块的接口。
+// D3b：日程 v2。表结构用 D0 合进来的 schema.sql（schedules v2 + pending_actions）；
+// D2 的解析与 D3a 的动作层还没合，所以这里用 esbuild 插件把 ./schedule-parse 与
+// ./actions 换成受本测试控制的 stub（签名照 design §5.4/§5.5）。被测代码只认真模块接口。
 const GROUP = "GROUP000001";
 const at = (s) => Date.parse(s);
 
@@ -57,24 +57,7 @@ async function bundle(entry, extra = "") {
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8"));
-  d.exec(`
-DROP TABLE IF EXISTS schedules;
-CREATE TABLE schedules(
-  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, owner TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK(kind IN ('digest_daily','digest_weekly','reminder','mute','agent_task')),
-  tz TEXT NOT NULL DEFAULT 'Australia/Sydney', spec TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','cancelled','paused')),
-  next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT, source_msg_id TEXT, created_at INTEGER NOT NULL);
-CREATE INDEX schedules_due ON schedules(status,next_run_at);
-CREATE INDEX schedules_group ON schedules(group_id,status);
-CREATE TABLE IF NOT EXISTS pending_actions(
-  id TEXT PRIMARY KEY, group_id TEXT NOT NULL, sender TEXT NOT NULL,
-  tool TEXT NOT NULL, draft TEXT NOT NULL, missing TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','done','expired')),
-  asked_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS pending_actions_open ON pending_actions(group_id,sender,status,expires_at);
-`);
+
   const database = {
     executed: 0,
     prepare(sql) {
@@ -938,5 +921,66 @@ test("D13 S-02 once becomes a reminder with run_at", async () => {
   const spec = JSON.parse(rowdb.spec);
   assert.equal(spec.run_at, runAt);
   assert.equal(spec.text, "交周报");
+  assert.equal(spec.steps, undefined);
+});
+
+test("D14 RC-12 mute: 10 minutes becomes a mute row ending at run_at", async () => {
+  const e = env();
+  const runAt = Date.now() + 10 * 60_000;
+  parseStub({
+    when: { "闭嘴10分钟": { ok: true, when: { cadence: "once", run_at: runAt, tz: "Australia/Sydney" }, tzSaid: false, matched: "10分钟后" } },
+  });
+  const result = await tools.scheduleCreateTool.run(
+    e,
+    { kind: "mute", when_text: "闭嘴10分钟" },
+    toolCtx("你先闭嘴10分钟bot设个定时任务十分钟后再说话"),
+  );
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.kind, "mute");
+  const spec = JSON.parse((await row(e, "SELECT * FROM schedules WHERE id=?", result.id)).spec);
+  assert.equal(spec.run_at, runAt);
+  assert.equal(spec.steps, undefined);
+});
+
+test("D15 RC-09 ledger + quota + token become one agent_task with all three steps", async () => {
+  const e = env();
+  const text = "把账本跟API余额每天在北京时间0点发一下日报，同时播报每日使用的token总数";
+  parseStub({
+    when: { "每天在北京时间0点": { ok: true, when: { cadence: "daily", time: "00:00", tz: BJ }, tzSaid: true, matched: "北京时间0点" } },
+    content: {
+      [text]: [
+        { action: "records_summary", type: "报销额度", period: "this_month" },
+        { action: "quota" },
+        { action: "token_usage" },
+      ],
+    },
+  });
+  const result = await tools.scheduleCreateTool.run(e, { when_text: "每天在北京时间0点" }, toolCtx(text));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.kind, "agent_task");
+  const spec = JSON.parse((await row(e, "SELECT * FROM schedules WHERE id=?", result.id)).spec);
+  const actions = spec.steps.map((s) => s.action);
+  assert.deepEqual(actions, ["records_summary", "quota", "token_usage"]);
+  assert.equal(spec.time, "00:00");
+});
+
+test("D16 S-03 weekly Beijing 9am stays digest_weekly with weekdays and tz", async () => {
+  const e = env();
+  parseStub({
+    when: { "每周一北京时间9点": { ok: true, when: { cadence: "weekly", time: "09:00", weekdays: [1], tz: BJ }, tzSaid: true, matched: "每周一北京时间9点" } },
+    content: { "发上周聊天总结": [{ action: "chat_digest", days: 7 }] },
+  });
+  const result = await tools.scheduleCreateTool.run(
+    e,
+    { when_text: "每周一北京时间9点", content_text: "发上周聊天总结" },
+    toolCtx("每周一北京时间9点发上周聊天总结"),
+  );
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.kind, "digest_weekly");
+  assert.equal(result.tz, BJ);
+  const rowdb = await row(e, "SELECT * FROM schedules WHERE id=?", result.id);
+  const spec = JSON.parse(rowdb.spec);
+  assert.deepEqual(spec.weekdays, [1]);
+  assert.equal(spec.time, "09:00");
   assert.equal(spec.steps, undefined);
 });
