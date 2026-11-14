@@ -219,9 +219,10 @@ test("daytime prompt carries the rules block once and drops the old team_reflect
     if (/FROM behavior_rules/.test(sql)) hits++;
     return orig.call(e.DB, sql);
   };
+  const m = api.metered(e);
   const s = stub();
   try {
-    await api.agentAnswer(e, await contextFor(e, { id: "msg-l7-1", body: "早上好", sender: "U1" }));
+    await api.agentAnswer(m, await contextFor(m, { id: "msg-l7-1", body: "早上好", sender: "U1" }));
   } finally {
     s.restore();
   }
@@ -299,4 +300,62 @@ test("a violation is queued on e.tail and written once as activity rule.violatio
   await api.flushTail(m);
   assert.equal((await all(m, "SELECT * FROM activity WHERE kind='rule.violation'")).length, 1, "the flush is idempotent");
   console.log("B-l7 回放：QQ 真实发送 0 次（本地假 D1，未调用 sendOutbox），线上 D1 写入 0 行");
+});
+
+test("rule budget reserve grows with images and quoted replies", () => {
+  assert.equal(api.ruleReserve(0, false), 30);
+  assert.equal(api.ruleReserve(3, true), 38);
+  assert.equal(api.rulesBudgetAllows(37, 0, false), true);
+  assert.equal(api.rulesBudgetAllows(29, 0, false), false);
+  assert.equal(api.rulesBudgetAllows(37, 3, true), false, "the four 48-statement fixtures land here");
+  assert.equal(api.rulesBudgetAllows(38, 3, true), true);
+  assert.equal(api.rulesBudgetAllows(36, 1, true), true);
+});
+
+test("a loose budget still reads and injects the rules block", async () => {
+  const e = await setup();
+  await seedRule(e, { id: "rule-cao", kind: "avoid_phrase", params: { phrase: "草" }, rule: "不要再说「草」。" });
+  let hits = 0;
+  const orig = e.DB.prepare;
+  e.DB.prepare = (sql) => {
+    if (/FROM behavior_rules/.test(sql)) hits++;
+    return orig.call(e.DB, sql);
+  };
+  const m = api.metered(e);
+  const s = stub();
+  try {
+    await api.agentAnswer(m, await contextFor(m, { id: "msg-l7-loose", body: "早上好" }));
+  } finally {
+    s.restore();
+  }
+  assert.ok(userPrompt(s.seen).includes("不要再说「草」。"));
+  assert.equal(hits, 1);
+  await api.flushTail(m);
+  assert.equal((await all(m, "SELECT * FROM activity WHERE kind='rules.skipped_budget'")).length, 0);
+});
+
+test("a tight budget skips the D1 read, replies as if there were no rules, and records the skip", async () => {
+  const e = await setup();
+  await seedRule(e, { id: "rule-cao", kind: "avoid_phrase", params: { phrase: "草" }, rule: "不要再说「草」。" });
+  let hits = 0;
+  const orig = e.DB.prepare;
+  e.DB.prepare = (sql) => {
+    if (/FROM behavior_rules/.test(sql)) hits++;
+    return orig.call(e.DB, sql);
+  };
+  const m = api.metered(e, 31);
+  const s = stub('{"mode":"work","text":"草，这个不行。"}');
+  let answer;
+  try {
+    answer = await api.agentAnswer(m, await contextFor(m, { id: "msg-l7-tight", body: "说说看" }));
+  } finally {
+    s.restore();
+  }
+  assert.equal(hits, 0, "a tight turn must not spend the rules read");
+  assert.ok(!userPrompt(s.seen).includes("群里大家提过的要求"), "no block when the read is skipped");
+  assert.equal(JSON.parse(answer).text, "草，这个不行。", "fail-open: the reply is not blocked or rewritten");
+  await api.flushTail(m);
+  const rows = await all(m, "SELECT * FROM activity WHERE kind='rules.skipped_budget'");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].entity, GROUP);
 });

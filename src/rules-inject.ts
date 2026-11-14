@@ -10,15 +10,29 @@ const MAX_TEXT = 400;
 
 export type RulesBlock = { text: string; avoid: string[] };
 
-/** 计数写入走 e.tail（发送后由 flushTail 落库），不占回复路径预算。 */
-export type RuleViolation = {
+/** 计数/跳过写入走 e.tail（发送后由 flushTail 落库），不占回复路径预算。 */
+export type RuleActivity = {
   id: string;
-  kind: "rule.violation";
+  kind: string;
   entity: string;
   actor: string;
   summary: string;
   created_at: string;
 };
+
+/**
+ * 规则读取的预算门槛。普通回复的尾部（模型→finalize→一次发送→尾巴）约 30 句；
+ * 随消息图片的引用/笔记每张再留 2 句，引用回复的发送重试再留 2 句。
+ * 四个 48 句预算夹具（B3/B4/P0a/W-9）是「3 图 + 引用」，读取点剩 37 句 < 38 → 跳过；
+ * 普通文本回合剩 36–37 句 ≥ 30，照常读规则。
+ */
+export const RULE_MIN_LEFT = 30;
+export function ruleReserve(images: number, quoted: boolean): number {
+  return RULE_MIN_LEFT + 2 * Math.max(0, Number(images) || 0) + (quoted ? 2 : 0);
+}
+export function rulesBudgetAllows(left: number, images: number, quoted: boolean): boolean {
+  return left >= ruleReserve(images, quoted);
+}
 
 function paramsOf(row: { params?: string }): Record<string, any> {
   try {
@@ -85,6 +99,13 @@ export function ruleIdForPhrase(rows: BehaviorRule[] | undefined, phrase: string
   return undefined;
 }
 
+function queueActivity(e: any, row: RuleActivity): boolean {
+  if (!e?.tail) return false;
+  const tail = e.tail as { ruleActivities?: RuleActivity[] };
+  (tail.ruleActivities ??= []).push(row);
+  return true;
+}
+
 /** 排队到 e.tail；flushTail 在发送后统一写 activity，失败只丢指标，不影响回复。 */
 export function queueRuleViolation(
   e: any,
@@ -93,16 +114,33 @@ export function queueRuleViolation(
   count: number,
   now = Date.now(),
 ): boolean {
-  if (!ruleId || count <= 0 || !e?.tail) return false;
-  const id = "rule-violation:" + ruleId + ":" + (messageId || now);
-  const tail = e.tail as { ruleViolations?: RuleViolation[] };
-  (tail.ruleViolations ??= []).push({
-    id,
+  if (!ruleId || count <= 0) return false;
+  return queueActivity(e, {
+    id: "rule-violation:" + ruleId + ":" + (messageId || now),
     kind: "rule.violation",
     entity: ruleId,
     actor: "Bot",
     summary: "口头禅清理命中 " + count + " 次",
     created_at: new Date(now).toISOString(),
   });
-  return true;
+}
+
+/** 预算不足跳过规则读取时的观察点；activity 只能尽力写，写不下就靠调用方的日志。 */
+export function queueRuleSkip(
+  e: any,
+  groupId: string | undefined,
+  messageId: string | undefined,
+  left: number,
+  reserve: number,
+  now = Date.now(),
+): boolean {
+  const group = groupId || "unknown";
+  return queueActivity(e, {
+    id: "rules.skipped_budget:" + group + ":" + (messageId || now),
+    kind: "rules.skipped_budget",
+    entity: group,
+    actor: "Bot",
+    summary: "剩余 D1 " + left + " 句，低于本轮预留 " + reserve + " 句，跳过规则块",
+    created_at: new Date(now).toISOString(),
+  });
 }

@@ -7,7 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure, describeSchedule, slug, nextRun } from "./schedules";
 import { finalizeSpoken } from "./reply-finalize";
-import { loadGroupRules, queueRuleViolation, ruleIdForPhrase, rulesBlock } from "./rules-inject";
+import { loadGroupRules, queueRuleSkip, queueRuleViolation, ruleIdForPhrase, ruleReserve, rulesBlock, rulesBudgetAllows } from "./rules-inject";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
@@ -738,13 +738,25 @@ async function answerWithTools(e: any, context: any) {
     ...(context.batch || []).map((m: any) => m.sender),
     context.latest?.sender,
   ].filter(Boolean))];
-  const groupRuleRows = sw['off:review_rules'] === '1'
-    ? []
-    : await loadGroupRules(e, context.latest?.group_id, Date.now());
-  context.groupRules = sw['off:review_rules'] === '1'
-    ? { text: '', avoid: [] }
-    : rulesBlock(groupRuleRows, batchSenders);
+  // 规则块是增强项：按本回合尾部成本预留预算，紧回合直接按「无规则」继续，
+  // 把 D1 留给 remember_correction、引用重试和第二个 ~s 段。宽松回合行为不变。
+  const batchImages = (context.batch || []).reduce(
+    (n: number, m: any) => n + (m.meta?.media?.length || 0),
+    0,
+  );
+  const quotedTurn = (context.batch || []).some((m: any) => m.meta?.replyTo || m.meta?.quoted);
+  const rulesOff = sw['off:review_rules'] === '1';
+  const reserve = ruleReserve(batchImages, quotedTurn);
+  const canReadRules = !rulesOff && rulesBudgetAllows(left(e), batchImages, quotedTurn);
+  const groupRuleRows = canReadRules
+    ? await loadGroupRules(e, context.latest?.group_id, Date.now())
+    : [];
+  context.groupRules = canReadRules ? rulesBlock(groupRuleRows, batchSenders) : { text: '', avoid: [] };
   context.groupRuleRows = groupRuleRows;
+  if (!rulesOff && !canReadRules) {
+    console.log("rules skipped by budget", context.latest?.group_id, left(e), reserve);
+    queueRuleSkip(e, context.latest?.group_id, context.latest?.id, left(e), reserve);
+  }
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
   const repoAsk = isRepoActivityAsk(context.latest?.body) &&
