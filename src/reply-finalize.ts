@@ -5,6 +5,9 @@ import { describeSchedule, nextRun, parseScheduleRequest, slug, sydneyText } fro
 import type { NewSchedule, ScheduleSpec } from "./schedules";
 
 const ACK = "记下了";
+/** 登记类工具成功后的实话回执；模型自己的答应句不一定提到已登记。 */
+const FEATURE_ACK = "收到，已记下，做好了告诉你。";
+const FEATURE_ACKED = /已记下|已立项|已登记|记下了|记上了/;
 const GUARD_FALLBACK = "这个我还没登记上，你说一下每天几点、发什么，我马上建。";
 
 export type FinalizeAction = {
@@ -166,6 +169,16 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
   const ack = creates.find((a) => typeof a.say === "string" && a.say.trim());
   if (ack && !text.includes(ACK)) {
     text = prefixLead(text, String(ack.say));
+    changed = true;
+  }
+
+  // ①b request_feature 成功但模型只顾着答应（「以后…」）时，先把登记的事实说清楚。
+  const feature = (o.acceptedActions || []).find(
+    (a) => a?.tool === "request_feature" && a.accepted !== false
+      && typeof a.say === "string" && /已立项|已记下|已登记/.test(a.say),
+  );
+  if (feature && !FEATURE_ACKED.test(text)) {
+    text = prefixLead(text, FEATURE_ACK);
     changed = true;
   }
 

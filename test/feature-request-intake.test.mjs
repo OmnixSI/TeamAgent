@@ -205,3 +205,50 @@ test('idempotency still wins when a same-message request fills the final slot be
   const r = await create(e, last);
   assert.equal(r.ok, true); assert.equal(r.duplicate, true); assert.equal((await rows(e)).length, 10);
 });
+
+test('S18 工具描述把「以后改说话方式」当需求：request_feature 覆盖，remember_correction 让路', async () => {
+  const e = env();
+  const row = { id: 'tools-1', group_id: 'g1', sender: 'owner', body: '你以后回复加些表情', ts: new Date().toISOString(), mentioned: 1, meta: { direct: true, can_request_artifact: true, media: [] } };
+  await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,0)').bind(row.id, row.group_id, row.sender, row.body, row.ts, 1).run();
+  await e.DB.prepare('INSERT INTO message_meta VALUES(?,?)').bind(row.id, JSON.stringify(row.meta)).run();
+  let offered = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.tools) offered = body.tools;
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ mode: 'banter', text: '收到' }) } }] });
+  };
+  try {
+    await api.agentAnswer(e, { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: true });
+  } finally { globalThis.fetch = old; }
+  const desc = Object.fromEntries(offered.map(t => [t.function.name, t.function.description]));
+  assert.ok(desc.request_feature, 'request_feature 应在工具表里');
+  assert.match(desc.request_feature, /说话方式/);
+  assert.match(desc.request_feature, /以后/);
+  assert.match(desc.request_feature, /不要先(答应|照做)/);
+  assert.match(desc.remember_correction, /request_feature/);
+  assert.match(api.capabilityCard(offered, { switches: {} }), /说话方式/);
+});
+
+test('S19 request_feature 在 @ 回合内就地执行：不建后台任务，一条回复带已记下', async () => {
+  const e = env();
+  const row = { id: 'inline-1', group_id: 'g1', sender: 'owner', body: '你以后回复加些表情', ts: new Date().toISOString(), mentioned: 1, meta: { direct: true, can_request_artifact: true, media: [] } };
+  await e.DB.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,0)').bind(row.id, row.group_id, row.sender, row.body, row.ts, 1).run();
+  await e.DB.prepare('INSERT INTO message_meta VALUES(?,?)').bind(row.id, JSON.stringify(row.meta)).run();
+  let modelCall = 0;
+  const old = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    modelCall++;
+    if (body.tools && modelCall === 1) return Response.json({ choices: [{ message: { role: 'assistant', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'request_feature', arguments: JSON.stringify({ title: '回复加表情', detail: '长期加表情', request_quote: row.body }) } }] } }] });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ mode: 'banter', text: '行，以后该阴阳就阴阳。' }) } }] });
+  };
+  let answer;
+  try {
+    answer = await api.agentAnswer(e, { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: true });
+  } finally { globalThis.fetch = old; }
+  const jobs = (await e.DB.prepare("SELECT id,kind FROM jobs WHERE kind='research'").all()).results;
+  assert.deepEqual(jobs, [], '需求登记不该转到后台任务');
+  assert.equal((await e.DB.prepare('SELECT COUNT(*) AS n FROM feature_request').first()).n, 1);
+  assert.match(JSON.parse(answer).text, /^收到，已记下，做好了告诉你。/);
+});

@@ -9,7 +9,7 @@ import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, sched
 import { finalizeSpoken } from "./reply-finalize";
 import { loadGroupRules, queueRuleSkip, queueRuleViolation, ruleIdForPhrase, ruleReserve, rulesBlock, rulesBudgetAllows } from "./rules-inject";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self", "get_quota"]);
+export const LOCAL_TOOLS = new Set(["remember_correction", "request_feature", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self", "get_quota"]);
 import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, authorizeFeature, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
@@ -812,7 +812,7 @@ async function answerWithTools(e: any, context: any) {
       function: {
         name: "remember_correction",
         description:
-          "仅在当前成员用不是…是、应该叫、名字改成、纠正、其实是等明确纠正语气修正项目代称、既有事实或你的习惯时，用原话保存纠正。普通记住某个现象的陈述、转述和推测不调用。",
+          "仅在当前成员用不是…是、应该叫、名字改成、纠正、其实是等明确纠正语气，修正已经存在的项目代称、事实或你的习惯时，用原话保存纠正。成员提出新的行为要求（以后…、加个…、能不能…来和我说话）不算纠正，改用 request_feature；普通陈述、转述和推测不调用。",
         parameters: {
           type: "object",
           properties: {
@@ -880,7 +880,7 @@ async function answerWithTools(e: any, context: any) {
       type: "function",
       function: {
         name: "request_feature",
-        description: "用户直接@机器人建议或要求加功能、改行为（如『为什么不能…』『能不能…』）时记录需求；闲聊、纯提问、转述别人的话、对其他成员说的话不调用。只立项，不会立刻做。调用后按返回的 say 只回一句；duplicate 时不要再次确认。",
+        description: "用户在直接@机器人时提出长期要机器人改做法——加功能、改行为、改说话方式/人设（『以后回复加些表情』『以后用这本书的梗和腔调说话』『每次都先…』『能不能改成…』『为什么不能…』）——都在这里立项登记。登记不等于马上生效：调用后按返回的 say 只回一句，不要先答应、也不要先照做。闲聊、纯提问、转述别人的话、对其他成员说的话不调用。duplicate 时不要再次确认。",
         parameters: {
           type: "object",
           properties: {
