@@ -13,7 +13,7 @@ import {mkdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {publicSourceUrl,safeReachText} from '../src/reach-contract.mjs';
+import {publicSourceUrl,safeReachText} from './reach-contract.mjs';
 import {validators,nextActions} from './reach-result.mjs';
 
 const HOSTS=['www.xiaohongshu.com','xiaohongshu.com'];

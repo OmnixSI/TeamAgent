@@ -1,4 +1,4 @@
-import {CHANNELS,publicSourceUrl,safeReachText,scopeFor} from '../src/reach-contract.mjs';
+import {CHANNELS,publicSourceUrl,safeReachText,scopeFor} from './reach-contract.mjs';
 export const validators=new Map();
 export const nextActions=new Map();
 export const NEXT_ACTION=Object.freeze({

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,copyFileSync,readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
+import {pathToFileURL} from 'node:url';
 import {
  XHS_COMMANDS,classifyXhsPage,noteToItems,searchRowsToItems,commentsToItems,
  parseXhsNoteTarget,buildSearchUrl,readXhsPage,validators
@@ -154,6 +155,19 @@ test('page wiring returns login_required and 300031 without inventing content',a
  const failed={goto:async()=>{throw Error('page.goto: Timeout 25000ms exceeded calling '+target);},waitForTimeout:async()=>{},evaluate:async()=>({}),url:()=>target};
  const timeout=await readXhsPage({page:failed,action:'read',target});
  assert.equal(timeout.ok,false);assert.equal(timeout.error.code,'TIMEOUT');
+});
+
+test('the flat local install can import every reach module without a sibling src directory',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'f9-3-flat-'));
+ try{
+  for(const name of readdirSync(new URL('../runner',import.meta.url))){
+   if(name.startsWith('reach-')&&name.endsWith('.mjs'))copyFileSync(new URL('../runner/'+name,import.meta.url),join(dir,name));
+  }
+  const adapter=await import(pathToFileURL(join(dir,'reach-adapter.mjs')).href);
+  assert.equal(adapter.REACH_COMMANDS['xiaohongshu:read:local'].access,'read');
+  const job=await import(pathToFileURL(join(dir,'reach-job.mjs')).href);
+  assert.equal(typeof job.runReachJob,'function');
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
 test('CLI fails closed without a login and never echoes the signed token',()=>{

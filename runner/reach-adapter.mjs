@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,rmSync} from 'node:fs';
 import {join,isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
-import {validTarget,scopeFor} from '../src/reach-contract.mjs';
+import {validTarget,scopeFor} from './reach-contract.mjs';
 import {normalizeReachResult} from './reach-result.mjs';
 import {XHS_COMMANDS} from './reach-xiaohongshu.mjs';
 
