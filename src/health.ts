@@ -66,7 +66,7 @@ export async function checkHealth(hub: Hub): Promise<Check[]> {
     }),
   ]);
   for (const site of ["xhs", "x"]) if (!net.cookie(site)) out.push({ key: site, ok: false, text: (site === "xhs" ? "小红书" : "X") + " 没有保存登录" });
-  for (const t of hub.plan.tight(hub.store.r2Bytes())) out.push({ key: "plan:" + t.slice(0, 12), ok: false, text: "Cloudflare 套餐：" + t + "，到停止线会自动停用到下个周期" });
+  for (const t of hub.plan.tight(hub.store.r2All())) out.push({ key: "plan:" + t.slice(0, 12), ok: false, text: "Cloudflare 套餐：" + t + "，到停止线会自动停用到下个周期" });
   if (!hub.gateway.connected) out.push({ key: "gateway", ok: false, text: "QQ 长连接现在是断开的" });
   return out;
 }

@@ -26,10 +26,20 @@ export class Store {
   private bucket() { return this.hub.env.FILES; }
   r2Bytes() { return Number(this.one("SELECT (SELECT COALESCE(SUM(size),0) FROM img WHERE r2 IS NOT NULL) + (SELECT COALESCE(SUM(size),0) FROM blob WHERE r2 IS NOT NULL) n").n); }
 
+  /**
+   * Everything in the bucket that grows with use: kept media, transfer files (file box, tool caches, workspaces),
+   * published and deployed sites, and backups. Every writer checks this one total against the stop line, so
+   * the parts cannot add up past what the plan includes.
+   */
+  r2All() {
+    const sum = (q: string) => { try { return Number(this.one(q).n) || 0; } catch { return 0; } };   // a table that does not exist yet counts as empty
+    return this.r2Bytes() + sum("SELECT COALESCE(SUM(size),0) n FROM xfer") + sum("SELECT COALESCE(SUM(bytes),0) n FROM site") + (Number(this.hub.get("backup:bytes")) || 0);
+  }
+
   private async save(table: "img" | "blob", id: number, bytes: Uint8Array) {
     const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     if (bytes.length <= INLINE_MAX) { this.hub.sql.exec(`UPDATE ${table} SET data=?, size=? WHERE id=?`, buf, bytes.length, id); return true; }
-    const ok = this.bucket() && bytes.length <= ITEM_MAX && this.r2Bytes() + bytes.length <= R2_STORAGE_STOP && this.hub.plan.take("r2_writes", 1);
+    const ok = this.bucket() && bytes.length <= ITEM_MAX && this.r2All() + bytes.length <= R2_STORAGE_STOP && this.hub.plan.take("r2_writes", 1);
     if (ok) {
       try {
         await this.bucket().put(table + "/" + id, buf);

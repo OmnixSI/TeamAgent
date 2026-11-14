@@ -64,7 +64,7 @@ export class Accounts {
       days: list,
       total: { deepseek_estimate_cny: Math.round(list.reduce((n, d: any) => n + d.deepseek_estimate_cny, 0) * 100) / 100, openai_estimate_usd: r4(list.reduce((n, d: any) => n + d.openai_estimate_usd, 0)) },
       deepseek_account: { balance_now_cny: balanceNow, real_spend_by_day: real, note: "真实花费是账户余额的变化，包含这个 key 在别处的用量；记账是从 2026-11-14 晚上开始的，之前的没有明细" },
-      cloudflare_plan: this.hub.plan.report(this.hub.store.r2Bytes()),
+      cloudflare_plan: this.hub.plan.report(this.hub.store.r2All()),
       about_the_numbers: "DeepSeek 按官方价格表估（工作日北京时间 9–12 点、14–18 点是双倍价），以余额变化为准。OpenAI 是按每次调用返回的用量和官方价格估的美元，真实账单要这把 key 有读账单的权限才能查，现在没有。Cloudflare 是每月 5 美元的固定套餐，cloudflare_plan 里是套餐内含量用了多少，用到停止线就停，不会多花钱。日期按北京时间。",
     };
   }
