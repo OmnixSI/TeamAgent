@@ -125,7 +125,7 @@ node scripts/evaluate-timing.mjs
 
 ## 群友表情读取（D-emoji）
 
-入站系统小黄脸（`<faceType=1,...>`）先读 `ext` 里的名称；`ext` 是 base64 JSON、URL 编码 JSON、转义 JSON 或裸 JSON 都支持，缺 `ext` 时用 `src/face.ts` 的 face id 表兜底（来源：QQBot.Net `Emotes.System`；旧式 `[<face,id=N/>]` 只用 0–54 的 pandolia/qqbot 表）。超级表情（`faceType=6`）和表情包图片走 `emoji_note` 后台任务：下载、识图、把「表情包：画面；表达/梗：…」写进 `image_notes`/`message_images`，GIF 在识图前取首帧转 PNG。默认每天最多读 40 张（`config/team.json` 的 `stickers.caps.read`，运行时可被 `settings.stickers:read_cap` 覆盖）；超限只显示「一张表情包」占位，不报错、不阻塞聊天。紧急停读：`INSERT INTO settings(key,value) VALUES('off:emoji_read','1') ON CONFLICT(key) DO UPDATE SET value='1';`，下一条消息生效，不需要部署。恢复删除该行。普通图片若落在上一批、而 @/问图在下一批，取图会回看最近 24 条；引用消息里的 `quoted.media` 也会取，note 记在引用方消息的独立索引段（1000+），在 `material.quote.media` 显示为「引用图片：…」。每轮最多 4 张，provider 调用按 2 路并发。读取不新增 D1 表，也不影响 `stickers.send` 的发送开关。
+入站系统小黄脸（`<faceType=1,...>`）先读 `ext` 里的名称；`ext` 是 base64 JSON、URL 编码 JSON、转义 JSON 或裸 JSON 都支持，缺 `ext` 时用 `src/face.ts` 的 face id 表兜底（来源：QQBot.Net `Emotes.System`；旧式 `[<face,id=N/>]` 只用 0–54 的 pandolia/qqbot 表）。超级表情（`faceType=6`）和表情包图片走 `emoji_note` 后台任务：下载、识图、把「表情包：画面；表达/梗：…」写进 `image_notes`/`message_images`，GIF 在识图前取首帧转 PNG。默认每天最多读 40 张（`config/team.json` 的 `stickers.caps.read`，运行时可被 `settings.stickers:read_cap` 覆盖）；超限只显示「一张表情包」占位，不报错、不阻塞聊天。紧急停读：`INSERT INTO settings(key,value) VALUES('off:emoji_read','1') ON CONFLICT(key) DO UPDATE SET value='1';`，下一条消息生效，不需要部署。恢复删除该行。普通图片若落在上一批、而 @/问图在下一批，取图会回看最近 24 条；引用消息里的 `quoted.media` 也会取，note 记在引用方消息的独立索引段（1000+），在 `material.quote.media` 显示为「引用图片：…」。每轮最多 4 张，provider 调用按 2 路并发。识图事件默认不写库；本地回放或排障时设 `VISION_EVENTS=1`，会把 trace/message/idx/stage/status/reason 写入 `vision_events`（迁移 `0081_vision_events.sql`，本次不部署），便于回查「为什么没识图」。读取不新增业务表，也不影响 `stickers.send` 的发送开关。
 
 ## 云端表情库（P2）
 

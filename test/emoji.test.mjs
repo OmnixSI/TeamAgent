@@ -256,6 +256,7 @@ test('E13 a quoted image note is rendered in the quoted material, not lost', () 
 
 test('E14 worker lookback queues one vision turn for four images pushed before the @', async () => {
   const e = env();
+  e.VISION_EVENTS = '1';
   await req(e, '/api/admin/bind', { groupId: 'GROUP000001' });
   await e.DB.prepare("INSERT INTO settings(key,value) VALUES('off:emoji_read','1')").run();
   const urlToFile = new Map();
@@ -287,6 +288,9 @@ test('E14 worker lookback queues one vision turn for four images pushed before t
   const visionJob = await e.DB.prepare("SELECT payload FROM jobs WHERE kind='chat' AND id LIKE 'chat-v-r502%'").first();
   assert.ok(visionJob, 'vision turn is queued');
   assert.equal(JSON.parse(visionJob.payload).imageOutcomes.length, 4);
+  const events = (await e.DB.prepare('SELECT message_id,idx,stage,status,reason FROM vision_events ORDER BY id').all()).results;
+  assert.equal(events.length, 4);
+  assert.ok(events.every((event) => event.stage === 'link' && event.status === 'ok' && event.reason === null));
 });
 
 test('E15 message_meta keeps QQ attachment subType and the sticker flag', async () => {
