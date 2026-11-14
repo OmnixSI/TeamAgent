@@ -4,6 +4,7 @@ import type { Host } from "./tools.ts";
 import type { Asker } from "./selfedit.ts";
 import { displayName } from "./core.ts";
 import { browse, render, renderPdf } from "./render.ts";
+import { runComputer } from "./computer.ts";
 import { checkHealth } from "./health.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, unb64 } from "./util.ts";
 
@@ -43,6 +44,11 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
     render: page => render(hub, page),
     renderPdf: (html, width, height) => renderPdf(hub, html, width, height),
     browse: (url, shot) => browse(hub, url, shot),
+    computer: req => runComputer(hub, req),
+    videoUrl: seq => {
+      const row = hub.sql.exec("SELECT meta FROM msg WHERE seq=? AND conv=?", seq, conv).toArray()[0] as any;
+      try { return row?.meta ? String(JSON.parse(String(row.meta)).videoUrl || "") : ""; } catch { return ""; }
+    },
     // its own settings, books and health
     cfg: key => hub.edit.cfg(conv, key),
     play: slot => hub.edit.play(conv, slot),

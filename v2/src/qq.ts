@@ -92,8 +92,12 @@ export function parseEvent(type: string, d: any, aliases: string[] = []): Inboun
   for (const a of Array.isArray(d.attachments) ? d.attachments : []) {
     const ct = String(a.content_type || "");
     if (ct.startsWith("image/")) images.push({ url: a.url, w: a.width, h: a.height });
-    else if (ct === "voice" || ct.startsWith("audio/") || a.asr_refer_text) text += (text ? " " : "") + "[语音] " + (a.asr_refer_text || "（没听清）");
-    else if (ct.startsWith("video/")) meta.video = true;
+    else if (ct === "voice" || ct.startsWith("audio/") || a.asr_refer_text) {
+      // QQ usually sends its own transcript; when it does not, the Hub listens to the recording before the turn runs.
+      if (!a.asr_refer_text && a.url) (meta.voice ||= []).push({ url: a.url });
+      text += (text ? " " : "") + (a.asr_refer_text ? "[语音] " + a.asr_refer_text : a.url ? "[语音 …]" : "[语音] （没听清）");
+    }
+    else if (ct.startsWith("video/")) { meta.video = true; if (a.url) meta.videoUrl = a.url; }
     else if (a.url) files.push({ url: a.url, name: a.filename });
   }
   if (images.length) meta.images = images.slice(0, 6);

@@ -20,7 +20,8 @@ export type Env = {
   FILES?: any;
   /** Set by Cloudflare on every deploy. */
   VERSION?: { id: string; tag?: string; timestamp?: string };
-  SANDBOX?: any;
+  /** Durable Object namespace of the cloud computer (one Linux container). */
+  COMPUTER?: any;
 };
 
 /** The deployed version this code belongs to; the Hub restarts itself when the Worker reports a newer one. */

@@ -95,9 +95,13 @@ export async function route(hub: Hub, req: Request): Promise<Response> {
   if (path === "/admin/usage") return json(await hub.accounts.usage(Number(url.searchParams.get("days") || 3)));
   if (path === "/admin/health") return json(await checkHealth(hub));
   if (path === "/admin/trust") return json(body.name ? hub.edit.setTrusted(conv, String(body.name), body.on !== false) : { trusted: hub.edit.trusted(conv).map(m => m.name) });
-  if (path === "/admin/changes") return json(hub.sql.exec("SELECT * FROM change ORDER BY id DESC LIMIT ?", limit).toArray());
+  if (path === "/admin/changes") {
+    // A maintainer closes a code proposal: status "done" or "declined", with a line the bot can relay.
+    if (body.id && body.status) hub.sql.exec("UPDATE change SET status=?, reason=reason || ? WHERE id=? AND kind='code'", String(body.status), body.note ? "\n【处理结果】" + String(body.note) : "", Number(body.id));
+    return json(hub.sql.exec("SELECT * FROM change ORDER BY id DESC LIMIT ?", limit).toArray());
+  }
   if (path === "/admin/img") {
-    if (body.delete) { hub.sql.exec("DELETE FROM img WHERE id=?", Number(body.delete)); return json({ ok: true }); }
+    if (body.delete) { hub.store.removeImage(Number(body.delete)); return json({ ok: true }); }
     if (body.id && typeof body.note === "string") { hub.sql.exec("UPDATE img SET note=? WHERE id=?", body.note, Number(body.id)); return json({ ok: true }); }
     if (url.searchParams.get("stickers")) return json(hub.sql.exec("SELECT id,name,note FROM img WHERE conv=? AND name LIKE 'sticker:%' ORDER BY name", conv).toArray());
     if (body.name && body.url) {

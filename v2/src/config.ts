@@ -9,6 +9,8 @@ export const TUNABLES: Record<string, Tunable> = {
   reply_split_max: { default: 3, min: 1, max: 5, what: "闲聊一次最多拆成几条发" },
   image_daily: { default: 40, min: 0, max: 300, what: "每天最多画几张图" },
   python_daily: { default: 40, min: 0, max: 300, what: "每天最多跑几次代码" },
+  computer_daily: { default: 30, min: 0, max: 200, what: "每天最多用几次云电脑" },
+  video_daily: { default: 20, min: 0, max: 100, what: "每天最多看几个视频" },
   voice_daily: { default: 60, min: 0, max: 300, what: "每天最多发几条语音" },
   image_quality: { default: "medium", options: ["low", "medium", "high"], what: "群友没指定时画图用的质量" },
   transcribe_max_minutes: { default: 60, min: 5, max: 120, what: "B 站无字幕视频最多转写多少分钟" },

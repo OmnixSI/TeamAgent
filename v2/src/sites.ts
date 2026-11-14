@@ -157,12 +157,12 @@ export async function biliResolve(input: string) {
 }
 const stamp = (sec: number) => Math.floor(sec / 60) + ":" + String(Math.floor(sec % 60)).padStart(2, "0");
 
-async function transcribe(env: Env, audio: Uint8Array, seconds = 0) {
+export async function transcribe(env: Env, audio: Uint8Array, seconds = 0, type = "audio/mp4", name = "audio.m4a") {
   if (!env.OPENAI_API_KEY) throw new Error("没有配置转写用的 OpenAI 密钥");
   const form = new FormData();
   form.append("model", "gpt-4o-mini-transcribe");
   form.append("response_format", "json");
-  form.append("file", new Blob([audio], { type: "audio/mp4" }), "audio.m4a");
+  form.append("file", new Blob([audio], { type }), name);
   const r = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form, signal: AbortSignal.timeout(170000) });
   const d: any = await r.json().catch(() => ({}));
   if (!r.ok || typeof d.text !== "string") throw new Error("转写失败（" + r.status + "）");
@@ -375,6 +375,22 @@ export async function xSearch(net: Net, query: string) {
 
 // ---------- voice ----------
 /** Text → DeepSeek TTS (24 kHz PCM) → SILK, the only voice format QQ accepts. */
+/** A voice message from QQ (SILK): decode it on the relay, wrap the samples as WAV, and transcribe. */
+export async function hearSilk(net: Net, silk: Uint8Array) {
+  const dec = await fetch(net.env.RELAY_URL + "/api/silk", {
+    method: "POST", headers: { "Content-Type": "application/json", "x-relay-key": net.env.RELAY_KEY || "" },
+    body: JSON.stringify({ op: "decode", data: b64(silk), rate: 24000 }), signal: AbortSignal.timeout(30000),
+  });
+  const d: any = await dec.json().catch(() => ({}));
+  if (!d.data) throw new Error("语音解码失败" + (d.error ? "：" + d.error : ""));
+  const pcm = unb64(d.data), wav = new Uint8Array(44 + pcm.length), v = new DataView(wav.buffer);
+  const tag = (at: number, t: string) => { for (let i = 0; i < 4; i++) wav[at + i] = t.charCodeAt(i); };
+  tag(0, "RIFF"); v.setUint32(4, 36 + pcm.length, true); tag(8, "WAVE"); tag(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 24000, true); v.setUint32(28, 48000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, "data"); v.setUint32(40, pcm.length, true);
+  wav.set(pcm, 44);
+  return (await transcribe(net.env, wav, pcm.length / 48000, "audio/wav", "voice.wav")).trim();
+}
+
 export async function ttsSilk(net: Net, text: string, voice: string) {
   const r = await dsJson(net.env, "/v1/tools/tts", { text, voice_id: voice === "male" ? "tide" : "stella", format: "pcm", filter_markdown: true }, 60000);
   if (!r.ok) throw new Error("语音合成失败（" + r.status + "）");

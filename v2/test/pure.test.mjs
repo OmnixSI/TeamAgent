@@ -135,7 +135,10 @@ describe("qq.parseEvent", () => {
         { content_type: "application/pdf", url: "https://f/1", filename: "a.pdf" },
       ],
     }));
-    assert.equal(e.text, "[语音] 你好呀 [语音] （没听清）");
+    // A recording without QQ's own transcript is marked for the Hub to listen to before the turn runs.
+    assert.equal(e.text, "[语音] 你好呀 [语音 …]");
+    assert.deepEqual(e.meta.voice, [{ url: "https://v/2" }]);
+    assert.equal(e.meta.videoUrl, "https://vid/1");
     assert.deepEqual(e.meta.images, [{ url: "https://img/1", w: 10, h: 20 }]);
     assert.equal(e.meta.video, true);
     assert.deepEqual(e.meta.files, [{ url: "https://f/1", name: "a.pdf" }]);

@@ -2,6 +2,7 @@
 import { buildOf } from "./util.ts";
 import type { Env } from "./util.ts";
 export { Hub } from "./hub.ts";
+export { Computer } from "./computer.ts";
 
 const hub = (env: Env) => env.HUB.get(env.HUB.idFromName("main"));
 const json = (v: any, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });

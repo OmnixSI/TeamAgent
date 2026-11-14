@@ -6,7 +6,7 @@ import type { Ref } from "./draw.ts";
 import type { Row, Tool } from "./core.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
-import { biliSearch, biliVideo, hot, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { biliSearch, biliVideo, hot, readRelayed, stock, transcribe, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
@@ -16,6 +16,7 @@ import { bookHtml, illustrate, planBook } from "./book.ts";
 import type { BookPlan } from "./book.ts";
 import type { Page } from "./show.ts";
 import type { Made } from "./store.ts";
+import type { ComputerRequest, ComputerResult } from "./computer.ts";
 import type { LiveStatus } from "./self.ts";
 
 /** What tools need from the place they run in (the Durable Object, or a stub in replay). */
@@ -44,6 +45,10 @@ export interface Host {
   renderPdf(html: string, width: number, height: number): Promise<Uint8Array>;
   /** Opens a live page in the headless browser and returns what it shows. */
   browse(url: string, shot: boolean): Promise<{ title: string; text: string; shot: Uint8Array | null }>;
+  /** Runs shell commands in the cloud computer (Linux, 1 vCPU, 1 GiB) and returns their output and the files asked for. */
+  computer(req: ComputerRequest): Promise<ComputerResult>;
+  /** Link of a video someone posted, by the message number shown as [视频 123]; "" when unknown. */
+  videoUrl(seq: number): string;
   /** A short progress line to the chat during a long job. */
   say(text: string): Promise<boolean>;
   jobs(): any[];
@@ -227,6 +232,30 @@ function parseWhen(when: any, now: number) {
 
 const line = (r: Row) => "[" + fmtFull(r.ts, BJ) + "] " + (r.role === "bot" ? "Bot(你)" : r.name || "成员") + "：" + r.text;
 
+/** What a sandbox or the cloud computer produced: sent to the chat, or kept as numbered material for a later step. */
+async function handOver(host: Host, files: { name: string; bytes: Uint8Array }[], deliver: boolean) {
+  const sent: string[] = [], failed: string[] = [], kept: string[] = [];
+  let queued = false;
+  for (const f of files) {
+    const base = f.name.split("/").pop() || f.name;
+    const isImage = /\.(png|jpe?g|gif|webp)$/i.test(base), mime = "image/" + (base.split(".").pop() || "png").toLowerCase().replace("jpg", "jpeg");
+    if (!deliver) {
+      const id = isImage ? (await host.sendImage(f.bytes, base, mime, true)).id : await host.keepFile(base, f.bytes);
+      kept.push(base + " → " + (id || "太大没存下"));
+      continue;
+    }
+    const r = isImage ? await host.sendImage(f.bytes, base, mime) : await host.sendFile(base, f.bytes);
+    if (!isImage && r.ok) await host.keepFile(base, f.bytes);
+    if (r.queued) queued = true;
+    (r.ok ? sent : failed).push(base + (r.ok ? (isImage && (r as any).id ? " → " + (r as any).id : "") : "（" + (r.error || "发送失败") + "）"));
+  }
+  return {
+    ...(deliver ? { files_sent: sent } : { kept_as_materials: kept, note: "没发群里。图用 img:编号 排进 show 的网页，文件编号可以放进下一次 run_python 或 computer 的 files" }),
+    ...(failed.length ? { files_not_sent: failed } : {}), ...(queued ? { delivery: QUEUED } : {}),
+  };
+}
+const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
+
 export function buildTools(host: Host): Tool[] {
   const env = host.env;
   const net: Net = { env: env as any, cookie: site => host.cookie(site) };
@@ -291,7 +320,7 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "read_url", work: true,
-      description: "读取一个链接的正文：普通网页、GitHub、推文、小红书笔记、知乎问题和回答、公众号文章都可以（抖音视频读不了）。群友发了链接、或搜索结果需要细看时用。B 站视频用 bilibili。",
+      description: "读取一个链接的正文：普通网页、GitHub、推文、小红书笔记、知乎问题和回答、公众号文章都可以。群友发了链接、或搜索结果需要细看时用。B 站视频用 bilibili，其他平台的视频用 watch_video。",
       parameters: obj({ url: str("完整链接"), screenshot: { type: "boolean", description: "想亲眼看这个网页长什么样（界面、排版、图表）时填 true，会用真浏览器打开并截一张图给你看" } }, ["url"]),
       run: async a => {
         const url = String(a.url || "");
@@ -569,19 +598,71 @@ export function buildTools(host: Host): Tool[] {
         if (Number(a.chat_days) > 0) inputs.push({ name: "chat.csv", bytes: host.chatCsv(Math.min(Number(a.chat_days), 60)) });
         const out = await runPython(env as any, String(a.task || ""), inputs, host.play("python"), host.sandbox());
         host.sandbox(out.container, out.opened);
-        const sent: string[] = [], failed: string[] = [], kept: string[] = [];
-        for (const f of out.files) {
-          const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name), mime = "image/" + (f.name.split(".").pop() || "png").toLowerCase().replace("jpg", "jpeg");
-          if (a.deliver === false) {
-            const id = isImage ? (await host.sendImage(f.bytes, f.name, mime, true)).id : await host.keepFile(f.name, f.bytes);
-            kept.push(f.name + " → " + (id || "太大没存下"));
-            continue;
-          }
-          const r = isImage ? await host.sendImage(f.bytes, f.name, mime) : await host.sendFile(f.name, f.bytes);
-          if (!isImage && r.ok) await host.keepFile(f.name, f.bytes);
-          (r.ok ? sent : failed).push(f.name + (r.ok ? (isImage && (r as any).id ? " → " + (r as any).id : "") : "（" + (r.error || "发送失败") + "）"));
-        }
-        return { ok: true, answer: clip(out.text, 6000), ...(a.deliver === false ? { kept_as_materials: kept, note: "没发群里。图用 img:编号 排进 show 的网页，文件编号可以放进下一次 run_python 的 files" } : { files_sent: sent }), ...(failed.length ? { files_not_sent: failed } : {}), code: out.code };
+        return { ok: true, answer: clip(out.text, 6000), ...(await handOver(host, out.files, a.deliver !== false)), code: out.code };
+      },
+    },
+    {
+      name: "computer", work: true, slow: true,
+      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 24、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置 3 分钟就关机并清空，隔了一阵再用要重新放文件，开机多等半分钟。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
+      parameters: obj({
+        commands: { type: "array", items: { type: "string" }, description: "按顺序执行的 bash 命令。例：[\"git clone --depth 1 https://github.com/OmnixSI/WhalePartner repo\", \"cd repo && grep -rn 'TODO' src | head -50\"]" },
+        files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },
+        collect: { type: "array", items: { type: "string" }, description: "跑完要取回的文件，如 \"out/report.pdf\"、\"frames/*.jpg\"" },
+        timeout_seconds: { type: "integer", description: "整批命令的总时限，默认 300，最多 1800" },
+        deliver: { type: "boolean", description: "默认 true，取回的图和文件直接发群里。只是中间素材时填 false：不发群，只返回编号" },
+      }, ["commands"]),
+      run: async a => {
+        if (!(await host.quota("computer", Number(host.cfg("computer_daily"))))) return { ok: false, error: "今天用云电脑的次数用完了" };
+        const files: { name: string; bytes: Uint8Array }[] = [];
+        for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) files.push(f); }
+        const commands = (Array.isArray(a.commands) ? a.commands : [a.commands]).map(String).filter(Boolean).slice(0, 20);
+        if (!commands.length) return { ok: false, error: "没有要跑的命令" };
+        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300 });
+        return {
+          ok: out.ok, ...(out.error ? { error: out.error } : {}), seconds: out.seconds, ...(out.bootstrap_seconds ? { note_boot: "电脑刚开机，装软件用了 " + out.bootstrap_seconds + " 秒" } : {}),
+          steps: out.steps.map(st => ({ command: clip(st.command, 200), exit: st.exit, seconds: st.seconds, stdout: clip(st.stdout, 5000), ...(st.stderr.trim() ? { stderr: clip(st.stderr, 2000) } : {}) })),
+          ...(out.skipped?.length ? { not_collected: out.skipped } : {}), ...(out.files.length ? await handOver(host, out.files, a.deliver !== false) : {}),
+        };
+      },
+    },
+    {
+      name: "watch_video", work: true, slow: true,
+      description: "看一个视频：群友直接发在群里的视频（消息里显示成 [视频 123]，video 填 123），或抖音、快手、微博、小红书、YouTube、X 等的视频链接，或一个视频文件的直链（B 站视频用 bilibili，更快）。会在云电脑里把视频取下来，把声音转成文字，再截几帧画面给你亲眼看。返回标题、时长、说了什么、画面。要等一两分钟。看完再评价，别只凭标题猜。",
+      parameters: obj({ video: str("聊天里的视频编号（[视频 123] 的 123），或视频页面、视频文件的链接"), frames: { type: "integer", description: "截几帧画面，默认 4，最多 4" } }, ["video"]),
+      run: async a => {
+        const given = String(a.video || "").trim().replace(/^\[?视频\s*/, "").replace(/\]$/, "");
+        const url = /^\d+$/.test(given) ? host.videoUrl(Number(given)) : given;
+        if (!/^https?:\/\/[^\s'"`\\]+$/.test(url)) return { ok: false, error: /^\d+$/.test(given) ? "这条视频的链接没存下来（可能是早些时候发的），让群友重发一次" : "要给视频编号或 http 链接" };
+        if (!(await host.quota("video", Number(host.cfg("video_daily"))))) return { ok: false, error: "今天看视频的次数用完了" };
+        const frames = Math.min(Math.max(Number(a.frames) || 4, 1), 4), minutes = Number(host.cfg("transcribe_max_minutes"));
+        // A posted video and a direct file link are plain downloads; anything else is a page, which yt-dlp knows how to read.
+        const direct = /^\d+$/.test(given) || /\.(mp4|mov|m4v|webm|mkv)(\?|$)/i.test(url);
+        const out = await host.computer({
+          timeoutSeconds: 600, collect: ["v/audio.mp3", "v/f*.jpg", "v/info.txt"],
+          commands: [
+            "rm -rf v && mkdir v && cd v && " + (direct
+              ? "curl -fsSL --max-filesize 300000000 -A 'Mozilla/5.0' -o in.mp4 " + shq(url) + " && echo '（群里发的视频）' > title.txt"
+              : "(command -v yt-dlp >/dev/null || uv pip install -q --python /opt/py/bin/python yt-dlp) && yt-dlp -q --no-playlist --no-warnings -f 'bv*[height<=720]+ba/b[height<=720]/b' --max-filesize 300M --merge-output-format mp4 -o 'in.%(ext)s' --print-to-file '%(title)s｜%(uploader)s' title.txt " + shq(url)),
+            "cd v && IN=$(ls in.* | head -1) && D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 \"$IN\" | cut -d. -f1) && D=${D:-1} && " +
+              "{ echo \"title: $(cat title.txt 2>/dev/null)\"; echo \"seconds: $D\"; ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 \"$IN\"; } > info.txt && " +
+              "(ffmpeg -v error -y -i \"$IN\" -vn -ac 1 -ar 16000 -b:a 32k -t " + minutes * 60 + " audio.mp3 || true) && " +
+              "ffmpeg -v error -y -i \"$IN\" -vf \"fps=" + frames + "/$((D>0?D:1)),scale='min(768,iw)':-2\" -frames:v " + frames + " -q:v 4 f%02d.jpg && rm -f in.*",
+          ],
+        });
+        const failedStep = out.steps.find(st => st.exit !== 0);
+        if (!out.ok && !out.files.length) return { ok: false, error: "视频没取下来：" + clip(out.error || failedStep?.stderr || failedStep?.stdout || "未知原因", 300) };
+        const file = (name: string) => out.files.find(f => f.name.endsWith(name));
+        const info = new TextDecoder().decode(file("info.txt")?.bytes || new Uint8Array()), seconds = Number(info.match(/seconds: (\d+)/)?.[1] || 0);
+        const audio = file("audio.mp3");
+        let said = "", heard = "";
+        if (audio && audio.bytes.length > 2000) { try { said = await transcribe(host.env, audio.bytes, Math.min(seconds, minutes * 60), "audio/mpeg", "audio.mp3"); } catch (e: any) { heard = "声音没转出来：" + clip(e?.message || "", 80); } }
+        else heard = "这个视频没有声音";
+        const shots = out.files.filter(f => /f\d+\.jpg$/.test(f.name)).slice(0, 4);
+        return {
+          note: EXTERNAL, ok: true, title: clip(info.match(/title: (.*)/)?.[1] || "", 200), seconds, size: info.split("\n")[2] || "",
+          said: said ? clip(said, 30000) : heard, ...(seconds > minutes * 60 ? { note_length: "视频比较长，只转写了前 " + minutes + " 分钟" } : {}),
+          frames: shots.length + " 帧画面（按时间顺序）", ...(shots.length ? { _images: shots.map(f => toDataUrl({ label: f.name, bytes: f.bytes, mime: "image/jpeg" })) } : {}),
+        };
       },
     },
     {
@@ -649,7 +730,7 @@ export function buildTools(host: Host): Tool[] {
         if (a.op === "list") return { schedules: (await host.scheduleList()).map(s => ({ ...s, next: fmtFull(s.next, SYD) + " 悉尼 / " + fmtFull(s.next, BJ) + " 北京" })) };
         if (a.op === "cancel") return { ok: await host.scheduleCancel(Number(a.id)) };
         if (!a.task) throw new Error("要写 task");
-        const made = await host.scheduleCreate(parseWhen(a.when, host.now()), clip(a.task, 600));
+        const made = await host.scheduleCreate(parseWhen(a.when, host.now()), clip(a.task, 3000));
         return { ok: true, id: made.id, next: fmtFull(made.next, SYD) + " 悉尼 / " + fmtFull(made.next, BJ) + " 北京" };
       },
     },

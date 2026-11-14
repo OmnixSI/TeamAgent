@@ -20,6 +20,7 @@ import type { Asker } from "./selfedit.ts";
 import { Accounts } from "./accounts.ts";
 import { dailyHealth } from "./health.ts";
 import { makeHost } from "./host.ts";
+import { hearSilk } from "./sites.ts";
 import { route } from "./admin.ts";
 import { BJ, SYD, b64, buildOf, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
@@ -378,6 +379,7 @@ export class Hub extends DurableObject<Env> {
     let top = 0, jobId = 0;
     try {
       const cursor = Number(this.get("cursor:" + conv) || 0);
+      await this.hearVoices(conv, cursor).catch(() => {});
       const rows = this.window(conv);
       const fresh = rows.filter(r => r.seq > cursor && r.role === "user");
       if (!fresh.length) return null;
@@ -434,6 +436,19 @@ export class Hub extends DurableObject<Env> {
       const more = this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0].n;
       if (Number(more) && !this.wake.has(conv)) { this.wake.set(conv, Date.now() + 600); setTimeout(() => this.poke(conv), 610); }
     }
+  }
+  /** Voice messages that came without QQ's own transcript are transcribed before the model reads them. */
+  async hearVoices(conv: string, cursor: number) {
+    const rows = this.sql.exec("SELECT seq, text, meta FROM msg WHERE conv=? AND seq>? AND role='user' AND meta LIKE '%\"voice\"%' ORDER BY seq DESC LIMIT 3", conv, cursor).toArray() as any[];
+    const net = { env: this.env as any, cookie: () => "" };
+    await Promise.all(rows.map(async r => {
+      const meta = JSON.parse(String(r.meta));
+      if (!meta.voice?.length || meta.heard) return;
+      let said = "";
+      try { const got = await this.fetchBytes(String(meta.voice[0].url), 6 * 1024 * 1024); if (got) said = await hearSilk(net, got.bytes); } catch (e: any) { console.log("voice failed", e?.message); }
+      meta.heard = true;
+      this.sql.exec("UPDATE msg SET text=?, meta=? WHERE seq=?", String(r.text).replace("[语音 …]", "[语音] " + (said || "（没听清）")), JSON.stringify(meta), r.seq);
+    }));
   }
   async captionImages(images: { seq: number; index: number; dataUrl: string }[]) {
     for (const im of images) {

@@ -70,6 +70,7 @@ export class Store {
     this.hub.sql.exec(`DELETE FROM ${table} WHERE ${where}`, ...b);
     if (keys.length && this.bucket()) this.hub.ctx.waitUntil(this.bucket().delete(keys).catch(() => {}));
   }
+  removeImage(id: number) { this.drop("img", "id=?", id); }
   /** Named pictures (characters, stickers) stay; the bot's own output keeps the latest 300, chat pictures 45 days, files the latest 150. */
   trim(conv: string) {
     this.drop("img", "conv=? AND name IS NULL AND src IS NULL AND id NOT IN (SELECT id FROM img WHERE conv=? AND name IS NULL AND src IS NULL ORDER BY id DESC LIMIT 300)", conv, conv);

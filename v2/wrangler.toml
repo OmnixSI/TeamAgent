@@ -13,6 +13,20 @@ class_name = "Hub"
 tag = "v1"
 new_sqlite_classes = ["Hub"]
 
+# Cloud computer: one Linux container, started on demand and asleep 3 minutes after the last use.
+# The image (Cloudflare's hosted Debian) and the size are chosen in src/computer.ts; no Docker build.
+[[containers]]
+class_name = "Computer"
+scheduling_policy = "durable_object"
+
+[[durable_objects.bindings]]
+name = "COMPUTER"
+class_name = "Computer"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Computer"]
+
 # Watchdog only: the Hub keeps itself alive with alarms; this wakes it after a deploy.
 [triggers]
 crons = ["*/2 * * * *"]

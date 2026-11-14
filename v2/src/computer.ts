@@ -31,9 +31,9 @@ curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null 2>&1
 uv venv -q --seed --python 3.12 /opt/py
 VIRTUAL_ENV=/opt/py uv pip install -q pandas matplotlib openpyxl python-pptx python-docx
-printf 'font.sans-serif: Noto Sans CJK SC, DejaVu Sans\naxes.unicode_minus: False\n' >> "$(/opt/py/bin/python -c 'import matplotlib; print(matplotlib.matplotlib_fname())')"
-echo 'export PATH=/opt/py/bin:$PATH HOME=/root LANG=C.UTF-8 MPLBACKEND=Agg' > /etc/profile.d/computer.sh
-# LibreOffice takes another 40 seconds, so it is installed the first time something calls it.
+printf 'font.sans-serif: Noto Sans CJK SC, DejaVu Sans\naxes.unicode_minus: False\n' > /etc/matplotlibrc
+echo 'export PATH=/opt/py/bin:$PATH HOME=/root LANG=C.UTF-8 MPLBACKEND=Agg MATPLOTLIBRC=/etc/matplotlibrc' > /etc/profile.d/computer.sh
+# LibreOffice adds most of a minute, so it is installed the first time something calls it.
 for n in soffice libreoffice; do printf '#!/bin/sh\n[ -x /usr/bin/soffice ] || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libreoffice-core-nogui libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui >/dev/null\nexec /usr/bin/%s "$@"\n' $n > /usr/local/bin/$n; chmod +x /usr/local/bin/$n; done
 touch ${MARK}`;
 
@@ -151,7 +151,7 @@ export class Computer extends DurableObject<Env> {
 
   /** Files to bring back (paths relative to the work directory, globs allowed) with their sizes. */
   async list(patterns: string[]) {
-    const r = await this.sh('shopt -s nullglob globstar; for p in "$@"; do for f in $p; do [ -f "$f" ] && printf "%s\\t%s\\n" "$(stat -c %s "$f")" "$f"; done; done; true', 30, patterns);
+    const r = await this.sh('shopt -s nullglob globstar; for p in "$@"; do for f in $p; do [ -f "$f" ] && printf "%s\\t%s\\n" "$(stat -c %s "$f")" "$f"; done; done | head -40; true', 30, patterns);
     const seen = new Set<string>();
     return text(r.out).split("\n").filter(Boolean).map(l => { const i = l.indexOf("\t"); return { size: Number(l.slice(0, i)), path: l.slice(i + 1) }; })
       .filter(f => !seen.has(f.path) && seen.add(f.path));
@@ -193,10 +193,13 @@ export async function runComputer(hub: Hub, req: ComputerRequest): Promise<Compu
       out.steps.push(step);
       if (step.exit !== 0) break;
     }
-    for (const f of req.collect?.length ? await box.list(req.collect) : []) {
-      if (out.files.length >= MAX_FILES || f.size > FILE_CAP) { (out.skipped ??= []).push(f.path + (f.size > FILE_CAP ? "（超过 25 MB）" : "（超过 6 个文件）")); continue; }
-      out.files.push({ name: f.path, bytes: await box.take(f.path) });
+    const found: { size: number; path: string }[] = req.collect?.length ? await box.list(req.collect) : [];
+    for (const f of found) {
+      if (f.size > FILE_CAP) (out.skipped ??= []).push(f.path + "（超过 25 MB）");
+      else if (out.files.length < MAX_FILES) out.files.push({ name: f.path, bytes: await box.take(f.path) });
     }
+    const extra = found.filter(f => f.size <= FILE_CAP).length - out.files.length;
+    if (extra > 0) (out.skipped ??= []).push("另有 " + (found.length >= 40 ? "至少 " : "") + extra + " 个文件没取回（一次最多 6 个）");
     out.ok = !out.error && out.steps.length === req.commands.length && out.steps.every(s => s.exit === 0);
     return out;
   } catch (e: any) {

@@ -64,7 +64,7 @@ export function renderLine(r: Row, captions = true) {
     body += " [图片 " + r.seq + "-" + i + (captions && im.caption ? "：" + clip(im.caption, 80) : "") + "]";
   });
   for (const f of meta.files || []) body += " [文件 " + (f.name || "未命名") + " " + f.url + "]";
-  if (meta.video) body += " [视频]";
+  if (meta.video) body += meta.videoUrl ? " [视频 " + r.seq + "]" : " [视频]";
   return "[" + fmtTime(r.ts) + "] " + displayName(r) + (r.mentioned ? "（@你）" : "") + "：" + clip(body.trim(), 1500);
 }
 

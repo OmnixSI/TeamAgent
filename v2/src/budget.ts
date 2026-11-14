@@ -10,7 +10,8 @@ const DO_DURATION_INCLUDED = 400_000;      // GB-seconds per cycle
 
 export const PLAN: Record<string, { included: number; stop: number; unit: string; what: string }> = {
   browser_seconds: { included: 36_000, stop: 30_600, unit: "秒", what: "无头浏览器（渲染文档和截图），套餐内每月 10 小时" },
-  container_seconds: { included: 90_000, stop: 72_000, unit: "秒", what: "云电脑（容器），套餐内每月 25 小时" },
+  container_seconds: { included: 90_000, stop: 72_000, unit: "秒", what: "云电脑（容器，1 GiB 内存），套餐内每月 25 小时" },
+  container_cpu_seconds: { included: 22_500, stop: 18_000, unit: "秒", what: "云电脑 CPU，套餐内每月 375 vCPU 分钟" },
   r2_writes: { included: 1_000_000, stop: 700_000, unit: "次", what: "R2 写入，免费额度每月 100 万次" },
   r2_reads: { included: 10_000_000, stop: 7_000_000, unit: "次", what: "R2 读取，免费额度每月 1000 万次" },
 };
