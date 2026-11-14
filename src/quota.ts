@@ -91,14 +91,16 @@ function sydneyHour(at: number): number {
 }
 
 function sydneyClock(at: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TIMEZONE,
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-  }).format(new Date(at));
+  }).formatToParts(new Date(at));
+  const get = (kind: string) => parts.find((part) => part.type === kind)?.value || "";
+  return get("month") + "-" + get("day") + " " + get("hour") + ":" + get("minute");
 }
 
 /** First instant of the Sydney calendar month. */
@@ -469,7 +471,7 @@ export function ownerQuotaText(snapshot: QuotaSnapshot): string {
       usdMicro(snapshot.deepseek.monthMicroUsd) +
       "；" +
       average +
-      (days === null ? "" : "，按近 7 天日均估算余额约够 " + days.toFixed(1) + " 天"),
+      (days === null ? "" : "，按此估算余额约够 " + days.toFixed(1) + " 天"),
   );
   parts.push(
     "OpenAI：今天 " +
