@@ -33,6 +33,7 @@ node --test test/learning-accept.mjs
 ```
 
 VL-1…VL-20 各一条；当前 27 个 test / 26 通过 / 1 失败（VL-6，见 `l9-acceptance-report.md` P1-1）。
+VL-6 的最小复现（不依赖测试框架，修复后退出码应为 0）：`node replay/vl6-repro.mjs`。
 每次运行写 `replay/out/learning-accept.tap`（可加 `--test-reporter=tap`）、`replay/out/latest.json` 和 `replay/out/learning-accept-*.log`。
 
 ## 文件
