@@ -15,7 +15,7 @@ export async function resolveSocialTarget(args:any):Promise<{channel:string;acti
   if(typeof args.url!=='string'||args.url.length>4096||args.target||args.channel||args.action)throw Error('unsupported');
   let u=checkedUrl(args.url);const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),3000);
   try{
-   for(let i=0;i<4;i++){
+   for(let i=0;i<6;i++){
     const info=Object.values(CHANNELS).find((c:any)=>c.short.includes(u.hostname)&&!c.hosts.includes(u.hostname));
     if(!info)break;
     const r=await fetch(u.href,{method:'HEAD',redirect:'manual',signal:controller.signal});await r.body?.cancel();

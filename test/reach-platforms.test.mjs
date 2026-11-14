@@ -79,8 +79,51 @@ test('zhihu read: answer body and question detail stay post_text and route to th
   assert.ok(parseZhihuQuestion(JSON.parse(await fixture('zhihu-question.json'))).text.includes('内存和功耗'));
 });
 
+test('douyin short links: six redirects allowed, seventh and foreign hosts rejected', async () => {
+  const chain = n => {
+    let hops = 0;
+    return async () => {
+      hops++;
+      return hops <= n
+        ? new Response(null, {status: 302, headers: {location: hops === n ? 'https://www.iesdouyin.com/share/video/123/' : `https://v.douyin.com/hop/${hops}`}})
+        : new Response('<html></html>', {status: 200, headers: {'content-type': 'text/html'}});
+    };
+  };
+  assert.equal(await resolveShortLink('https://v.douyin.com/hop/0', {fetchImpl: chain(6)}), 'https://www.iesdouyin.com/share/video/123/');
+  await assert.rejects(resolveShortLink('https://v.douyin.com/hop/0', {fetchImpl: chain(7)}), e => e.code === 'BAD_INPUT' && e.stage === 'redirect_limit');
+  await assert.rejects(resolveShortLink('https://v.douyin.com/hop/0', {fetchImpl: async () => new Response(null, {status: 302, headers: {location: 'https://evil.example/x'}})}), e => e.code === 'BAD_INPUT');
+  assert.equal(validTarget('douyin', 'read', 'https://v.douyin.com/abc/'), true);
+  assert.equal(validTarget('douyin', 'read', 'https://www.iesdouyin.com/share/video/123/'), true);
+});
+
+test('douyin detail: copy/author/interactions/duration parse without media URLs; page JSON also parses', async () => {
+  const raw = JSON.parse(await fixture('douyin-detail.json'));
+  const item = parseDouyinDetail(raw);
+  assert.ok(item);
+  assert.equal(item.author, '示例创作者');
+  assert.ok(item.text.includes('流水线'));
+  assert.ok(item.text.includes('12345'));
+  assert.ok(item.text.includes('12.3 秒'));
+  const page = parseDouyinPage(await fixture('douyin-page.html'));
+  assert.ok(page);
+  assert.equal(page.author, '示例创作者');
+  const result = reach('douyin', 'read', 'https://www.douyin.com/video/7298145681699622182', {ok: true, items: [item]});
+  assert.equal(result.content_scope, 'post_text');
+  assert.doesNotMatch(JSON.stringify(result), /play_addr|douyinvod|\.mp4|secret\.mp4/i);
+});
+
+test('douyin deleted and security block map to not_found and platform_blocked', async () => {
+  const gone = await runPublicRead({channel: 'douyin', action: 'read', target: 'https://www.douyin.com/video/123'}, {fetchImpl: async () => reply(await fixture('douyin-deleted.html'))});
+  assert.equal(gone.ok, false);
+  assert.equal(gone.error.code, 'NOT_FOUND');
+  assert.equal(reach('douyin', 'read', 'https://www.douyin.com/video/123', gone).error.error_kind, 'not_found');
+  const blocked = await runPublicRead({channel: 'douyin', action: 'read', target: 'https://www.douyin.com/video/123'}, {fetchImpl: async () => new Response(await fixture('douyin-blocked.txt'), {status: 403})});
+  assert.equal(blocked.error.code, 'SECURITY_BLOCK');
+  assert.equal(reach('douyin', 'read', 'https://www.douyin.com/video/123', blocked).error.error_kind, 'platform_blocked');
+});
+
 test('registered commands are read-only and API-bound', () => {
-  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile', 'zhihu:hot', 'zhihu:search', 'zhihu:read'];
+  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile', 'zhihu:hot', 'zhihu:search', 'zhihu:read', 'douyin:read'];
   for (const key of expected) {
     const entry = REACH_COMMANDS[key + ':local'];
     assert.ok(entry, key);

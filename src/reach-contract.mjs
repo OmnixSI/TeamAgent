@@ -7,7 +7,7 @@ export const CHANNELS=Object.freeze({
  xueqiu:{hosts:['xueqiu.com','www.xueqiu.com'],short:[],actions:['quote','search','hot']},
  weibo:{hosts:['weibo.com','www.weibo.com','s.weibo.com','m.weibo.cn'],short:['weibo.cn'],actions:['read','search','hot','profile','comments']},
  zhihu:{hosts:['www.zhihu.com','zhihu.com'],short:['zhihu.com'],actions:['read','search','hot','profile']},
- douyin:{hosts:['www.douyin.com','douyin.com'],short:['v.douyin.com'],actions:['read']},
+ douyin:{hosts:['www.douyin.com','douyin.com','www.iesdouyin.com','iesdouyin.com'],short:['v.douyin.com'],actions:['read']},
  weixin:{hosts:['mp.weixin.qq.com'],short:[],actions:['read','search']},
 });
 export function scopeFor(action){return scopes[action]||'post_text';}
@@ -25,7 +25,7 @@ export function validTarget(channel,action,target){
  let decoded=target;try{for(let n=0;n<3;n++){const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}}catch{return false;}
  if(/[;|`$<>\\\u0000-\u001f\u007f]/.test(decoded))return false;
  if(/^https:\/\//.test(target)){
-  try{const u=new URL(target);return !u.username&&!u.password&&(!u.port||u.port==='443')&&CHANNELS[channel].hosts.includes(u.hostname);}catch{return false;}
+  try{const u=new URL(target);return !u.username&&!u.password&&(!u.port||u.port==='443')&&[...CHANNELS[channel].hosts,...CHANNELS[channel].short].includes(u.hostname);}catch{return false;}
  }
  if(['read','thread','comments'].includes(action))return false;
  if(action==='quote')return /^(?:SH|SZ|HK|US)?[A-Z0-9.]{1,12}$/i.test(target);
