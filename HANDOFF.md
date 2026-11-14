@@ -1,4 +1,15 @@
-# TeamAgent 接手包（2026-11-14）
+# TeamAgent 接手包
+
+> **2026-11-14 21:15（悉尼）更新：群里的 Bot 已切到 v2，整套跑在 Cloudflare（Worker `teamagent`），不再依赖任何本机进程。先读 [`v2/README.md`](v2/README.md)。**
+>
+> - 旧 Worker `inkboard-team` 只剩团队开发台网页：它的 QQ 发信密钥和定时触发已撤掉，不再往群里说话。
+> - 群主 Mac 上的 TeamAgent 常驻服务（QQ 网关、执行器、抓取、媒体、GitHub runner 等 11 个）已 `launchctl disable`，文件原样保留在 `~/.inkboard-team/`。
+> - `.github/workflows/check.yml` 已在 GitHub 上停用（它只能跑在群主 Mac 的自托管 runner 上）。发布改为 `npx wrangler deploy -c v2/wrangler.toml`。
+> - 下面是 v1 时期的接手说明，留作历史参考；其中“先修自动发布”“未兑现需求”等条目对 v2 已不适用。
+
+---
+
+## v1 接手说明（2026-11-14 20:00，历史）
 
 > 这份文档是接手 TeamAgent 的第一入口。到 2026-11-14 为止，项目一直由 OpenMausBot 多代理编队（BINI 总指挥 + DeepSeek/Codex/Claude 成员）开发。该编队已于 2026-11-14 晚停用，之后由人或单个编码助手（Claude Code、Codex 等）直接在本仓库维护。
 >
