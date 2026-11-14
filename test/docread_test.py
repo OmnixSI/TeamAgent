@@ -684,6 +684,46 @@ class DocReadTests(unittest.TestCase):
         self.assertIn("XML 元素", out["error"])
         self.assertIn("2000000", out["error"])
 
+    def _styles_exempt_xlsx(self, name, junk):
+        write_single_sheet_xlsx(
+            self.root / name,
+            '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>',
+        )
+        src = self.root / name
+        out = self.root / ("rewrite-" + name)
+        with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                if info.filename == "xl/_rels/workbook.xml.rels":
+                    data = data.replace(
+                        b"</Relationships>",
+                        b'<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="styles.xml"/></Relationships>',
+                    )
+                zout.writestr(info.filename, data)
+            zout.writestr(
+                "xl/styles.xml",
+                '<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                + "".join(
+                    "<si>" + "".join(f'<x i="{k * 90_000 + j}"/>' for j in range(90_000)) + "</si>"
+                    for k in range(junk // 90_000)
+                ) + "</styleSheet>",
+            )
+        return out
+
+    def test_xlsx_rels_cannot_exempt_styles_xml(self):
+        # styles.xml is read as a whole tree by openpyxl; pointing a sharedStrings
+        # relationship at it must not grant the streaming exemption.
+        path = self._styles_exempt_xlsx("styles-exempt.xlsx", 2_160_000)
+        with self.assertRaises(docread.DocReadError) as caught:
+            docread._guard_ooxml(path)
+        self.assertEqual(caught.exception.kind, "too_large")
+
+    def test_xlsm_workbook_still_uses_relationship_exemption(self):
+        make_large_sheet_xlsx(self.root / "big.xlsx", rows=75_000, cols=10, text=True)
+        (self.root / "big.xlsx").rename(self.root / "big.xlsm")
+        self.assertGreater(docread._guard_ooxml(self.root / "big.xlsm"), 40 * 1024 * 1024)
+
     def test_xlsx_chartsheet_is_not_exempt(self):
         # A chartsheet relationship is not a worksheet: the part gets the 32 MiB cap.
         make_large_sheet_xlsx(

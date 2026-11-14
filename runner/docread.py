@@ -126,6 +126,9 @@ def _member_is_xml(archive, info):
     return _looks_like_xml(head)
 
 
+_WHOLE_TREE_PARTS = {"xl/styles.xml", "xl/workbook.xml", "[content_types].xml"}
+
+
 def _relationships(archive, infos, extension):
     """Part names a real .xlsx/.xlsm workbook declares as worksheet/sharedStrings.
 
@@ -163,6 +166,9 @@ def _relationships(archive, infos, extension):
             part = posixpath.normpath(target)
         else:
             part = posixpath.normpath(posixpath.join("xl", target))
+        # openpyxl reads these fixed-path parts as whole trees whatever the rels say.
+        if part.lower() in _WHOLE_TREE_PARTS or part.lower().startswith(("docprops/", "xl/_rels/")):
+            continue
         if kind.endswith("/worksheet"):
             worksheets.add(part)
         elif kind.endswith("/sharedstrings"):
