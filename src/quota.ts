@@ -22,6 +22,8 @@ export const DEEPSEEK_LOW_DAYS = 3;
 export const DEEPSEEK_SPEND_WINDOW_MS = 7 * 86400000;
 /** Team pricing converts at 7.2 CNY/USD; the balance endpoint reports CNY. */
 export const CNY_PER_USD = 7.2;
+/** USD-only accounts get their own threshold; never compare USD to ¥10. */
+export const DEEPSEEK_LOW_BALANCE_USD = DEEPSEEK_LOW_BALANCE_CNY / CNY_PER_USD;
 
 export const QUOTA_MORNING_KEY = "quota:morning";
 export const QUOTA_MORNING_HOUR = 8;
@@ -32,7 +34,14 @@ const IMAGE_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const TIMEZONE = TEAM.memory?.timezone || "Australia/Sydney";
 
-export type BalanceFailureKind = "missing_key" | "timeout" | "upstream" | "auth" | "invalid";
+export type BalanceFailureKind =
+  | "missing_key"
+  | "timeout"
+  | "upstream"
+  | "auth"
+  | "payment"
+  | "rate_limit"
+  | "invalid";
 
 export type DeepSeekBalance =
   | {
@@ -194,7 +203,7 @@ function parseBalance(value: any): DeepSeekBalance | null {
   return {
     ok: false,
     at,
-    kind: (["missing_key", "timeout", "upstream", "auth", "invalid"].includes(kind)
+    kind: (["missing_key", "timeout", "upstream", "auth", "payment", "rate_limit", "invalid"].includes(kind)
       ? kind
       : "upstream") as BalanceFailureKind,
   };
@@ -257,7 +266,14 @@ export async function readDeepSeekBalance(
     body = null;
   }
   if (!response.ok) {
-    const kind = response.status === 401 || response.status === 403 ? "auth" : "upstream";
+    const kind =
+      response.status === 401 || response.status === 403
+        ? "auth"
+        : response.status === 402
+          ? "payment"
+          : response.status === 429
+            ? "rate_limit"
+            : "upstream";
     return store({ ok: false, at, kind });
   }
 
@@ -284,10 +300,12 @@ export async function readDeepSeekBalance(
   });
 }
 
-function balanceCny(balance: DeepSeekBalance): number | null {
+/** True when the account is below the matching currency's warning line. */
+export function balanceAmountLow(balance: DeepSeekBalance): boolean | null {
   if (!balance.ok) return null;
-  if (balance.currency === "CNY") return balance.total;
-  if (balance.currency === "USD") return balance.total * CNY_PER_USD;
+  const currency = balance.currency.toUpperCase();
+  if (currency === "CNY") return balance.total < DEEPSEEK_LOW_BALANCE_CNY;
+  if (currency === "USD") return balance.total < DEEPSEEK_LOW_BALANCE_USD;
   return null;
 }
 
@@ -300,33 +318,38 @@ function ratioBand(used: number, cap: number): QuotaBand {
 }
 
 function daysLeft(balance: DeepSeekBalance, avg7MicroUsd: number): number | null {
-  const cny = balanceCny(balance);
-  if (cny === null) return null;
+  if (!balance.ok) return null;
   const dailyUsd = Math.max(0, Number(avg7MicroUsd) || 0) / 1e6;
   if (dailyUsd <= 0) return null;
-  return cny / CNY_PER_USD / dailyUsd;
+  const currency = balance.currency.toUpperCase();
+  if (currency === "USD") return balance.total / dailyUsd;
+  if (currency === "CNY") return balance.total / CNY_PER_USD / dailyUsd;
+  return null;
+}
+
+/** Balance currency, availability and the 7-day average decide the band. */
+export function deepseekBand(balance: DeepSeekBalance, avg7MicroUsd: number): QuotaBand {
+  if (!balance.ok) return "unknown";
+  if (balance.available === false) return "critical";
+  const amountLow = balanceAmountLow(balance);
+  if (amountLow === true) return "critical";
+  const days = daysLeft(balance, avg7MicroUsd);
+  if (days === null) return amountLow === null ? "unknown" : "ok";
+  if (days < 1.5) return "critical";
+  if (days < DEEPSEEK_LOW_DAYS) return "low";
+  return "ok";
 }
 
 /** Pure band calculator, exported so the thresholds can be tested directly. */
 export function quotaBand(input: {
-  balanceCny: number | null;
-  /** false is the provider's own "cannot call" signal. */
-  balanceAvailable?: boolean | null;
+  balance: DeepSeekBalance | null;
   avg7MicroUsd: number;
   openaiUsedMicroUsd: number;
   openaiCapMicroUsd: number;
   aiUsed: number;
   aiCap: number;
 }): QuotaBand {
-  let deepseek: QuotaBand;
-  if (input.balanceAvailable === false) deepseek = "critical";
-  else if (input.balanceCny === null || !Number.isFinite(input.balanceCny)) deepseek = "unknown";
-  else if (input.balanceCny < DEEPSEEK_LOW_BALANCE_CNY) deepseek = "critical";
-  else {
-    const dailyUsd = Math.max(0, Number(input.avg7MicroUsd) || 0) / 1e6;
-    const days = dailyUsd > 0 ? input.balanceCny / CNY_PER_USD / dailyUsd : null;
-    deepseek = days === null ? "ok" : days < 1.5 ? "critical" : days < DEEPSEEK_LOW_DAYS ? "low" : "ok";
-  }
+  const deepseek = input.balance ? deepseekBand(input.balance, input.avg7MicroUsd) : "unknown";
   const openai = ratioBand(input.openaiUsedMicroUsd, input.openaiCapMicroUsd);
   const ai = ratioBand(input.aiUsed, input.aiCap);
   if ([deepseek, openai, ai].includes("critical")) return "critical";
@@ -429,8 +452,14 @@ export async function quotaSnapshot(
 
 function balanceLine(balance: DeepSeekBalance): string {
   if (!balance.ok) {
-    if (balance.kind === "missing_key") return "DeepSeek 余额：暂时查不到（没有配置密钥）";
-    return "DeepSeek 余额：暂时查不到（接口暂时不可用，10 分钟内不再重试）";
+    const suffix = "），请看 DeepSeek 后台";
+    if (balance.kind === "missing_key") return "DeepSeek 余额：暂时查不到（没有配置密钥" + suffix;
+    if (balance.kind === "auth") return "DeepSeek 余额：暂时查不到（密钥或权限问题" + suffix;
+    if (balance.kind === "payment") return "DeepSeek 余额：暂时查不到（账户余额不足或欠费" + suffix;
+    if (balance.kind === "rate_limit") return "DeepSeek 余额：暂时查不到（查询太频繁" + suffix;
+    if (balance.kind === "timeout") return "DeepSeek 余额：暂时查不到（查询超时" + suffix;
+    if (balance.kind === "invalid") return "DeepSeek 余额：暂时查不到（返回内容无法识别" + suffix;
+    return "DeepSeek 余额：暂时查不到（接口暂时不可用" + suffix;
   }
   if (balance.available === false) return "DeepSeek 余额：账户当前不可用";
   return (
@@ -514,8 +543,7 @@ export async function renderQuota(
       sender: options.sender,
     });
     const band = quotaBand({
-      balanceCny: balanceCny(snapshot.balance),
-      balanceAvailable: snapshot.balance.ok ? snapshot.balance.available : null,
+      balance: snapshot.balance,
       avg7MicroUsd: snapshot.deepseek.avg7MicroUsd,
       openaiUsedMicroUsd: snapshot.openai.todayMicroUsd,
       openaiCapMicroUsd: snapshot.openai.capMicroUsd,
@@ -553,14 +581,18 @@ export async function morningQuotaLine(e: any, at = Date.now()): Promise<string>
     )?.spent ?? 0;
   const average = (Number(spent) || 0) / 7;
   const days = daysLeft(balance, average);
-  const belowAmount = (balanceCny(balance) ?? Infinity) < DEEPSEEK_LOW_BALANCE_CNY;
+  const belowAmount = balanceAmountLow(balance) === true;
   const belowDays = days !== null && days < DEEPSEEK_LOW_DAYS;
   const unavailable = balance.available === false;
   if (!belowAmount && !belowDays && !unavailable) return "";
   const moneyText = money(balance.total, balance.currency);
+  const currency = balance.currency.toUpperCase();
   const reasons: string[] = [];
   if (unavailable) reasons.push("账户当前不可用");
-  if (belowAmount) reasons.push("低于 ¥" + DEEPSEEK_LOW_BALANCE_CNY + " 警戒线");
+  if (belowAmount) {
+    const threshold = currency === "USD" ? "$" + DEEPSEEK_LOW_BALANCE_USD.toFixed(2) : "¥" + DEEPSEEK_LOW_BALANCE_CNY;
+    reasons.push("低于 " + threshold + " 警戒线");
+  }
   if (belowDays && days !== null) reasons.push("按近 7 天日均只够 " + days.toFixed(1) + " 天");
   return "DeepSeek 余额 " + moneyText + "，" + reasons.join("，") + "。";
 }

@@ -120,6 +120,10 @@ function stubFetch(payload = null, { fail = null, status = 200 } = {}) {
   };
 }
 
+function bal(currency, total, available = true) {
+  return { ok: true, at: NOW, available, currency, total, granted: 0, toppedUp: 0 };
+}
+
 function balancePayload(total = "8.88") {
   return {
     is_available: true,
@@ -232,6 +236,23 @@ test("an unavailable account and an omitted is_available are reported without in
   }
 });
 
+test("USD-only balance uses its own threshold and is never compared to ¥10", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  const stub = stubFetch({
+    is_available: true,
+    balance_infos: [{ currency: "USD", total_balance: "5.00", granted_balance: "0.00", topped_up_balance: "5.00" }],
+  });
+  try {
+    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    assert.match(result.text, /DeepSeek 余额：\$5\.00/);
+    assert.equal(result.text.includes("¥5.00"), false);
+    assert.equal(await api.morningQuotaLine(e, NOW), "");
+  } finally {
+    stub.restore();
+  }
+});
+
 test("balance is cached for ten minutes and a second question does not call out", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(balancePayload());
@@ -270,15 +291,71 @@ test("thresholds follow the order: under ¥10 or under three days of spend", () 
   const base = { avg7MicroUsd: 400000, openaiUsedMicroUsd: 0, openaiCapMicroUsd: 3000000, aiUsed: 0, aiCap: 8000 };
   assert.equal(api.DEEPSEEK_LOW_BALANCE_CNY, 10);
   assert.equal(api.DEEPSEEK_LOW_DAYS, 3);
-  assert.equal(api.quotaBand({ ...base, balanceCny: 9.99 }), "critical");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 10.01 }), "ok");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 10.01, avg7MicroUsd: 1000000 }), "critical");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 20, avg7MicroUsd: 1000000 }), "low");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 30, avg7MicroUsd: 1000000 }), "ok");
-  assert.equal(api.quotaBand({ ...base, balanceCny: null }), "unknown");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 100, balanceAvailable: false }), "critical");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 100, openaiUsedMicroUsd: 2700000 }), "critical");
-  assert.equal(api.quotaBand({ ...base, balanceCny: 100, aiUsed: 7000 }), "low");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 9.99) }), "critical");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 10.01) }), "ok");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 10.01), avg7MicroUsd: 1000000 }), "critical");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 20), avg7MicroUsd: 1000000 }), "low");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 30), avg7MicroUsd: 1000000 }), "ok");
+  assert.equal(api.quotaBand({ ...base, balance: { ok: false, at: NOW, kind: "timeout" } }), "unknown");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 100, false) }), "critical");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 100), openaiUsedMicroUsd: 2700000 }), "critical");
+  assert.equal(api.quotaBand({ ...base, balance: bal("CNY", 100), aiUsed: 7000 }), "low");
+  // USD has its own constant; a USD 5.00 balance must not be compared to 10.
+  assert.equal(api.DEEPSEEK_LOW_BALANCE_USD.toFixed(2), "1.39");
+  assert.equal(api.quotaBand({ ...base, balance: bal("USD", 5), avg7MicroUsd: 2000000 }), "low");
+  assert.equal(api.quotaBand({ ...base, balance: bal("USD", 2) }), "ok");
+  assert.equal(api.quotaBand({ ...base, balance: bal("USD", 1) }), "critical");
+});
+
+test("missing optional balance fields are tolerated without crashing", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const stub = stubFetch({ is_available: true, balance_infos: [{ currency: "CNY", total_balance: "12.00" }] });
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /¥12\.00/);
+    assert.match(result.text, /赠送 ¥0\.00 \/ 充值 ¥0\.00/);
+  } finally {
+    stub.restore();
+  }
+  const e2 = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const empty = stubFetch({ is_available: true, balance_infos: [{ currency: "CNY" }] });
+  try {
+    const result = await api.renderQuota(e2, { owner: true, now: NOW });
+    assert.match(result.text, /暂时查不到（返回内容无法识别/);
+    assert.match(result.text, /请看 DeepSeek 后台/);
+  } finally {
+    empty.restore();
+  }
+});
+
+test("401, 402 and 429 degrade to a plain console-check answer, never a throw", async () => {
+  for (const [status, phrase] of [[401, "密钥或权限"], [402, "欠费"], [429, "太频繁"]]) {
+    const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+    const stub = stubFetch({ error: {} }, { status });
+    try {
+      const result = await api.renderQuota(e, { owner: true, now: NOW });
+      assert.equal(result.ok, true);
+      assert.match(result.text, new RegExp(phrase));
+      assert.match(result.text, /请看 DeepSeek 后台/);
+      assert.equal(result.text.includes(SECRET), false);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test("a timeout is reported as a timeout and cached for ten minutes", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const stub = stubFetch(null, { fail: Object.assign(new Error("aborted"), { name: "AbortError" }) });
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /暂时查不到（查询超时/);
+    assert.match(result.text, /请看 DeepSeek 后台/);
+    await api.renderQuota(e, { owner: true, now: NOW + 60000 });
+    assert.equal(stub.calls.length, 1);
+  } finally {
+    stub.restore();
+  }
 });
 
 test("morning job writes one low-balance line for the developer-room report", async () => {
