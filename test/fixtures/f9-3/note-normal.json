@@ -1,0 +1,18 @@
+{
+  "_provenance": {
+    "source": "constructed 2026-11-14; title/author taken from the trial's real public-web capture, body/engagement text constructed because no logged-in session is available yet",
+    "note": "replace with a real logged-in extraction once the user logs into xiaohongshu.com in the TeamAgent Edge profile",
+    "real": false
+  },
+  "pageUrl": "https://www.xiaohongshu.com/explore/6371c72a000000001501476b?xsec_token=SIGNED_VALUE&xsec_source=pc_search",
+  "securityBlock": false,
+  "loginWall": false,
+  "notFound": false,
+  "title": "日常咖啡一杯☕️",
+  "desc": "今天用新到的豆子做了一杯手冲，莓果香气很明显，尾段带一点焦糖甜。",
+  "author": "王怡人",
+  "likes": "1.2万",
+  "collects": "3456",
+  "comments": "178",
+  "tags": ["咖啡", "手冲"]
+}

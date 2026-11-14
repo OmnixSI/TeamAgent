@@ -10,8 +10,8 @@ import {execFile} from 'node:child_process';
 import {openNativeX,xAuthTokenPresent,xMetadata,X_ERRORS,publishX} from './native-x-browser.mjs';
 
 const COOKIE_NAMES=['SESSDATA','bili_jct','DedeUserID','buvid3'];
-const LABELS={bili:'B 站',x:'X'};
-const LOGIN={bili:'https://passport.bilibili.com/login',x:'https://x.com/login'};
+const LABELS={bili:'B 站',x:'X',xiaohongshu:'小红书'};
+const LOGIN={bili:'https://passport.bilibili.com/login',x:'https://x.com/login',xiaohongshu:'https://www.xiaohongshu.com/explore'};
 const BROWSER_MISSING='需要装一次浏览器（Chromium），请联系维护者安装后再登录。';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function privateDir(path){await mkdir(path,{recursive:true,mode:0o700});await chmod(path,0o700);}
@@ -46,8 +46,15 @@ const flatCookies=cookies=>Object.fromEntries(Object.entries(cookies).map(([k,c]
 export function allowedBrowserUrl(service,raw){
  try{
   const u=new URL(raw);
-  if(u.protocol!=='https:'||(u.port&&u.port!=='443')||u.username||u.password)return false;
+  // Xiaohongshu's own risk page redirects to plain http; no other service may leave https.
+  if(u.protocol!=='https:'&&!(service==='xiaohongshu'&&u.protocol==='http:'))return false;
+  if((u.port&&u.port!=='443')||u.username||u.password)return false;
   if(service==='x')return ['x.com','twitter.com','abs.twimg.com'].includes(u.hostname)||u.hostname.endsWith('.twimg.com');
+  if(service==='xiaohongshu'){
+   const host=u.hostname;
+   return ['www.xiaohongshu.com','xiaohongshu.com','xhslink.com','www.rednote.com','rednote.com'].includes(host)
+    ||host.endsWith('.xhscdn.com')||host.endsWith('.rednote.com')||host.endsWith('.rednotecdn.com');
+  }
   return service==='bili'&&(['www.bilibili.com','api.bilibili.com','passport.bilibili.com','comment.bilibili.com','b23.tv'].includes(u.hostname)||u.hostname.endsWith('.hdslb.com'));
  }catch{return false;}
 }
@@ -94,6 +101,16 @@ async function xState(page){
  if(/^\/(?:login|i\/flow\/login)(?:\/|$)/.test(new URL(page.url()).pathname))return 'expired';
  if(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').isVisible())return 'ok';
  return null; // An empty/error page does not establish that the session expired.
+}
+async function xhsState(page){
+ let body='',url='',cookies=[];
+ try{body=await page.evaluate(()=>document.body?.innerText||'');}catch{}
+ try{url=page.url();}catch{}
+ if(/安全限制|访问链接异常|请完成验证码|验证码|安全验证/.test(body)||/website-login\/error|error_code=300017/.test(url))return 'risk';
+ try{cookies=await page.context().cookies(['https://www.xiaohongshu.com','https://www.rednote.com']);}catch{}
+ if(cookies.some(c=>c.name==='web_session'&&typeof c.value==='string'&&c.value))return 'ok';
+ if(/登录后查看|请登录|扫码登录|手机号登录/.test(body))return 'expired';
+ return null;
 }
 function xSessionUrl(page){
  try{
@@ -150,7 +167,7 @@ export function createBrowserAuth(options={}){
   const old=await readJSON(statePath(service));
   const checked_at=new Date(now()).toISOString();
   await writeJSON(statePath(service),{state,checked_at,had_ok:state==='ok'||old.had_ok===true});
-  if(old.state==='ok'&&['expired','risk'].includes(state))await notify(LABELS[service]+' 登录过期或需要验证，双击桌面「TeamAgent-登录」重新登录。');
+  if(old.state==='ok'&&['expired','risk'].includes(state))await notify(service==='xiaohongshu'?'小红书登录过期或需要验证，请在 Edge 里重新登录 xiaohongshu.com。':LABELS[service]+' 登录过期或需要验证，双击桌面「TeamAgent-登录」重新登录。');
   try{await report({service,state,checked_at});}catch{options.log?.('登录状态暂未上报，将在下次检查时重试。');}
   return state;
  }
@@ -175,7 +192,7 @@ export function createBrowserAuth(options={}){
   finally{if(context)await context.close().catch(()=>{});}
  }
  async function login(service,control={}){
-  if(!LOGIN[service])throw Error('请选择 bili 或 x。');
+  if(!LOGIN[service])throw Error('请选择 bili、x 或 xiaohongshu。');
   return locked(service,async()=>{
   if(service==='bili'&&(await client()).isPaused())return 'risk';
   if(control.signal?.aborted)return 'cancelled';
@@ -199,6 +216,8 @@ export function createBrowserAuth(options={}){
       exported=Object.fromEntries(cookies.filter(c=>COOKIE_NAMES.includes(c.name)).map(c=>[c.name,c]));
       await rememberCookies(exported);
       state=await probeBili(Object.fromEntries(Object.entries(exported).map(([k,c])=>[k,c.value])));
+     }else if(service==='xiaohongshu'){
+      state=await xhsState(page);
      }else if(context.nativeX){
       const present=await xAuthTokenPresent(context);
       const ct0=present&&await xCookiePresent(context,'ct0');
@@ -242,6 +261,14 @@ export function createBrowserAuth(options={}){
    if(!session?.value)state='missing';
    else if(session.expires>0&&session.expires*1000<=now())state='expired';
    else state=await probeBili(flatCookies(cookies));
+  }else if(service==='xiaohongshu'){
+   const old=await readJSON(statePath('xiaohongshu'));
+   if(!old?.had_ok&&!existsSync(resolve(home,'browser/xiaohongshu/Default')))state='missing';
+   else state=await open('xiaohongshu',true,async(_context,page)=>{
+    const response=await page.goto('https://www.xiaohongshu.com/explore',{waitUntil:'domcontentloaded',timeout:15000});
+    if(response?.status()>=400)return null;
+    return xhsState(page);
+   }).catch(()=>null);
   }else{
    const old=await readJSON(statePath('x'));
    if(!old?.had_ok&&!existsSync(resolve(home,'browser/x/Default')))state='missing';

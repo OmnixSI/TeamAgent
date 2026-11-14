@@ -1,5 +1,6 @@
 import {CHANNELS,publicSourceUrl,safeReachText,scopeFor} from '../src/reach-contract.mjs';
 export const validators=new Map();
+export const nextActions=new Map();
 export const NEXT_ACTION=Object.freeze({
  tool_not_ready:'读取组件尚未就绪，请维护者检查固定版本安装；本次不自动安装。',
  login_required:'需要本人在该平台官方页面完成登录后再主动读取。',
@@ -39,7 +40,7 @@ export function normalizeReachResult(req,raw={},options={}){
  if(raw?.ok!==true&&!kind)kind='upstream_unavailable';
  if(kind&&!Object.hasOwn(NEXT_ACTION,kind))kind='insufficient_content';
  const retry=Number(e.retry_after||raw?.retry_after);
- const error=kind?{error_kind:kind,next_action:NEXT_ACTION[kind],
+ const error=kind?{error_kind:kind,next_action:nextActions.get(req.channel)?.[kind]||NEXT_ACTION[kind],
   ...(token(code)?{vendor_code:code}:{}),...(token(e.stage)?{stage:e.stage}:{}),
   ...(Number.isFinite(retry)&&retry>0?{retry_after:Math.min(86400,Math.ceil(retry))}:{}),
  }:null;
