@@ -52,7 +52,7 @@ export CLOUDFLARE_API_TOKEN=...   # 账户级 token
 npx wrangler deploy -c v2/wrangler.toml
 ```
 
-部署后 Hub 约 40 秒换上新代码，QQ 连接自动重连。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `ADMIN_TOKEN`。
+改了行为就把 `src/util.ts` 里的 `BUILD` 加一。Hub 握着 QQ 长连接，部署不会自动替换它；定时触发（每 2 分钟）发现版本不一致会让它自重启，想立刻生效就 `POST /admin/restart`。重启后 QQ 会话自动续上。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `ADMIN_TOKEN`。
 
 ## 管理接口
 
@@ -67,6 +67,8 @@ npx wrangler deploy -c v2/wrangler.toml
 | `POST /admin/dry {"text":"…","name":"…","seedFrom":"<群>"}` | 私下试一句，带真实记忆，不发群 |
 | `POST /admin/gateway {"on":true\|false}` | 开关 QQ 连接（紧急闭嘴用 `false`） |
 | `POST /admin/reflect` | 立即整理一次记忆 |
+| `POST /admin/restart` | 让 Hub 立刻换上最新部署的代码 |
+| `POST /admin/task {"task":"…"}` | 让 Bot 现在去做一件事并把结果发到群里 |
 | `POST /admin/sched` | 加/取消定时任务 |
 
 ## 本地回放

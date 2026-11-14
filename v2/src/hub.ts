@@ -9,11 +9,10 @@ import { QQ, parseEvent } from "./qq.ts";
 import type { Inbound } from "./qq.ts";
 import { buildTools } from "./tools.ts";
 import type { Host } from "./tools.ts";
-import { BJ, SYD, b64, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
+import { BJ, BUILD, SYD, b64, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 
 const INTENTS = (1 << 0) | (1 << 1) | (1 << 30) | (1 << 12) | (1 << 25) | (1 << 26);
-const BUILD = "2026-11-14.4";
 const TICK_MS = 20000;
 const REPLY_WINDOW_MS = 270000;   // a QQ message can be answered for five minutes
 const REPLIES_PER_MESSAGE = 5;
@@ -421,7 +420,17 @@ export class Hub extends DurableObject<Env> {
     const json = (v: any, status = 200) => new Response(JSON.stringify(v, null, 1), { status, headers: { "Content-Type": "application/json" } });
     const conv = String(body.conv || url.searchParams.get("conv") || this.get("main") || "");
 
-    if (path === "/tick") { await this.tick(); return json({ ok: true }); }
+    if (path === "/tick" || path === "/admin/restart") {
+      // A deploy does not replace an object that is holding a live connection, so it steps aside itself.
+      const want = url.searchParams.get("build");
+      if (path === "/admin/restart" || (want && want !== BUILD)) {
+        this.closeWs();
+        await this.ctx.storage.setAlarm(Date.now() + 1500);
+        this.ctx.abort("restart for build " + (want || "manual"));
+      }
+      await this.tick();
+      return json({ ok: true, build: BUILD });
+    }
     if (path === "/event") { await this.onEvent(String(body.t), body.d); return json({ op: 12, d: 0 }); }
     if (path === "/admin/status") {
       const count = (q: string, ...b: any[]) => Number(this.sql.exec(q, ...b).toArray()[0].n);

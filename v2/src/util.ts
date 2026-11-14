@@ -14,6 +14,9 @@ export type Env = {
   EXPERT_MODEL?: string;
 };
 
+/** Bumped on every behaviour change; the Hub restarts itself when the Worker reports a newer build. */
+export const BUILD = "2026-11-14.7";
+
 export const BJ = "Asia/Shanghai";
 export const SYD = "Australia/Sydney";
 

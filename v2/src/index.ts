@@ -1,4 +1,5 @@
 // Worker entry: a health page, the admin surface, an optional QQ webhook, and a cron that keeps the Hub awake.
+import { BUILD } from "./util.ts";
 import type { Env } from "./util.ts";
 export { Hub } from "./hub.ts";
 
@@ -39,7 +40,7 @@ async function webhook(req: Request, env: Env) {
 export default {
   async fetch(req: Request, env: Env) {
     const url = new URL(req.url);
-    if (url.pathname === "/health") return json({ ok: true, service: "teamagent" });
+    if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: BUILD });
     if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
     if (url.pathname.startsWith("/admin/")) {
       const given = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -50,6 +51,6 @@ export default {
     return new Response("teamagent", { status: 200 });
   },
   async scheduled(_c: any, env: Env) {
-    await hub(env).fetch("https://hub/tick");
+    await hub(env).fetch("https://hub/tick?build=" + BUILD).catch(() => {});
   },
 };

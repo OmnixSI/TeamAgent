@@ -66,7 +66,7 @@ export type Inbound = {
 };
 
 /** Typed names people use for the bot when they do not use a real @. */
-const CALLED = /@\s*(bot|boat|机器人|奶蛙)|^\s*(bot|boat|奶蛙)\s*[，,：:\s]/i;
+const CALLED = /@\s*(bot|boat|机器人|奶蛙)|^\s*(bot|boat|奶蛙)(?![a-z])/i;
 
 export function parseEvent(type: string, d: any): Inbound | null {
   const group = type === "GROUP_AT_MESSAGE_CREATE" || type === "GROUP_MESSAGE_CREATE";

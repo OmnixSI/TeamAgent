@@ -113,6 +113,7 @@ function tidy(content: unknown) {
   text = text.replace(/^\s*(\[\d\d:\d\d\]\s*)?(bot|我|奶蛙)\s*[:：]\s*/i, "");
   return text.trim();
 }
+const PROMISE = /(先|等我|我去|这就|马上|正在|在)(查|看|搜|翻|读|调研|核实|确认)|等结果|稍后|稍等|回头|查完|看完|后台|单独回/;
 const isPass = (text: string) => !text || /^\s*[（(【\[]?\s*PASS\b/i.test(text);
 
 export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnResult> {
@@ -121,7 +122,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   const messages = buildMessages(input);
   const defs = toolDefs(deps.tools);
   const mustReply = input.mentioned || !!input.task;
-  let careful = !!input.task, interimSent = false, final = "", nudged = false;
+  let careful = !!input.task, interimSent = false, final = "", nudged = false, promised = false;
 
   const call = async (withTools: boolean, effort: Effort, maxTokens: number) => {
     const r = await deps.chat({ messages, tools: withTools ? defs : undefined, max_tokens: maxTokens }, effort, effort === "none" ? 45000 : 150000);
@@ -137,10 +138,19 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const lastRound = round === MAX_ROUNDS - 1;
       if (lastRound) messages.push({ role: "user", content: "[工具次数用完了。就用手上已有的结果把话说完，没查到的照实说。]" });
-      const msg = await call(!lastRound, careful ? "high" : "none", careful ? 4000 : 900);
+      // Chatter nobody addressed to you gets the instant path; a direct call gets a moment of thought,
+      // which is what makes it reach for tools instead of answering from memory.
+      const msg = await call(!lastRound, careful ? "high" : mustReply ? "low" : "none", careful ? 4000 : 1500);
       const calls: any[] = msg.tool_calls || [];
       if (!calls.length) {
         final = tidy(msg.content);
+        // You have no background: announcing work without doing it in this turn means it never happens.
+        if (!promised && !stats.tools.length && final.length < 120 && PROMISE.test(final)) {
+          promised = true; careful = true;
+          messages.push({ role: "assistant", content: msg.content || "" });
+          messages.push({ role: "user", content: "[别预告。你没有后台，这句发出去之后什么都不会发生。现在就调工具把事办完，然后直接给结果；如果其实不需要查，就直接回答。]" });
+          continue;
+        }
         if (isPass(final) && mustReply && !nudged) {
           nudged = true;
           messages.push({ role: "assistant", content: msg.content || "PASS" });
