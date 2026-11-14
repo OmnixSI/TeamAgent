@@ -367,6 +367,10 @@ export class Hub extends DurableObject<Env> {
           last_memory_consolidation: hub.get("reflect:day"),
         };
       },
+      members: () => {
+        const real = conv.startsWith("t:") ? hub.get("main") || conv : conv;
+        return hub.sql.exec("SELECT name, COUNT(*) c FROM msg WHERE conv=? AND role='user' AND name IS NOT NULL AND name<>'' GROUP BY name ORDER BY c DESC LIMIT 12", real).toArray().map((r: any) => String(r.name));
+      },
       savedNames: () => {
         const of = (c: string) => hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", c).toArray().map((r: any) => String(r.name));
         return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(hub.get("main") || "") : [])])];

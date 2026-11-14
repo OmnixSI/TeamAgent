@@ -38,13 +38,14 @@ const SCOUT = `你是美术指导的前期调研。读群友的要求和聊天�
 只输出一个 JSON 对象：{"intent":"…","use_saved":["名字"],"look_up":["搜索词"]}`;
 
 /** Step one of every drawing: work out what is really being asked and what must be looked at first. */
-export async function scout(env: Env, input: { request: string; context: string; memory: string; saved: string[]; extra?: string }) {
+export async function scout(env: Env, input: { request: string; context: string; memory: string; saved: string[]; members?: string[]; extra?: string }) {
   const empty = { intent: "", use_saved: [] as string[], look_up: [] as string[] };
   try {
     const r = await dsChat(env, {
       messages: [
         { role: "system", content: SCOUT + (input.extra ? "\n\n【群里对画图的额外要求】\n" + input.extra : "") },
-        { role: "user", content: "【群友的要求】\n" + input.request + "\n\n【最近的聊天】\n" + clip(input.context, 3000) + "\n\n【Bot 记得的事】\n" + clip(input.memory, 2500) + "\n\n【已保存的形象】" + (input.saved.join("、") || "（无）") },
+        { role: "user", content: "【群友的要求】\n" + input.request + "\n\n【最近的聊天】\n" + clip(input.context, 3000) + "\n\n【Bot 记得的事】\n" + clip(input.memory, 2500) + "\n\n【已保存的形象】" + (input.saved.join("、") || "（无）") +
+          "\n\n【群友的昵称】" + ((input.members || []).join("、") || "（未知）") + "。这些是群里的真人，不是网上的角色或梗，绝对不要拿他们的昵称去搜图；他们的样子只能来自保存的形象、他们发过的照片，或记忆里的描述。" },
       ],
       max_tokens: 3000,
     }, "high", 45000);
@@ -52,7 +53,8 @@ export async function scout(env: Env, input: { request: string; context: string;
     return {
       intent: clip(d.intent || "", 300),
       use_saved: (Array.isArray(d.use_saved) ? d.use_saved : []).map(String).filter((n: string) => input.saved.includes(n)).slice(0, 3),
-      look_up: (Array.isArray(d.look_up) ? d.look_up : []).map(String).filter(Boolean).slice(0, 3),
+      look_up: (Array.isArray(d.look_up) ? d.look_up : []).map(String).filter(Boolean)
+        .filter((q: string) => !(input.members || []).some(m => m.length >= 2 && q.includes(m))).slice(0, 3),
     };
   } catch { return empty; }
 }
@@ -64,10 +66,19 @@ const dataUrl = (r: Ref) => {
   return "data:" + r.mime + ";base64," + btoa(s);
 };
 
-export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string }): Promise<Design> {
+export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string; members?: string[]; rejected?: { idea: string; prompt: string; reason: string }[] }): Promise<Design> {
   const text = "【群友的要求】\n" + input.request + (input.intent ? "\n\n【调研后对意图的理解】\n" + input.intent : "") +
     "\n\n【最近的聊天】\n" + clip(input.context, 3000) +
     "\n\n【Bot 记得的事（人物、梗、形象设定）】\n" + clip(input.memory, 2500) +
+    (input.members?.length ? "\n\n【群友的昵称】" + input.members.join("、") + "。他们是群里的真人：有他们的照片或保存的形象就照着画；没有的话按记忆里对这个人的描述画一个普通人，不要凭昵称的字面意思编成别的东西（比如把“卡特龙”画成龙或机甲）。" : "") +
+    (input.rejected?.length
+      ? "\n\n【前面的画法被图像接口拒了】\n" + input.rejected.map((r, i) => "第 " + (i + 1) + " 版：" + r.idea + "\n提示词：" + clip(r.prompt, 700) + "\n接口给的原因：" + (r.reason || "没说")).join("\n\n") +
+        "\n\n这次的任务：保留同一个梗、同样的人物和关系，画出接口能接受的、离原意最近的一版，不要退回成一张无关痛痒的图。按这个顺序让步，能少让就少让：" +
+        "先换表现手法（动作发生前或发生后的瞬间、借位、遮挡、镜头给到旁人的反应、夸张的卡通化），再把动作本身换成最接近的（比如凑近、亲、捧着、伺候），" +
+        "最后才动人物（把真人画成一眼认得出是谁的漫画形象）。" +
+        (input.rejected.length >= 2 ? "已经被拒两次了，这一版要明显更稳：不用网上找来的真人照片当参考（use_refs 里不要选它们），人物漫画化。" : "") +
+        "idea 里用一句话说清这一版和原要求差在哪。"
+      : "") +
     (input.refs.length ? "\n\n【参考图】共 " + input.refs.length + " 张，按顺序是：" + input.refs.map((r, i) => i + " = " + (r.found ? "网上找到的 " : "群友给的 ") + r.label).join("；") : "");
   const given = input.refs.map((r, i) => (r.found ? -1 : i)).filter(i => i >= 0);
   const fallback: Design = { prompt: input.request, size: SIZES[input.size || "square"] || SIZES.square, quality: input.quality || "medium", idea: clip(input.request, 60), use: given };
@@ -153,9 +164,11 @@ export async function draw(env: Env, d: Design, refs: Ref[]) {
   }
   const data: any = await r.json().catch(() => ({}));
   if (!r.ok || !data.data?.[0]?.b64_json) {
-    throw new Error(/safety|moderation/i.test(data.error?.code + " " + data.error?.message)
+    const blocked = /safety|moderation|policy/i.test(data.error?.code + " " + data.error?.message);
+    throw Object.assign(new Error(blocked
       ? "内容被图像模型的安全策略拒绝"
-      : "图像模型返回错误（" + r.status + "）" + (data.error?.message ? "：" + clip(data.error.message, 120) : ""));
+      : "图像模型返回错误（" + r.status + "）" + (data.error?.message ? "：" + clip(data.error.message, 120) : "")),
+    { blocked, detail: clip(data.error?.message || "", 300) });
   }
   return unb64(data.data[0].b64_json);
 }

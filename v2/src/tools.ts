@@ -24,6 +24,7 @@ export interface Host {
   nameImage(ref: string, name: string): Promise<boolean>;
   fileRef(ref: string): Promise<{ name: string; bytes: Uint8Array } | null>;
   savedNames(): string[];
+  members(): string[];
   status(): LiveStatus;
   cfg(key: string): number | string;
   play(slot: string): string;
@@ -348,7 +349,7 @@ export function buildTools(host: Host): Tool[] {
         // Every drawing starts the same way: understand the ask, then look at the things it mentions.
         const request = String(a.request || ""), context = host.recentLines(16), memory = host.memory();
         const extra = host.play("drawing");
-        const brief = await scout(env, { request, context, memory, saved: host.savedNames(), extra });
+        const brief = await scout(env, { request, context, memory, saved: host.savedNames(), members: host.members(), extra });
         for (const name of brief.use_saved) {
           if (refs.length >= 4 || refs.some(r => r.label === name)) continue;
           const saved = await host.imageRef(name).catch(() => null);
@@ -357,11 +358,22 @@ export function buildTools(host: Host): Tool[] {
         const queries = [...new Set([...(a.look_up ? [String(a.look_up)] : []), ...brief.look_up])].slice(0, 3);
         const found = await Promise.all(queries.map(q => findImages(env, q, 2).catch(() => [])));
         for (const group of found) for (const ref of group) if (refs.length < 6) refs.push(ref);
-        const plan = await design(env, { request, intent: brief.intent, context, memory, refs, size: a.size, quality: a.quality, extra, defaultQuality: String(host.cfg("image_quality")) });
-        const image = await draw(env, plan, plan.use.map(i => refs[i]).filter(Boolean));
+        // If the image service turns a version down, redesign toward the closest picture it will accept
+        // and try again, instead of giving up on the first refusal.
+        const rejected: { idea: string; prompt: string; reason: string }[] = [];
+        let plan: any, image: Uint8Array | null = null;
+        for (let attempt = 0; attempt < 3 && !image; attempt++) {
+          plan = await design(env, { request, intent: brief.intent, context, memory, refs, size: a.size, quality: a.quality, extra, defaultQuality: String(host.cfg("image_quality")), members: host.members(), rejected });
+          try { image = await draw(env, plan, plan.use.map((i: number) => refs[i]).filter(Boolean)); }
+          catch (e: any) {
+            if (!e?.blocked) throw e;
+            rejected.push({ idea: plan.idea, prompt: plan.prompt, reason: e.detail || "" });
+          }
+        }
+        if (!image) return { ok: false, sent: false, error: "画图接口连着三版都拒了", tried: rejected.map(r => r.idea), service_reason: rejected[rejected.length - 1]?.reason || "" };
         const sent = await host.sendImage(image, plan.idea);
         return sent.ok
-          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, looked_up: queries, references_used: plan.use.map(i => refs[i]?.label).filter(Boolean), ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
+          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, ...(rejected.length ? { adjusted: "照原话画被画图接口拒了 " + rejected.length + " 次，这张是改过的最接近的一版。回话时说清哪里跟要求不一样", refused_versions: rejected.map(r => r.idea), service_reason: rejected[0].reason } : {}), looked_up: queries, references_used: plan.use.map(i => refs[i]?.label).filter(Boolean), ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
           : { ok: false, sent: false, error: "图生成了但发到 QQ 失败：" + (sent.error || "未知原因") };
       },
     },
