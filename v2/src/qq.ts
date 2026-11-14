@@ -49,8 +49,14 @@ export class QQ {
   }
   seq() { return ((Date.now() % 100_000_000) ^ Math.floor(Math.random() * 65536)) % 65536; }
 
-  sendText(conv: string, text: string, msgId?: string) {
-    return this.call(this.base(conv) + "/messages", { content: text.slice(0, 4000), msg_type: 0, msg_id: msgId, msg_seq: this.seq() });
+  /** `quote` shows the reply as answering that message; if QQ rejects the quote the text is sent plainly. */
+  async sendText(conv: string, text: string, msgId?: string, quote?: string) {
+    const body = { content: text.slice(0, 4000), msg_type: 0, msg_id: msgId };
+    if (quote) {
+      const r = await this.call(this.base(conv) + "/messages", { ...body, msg_seq: this.seq(), message_reference: { message_id: quote } });
+      if (r.ok) return r;
+    }
+    return this.call(this.base(conv) + "/messages", { ...body, msg_seq: this.seq() });
   }
   /** fileType 1 = image, 3 = voice (SILK), 4 = file. Uploads, then sends as a rich-media message. */
   async sendMedia(conv: string, fileType: number, dataB64: string, msgId?: string, fileName?: string) {
@@ -68,7 +74,7 @@ export type Inbound = {
 /** Typed names people use for the bot when they do not use a real @; talking about "bot" counts as talking to it. */
 const CALLED = /@\s*(bot|boat|机器人|奶蛙)|(^|[^a-z])(bot|boat)(?![a-z])|^\s*奶蛙/i;
 
-export function parseEvent(type: string, d: any): Inbound | null {
+export function parseEvent(type: string, d: any, aliases: string[] = []): Inbound | null {
   const group = type === "GROUP_AT_MESSAGE_CREATE" || type === "GROUP_MESSAGE_CREATE";
   const c2c = type === "C2C_MESSAGE_CREATE";
   if (!group && !c2c) return null;
@@ -111,7 +117,8 @@ export function parseEvent(type: string, d: any): Inbound | null {
       text += (text ? " " : "") + "[分享卡片 " + [...new Set(title)].join(" / ").slice(0, 200) + (link ? " " + link : "") + "]";
     } catch {}
   }
-  const mentioned = c2c || type === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.is_you) || CALLED.test(text) || !!meta.quote?.bot;
+  const named = aliases.some(a => a && text.toLowerCase().includes(a.toLowerCase()));
+  const mentioned = c2c || type === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.is_you) || CALLED.test(text) || named || !!meta.quote?.bot;
   if (!text && !images.length && !files.length && !meta.video) return null;
   return {
     id: String(d.id), conv: c2c ? "u:" + sender : "g:" + String(d.group_openid),

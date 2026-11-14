@@ -9,6 +9,7 @@ import { QQ, parseEvent } from "./qq.ts";
 import type { Inbound } from "./qq.ts";
 import { buildTools } from "./tools.ts";
 import type { Host } from "./tools.ts";
+import { PLAYBOOKS, PLAYBOOK_LIMIT, TUNABLES, checkTunable } from "./config.ts";
 import { BJ, BUILD, SYD, b64, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 
@@ -31,6 +32,7 @@ export class Hub extends DurableObject<Env> {
   wake = new Map<string, number>();
   firstPending = new Map<string, number>();
   anchorUse = new Map<string, number>();
+  restartWanted = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -50,6 +52,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS ledger(conv TEXT, name TEXT, balance REAL NOT NULL DEFAULT 0, PRIMARY KEY(conv, name));
       CREATE TABLE IF NOT EXISTS ledger_log(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, name TEXT, delta REAL, balance REAL, note TEXT, ts INTEGER);
       CREATE TABLE IF NOT EXISTS img(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, mime TEXT, data BLOB, note TEXT, name TEXT);
+      CREATE TABLE IF NOT EXISTS change(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, by TEXT, kind TEXT, key TEXT, before TEXT, after TEXT, reason TEXT, status TEXT);
       CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, body TEXT, ts INTEGER);
     `);
     const gw = this.get("gw");
@@ -71,6 +74,82 @@ export class Hub extends DurableObject<Env> {
     return out ? Number(out.seq) : 0;
   }
   on(flag: string) { return this.get("flag:" + flag) === "1"; }
+
+  // ---------- the layer the bot may edit by itself ----------
+  /** Test rooms read the main group's values unless they have their own. */
+  scoped(prefix: string, conv: string, key: string) {
+    return this.get(prefix + ":" + conv + ":" + key) ?? (conv.startsWith("t:") ? this.get(prefix + ":" + (this.get("main") || "") + ":" + key) : null);
+  }
+  cfg(conv: string, key: string): number | string {
+    const t = TUNABLES[key], raw = this.scoped("cfg", conv, key);
+    if (!t) return 0;
+    if (raw === null) return t.default;
+    return t.options ? raw : Number(raw);
+  }
+  play(conv: string, slot: string) { return this.scoped("play", conv, slot) || ""; }
+  aliases(conv: string): string[] { try { return JSON.parse(this.scoped("alias", conv, "list") || "[]"); } catch { return []; } }
+  isOwner(askers: { id: string; name: string }[]) {
+    const owners = (this.get("owners") || (this.env as any).OWNERS || "").split(",").map((x: string) => x.trim()).filter(Boolean);
+    return askers.some(a => owners.includes(a.id));
+  }
+  writeChange(conv: string, kind: string, key: string, value: string) {
+    this.set((kind === "config" ? "cfg" : kind === "playbook" ? "play" : "alias") + ":" + conv + ":" + (kind === "alias" ? "list" : key), value);
+  }
+  async selfUpdate(conv: string, askers: { id: string; name: string }[], a: any) {
+    const op = String(a.op || "status"), owner = this.isOwner(askers), by = askers.map(x => x.name || x.id.slice(-4)).join("、") || "（没人，系统任务）";
+    const reason = String(a.reason || "").trim();
+    if (op === "status") {
+      return {
+        can_change_myself: "参数、做法说明、别人叫我的名字。代码逻辑（收发、存储、安全、工具实现）我自己改不了，只能写提议。",
+        settings: Object.fromEntries(Object.entries(TUNABLES).map(([k, t]) => [k, { now: this.cfg(conv, k), default: t.default, what: t.what, ...(t.options ? { options: t.options } : { min: t.min, max: t.max }) }])),
+        playbooks: Object.fromEntries(Object.keys(PLAYBOOKS).map(slot => [slot, { what: PLAYBOOKS[slot], text: this.play(conv, slot) || "（空）" }])),
+        aliases: this.aliases(conv),
+        recent_changes: this.sql.exec("SELECT id,ts,by,kind,key,after,reason,status FROM change WHERE conv=? ORDER BY id DESC LIMIT 12", conv).toArray()
+          .map((r: any) => ({ id: r.id, when: fmtFull(Number(r.ts), BJ), by: r.by, what: r.kind + " " + r.key + " → " + clip(r.after, 80), reason: clip(r.reason, 120), status: r.status })),
+      };
+    }
+    const log = (kind: string, key: string, before: string, after: string, status: string) =>
+      Number(this.sql.exec("INSERT INTO change(conv,ts,by,kind,key,before,after,reason,status) VALUES(?,?,?,?,?,?,?,?,?) RETURNING id", conv, Date.now(), by, kind, key, before, after, reason, status).toArray()[0].id);
+    if (op === "revert" || op === "apply") {
+      if (!owner) return { ok: false, error: "撤销和批准只有群主能做" };
+      const row = this.sql.exec("SELECT * FROM change WHERE id=? AND conv=?", Number(a.id), conv).toArray()[0];
+      if (!row || row.kind === "code") return { ok: false, error: "没有这条可操作的改动" };
+      if (op === "revert" && row.status === "applied") { this.writeChange(conv, String(row.kind), String(row.key), String(row.before)); this.sql.exec("UPDATE change SET status='reverted' WHERE id=?", row.id); return { ok: true, reverted: row.id, restored: clip(row.before, 200) }; }
+      if (op === "apply" && row.status === "proposed") { this.writeChange(conv, String(row.kind), String(row.key), String(row.after)); this.sql.exec("UPDATE change SET status='applied' WHERE id=?", row.id); return { ok: true, applied: row.id, now: clip(row.after, 200) }; }
+      return { ok: false, error: "这条现在的状态是 " + row.status + "，不能这么操作" };
+    }
+    if (reason.length < 8) return { ok: false, error: "要写 reason：问题是什么、查到的原因、为什么这样改" };
+    if (op === "propose_code") {
+      const id = log("code", clip(a.title || "未命名", 80), "", clip(a.text || "", 3000), "proposed");
+      return { ok: true, id, note: "已记成第 " + id + " 号改进提议，等维护代码的人处理；这个问题现在还没修好，别说修好了" };
+    }
+    let kind = "", key = "", before = "", after = "";
+    if (op === "set_config") {
+      const checked = checkTunable(String(a.key), a.value);
+      if (!checked.ok) return { ok: false, error: checked.error };
+      kind = "config"; key = String(a.key); before = String(this.cfg(conv, key)); after = String(checked.value);
+    } else if (op === "set_playbook") {
+      const slot = String(a.slot), text = String(a.text || "").trim();
+      if (!PLAYBOOKS[slot]) return { ok: false, error: "slot 只能是 " + Object.keys(PLAYBOOKS).join(" / ") };
+      if (!text && a.mode !== "replace") return { ok: false, error: "要写 text" };
+      kind = "playbook"; key = slot; before = this.play(conv, slot);
+      after = a.mode === "replace" ? text : (before ? before + "\n" : "") + "· " + text.replace(/^[·\-\s]+/, "");
+      if (after.length > PLAYBOOK_LIMIT) return { ok: false, error: "这段做法说明超过 " + PLAYBOOK_LIMIT + " 字了，先用 mode=replace 合并精简再加" };
+    } else if (op === "add_alias" || op === "remove_alias") {
+      const alias = String(a.alias || "").trim(), list = this.aliases(conv);
+      if (alias.length < 2 || alias.length > 12) return { ok: false, error: "名字要 2 到 12 个字" };
+      kind = "alias"; key = alias; before = JSON.stringify(list);
+      after = JSON.stringify(op === "add_alias" ? [...new Set([...list, alias])].slice(0, 12) : list.filter(x => x !== alias));
+    } else return { ok: false, error: "不认识的 op" };
+    if (before === after) return { ok: true, unchanged: true, now: clip(after, 200) };
+    if (!owner) {
+      const id = log(kind, key, before, after, "proposed");
+      return { ok: false, needs_owner: true, id, note: "改自己的设置要群主点头。已记成第 " + id + " 号提议，群主说同意后用 op=apply 生效；现在还没改" };
+    }
+    this.writeChange(conv, kind, key, after);
+    const id = log(kind, key, before, after, "applied");
+    return { ok: true, id, before: clip(before, 200) || "（空）", now: clip(after, 300), undo: "群主说撤销第 " + id + " 号就能改回去" };
+  }
 
   // ---------- QQ gateway (outbound WebSocket held by this object) ----------
   async connect() {
@@ -131,7 +210,8 @@ export class Hub extends DurableObject<Env> {
 
   // ---------- inbound ----------
   async onEvent(type: string, d: any) {
-    const m = parseEvent(type, d);
+    const conv = type === "C2C_MESSAGE_CREATE" ? "u:" + String(d.author?.user_openid || d.author?.id || "") : "g:" + String(d.group_openid);
+    const m = parseEvent(type, d, this.aliases(conv));
     if (!m) return;
     const allowed = this.get("allow");                    // optional comma list of convs; empty = all
     if (allowed && !allowed.split(",").includes(m.conv)) return;
@@ -145,7 +225,7 @@ export class Hub extends DurableObject<Env> {
     const now = Date.now(), first = this.firstPending.get(m.conv) ?? now;
     this.firstPending.set(m.conv, first);
     // Short pause so a burst of lines is read together; a direct call barely waits.
-    const due = Math.min(now + (m.mentioned ? 350 : 2200), Math.max(first + 6000, now + 200));
+    const due = Math.min(now + Number(this.cfg(m.conv, m.mentioned ? "wait_called_ms" : "wait_chat_ms")), Math.max(first + Number(this.cfg(m.conv, "wait_max_ms")), now + 200));
     const current = this.wake.get(m.conv);
     this.wake.set(m.conv, m.mentioned && current ? Math.min(current, due) : due);
     setTimeout(() => this.poke(m.conv), due - now + 5);
@@ -166,11 +246,11 @@ export class Hub extends DurableObject<Env> {
   }
   used(id?: string) { if (id) this.anchorUse.set(id, (this.anchorUse.get(id) || 0) + 1); if (this.anchorUse.size > 400) this.anchorUse.clear(); }
   /** Sends text now if QQ allows it, otherwise holds it until someone next speaks. */
-  async say(conv: string, text: string, opts: { queue?: boolean } = {}) {
+  async say(conv: string, text: string, opts: { queue?: boolean; quote?: string } = {}) {
     const record = (id: string) => this.insert(conv, { id: "bot:" + id, role: "bot", name: "Bot", text, ts: Date.now() });
     if (conv.startsWith("t:")) { record(crypto.randomUUID()); return true; }
     const id = this.anchor(conv);
-    const r = await this.qq.sendText(conv, text, id).catch(() => null);
+    const r = await this.qq.sendText(conv, text, id, opts.quote).catch(() => null);
     if (r?.ok) { this.used(id); record(String(r.data?.id || crypto.randomUUID())); return true; }
     console.log("send failed", r?.status, JSON.stringify(r?.data || {}).slice(0, 200));
     if (opts.queue !== false) this.sql.exec("INSERT INTO pending(conv,kind,body,ts) VALUES(?,?,?,?)", conv, "text", text, Date.now());
@@ -235,9 +315,17 @@ export class Hub extends DurableObject<Env> {
   }
 
   // ---------- turns ----------
-  host(conv: string): Host {
+  host(conv: string, askers: { id: string; name: string }[] = []): Host {
     const hub = this;
     return {
+      cfg: key => hub.cfg(conv, key),
+      play: slot => hub.play(conv, slot),
+      selfUpdate: args => hub.selfUpdate(conv, askers, args),
+      chatCsv: days => {
+        const rows = hub.sql.exec("SELECT ts,name,role,text FROM msg WHERE conv=? AND ts>? ORDER BY seq", conv, Date.now() - days * 86400000).toArray();
+        const cell = (v: string) => '"' + v.replace(/"/g, '""').replace(/\r?\n/g, " ") + '"';
+        return new TextEncoder().encode("\ufefftime,name,text\n" + rows.map((r: any) => [fmtDate(Number(r.ts), BJ) + " " + new Date(Number(r.ts) + 8 * 3600000).toISOString().slice(11, 19), r.role === "bot" ? "Bot" : String(r.name || "成员"), String(r.text || "")].map(cell).join(",")).join("\n"));
+      },
       env: this.env, now: () => Date.now(),
       sendImage: (bytes, note, mime) => hub.sendImage(conv, bytes, note, mime),
       sendFile: (name, bytes) => hub.sendMediaMessage(conv, 4, b64(bytes), "[你发了一个文件：" + name + "]", name),
@@ -259,13 +347,33 @@ export class Hub extends DurableObject<Env> {
         const img = await hub.imageRef(conv, ref);
         return img ? { name: "image-" + ref.replace(/[^0-9a-z-]/gi, "") + "." + (img.mime.split("/")[1] || "jpg"), bytes: img.bytes } : null;
       },
+      status: () => {
+        const n = (q: string, ...b: any[]) => Number(hub.sql.exec(q, ...b).toArray()[0].n);
+        const real = conv.startsWith("t:") ? hub.get("main") || conv : conv;
+        return {
+          gateway_connected: !!hub.ws,
+          messages: n("SELECT COUNT(*) n FROM msg WHERE conv=?", real),
+          saved_images: n("SELECT COUNT(*) n FROM img WHERE conv=?", real),
+          saved_characters: hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", real).toArray().map((r: any) => String(r.name)),
+          schedules: hub.sql.exec("SELECT spec,task FROM sched WHERE conv=? AND active=1 ORDER BY next", real).toArray().map((r: any) => {
+            const spec = JSON.parse(String(r.spec));
+            return { when: spec.type === "daily" ? "每天 " + spec.time + "（" + (spec.tz === BJ ? "北京" : "悉尼") + "时间）" : "一次性 " + fmtFull(Number(spec.at), BJ) + " 北京时间", task: clip(r.task, 80) };
+          }),
+          logins: hub.sql.exec("SELECT k FROM kv WHERE k LIKE 'cookie:%'").toArray().map((r: any) => ({ bili: "B 站", xhs: "小红书", zhihu: "知乎", douyin: "抖音", x: "X" } as Record<string, string>)[String(r.k).slice(7)] || String(r.k).slice(7)),
+          memory_chars: (hub.get("memory:" + real) || "").length,
+          notes_today: n("SELECT COUNT(*) n FROM note WHERE conv=?", real),
+          last_24h: hub.sql.exec("SELECT kind, COUNT(*) c, AVG(ms) m FROM turn WHERE conv=? AND ts>? GROUP BY kind", real, Date.now() - 86400000).toArray()
+            .map((r: any) => ({ kind: ({ chat: "没人叫我的闲聊", called: "被叫到的回复", task: "定时或交办任务", stale: "来不及接的话" } as Record<string, string>)[String(r.kind)] || String(r.kind), turns: Number(r.c), avg_seconds: Math.round(Number(r.m) / 100) / 10 })),
+          last_memory_consolidation: hub.get("reflect:day"),
+        };
+      },
       savedNames: () => {
         const of = (c: string) => hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", c).toArray().map((r: any) => String(r.name));
         return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(hub.get("main") || "") : [])])];
       },
       stats: days => hub.sql.exec(
-        "SELECT date(ts/1000 + 28800, 'unixepoch') d, COALESCE(NULLIF(name,''), '成员') n, COUNT(*) c FROM msg WHERE conv=? AND role='user' AND ts>? GROUP BY d, n ORDER BY d DESC, c DESC",
-        conv, Date.now() - days * 86400000).toArray().map((r: any) => ({ date: String(r.d), name: String(r.n), count: Number(r.c) })),
+        "SELECT date(ts/1000 + 28800, 'unixepoch') d, COALESCE(NULLIF(name,''), '成员') n, COUNT(*) c, SUM(length(text)) ch FROM msg WHERE conv=? AND role='user' AND ts>? GROUP BY d, n ORDER BY d DESC, c DESC",
+        conv, Date.now() - days * 86400000).toArray().map((r: any) => ({ date: String(r.d), name: String(r.n), count: Number(r.c), chars: Number(r.ch) })),
       recentLines: n => hub.recent(conv, n).map(r => (r.role === "bot" ? "Bot" : displayName(r)) + "：" + clip(r.text, 300)).join("\n"),
       memory: () => hub.get("memory:" + conv) || "",
       quota: async (kind, limit) => {
@@ -322,7 +430,7 @@ export class Hub extends DurableObject<Env> {
    */
   window(conv: string) {
     const since = Number(this.get("reflect:seq:" + conv) || 0);
-    const rows: Row[] = this.sql.exec("SELECT * FROM (SELECT * FROM msg WHERE conv=? AND seq>? ORDER BY seq DESC LIMIT 900) ORDER BY seq", conv, since - 150).toArray().map(this.rowOf);
+    const rows: Row[] = this.sql.exec("SELECT * FROM (SELECT * FROM msg WHERE conv=? AND seq>? ORDER BY seq DESC LIMIT 900) ORDER BY seq", conv, since - Number(this.cfg(conv, "history_carry"))).toArray().map(this.rowOf);
     if (rows.length <= 200) return rows;
     const cut = rows.findIndex(r => r.seq % 100 === 0);
     return cut > 0 && cut <= 100 ? rows.slice(cut) : rows;
@@ -350,10 +458,10 @@ export class Hub extends DurableObject<Env> {
       conv, Date.now(), kind, s.ms, s.firstMs, s.calls, s.tools.join(","), s.inTok, s.outTok, s.cached, res.silent ? "" : clip(res.replies.join(" ‖ "), 300), s.error || null);
     this.sql.exec("DELETE FROM turn WHERE id < (SELECT MAX(id) FROM turn) - 3000");
   }
-  deps(conv: string, interim: boolean) {
+  deps(conv: string, interim: boolean, askers: { id: string; name: string }[] = []) {
     return {
       chat: (body: any, effort: any, timeout?: number) => dsChat(this.env, body, effort, timeout),
-      tools: buildTools(this.host(conv)),
+      tools: buildTools(this.host(conv, askers)),
       ...(interim ? { interim: async (text: string) => { await this.say(conv, text, { queue: false }); } } : {}),
     };
   }
@@ -369,18 +477,27 @@ export class Hub extends DurableObject<Env> {
       top = rows[rows.length - 1].seq;
       const mentioned = fresh.some(r => r.mentioned);
       const images = await this.loadImages(fresh);
+      const askers = fresh.filter(r => r.mentioned).map(r => ({ id: String(r.sender || ""), name: displayName(r) }));
       const res = await runTurn(
-        { rows, cursor, mentioned, memory: this.get("memory:" + conv) || "", notes: this.notes(conv), now: Date.now(), images },
-        this.deps(conv, true),
+        {
+          rows, cursor, mentioned, memory: this.get("memory:" + conv) || "", notes: this.notes(conv), now: Date.now(), images,
+          rules: this.play(conv, "persona"), askers: askers.map(a => a.name), talkative: String(this.cfg(conv, "talkative")), splitMax: Number(this.cfg(conv, "reply_split_max")),
+        },
+        this.deps(conv, true, askers),
       );
       this.set("cursor:" + conv, String(top));
       // A casual remark that the chat has already moved past is dropped; the next turn sees everything.
       const newer = Number(this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, top).toArray()[0].n);
       const stale = !mentioned && (newer >= 3 || (newer >= 1 && res.stats.ms > 9000));
       if (!res.silent && !stale) {
+        // When one person asked and the chat has moved on since, quote their message so it is clear who is being answered.
+        const asked = fresh.filter(r => r.mentioned);
+        const one = new Set(asked.map(r => r.sender)).size === 1 ? asked[asked.length - 1] : null;
+        const movedOn = one ? Number(this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, one.seq).toArray()[0].n) > 0 : false;
+        const quote = one && movedOn && Date.now() - one.ts < REPLY_WINDOW_MS ? one.id : undefined;
         for (let i = 0; i < res.replies.length; i++) {
           if (i) await sleep(Math.min(1400, 350 + res.replies[i].length * 35));
-          await this.say(conv, res.replies[i], { queue: mentioned });
+          await this.say(conv, res.replies[i], { queue: mentioned, quote: i === 0 ? quote : undefined });
         }
       }
       this.logTurn(conv, stale ? "stale" : mentioned ? "called" : "chat", res);
@@ -392,6 +509,7 @@ export class Hub extends DurableObject<Env> {
       return null;
     } finally {
       this.running.delete(conv);
+      this.maybeRestart();
       const cursor = Number(this.get("cursor:" + conv) || 0);
       const more = this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0].n;
       if (Number(more) && !this.wake.has(conv)) { this.wake.set(conv, Date.now() + 600); setTimeout(() => this.poke(conv), 610); }
@@ -417,13 +535,20 @@ export class Hub extends DurableObject<Env> {
     try {
       const rows = this.window(conv), top = rows.length ? rows[rows.length - 1].seq : 0;
       const res = await runTurn(
-        { rows, cursor: top, mentioned: false, memory: this.get("memory:" + conv) || "", notes: this.notes(conv), now: Date.now(), task },
+        { rows, cursor: top, mentioned: false, memory: this.get("memory:" + conv) || "", notes: this.notes(conv), now: Date.now(), task, rules: this.play(conv, "persona") },
         this.deps(conv, false),
       );
       if (!res.silent) for (const reply of res.replies) await this.say(conv, reply);
       this.logTurn(conv, "task", res);
       return true;
-    } finally { this.running.delete(conv); }
+    } finally { this.running.delete(conv); this.maybeRestart(); }
+  }
+  /** A new build waits for the turns in flight to finish, so nobody's answer is cut off. */
+  maybeRestart() {
+    if (!this.restartWanted || this.running.size) return;
+    const why = this.restartWanted; this.restartWanted = "";
+    this.closeWs();
+    this.ctx.storage.setAlarm(Date.now() + 1500).then(() => this.ctx.abort("restart for " + why));
   }
 
   // ---------- nightly memory ----------
@@ -473,12 +598,12 @@ export class Hub extends DurableObject<Env> {
       }
 
       // Anything a lost timer left unanswered.
-      for (const c of this.sql.exec("SELECT DISTINCT conv FROM msg WHERE role='user' AND ts>? AND ts<?", now - 240000, now - 12000).toArray()) {
+      for (const c of this.sql.exec("SELECT DISTINCT conv FROM msg WHERE role='user' AND ts>? AND ts<?", now - 1800000, now - 12000).toArray()) {
         const conv = String(c.conv);
         if (this.running.has(conv) || this.wake.has(conv)) continue;
         const cursor = Number(this.get("cursor:" + conv) || 0);
-        if (Number(this.sql.exec("SELECT COUNT(*) n FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0].n))
-          this.ctx.waitUntil(this.runConv(conv).catch(() => {}));
+        const waiting = this.sql.exec("SELECT COUNT(*) n, SUM(mentioned) m, MAX(ts) t FROM msg WHERE conv=? AND seq>? AND role='user'", conv, cursor).toArray()[0];
+        if (Number(waiting.n) && (Number(waiting.m) > 0 || now - Number(waiting.t) < 240000)) this.ctx.waitUntil(this.runConv(conv).catch(() => {}));
       }
     } finally {
       await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
@@ -500,9 +625,9 @@ export class Hub extends DurableObject<Env> {
       // A deploy does not replace an object that is holding a live connection, so it steps aside itself.
       const want = url.searchParams.get("build");
       if (path === "/admin/restart" || (want && want !== BUILD)) {
-        this.closeWs();
-        await this.ctx.storage.setAlarm(Date.now() + 1500);
-        this.ctx.abort("restart for build " + (want || "manual"));
+        this.restartWanted = "build " + (want || "manual");
+        if (this.running.size) return json({ ok: true, build: BUILD, restart: "after " + this.running.size + " running turn(s)" });
+        this.maybeRestart();
       }
       await this.tick();
       return json({ ok: true, build: BUILD });
@@ -548,7 +673,7 @@ export class Hub extends DurableObject<Env> {
           this.set("cursor:" + test, String(top || 0));
         }
       }
-      this.insert(test, { id: "dry:" + crypto.randomUUID(), role: "user", sender: "tester", name: body.name || "测试员", text: String(body.text || ""), ts: Date.now(), mentioned: body.mentioned !== false, meta: body.meta });
+      this.insert(test, { id: "dry:" + crypto.randomUUID(), role: "user", sender: body.sender || "tester", name: body.name || "测试员", text: String(body.text || ""), ts: Date.now(), mentioned: body.mentioned !== false, meta: body.meta });
       const res = await this.runConv(test);
       return json(res || { error: "no turn" });
     }
@@ -568,6 +693,7 @@ export class Hub extends DurableObject<Env> {
       for (const [name, amount] of Object.entries(body.set || {})) await h.ledger("set", name, Number(amount), "初始化");
       return json(await h.ledger("list"));
     }
+    if (path === "/admin/changes") return json(this.sql.exec("SELECT * FROM change ORDER BY id DESC LIMIT ?", Number(url.searchParams.get("n") || 30)).toArray());
     if (path === "/admin/img") {
       if (body.delete) { this.sql.exec("DELETE FROM img WHERE id=?", Number(body.delete)); return json({ ok: true }); }
       if (body.name && body.url) {

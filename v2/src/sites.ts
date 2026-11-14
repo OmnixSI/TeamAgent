@@ -216,7 +216,7 @@ async function biliTranscript(net: Net, query: string, cid: number, maxMinutes: 
   return out.join("\n");
 }
 
-export async function biliVideo(net: Net, input: string, wantTranscript = true) {
+export async function biliVideo(net: Net, input: string, wantTranscript = true, maxMinutes = 60) {
   const ref = await biliResolve(input);
   if (!ref) throw new Error("没认出这是哪个 B 站视频，给个链接或 BV 号");
   const v = await biliApi(net, "/x/web-interface/view?" + ref.query);
@@ -246,9 +246,9 @@ export async function biliVideo(net: Net, input: string, wantTranscript = true) 
   } catch {}
   if (!info.transcript) {
     try {
-      const minutes = Math.min(Math.ceil((part.duration || v.duration) / 60), 60);
-      info.transcript = clip(await biliTranscript(net, q, part.cid, 60), 40000);
-      info.transcript_source = "音轨转写" + ((part.duration || v.duration) > 3600 ? "（只转了前 60 分钟）" : "（共 " + minutes + " 分钟）");
+      const minutes = Math.min(Math.ceil((part.duration || v.duration) / 60), maxMinutes);
+      info.transcript = clip(await biliTranscript(net, q, part.cid, maxMinutes), 40000);
+      info.transcript_source = "音轨转写" + ((part.duration || v.duration) > maxMinutes * 60 ? "（只转了前 " + maxMinutes + " 分钟）" : "（共 " + minutes + " 分钟）");
     } catch (e: any) { info.transcript_error = clip(e?.message || String(e), 160); }
   }
   return info;

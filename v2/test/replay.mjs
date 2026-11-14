@@ -16,7 +16,7 @@ function host(now, upto) {
   const notes = [];
   return {
     env, now: () => now, notes,
-    sendImage: async () => ({ ok: true, id: 'g1' }), sendFile: async () => ({ ok: true }), imageRef: async () => null, nameImage: async () => true, fileRef: async () => null, recentLines: () => '', savedNames: () => [], stats: () => [], memory: () => memory,
+    sendImage: async () => ({ ok: true, id: 'g1' }), sendFile: async () => ({ ok: true }), imageRef: async () => null, nameImage: async () => true, fileRef: async () => null, recentLines: () => '', savedNames: () => [], cfg: k => ({ image_daily: 40, python_daily: 40, voice_daily: 60, image_quality: 'medium', transcribe_max_minutes: 60 })[k], play: () => '', selfUpdate: async () => ({}), chatCsv: () => new Uint8Array(), status: () => ({ gateway_connected: true, messages: 0, saved_images: 0, saved_characters: [], schedules: [], logins: [], memory_chars: 0, notes_today: 0, last_24h: [], last_memory_consolidation: null }), stats: () => [], memory: () => memory,
     quota: async () => true,
     remember: async t => { notes.push(t); console.log("     [remember]", t); },
     forget: async () => 0,

@@ -23,6 +23,10 @@ export type TurnInput = {
   now: number;
   task?: string;            // set when a schedule fires instead of a chat message
   images?: { seq: number; index: number; dataUrl: string }[];
+  rules?: string;           // self-added persona playbook
+  askers?: string[];        // who addressed the bot in this batch
+  talkative?: string;       // quiet | normal | chatty
+  splitMax?: number;
 };
 export type TurnDeps = {
   chat(body: { messages: any[]; tools?: any[]; max_tokens?: number }, effort: Effort, timeoutMs?: number): Promise<ChatResult>;
@@ -53,15 +57,15 @@ export function renderLine(r: Row, captions = true) {
   return "[" + fmtTime(r.ts) + "] " + displayName(r) + (r.mentioned ? "（@你）" : "") + "：" + clip(body.trim(), 1500);
 }
 
-export function systemPrompt(memory: string, notes: string[]) {
-  return PERSONA +
+export function systemPrompt(memory: string, notes: string[], rules = "") {
+  return PERSONA + (rules.trim() ? "\n\n【后来加的规矩】（你自己或群主后来补的，和上面冲突时以这里为准）\n" + rules.trim() : "") +
     "\n\n【你记得的事】（长期记忆，每晚整理一次）\n" + (memory.trim() || "（还没有）") +
     (notes.length ? "\n\n【最近刚记下的】\n" + notes.map(n => "· " + n).join("\n") : "");
 }
 
 /** History as real chat turns: people's lines are user content, your own past lines are assistant content. */
 export function buildMessages(input: TurnInput) {
-  const messages: any[] = [{ role: "system", content: systemPrompt(input.memory, input.notes) }];
+  const messages: any[] = [{ role: "system", content: systemPrompt(input.memory, input.notes, input.rules) }];
   const rows = input.rows.slice();
   while (rows.length && rows[0].role === "bot") rows.shift();
   const fresh = new Set((input.images || []).map(im => im.seq));
@@ -85,9 +89,13 @@ export function buildMessages(input: TurnInput) {
   if (input.task) {
     pending.push("\n[" + when + "定时任务触发，不是群友发言：" + input.task + "\n把要发到群里的话直接写出来；如果确实没什么可发，只输出 PASS。]");
   } else {
+    const who = [...new Set(input.askers || [])];
+    const idle = input.talkative === "quiet" ? "没人叫你。除非有非说不可的新信息，否则只输出 PASS。"
+      : input.talkative === "chatty" ? "没人叫你。有能接的话、能抖的机灵就接一句，实在没什么可说才输出 PASS。"
+      : "没人叫你。值得接就接一句，不值得就只输出 PASS。";
     pending.push("\n[" + when + (input.mentioned
-      ? "有人在叫你或对你说话，必须回应，不能 PASS。"
-      : "没人叫你。值得接就接一句，不值得就只输出 PASS。") + "]");
+      ? "有人在叫你或对你说话，必须回应，不能 PASS。" + (who.length > 1 ? "这批新消息里找你的有 " + who.join("、") + "，每个人的事都要办、都要回应，别只办其中一个。" : "")
+      : idle) + "]");
   }
   const text = pending.join("\n");
   if (input.images?.length) {
@@ -112,6 +120,8 @@ function tidy(content: unknown) {
   let text = String(content || "");
   // Tool-call markup occasionally leaks into the text channel; never show it.
   text = text.split("\n").filter(l => !/DSML|<｜|<\|tool|function_calls>/.test(l)).join("\n");
+  // Lines like "[你发了一张图 g12：…]" are the log's record of media you sent, never something to say.
+  text = text.split("\n").filter(l => !/^\s*\[你发了(一张图|一个文件|一条语音)/.test(l)).join("\n");
   text = text.replace(/^\s*(\[\d\d:\d\d\]\s*)?(bot|我|奶蛙)\s*[:：]\s*/i, "");
   return text.trim();
 }
@@ -202,5 +212,5 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   stats.ms = Date.now() - started;
   if (isPass(final)) return { replies: [], silent: true, stats };
   const cleaned = cleanReply(final);
-  return { replies: careful ? [cleaned] : splitReply(cleaned).slice(0, 3), silent: false, stats };
+  return { replies: careful ? [cleaned] : splitReply(cleaned).slice(0, input.splitMax || 3), silent: false, stats };
 }
