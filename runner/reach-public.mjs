@@ -10,6 +10,7 @@
  * redirects, one short-lived process per request, no cookies, no media download
  * and no write action. The caller never supplies an executable or argv.
  */
+import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {CHANNELS, validTarget} from '../src/reach-contract.mjs';
 
@@ -587,7 +588,10 @@ export async function runPublicRead(req, {fetchImpl = fetch, timeoutMs = TIMEOUT
 
 /* ------------------------------- CLI ------------------------------- */
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]); } catch { return false; }
+})();
 if (isMain) {
   const [channel, action, target] = process.argv.slice(2);
   const result = await runPublicRead({channel, action, target});
