@@ -26,6 +26,7 @@ export function joinResults(results, title) {
   calls.join.push(results);
   return (title ? title + "\\n" : "") + results.map(r => r.text).join("\\n");
 }
+export async function composeWithNote(_ctx, results, note) { return note + "\\n" + results.map(r => r.text).join("\\n"); }
 `;
 
 // The stub captures this object at module evaluation, so it must exist before import.
