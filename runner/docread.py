@@ -33,9 +33,12 @@ MAX_XML_BYTES = 32 * 1024 * 1024
 MAX_XML_TOTAL_BYTES = 48 * 1024 * 1024
 MAX_XML_ELEMENTS = 2_000_000
 MAX_XML_TAG_BYTES = 4 * 1024 * 1024
+MAX_RELS_BYTES = 1024 * 1024
 MAX_WORKSHEET_COLUMNS = 16_384
 MAX_WORKSHEET_OUT_OF_ROW = 100_000
 MAX_WORKSHEET_ROW_ELEMENTS = 100_000
+MAX_SHARED_STRING_ELEMENTS = 100_000
+MAX_SHARED_STRING_OUTSIDE = 100_000
 MAX_SHEET_ROWS = 5000
 MAX_OUTPUT_COLUMNS = 200
 MAX_COMPRESSION_RATIO = 100
@@ -96,29 +99,24 @@ def resolve_input(path, root=None):
     return resolved
 
 
-def _is_worksheet_xml(name):
-    lowered = name.lower()
-    return lowered.startswith("xl/worksheets/") and lowered.endswith(".xml")
-
-
-def _is_shared_strings_xml(name):
-    return name.lower() == "xl/sharedstrings.xml"
-
-
 def _looks_like_xml(head):
-    """True when a member starts with an XML declaration/element after its BOM."""
-    for bom in (codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+    """True when a member head decodes to markup, including UTF-16/32 without a BOM."""
+    for bom in (
+        codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE,
+        codecs.BOM_UTF8, codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE,
+    ):
         if head.startswith(bom):
             head = head[len(bom):]
             break
-    return head.lstrip(b" \t\r\n").startswith(b"<")
+    # UTF-16/32 keeps a NUL beside every ASCII markup byte; lxml still parses it.
+    return head.replace(b"\x00", b"").lstrip(b" \t\r\n").startswith(b"<")
 
 
 def _member_is_xml(archive, info):
     if info.is_dir() or not info.file_size:
         return False
     try:
-        with archive.open(info.filename) as source:
+        with archive.open(info) as source:
             head = source.read(64)
     except Exception as error:
         raise DocReadError(
@@ -128,30 +126,75 @@ def _member_is_xml(archive, info):
     return _looks_like_xml(head)
 
 
+def _relationships(archive, infos, extension):
+    """Part names a real .xlsx/.xlsm workbook declares as worksheet/sharedStrings.
+
+    A docx/pptx member that merely sits under xl/worksheets/ is not exempt; only the
+    parts the xlsx readers stream are. Chartsheets are not worksheets.
+    """
+    if extension not in {".xlsx", ".xlsm"}:
+        return set(), set()
+    rels_name = "xl/_rels/workbook.xml.rels"
+    rels_infos = [info for info in infos if info.filename == rels_name]
+    if not rels_infos or any(info.file_size > MAX_RELS_BYTES for info in rels_infos):
+        return set(), set()
+    rels_info = rels_infos[-1]
+    data = archive.read(rels_info)
+    if b"<!doctype" in data.lower() or b"<!entity" in data.lower():
+        return set(), set()
+    import posixpath
+    import xml.etree.ElementTree as ElementTree
+
+    try:
+        root = ElementTree.fromstring(data)
+    except Exception:
+        return set(), set()
+    worksheets, shared = set(), set()
+    for relation in root:
+        if (relation.get("TargetMode") or "").lower() == "external":
+            continue
+        kind = (relation.get("Type") or "").rstrip("/").lower()
+        target = relation.get("Target") or ""
+        if not target:
+            continue
+        if target.startswith("/"):
+            part = target.lstrip("/")
+        elif target.startswith("xl/"):
+            part = posixpath.normpath(target)
+        else:
+            part = posixpath.normpath(posixpath.join("xl", target))
+        if kind.endswith("/worksheet"):
+            worksheets.add(part)
+        elif kind.endswith("/sharedstrings"):
+            shared.add(part)
+    return worksheets, shared
+
+
 def _checked_chunks(source, name):
     """Yield 64 KiB chunks, refusing a single tag or text node over 4 MiB.
 
     Expat collects a whole start tag (including its attribute dict) before it calls
     the start handler, so a 28 MiB tag with millions of attributes can cost hundreds
-    of MB before any element is counted. The longest run since the previous `>`
-    bounds both that tag and an unterminated text node.
+    of MB before any element is counted. Raw `<` is illegal in text and attribute
+    values, so the span between two `<` bounds both a tag and a text node; measuring
+    `>` instead lets an attribute value of ">" reset the counter.
     """
-    since_gt = 0
+    since_lt = 0
     while True:
         chunk = source.read(65536)
         if not chunk:
             return
-        cut = chunk.rfind(b">")
+        cut = chunk.rfind(b"<")
         if cut >= 0:
-            if since_gt + cut > MAX_XML_TAG_BYTES:
+            if since_lt + cut > MAX_XML_TAG_BYTES:
                 raise DocReadError(
                     "too_large",
                     f"{name} 单个标签或文本节点超过 {MAX_XML_TAG_BYTES // (1024 * 1024)} MiB，不解压",
                 )
-            since_gt = len(chunk) - cut - 1
+            since_lt = len(chunk) - cut - 1
         else:
-            since_gt += len(chunk)
-            if since_gt > MAX_XML_TAG_BYTES:
+            since_lt += len(chunk)
+            if since_lt > MAX_XML_TAG_BYTES:
                 raise DocReadError(
                     "too_large",
                     f"{name} 单个标签或文本节点超过 {MAX_XML_TAG_BYTES // (1024 * 1024)} MiB，不解压",
@@ -159,33 +202,51 @@ def _checked_chunks(source, name):
         yield chunk
 
 
-def _check_xml_tokens(archive, name):
-    with archive.open(name) as source:
-        for _chunk in _checked_chunks(source, name):
-            pass
-
-
-def _scan_xml(archive, name, worksheet=False, prior=0):
+def _scan_xml(archive, info, worksheet=False, shared_strings=False, prior=0):
     """Count XML elements with Expat, without building a tree.
 
     python-docx/openpyxl keep ~260-300 bytes per element, so a byte cap alone misses
     small tags. `prior` is the element count already spent by earlier XML members, so
     the 2M budget is global for tree-built parts. Worksheets are streamed instead:
     they are exempt from that budget, skip past row 5001 (the output cap), and refuse
-    any single row with more than 100k elements. `sharedStrings` is not scanned here.
+    any single row with more than 100k elements. sharedStrings is also streamed, but
+    openpyxl only clears `<si>`; garbage outside `si` stays in the tree, so both the
+    si-external count and each si's element count are capped at 100k.
     """
     import xml.parsers.expat as expat
 
+    name = info.filename
     parser = expat.ParserCreate()
-    elements = rows = cells = outside = row_elements = 0
-    in_row = False
+    elements = rows = cells = outside = row_elements = si_elements = 0
+    in_row = in_si = False
 
     class _Done(Exception):
         pass
 
     def start(tag, _attrs):
-        nonlocal elements, rows, cells, outside, row_elements, in_row
+        nonlocal elements, rows, cells, outside, row_elements, si_elements, in_row, in_si
         elements += 1
+        local = tag.rsplit(":", 1)[-1]
+        if shared_strings:
+            if local == "si" and not in_si:
+                in_si = True
+                si_elements = 0
+                return
+            if in_si:
+                si_elements += 1
+                if si_elements > MAX_SHARED_STRING_ELEMENTS:
+                    raise DocReadError(
+                        "too_large",
+                        f"{name} 单个 si 内元素超过 {MAX_SHARED_STRING_ELEMENTS} 个，不解压",
+                    )
+            else:
+                outside += 1
+                if outside > MAX_SHARED_STRING_OUTSIDE:
+                    raise DocReadError(
+                        "too_large",
+                        f"{name} si 外元素超过 {MAX_SHARED_STRING_OUTSIDE} 个，不解压",
+                    )
+            return
         if not worksheet:
             if prior + elements > MAX_XML_ELEMENTS:
                 raise DocReadError(
@@ -193,7 +254,6 @@ def _scan_xml(archive, name, worksheet=False, prior=0):
                     f"XML 元素总数超过 {MAX_XML_ELEMENTS} 个，不解压",
                 )
             return
-        local = tag.rsplit(":", 1)[-1]
         if local == "row":
             if not in_row:
                 rows += 1
@@ -225,9 +285,12 @@ def _scan_xml(archive, name, worksheet=False, prior=0):
                 )
 
     def end(tag):
-        nonlocal in_row
-        if worksheet and tag.rsplit(":", 1)[-1] == "row":
+        nonlocal in_row, in_si
+        local = tag.rsplit(":", 1)[-1]
+        if worksheet and local == "row":
             in_row = False
+        elif shared_strings and local == "si":
+            in_si = False
 
     def doctype(*_args):
         raise DocReadError("corrupted", f"{name} 含 DTD，不解压")
@@ -236,7 +299,7 @@ def _scan_xml(archive, name, worksheet=False, prior=0):
     parser.EndElementHandler = end
     parser.StartDoctypeDeclHandler = doctype
     try:
-        with archive.open(name) as source:
+        with archive.open(info) as source:
             for chunk in _checked_chunks(source, name):
                 parser.Parse(chunk, False)
             parser.Parse(b"", True)
@@ -252,13 +315,14 @@ def _scan_xml(archive, name, worksheet=False, prior=0):
 def _guard_ooxml(path):
     """Refuse an OOXML package before python-docx/openpyxl/python-pptx inflate it.
 
-    XML-ness is sniffed from each member's head (BOM + whitespace, then `<`), not its
-    suffix, so a renamed part cannot skip the caps. Size caps catch large parts; an
-    Expat pre-scan counts elements for small-tag floods. Worksheets and sharedStrings
-    are exempt from the 2M budget because both readers stream them; worksheets skip
-    after row 5001 and cap a single row at 100k elements, while sharedStrings keeps
-    only the 32 MiB per-file cap (plus the 4 MiB token check).
+    XML-ness is sniffed from each member's head (NULs/BOM/whitespace, then `<`), not
+    its suffix. Only parts an .xlsx/.xlsm workbook declares through workbook.xml.rels
+    as worksheet/sharedStrings are streamed; every other part (including docx/pptx
+    members under xl/worksheets/) gets the 32 MiB cap and the 2M element budget.
+    Worksheets skip after row 5001 and cap a single row at 100k elements;
+    sharedStrings caps si-outside and per-si elements at 100k each.
     """
+    path = pathlib.Path(path)
     try:
         archive = zipfile.ZipFile(path)
     except zipfile.BadZipFile:
@@ -271,12 +335,13 @@ def _guard_ooxml(path):
                 "too_large",
                 f"压缩包解压后 {total} 字节，超过上限 {MAX_ARCHIVE_BYTES} 字节（200 MiB），不解压",
             )
+        worksheets, shared_strings = _relationships(archive, infos, path.suffix.lower())
         members = [(info, _member_is_xml(archive, info)) for info in infos]
         xml_total = 0
         for info, is_xml in members:
             name = info.filename
-            is_worksheet = _is_worksheet_xml(name)
-            is_shared = _is_shared_strings_xml(name)
+            is_worksheet = name in worksheets
+            is_shared = name in shared_strings
             if is_xml:
                 # Worksheets are streamed with no per-file XML cap; sharedStrings is
                 # streamed under only its 32 MiB cap. Neither counts toward the 48 MiB
@@ -312,13 +377,13 @@ def _guard_ooxml(path):
         for info, is_xml in members:
             if not is_xml or not info.file_size:
                 continue
-            if _is_worksheet_xml(info.filename):
-                _scan_xml(archive, info.filename, worksheet=True)
-            elif _is_shared_strings_xml(info.filename):
-                _check_xml_tokens(archive, info.filename)
+            if info.filename in worksheets:
+                _scan_xml(archive, info, worksheet=True)
+            elif info.filename in shared_strings:
+                _scan_xml(archive, info, shared_strings=True)
             else:
                 elements_total += _scan_xml(
-                    archive, info.filename, prior=elements_total,
+                    archive, info, prior=elements_total,
                 )
     return total
 
