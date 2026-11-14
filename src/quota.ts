@@ -123,11 +123,11 @@ export function sydneyMonthStart(at = Date.now()): number {
 function money(value: number, currency: string): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "——";
-  const code = String(currency || "CNY").toUpperCase();
+  const code = String(currency || "").toUpperCase();
   const digits = Math.abs(amount) < 0.01 && amount !== 0 ? 4 : 2;
   if (code === "CNY") return "¥" + amount.toFixed(digits);
   if (code === "USD") return "$" + amount.toFixed(digits);
-  return amount.toFixed(digits) + " " + code;
+  return amount.toFixed(digits) + "（币种未知）";
 }
 
 function usdMicro(value: number): string {
@@ -193,7 +193,7 @@ function parseBalance(value: any): DeepSeekBalance | null {
       at,
       available:
         raw.available === true ? true : raw.available === false ? false : null,
-      currency: String(raw.currency || "CNY").toUpperCase(),
+      currency: String(raw.currency || "UNKNOWN").toUpperCase(),
       total,
       granted: Number.isFinite(granted) ? granted : 0,
       toppedUp: Number.isFinite(toppedUp) ? toppedUp : 0,
@@ -293,7 +293,7 @@ export async function readDeepSeekBalance(
     at,
     available:
       body?.is_available === true ? true : body?.is_available === false ? false : null,
-    currency: String(info?.currency || "CNY").toUpperCase(),
+    currency: String(info?.currency || "UNKNOWN").toUpperCase(),
     total,
     granted: number(info?.granted_balance),
     toppedUp: number(info?.topped_up_balance),

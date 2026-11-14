@@ -328,6 +328,19 @@ test("missing optional balance fields are tolerated without crashing", async () 
   }
 });
 
+test("a missing currency is never turned into an invented CNY amount", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const stub = stubFetch({ is_available: true, balance_infos: [{ total_balance: "5.00" }] });
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /5\.00（币种未知）/);
+    assert.equal(result.text.includes("¥5.00"), false);
+    assert.equal(result.band, "unknown");
+  } finally {
+    stub.restore();
+  }
+});
+
 test("401, 402 and 429 degrade to a plain console-check answer, never a throw", async () => {
   for (const [status, phrase] of [[401, "密钥或权限"], [402, "欠费"], [429, "太频繁"]]) {
     const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
