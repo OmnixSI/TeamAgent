@@ -122,16 +122,21 @@ async function readUrl(net: Net, url: string) {
   throw new Error("这个页面读不出来（可能要登录、被拦截或内容是动态加载的）");
 }
 
+/** Tokens to try, the long-lived one first; the other covers what the first is not allowed to read. */
+export const githubTokens = (env: Env) => [env.GITHUB_TOKEN_2, env.GITHUB_TOKEN].filter(Boolean) as string[];
+
 async function gh(env: Env, path: string, accept = "application/vnd.github+json") {
-  const r = await fetch("https://api.github.com" + path, {
-    headers: {
-      Accept: accept, "User-Agent": "teamagent", "X-GitHub-Api-Version": "2022-11-28",
-      ...(env.GITHUB_TOKEN ? { Authorization: "Bearer " + env.GITHUB_TOKEN } : {}),
-    },
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!r.ok) throw new Error(r.status === 404 ? "仓库或路径不存在（也可能没有访问权限）" : r.status === 401 ? "GitHub 凭据失效了" : "GitHub 返回 " + r.status);
-  return r.json() as Promise<any>;
+  let status = 0;
+  for (const token of [...githubTokens(env), ""]) {
+    const r = await fetch("https://api.github.com" + path, {
+      headers: { Accept: accept, "User-Agent": "teamagent", "X-GitHub-Api-Version": "2022-11-28", ...(token ? { Authorization: "Bearer " + token } : {}) },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (r.ok) return r.json() as Promise<any>;
+    status = r.status;
+    if (![401, 403, 404].includes(status)) break;
+  }
+  throw new Error(status === 404 ? "仓库或路径不存在（也可能没有访问权限）" : status === 401 ? "GitHub 凭据失效了" : status === 403 ? "GitHub 令牌没有读这个内容的权限" : "GitHub 返回 " + status);
 }
 const SECRET_PATH = /(^|\/)(\.env[^/]*|[^/]*secret[^/]*|[^/]*credential[^/]*|id_rsa[^/]*|[^/]*\.pem|[^/]*\.key)$/i;
 

@@ -8,6 +8,8 @@ export type Env = {
   QQ_APP_SECRET: string;
   ADMIN_TOKEN: string;
   GITHUB_TOKEN?: string;
+  /** A second token, tried first; lets a new token be phased in while the old one still covers what it lacks. */
+  GITHUB_TOKEN_2?: string;
   GITHUB_ORG?: string;
   IMAGE_MODEL?: string;
   CHAT_MODEL?: string;
