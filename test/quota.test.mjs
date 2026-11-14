@@ -209,6 +209,27 @@ test("non-owner gets only one coarse band word, never numbers", async () => {
   }
 });
 
+test("an unavailable account and an omitted is_available are reported without inventing availability", async () => {
+  const body = { balance_infos: [{ currency: "CNY", total_balance: "5.00", granted_balance: "0", topped_up_balance: "5.00" }] };
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const off = stubFetch({ ...body, is_available: false });
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /DeepSeek 余额：账户当前不可用/);
+  } finally {
+    off.restore();
+  }
+  const e2 = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const unknown = stubFetch(body);
+  try {
+    const result = await api.renderQuota(e2, { owner: true, now: NOW });
+    assert.match(result.text, /官方未返回可用状态/);
+    assert.equal(result.text.includes("（可用；"), false);
+  } finally {
+    unknown.restore();
+  }
+});
+
 test("balance is cached for ten minutes and a second question does not call out", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(balancePayload());

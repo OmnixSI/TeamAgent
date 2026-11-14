@@ -38,7 +38,8 @@ export type DeepSeekBalance =
   | {
       ok: true;
       at: number;
-      available: boolean;
+      /** null when the provider omitted the optional is_available field. */
+      available: boolean | null;
       currency: string;
       total: number;
       granted: number;
@@ -179,7 +180,8 @@ function parseBalance(value: any): DeepSeekBalance | null {
     return {
       ok: true,
       at,
-      available: raw.available !== false,
+      available:
+        raw.available === true ? true : raw.available === false ? false : null,
       currency: String(raw.currency || "CNY").toUpperCase(),
       total,
       granted: Number.isFinite(granted) ? granted : 0,
@@ -270,7 +272,8 @@ export async function readDeepSeekBalance(
   return store({
     ok: true,
     at,
-    available: body?.is_available !== false,
+    available:
+      body?.is_available === true ? true : body?.is_available === false ? false : null,
     currency: String(info?.currency || "CNY").toUpperCase(),
     total,
     granted: number(info?.granted_balance),
@@ -433,11 +436,13 @@ function balanceLine(balance: DeepSeekBalance): string {
     if (balance.kind === "missing_key") return "DeepSeek 余额：暂时查不到（没有配置密钥）";
     return "DeepSeek 余额：暂时查不到（接口暂时不可用，10 分钟内不再重试）";
   }
-  if (!balance.available) return "DeepSeek 余额：账户当前不可用";
+  if (balance.available === false) return "DeepSeek 余额：账户当前不可用";
   return (
     "DeepSeek 余额：" +
     money(balance.total, balance.currency) +
-    "（可用；赠送 " +
+    "（" +
+    (balance.available === true ? "可用；" : "官方未返回可用状态；") +
+    "赠送 " +
     money(balance.granted, balance.currency) +
     " / 充值 " +
     money(balance.toppedUp, balance.currency) +
@@ -465,7 +470,7 @@ export function ownerQuotaText(snapshot: QuotaSnapshot): string {
       usdMicro(snapshot.deepseek.monthMicroUsd) +
       "；" +
       average +
-      (days === null ? "" : "，余额约够 " + days.toFixed(1) + " 天"),
+      (days === null ? "" : "，按近 7 天日均估算余额约够 " + days.toFixed(1) + " 天"),
   );
   parts.push(
     "OpenAI：今天 " +
