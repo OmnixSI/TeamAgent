@@ -189,6 +189,13 @@ def _relationships(archive, infos, extension):
     none = (set(), set())
     if extension not in {".xlsx", ".xlsm"}:
         return none
+    try:  # the exemption model mirrors openpyxl 3.1.5's part lookup; any other version: no exemption
+        import openpyxl
+
+        if getattr(openpyxl, "__version__", "") != "3.1.5":
+            return none
+    except Exception:
+        return none
     types = _parse_small_xml(archive, infos, "[Content_Types].xml")
     if types is None:
         return none
