@@ -122,14 +122,25 @@ const SENTENCE_RE = /[^。！？!?；;\n]+[。！？!?；;\n]?/g;
 const RECURRING_RE = /每\s*(?:天|日|早|晚|个?\s*(?:周|星期|礼拜))/;
 const CLOCK_RE = /(?:\d{1,2}\s*[:：]\s*\d{2}|\d{1,2}\s*[点时])/;
 const PUSH_VERB_RE = /(?:发|推|出)/;
+// 整句带这些词就是在承诺，后面的疑问词只是从句（「列出当天是否有新 PR」）。
+const PROMISE_WORD_RE = /(?:我会|我就|记下|已经|安排好|设好|定好)/;
+// 只认最后一个分句里的疑问语气，避免把承诺句里的「是否/如何」当成征求同意。
+// 「是不是/怎么」不要求落在句尾：VL-6 的 outbox.rid=254 就是「…是不是同一套、…怎么呈现；」。
+const QUESTION_TAIL_RE = /(?:(?:吗|要不要|好不好|行不行|可以吗|如何|怎么样)[？?。]?\s*$|是不是|怎么)/;
+
+/** 疑问句是在征求同意（「每天早 8 点推送，要吗？」），不是承诺。
+ *  只看最后一个分句；整句有承诺词时仍按承诺处理。 */
+function askingForConsent(sentence: string) {
+  const tail = (sentence.split(/[，,：:]/).pop() || "").trim();
+  return /[？?]\s*$/.test(sentence) || QUESTION_TAIL_RE.test(tail);
+}
 
 /** 找回复里那句「每天/每周…X 点…发/推/出」的承诺；只认同句里三样都出现。 */
 function promiseSentence(text: string) {
   SENTENCE_RE.lastIndex = 0;
   for (let m = SENTENCE_RE.exec(text); m; m = SENTENCE_RE.exec(text)) {
     const sentence = m[0];
-    // 疑问句是在征求同意（「每天早 8 点推送，要吗？」），不是承诺。
-    if (/[？?]\s*$/.test(sentence) || /吗|要不要|好不好|行不行|是不是|是否|怎么|如何/.test(sentence)) continue;
+    if (!PROMISE_WORD_RE.test(sentence) && askingForConsent(sentence)) continue;
     if (RECURRING_RE.test(sentence) && CLOCK_RE.test(sentence) && PUSH_VERB_RE.test(sentence))
       return sentence;
   }

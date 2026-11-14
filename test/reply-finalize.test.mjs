@@ -217,6 +217,64 @@ test("F6 promiseGuard rewrites the promise when the member's words do not parse"
   assert.equal(v.text, "这个我还没登记上，你说一下每天几点、发什么，我马上建。");
 });
 
+test("F6b promiseGuard still catches promises whose question words sit in a later clause", async () => {
+  const cases = [
+    "以后每天早上 9 点给你推一份汇总，列出当天是否有新 PR。",
+    "我会每天 8 点发日报，看看进展如何。",
+    "记下了：每天 8 点发日报…可以吗？",
+  ];
+  const now = at("2026-11-14T14:30:00+11:00");
+  for (const [i, text] of cases.entries()) {
+    const created = [];
+    const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text }), {
+      acceptedActions: [],
+      avoid: [],
+      userText: TOO,
+      owner: "U1",
+      groupId: GROUP,
+      sourceMsgId: `msg-promise-${i}`,
+      now,
+      createSchedule: async (input) => {
+        created.push(input);
+        return {
+          id: `sched-${i}`,
+          group_id: GROUP,
+          owner: "U1",
+          kind: input.kind,
+          tz: "Australia/Sydney",
+          spec: input.spec,
+          next_run_at: at("2026-11-15T08:00:00+11:00"),
+          created_at: now,
+          source_msg_id: input.source_msg_id,
+        };
+      },
+      findDuplicate: async () => null,
+    });
+    assert.equal(created.length, 1, `case ${i + 1} must be registered: ${text}`);
+    assert.ok(JSON.parse(out).text.startsWith("记下了，"), `case ${i + 1} must get the ack`);
+  }
+});
+
+test("F6c VL-6 original sentence is still treated as asking for consent", async () => {
+  let created = 0;
+  const text = "每天早 8 点推送，要吗？";
+  const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text }), {
+    acceptedActions: [],
+    avoid: [],
+    userText: TOO,
+    owner: "U1",
+    groupId: GROUP,
+    sourceMsgId: "msg-vl6",
+    createSchedule: async () => {
+      created++;
+      return null;
+    },
+    findDuplicate: async () => null,
+  });
+  assert.equal(created, 0, "a consent question must not register a schedule");
+  assert.equal(out, JSON.stringify({ mode: "work", text }));
+});
+
 test("F7 an active schedule within ten minutes is reused, not recreated", async () => {
   let called = 0;
   const dup = {
