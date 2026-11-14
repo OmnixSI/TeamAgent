@@ -322,28 +322,31 @@ describe("root-absolute links", () => {
 
 // ---------- storing and serving ----------
 
+/** publish.ts as it was before it had versioned keys and the single-page fallback: the feature must still work in place. */
+const P0 = { ...P, objectKey: undefined, verKey: undefined, spaKey: undefined };
+
 describe("store through publish.ts", () => {
-  test("today's publish.ts: in-place mode, served by publish's own route", async () => {
+  test("a publish.ts without versioned keys: in-place mode, served by publish's own route", async () => {
     const hub = mkHub();
-    const s = S.support(P);
+    const s = S.support(P0);
     assert.deepEqual([s.versioned, s.spa], [false, false]);
     const r = await store(hub, { s, rewrite: true, entries: S.untar(S.gunzip(chunked(gz("gnu")))) });
     assert.equal(r.ok, true, r.error);
-    assert.equal(r.files, 3);   // index.html, a.css, a.js; the long path has a 65-letter folder, over publish.ts's 60
+    assert.equal(r.files, 4);   // index.html, a.css, a.js, font.ttf; the long path has a 65-letter folder, over publish.ts's 60
     assert.ok(r.skipped.some(x => x.startsWith(LONG) && /不支持/.test(x)));
-    assert.ok(r.skipped.some(x => /link\.html.*链接/.test(x)) && r.skipped.some(x => /escape.*不安全/.test(x)) && r.skipped.some(x => /font\.ttf.*不支持/.test(x)) && r.skipped.some(x => /\.map/.test(x)));
+    assert.ok(r.skipped.some(x => /link\.html.*链接/.test(x)) && r.skipped.some(x => /escape.*不安全/.test(x)) && r.skipped.some(x => /\.map/.test(x)));
     const res = await serve(hub, "/p/abcdefghijkl/");
     assert.equal(res.status, 200);
     assert.match(await res.text(), /href="\/p\/abcdefghijkl\/assets\/a\.css"/);
     assert.equal(await (await serve(hub, "/p/abcdefghijkl/assets/a.css")).text(), "body{background:url(/p/abcdefghijkl/img/x.png)}");
     assert.ok(![...hub.files.keys()].some(k => /escape|abs|up\.txt|passwd/.test(k)));
-    assert.equal(hub.used.r2_writes, 3);
+    assert.equal(hub.used.r2_writes, 4);
     const site = hub.sql.exec("SELECT * FROM site").toArray()[0];
-    assert.equal(site.by, "deploy"); assert.equal(site.files, 3); assert.equal(site.title, "blog");
-    assert.equal(S.deployRow(hub, "t:r", "blog").files, 3);
+    assert.equal(site.by, "deploy"); assert.equal(site.files, 4); assert.equal(site.title, "blog");
+    assert.equal(S.deployRow(hub, "t:r", "blog").files, 4);
   });
   test("in place: a redeploy keeps old assets until the delay, never deletes live files", async () => {
-    const hub = mkHub(), s = S.support(P);
+    const hub = mkHub(), s = S.support(P0);
     await store(hub, { s, now: 1000, entries: entriesOf([["index.html", "v1 <script src=a-1.js>"], ["a-1.js", "1"], ["keep.css", "k1"]]) });
     const order = [];
     const put = hub.env.FILES.put; hub.env.FILES.put = async (k, v, o) => { order.push(k.split("/").pop()); return put(k, v, o); };
@@ -522,7 +525,7 @@ describe("deploy job", () => {
       assert.match((await tool.run({ op: "deploy", repo: "x", dir: "../etc" })).error, /dir/);
       const r = await tool.run({ op: "deploy", repo: "OmnixSI/NextThought-Website", dir: "web", spa: true });
       assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.name, "nextthought-website");
-      assert.match(r.warnings.join(), /单页应用/);
+      assert.doesNotMatch((r.warnings || []).join(), /单页应用/, "publish.ts serves the single-page fallback now");
       assert.equal(hub.get("deploy:busy"), "0");
       const again = await tool.run({ op: "deploy", name: "nextthought-website" });
       assert.equal(again.ok, true); assert.match(again.source, /NextThought-Website 的 web/);
