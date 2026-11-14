@@ -699,7 +699,7 @@ async function caseRC06(api) {
   const records = recordRows(e, false);
   if (process.env.D_ACCEPT_DEBUG)
     console.log(`RC06-DEBUG ${JSON.stringify(records.map((r) => [r.person, r.amount_cents, r.status]))} calls=${JSON.stringify(await rows(e, "SELECT name,status,error_kind FROM tool_calls"))} reply=${text.slice(0, 220)}`);
-  must(records.length === 4, `records=${records.length}`);
+  must(records.length === 4, `records=${records.length} reply=${text.slice(0, 200)}`);
   must(personSum(records, "TOO") === 37000, `TOO=${personSum(records, "TOO")}`);
   must(sumCents(records) === 51000, `total=${sumCents(records)}`);
   must(/370/.test(text), `回复没有 370: ${text.slice(0, 160)}`);
@@ -949,9 +949,9 @@ async function caseS06(api) {
   await seedLedger(e, api);
   const del = syntheticRow("S-06", 1, "删掉我刚记的那笔");
   seedMessages(e, [del]);
-  await agentTurn(e, api, [del], { mentioned: true, now: SYNTH_NOW, caseId: "S-06a" });
+  const delTurn = await agentTurn(e, api, [del], { mentioned: true, now: SYNTH_NOW, caseId: "S-06a" });
   const afterDelete = recordRows(e, false);
-  must(afterDelete.length === 2, `单条删除后 records=${afterDelete.length}`);
+  must(afterDelete.length === 2, `单条删除后 records=${afterDelete.length} reply=${delTurn.text.slice(0, 200)}`);
   must(rows(e, "SELECT id FROM records WHERE deleted_at IS NOT NULL").length === 1, `软删行=${rows(e, "SELECT id FROM records WHERE deleted_at IS NOT NULL").length}`);
 
   const clear = syntheticRow("S-06", 2, "清空报销账本", "U1", true);

@@ -42,8 +42,13 @@ async function activeTypes(e: any, groupId: string): Promise<any[]> {
 async function resolveReadType(e: any, groupId: string, name: unknown): Promise<RecordTypeRow> {
   if (name) {
     const found = await findType(e, groupId, String(name));
-    if (!found) throw new RecordError("not_found", `没有叫「${name}」的账本`);
-    return found;
+    if (found) return found;
+    // 「账本」「本地记账工具」这类泛称：本群只有一个账本时就用它，别让模型卡在名字上。
+    if (isGenericLedgerName(String(name))) {
+      const ledgers = (await activeTypes(e, groupId)).filter((row) => row.kind === "ledger");
+      if (ledgers.length === 1) return findType(e, groupId, ledgers[0].id) as Promise<RecordTypeRow>;
+    }
+    throw new RecordError("not_found", `没有叫「${name}」的账本`);
   }
   const list = await activeTypes(e, groupId);
   if (!list.length) throw new RecordError("not_found", "本群还没有账本，先说「记账 …」建一个");
@@ -263,8 +268,9 @@ export const recordsWriteTool: BotTool = {
       name: "records_write",
       description:
         "记账或清单：建类型、记一笔、改或删先确认、撤销上一笔；只有成员本人原话能作为依据，改删确认限记录人或管理员。" +
-        "「我加10/再加一笔」= op:add（新行，不是改旧行）；「把某人那笔改成60」= op:quote_update + match:{person} + patch:{amount:'60'}；" +
-        "「删掉刚记的那笔」= op:quote_delete；改删会返回 token，成员回「确认」后再 op:confirm + token。",
+        "「我加10/再加一笔」= op:add（新行，不是改旧行）；「X买了/X勾掉/X打勾」= op:quote_update + match:{title:'X'} + patch:{status:'done'}（不是新增）；「把某人那笔改成60」= op:quote_update + match:{person} + patch:{amount:'60'}；" +
+        "「删掉刚记的那笔」= op:quote_delete，「标成已买/完成」= op:quote_update+patch:{status:'done'}：拿到 token 后同一轮直接 op:confirm 落库。" +
+        "改金额（「把那笔改成60」）要先 quote，等成员回「确认」再 op:confirm；批量/清空也要等确认。",
       parameters: {
         type: "object",
         properties: {
@@ -424,6 +430,10 @@ export const recordsWriteTool: BotTool = {
           before: change.before, ...(change.after ? { after: change.after } : {}),
           short: change.before.short, expires_at: change.expires_at,
           summary_line: `${title}：${change.before.short} ${before}${change.after ? " → " + after : ""}`,
+          next_action:
+            op === "quote_delete" || String(args?.patch?.status || "") === "done"
+              ? `同一轮直接调 records_write{op:'confirm',token:'${change.token}'} 落库。`
+              : `先把预览发给成员，等他回「确认」再调 records_write{op:'confirm',token:'${change.token}'}。`,
           say,
         };
       }

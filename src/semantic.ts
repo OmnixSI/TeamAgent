@@ -27,6 +27,7 @@ import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
 import { BOARD_INBOX, requestPlan } from "./tasks";
 import { scheduleCreateTool } from "./tools/schedule-tools";
+import { confirmPendingFromCommand, landLedger, recordsTaint } from "./ledger-land";
 import { familyOfTool, type Accepted, type Family } from "./receipt-guard";
 import { model, activity, redact, utilityText } from "./runtime";
 import { ToolRecovery } from "./tool-audit";
@@ -745,37 +746,31 @@ async function pendingNote(e: any, latest: any): Promise<string> {
 }
 
 /** D5 合并前的兼容：skills 表不在时静默跳过；在时只注入「名字+触发词」一行。 */
-async function skillsNote(e: any, group: string | undefined): Promise<string> {
-  // D5 未合时没有 skills 表，也没有这些工具；有工具才值得花这条查询。
-  if (!group || !findExtraTool("skill_save")) return "";
+function skillsNote(raw: unknown): string {
+  let rows: any[] = [];
   try {
-    const rows = (
-      await e.DB.prepare(
-        "SELECT name,triggers FROM skills WHERE group_id=? AND status='active' ORDER BY updated_at DESC LIMIT 30",
-      )
-        .bind(group)
-        .all()
-    ).results as any[];
-    if (!rows.length) return "";
-    const parts = rows.map((row) => {
-      let triggers: string[] = [];
-      try {
-        const value = JSON.parse(String(row.triggers || "[]"));
-        if (Array.isArray(value)) triggers = value.map(String).filter(Boolean);
-      } catch {}
-      return `${row.name}${triggers.length ? "（触发词：" + triggers.join("、") + "）" : ""}`;
-    });
-    return ("本群可用技能：" + parts.join("；")).slice(0, 400);
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (Array.isArray(value)) rows = value;
   } catch {
     return "";
   }
+  if (!rows.length) return "";
+  const parts = rows.map((row) => {
+    let triggers: string[] = [];
+    try {
+      const value = JSON.parse(String(row?.triggers || "[]"));
+      if (Array.isArray(value)) triggers = value.map(String).filter(Boolean);
+    } catch {}
+    return `${String(row?.name || "").trim()}${triggers.length ? "（触发词：" + triggers.join("、") + "）" : ""}`;
+  }).filter((line) => line.length > 3);
+  return parts.length ? ("本群可用技能：" + parts.join("；")).slice(0, 400) : "";
 }
 
 /** D4 few-shot：账本/定时/工作台/执行分别该调什么，禁止把本地写活转成「后台处理」。 */
 function toolRoutingNote(): string {
   const lines = [
     "D 版工具路由（这些交办必须当场调工具，不要转后台、不要只口头答应）：",
-    "• 记账/账本/清单/报销/改一笔/删一笔 → records_write；查账、合计、导出 → records_read。几个人一起报账就一次写多行。",
+    "• 记账/账本/清单/报销/改一笔/删一笔 → records_write；查账、合计、导出 → records_read。几个人一起报账就一次写多行。账本名照用户说的填（「报销额度」就填报销额度），不要统一叫「账本」。",
     "• 「我加10」「再加一笔」必须调 records_write{op:'add'}，不能只口头说记上了，也不能只用 records_read 代替写。",
     "• 「可以每天固定时间发…吗」也是要建日程，不是现在报一次数；缺时间就调一次 schedule_create 拿到 pending，只问一句「几点发？」。",
     "• 账本动词：加/再加/又记一笔 → records_write{op:'add'}（新行，不是改旧行）；把某人那笔改成 N → quote_update；删掉刚记的那笔 → quote_delete；改/删返回的 token 要留着，成员回「确认」时再调 records_write{op:'confirm',token}；合计/总账单 → records_read{op:'summarize'}，本群只有一个账本时不要填 type。",
@@ -797,9 +792,16 @@ function toolRoutingNote(): string {
 function finalizeOptions(e: any, context: any, acceptedActions: Accepted[], messages: any[]) {
   const latest = context.latest;
   const group = latest?.group_id;
-  // D4 autoLand：守卫发现 schedule 承诺没落地时，直接用用户原话补建，不经模型。
+  // D4 autoLand：守卫发现承诺没落地时补建。schedule 用 scheduleCreateTool；record 走一次
+  // 非 thinking 的 JSON 抽取 + records_write 内部实现（主程批准的 §5.6 扩展）。
+  let ledgerLand: Promise<Accepted | null> | null = null;
   const autoLand = async (family: Family): Promise<Accepted | null> => {
-    if (family !== "schedule" || !group || !latest?.id || !latest?.body) return null;
+    if (!group || !latest?.id || !latest?.body) return null;
+    if (family === "record") {
+      if (!ledgerLand) ledgerLand = landLedger(e, context, messages, () => tainted(context, messages));
+      return ledgerLand;
+    }
+    if (family !== "schedule") return null;
     if (await toolSwitchedOff(e, scheduleCreateTool)) return null;
     const result = await scheduleCreateTool.run(
       e,
@@ -857,6 +859,7 @@ export async function agentAnswer(e: any, context: any) {
 }
 async function answerWithTools(e: any, context: any) {
   e.timingTurn = context.latest?.id || e.timingTurn;
+  const turnStartedAt = Date.now();
   // F6-6 定时闭嘴：除被 @ 外不进模型、不出声；创建闭嘴的那条消息本身豁免。
   if (!context.mentioned && await muted(e, context.latest?.group_id, context.latest?.id))
     return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
@@ -891,11 +894,34 @@ async function answerWithTools(e: any, context: any) {
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
   const repoAsk = isRepoActivityAsk(context.latest?.body) &&
     (!!context.mentioned || context.latest?.meta?.direct === true);
-  const facts = (
-    await e.DB.prepare(
-      "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
-    ).all()
-  ).results;
+  // D5 合入后技能行也要每轮注入。为了不额外花一条 D1 语句（48 条/轮很紧），
+  // 把技能 JSON 作为同一个 facts 查询的列带回；facts 为空时 LEFT JOIN 仍留一行。
+  const skillsEnabled = !!findExtraTool("skill_save") && !!context.latest?.group_id;
+  const plainFactsSql =
+    "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60";
+  let facts: any[] = [];
+  let skillRowsRaw: unknown = null;
+  try {
+    if (skillsEnabled) {
+      const rows = (
+        await e.DB.prepare(
+          `SELECT f.id,f.repo,f.subject,f.predicate,f.value,f.evidence,f.status,s.j AS __skills
+           FROM (SELECT json_group_array(json_object('name',name,'triggers',triggers)) AS j
+                 FROM (SELECT name,triggers FROM skills WHERE group_id=? AND status='active' ORDER BY updated_at DESC LIMIT 30)) s
+           LEFT JOIN (SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60) f ON 1=1`,
+        )
+          .bind(context.latest.group_id)
+          .all()
+      ).results as any[];
+      skillRowsRaw = rows.find((row) => row && row.__skills != null)?.__skills ?? null;
+      facts = rows.filter((row) => row && row.id);
+    } else {
+      facts = (await e.DB.prepare(plainFactsSql).all()).results;
+    }
+  } catch {
+    // skills 表不在（老库）时退回普通 facts 查询，不能因为技能注入拖垮整轮。
+    facts = (await e.DB.prepare(plainFactsSql).all()).results;
+  }
   const acceptedActions: Accepted[] = [];
   // schedule_create 缺时间只问一次：它不是「已建」，但这一轮确实有要回的话。
   const pendingAsks: any[] = [];
@@ -1127,7 +1153,7 @@ async function answerWithTools(e: any, context: any) {
     // The card summary is an optimisation; never fail a turn because it is unreadable.
   }
   const pending = await pendingNote(e, context.latest);
-  const skills = await skillsNote(e, context.latest?.group_id);
+  const skills = skillsNote(skillRowsRaw);
   const systemPrompt =
     (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
     "\n\n" +
@@ -1239,6 +1265,8 @@ async function answerWithTools(e: any, context: any) {
     if (!m.tool_calls?.length) {
       if (offerTools && turn < 3 && recovery.retry(messages)) continue;
       if (!m.content?.trim()) throw Error("agent empty answer");
+      const autoConfirm = await confirmPendingFromCommand(e, context, messages, turnStartedAt);
+      if (autoConfirm) acceptedActions.push(autoConfirm);
       const forced =
         !!context.mentioned || addressedMessages(context).length > 0 ||
         !!context.videoWaited ||
@@ -1256,7 +1284,9 @@ async function answerWithTools(e: any, context: any) {
         !(await maySpeak(e, decision, forced, acceptedActions.length > 0 || pendingAsks.length > 0))
       )
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
-      const spoken = await speakBrief(
+      const spoken = autoConfirm
+        ? JSON.stringify({ mode: "work", text: String((autoConfirm as any).say || "改好了。") })
+        : await speakBrief(
         e,
         {
           facts: recovery.brief(decision.brief),
@@ -1609,7 +1639,11 @@ async function answerWithTools(e: any, context: any) {
               context,
               source: context.batch?.find((m: any) => m.id === a.source_id) || context.latest,
               messages,
-              isTainted: () => tainted(context, messages),
+              // 读本群账本不该把同一轮的写账判成外部污染；外部资料仍按 tainted 拒绝。
+              isTainted: () =>
+                call.function.name === "records_write"
+                  ? recordsTaint(context, messages, () => tainted(context, messages))
+                  : tainted(context, messages),
             });
         }
         return result;
@@ -1638,6 +1672,10 @@ async function answerWithTools(e: any, context: any) {
     }
     recovery.retry(messages);
   }
-  const spoken = await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
+  const autoConfirm = await confirmPendingFromCommand(e, context, messages, turnStartedAt);
+  if (autoConfirm) acceptedActions.push(autoConfirm);
+  const spoken = autoConfirm
+    ? JSON.stringify({ mode: "work", text: String((autoConfirm as any).say || "改好了。") })
+    : await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
   return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, messages)));
 }

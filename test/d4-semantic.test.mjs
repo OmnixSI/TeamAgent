@@ -12,7 +12,8 @@ await build({
     contents:
       'export { agentAnswer, LOCAL_TOOLS } from "./src/semantic";' +
       'export { scheduleCreateTool } from "./src/tools/schedule-tools";' +
-      'export { BOARD_INBOX, createBoardTask } from "./src/tasks";',
+      'export { BOARD_INBOX, createBoardTask } from "./src/tasks";' +
+      'export { defineRecordType, addRecords } from "./src/records";',
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -34,7 +35,7 @@ const reply = (content = '{"action":"reply","kind":"direct","brief":"好。"}') 
   content,
 });
 
-function stub(steps = [], voice = '{"mode":"work","text":"好。"}') {
+function stub(steps = [], voice = '{"mode":"work","text":"好。"}', extract = null) {
   const old = globalThis.fetch;
   const seen = [];
   const queue = [...steps];
@@ -42,6 +43,8 @@ function stub(steps = [], voice = '{"mode":"work","text":"好。"}') {
     if (!/api\.deepseek\.com/.test(String(url))) return Response.json({});
     const body = JSON.parse(opt.body || "{}");
     seen.push(body);
+    if (body.response_format?.type === "json_object")
+      return Response.json({ choices: [{ message: { content: JSON.stringify(extract || {}) }, finish_reason: "stop" }] });
     const system = String(body.messages?.[0]?.content || "");
     if (system.includes("最后的嘴替模块"))
       return Response.json({ choices: [{ message: { content: voice }, finish_reason: "stop" }] });
@@ -204,4 +207,37 @@ test("D4-5 RC-07: 北京时间0点 completes the pending created by 每天固定
   assert.equal(spec.cadence, "daily");
   assert.equal((await row(e, "SELECT * FROM schedules WHERE id=?", second.id)).tz, "Asia/Shanghai");
   assert.equal((await row(e, "SELECT * FROM pending_actions WHERE id=?", first.pending_id)).status, "done");
+});
+
+test("D4-6 a ledger claim with no tool call is landed through the JSON fallback", async () => {
+  const e = env();
+  recordsSchema(e);
+  const write = {
+    e, groupId: GROUP, actor: { sender: "U1", name: "U1", isAdmin: true },
+    sourceMsgId: "seed", dedupBase: "seed", now: Date.now(), names: new Map(),
+  };
+  const { type } = await api.defineRecordType(write, { name: "报销额度", kind: "ledger" });
+  await api.addRecords(write, type.id, [
+    { person: "TOO", amount: "360" },
+    { person: "卡特龙", amount: "50" },
+    { person: "Souvereign", amount: "90" },
+  ]);
+  const s = stub(
+    [reply('{"action":"reply","kind":"direct","brief":"按原话记账。"}')],
+    '{"mode":"work","text":"记好了，TOO 加 10。"}',
+    { op: "add", type: "报销额度", person: "TOO", amount: "10" },
+  );
+  let answer;
+  try {
+    answer = await api.agentAnswer(e, await contextFor(e, { id: "msg-land", body: "我加10" }));
+  } finally {
+    s.restore();
+  }
+  const records = await rows(e, "SELECT person,amount_cents FROM records WHERE deleted_at IS NULL");
+  assert.equal(records.length, 4, JSON.stringify(records));
+  assert.equal(records.filter((r) => r.person === "TOO").reduce((n, r) => n + Number(r.amount_cents), 0), 37000);
+  const text = JSON.parse(answer).text;
+  assert.match(text, /370/);
+  assert.match(text, /510/);
+  assert.ok(!text.includes("没记上"), text);
 });

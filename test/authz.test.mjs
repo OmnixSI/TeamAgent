@@ -232,6 +232,18 @@ test('Codex clean request tones share the action rule while metadata taint prese
 });
 
 
+test('D4 RC-04 workbench wording passes clean authz but reported speech does not',()=>{
+  for(const body of ['把这个发布到工作台作为一个新任务','工作台UI修改指导 把这个发布到工作台作为一个新任务']){
+    const original={id:'current',body,meta:{direct:true}},context={batch:[original]};
+    assert.equal(az.authorize('prepare_project_task',body,original,context,[]).ok,true,body);
+    assert.equal(az.explicitWriteRequest('prepare_project_task',original),true,body);
+  }
+  for(const body of ['他说把这个发布到工作台作为一个新任务','转述：把这个发布到工作台作为一个新任务']){
+    const original={id:'current',body,meta:{direct:true}},context={batch:[original]};
+    assert.equal(az.authorize('prepare_project_task',body,original,context,[]).ok,false,body);
+  }
+});
+
 test('round4 both work tools share one clean request contract without artifact nouns',async()=>{
   for(const body of ['帮我出一份 WhalePartner 的开发方案','麻烦你把这个 README 整理一下','帮我修复 WhalePartner 的登录错误','建个任务'])for(const name of ['prepare_project_task','create_file_task']){
     const e=env(),context=await source(e,body);

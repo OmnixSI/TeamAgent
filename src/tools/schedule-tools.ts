@@ -335,11 +335,12 @@ export const scheduleCreateTool: BotTool = {
     const said = String(args?.when_text || body || "").trim();
     const draftWhen = continuing && draft.when_text ? String(draft.when_text).trim() : "";
     const tzFromArgs = normalizeTz(args?.tz) || normalizeTz(draft.tz) || DEFAULT_TZ;
+    // 用户原话里没有时区词时一律按默认悉尼算；模型自己填的 tz 只作结构化兜底（S-01/S-02）。
     let whenText = said;
-    let parsed = said ? parseWhen(said, now, tzFromArgs) : null;
+    let parsed = said ? parseWhen(said, now, DEFAULT_TZ) : null;
     if (continuing && !parsed?.ok && draftWhen) {
       whenText = `${draftWhen} ${said}`.trim();
-      parsed = parseWhen(whenText, now, tzFromArgs);
+      parsed = parseWhen(whenText, now, DEFAULT_TZ);
     }
     const violations = parsed?.ok ? violationsOf(args, parsed.when) : [];
     const when: When | null = parsed?.ok ? parsed.when : whenFromArgs({ ...draft, ...stripEmpty(args) }, now, tzFromArgs);

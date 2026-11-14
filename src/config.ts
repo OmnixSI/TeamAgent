@@ -15,10 +15,13 @@ export function modelSettings(
   return {
     model: TEAM.model.name,
     effort:
-      efforts[kind] ||
-      ((requested === "max"
-        ? TEAM.model.important_effort
-        : TEAM.model.quick_effort) as Effort),
+      // 显式 none 永远表示非 thinking（账本抽取这类小调用），不被 kind 的档位覆盖。
+      requested === "none"
+        ? "none"
+        : efforts[kind] ||
+          ((requested === "max"
+            ? TEAM.model.important_effort
+            : TEAM.model.quick_effort) as Effort),
     timeout: timeouts[kind] || timeout,
   };
 }

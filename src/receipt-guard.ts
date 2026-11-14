@@ -164,12 +164,20 @@ function legacySchedulePromise(sentence: string) {
 }
 
 // design 的冻结表漏了「已记：…」这种省略「上/账」的说法；模型真的会这样编记录号。
-const RECORD_SHORT_RE = /已记(?=[：:，,。]|$)/;
+const RECORD_SHORT_RE = /已记(?=[：:，,。]|$)|已?加上了|按这笔记|标(好|记)了|已完成|完成了|勾掉|打勾|买(好|到)了|打完卡|打卡|done|(?:现在|合计)[^。]{0,24}[¥￥]\d/;
 
-function familiesFor(sentence: string): Family[] {
+const LEDGER_TEXT_RE = /清单|账本|报销|记录号|这笔|那笔|[¥￥]\s?\d|#[0-9a-f]{6}/i;
+// 「鸡蛋买完了」「这条搞定」这类只在整段确实在讲账本/清单时才算记录承诺。
+const RECORD_SOFT_RE = /买完|买好|买了|已买|勾掉|勾了|办完|搞定|打卡|完成|建好|done/i;
+
+function familiesFor(sentence: string, ledgerText = false): Family[] {
   const hits: Family[] = [];
   for (const claim of CLAIMS) if (claim.re.test(sentence)) hits.push(claim.family);
-  if (!hits.includes("record") && RECORD_SHORT_RE.test(sentence)) hits.push("record");
+  if (
+    !hits.includes("record") &&
+    (RECORD_SHORT_RE.test(sentence) || (ledgerText && RECORD_SOFT_RE.test(sentence)))
+  )
+    hits.push("record");
   if (!hits.includes("schedule") && legacySchedulePromise(sentence)) hits.unshift("schedule");
   return hits;
 }
@@ -178,8 +186,11 @@ function familiesFor(sentence: string): Family[] {
 const EXISTING_RE = /(已经|已|早就|之前|原来)/;
 const FUTURE_RE = /(以后|从今|接下来|往后|我会|会每|每(天|周|月).{0,12}(都|准|会)发)/;
 
+// 「已记/已加/已改/已删」是动作承诺，不是「已经建好」这种状态陈述，不能拿旧行豁免。
+const ACTION_CLAIM_RE = /已(记|加|改|删)|记(好|上)了|改好了|删好了|加上了/;
+
 function isExistingStatement(sentence: string) {
-  return EXISTING_RE.test(sentence) && !FUTURE_RE.test(sentence);
+  return EXISTING_RE.test(sentence) && !FUTURE_RE.test(sentence) && !ACTION_CLAIM_RE.test(sentence);
 }
 
 // autoLand 成功时由调用方在运行时附带「下次 …」文本；不动冻结的 Accepted 接口。
@@ -238,7 +249,7 @@ export async function guardReceipts(g: GuardInput): Promise<GuardResult> {
     out += source.slice(cursor, index);
     cursor = index + sentence.length;
 
-    const families = familiesFor(sentence);
+    const families = familiesFor(sentence, LEDGER_TEXT_RE.test(source));
     if (!families.length) {
       out += sentence;
       continue;
@@ -271,22 +282,30 @@ export async function guardReceipts(g: GuardInput): Promise<GuardResult> {
       continue;
     }
 
-    // ③ schedule 承诺没有落地 → 用原话补建，成功就保留并补 id/下次时间。
-    if (families.includes("schedule") && typeof g.autoLand === "function") {
-      let landed: LandedAccepted | null = null;
-      try {
-        landed = await g.autoLand("schedule");
-      } catch {
-        landed = null;
+    // ③ schedule / record 承诺没有落地 → 用原话补建；record 直接换成真实回执。
+    let landedBy: Family | null = null;
+    if (typeof g.autoLand === "function") {
+      for (const family of families) {
+        if (family !== "schedule" && family !== "record") continue;
+        let landed: LandedAccepted | null = null;
+        try {
+          landed = await g.autoLand(family);
+        } catch {
+          landed = null;
+        }
+        if (landed && landed.ok === true) {
+          const say = typeof (landed as any).say === "string" ? String((landed as any).say).trim() : "";
+          if (family === "record" && say) out += /[。！？!?]$/.test(say) ? say : say + "。";
+          else out += appendLanded(sentence, landed);
+          violations.push({ family, sentence, fixed: "landed" });
+          landedBy = family;
+          break;
+        }
+        if (landed && landed.ok === false && landed.reason && !failures.some((f) => f.family === family))
+          failures.push({ ...landed, family, ok: false });
       }
-      if (landed && landed.ok === true) {
-        out += appendLanded(sentence, landed);
-        violations.push({ family: "schedule", sentence, fixed: "landed" });
-        continue;
-      }
-      if (landed && landed.ok === false && landed.reason)
-        failures.push({ ...landed, family: "schedule", ok: false });
     }
+    if (landedBy) continue;
 
     // ④ 换成老实措辞；与上一条/本回复前面的同句重复时用第二套。
     const family = pickFamily(families, sentence, failures);

@@ -107,8 +107,8 @@ test("schedule: autoLand returns null (no time in the member's words) still repl
   assert.equal(result.violations[0].fixed, "replaced");
 });
 
-test("autoLand is only consulted for schedule claims", async () => {
-  for (const family of ["record", "feature", "task", "skill", "job"]) {
+test("autoLand is consulted for schedule and record claims only", async () => {
+  for (const family of ["schedule", "record"]) {
     let called = 0;
     const result = await guardReceipts({
       text: CASES[family].claim,
@@ -116,7 +116,21 @@ test("autoLand is only consulted for schedule claims", async () => {
       failures: [],
       autoLand: async () => {
         called++;
-        return accepted("schedule", { id: "nope" });
+        return null;
+      },
+    });
+    assert.equal(called, 1, family);
+    assert.equal(result.text, honest(family, [], 1), family);
+  }
+  for (const family of ["feature", "task", "skill", "job"]) {
+    let called = 0;
+    const result = await guardReceipts({
+      text: CASES[family].claim,
+      accepted: [],
+      failures: [],
+      autoLand: async () => {
+        called++;
+        return null;
       },
     });
     assert.equal(called, 0, family);
@@ -141,6 +155,29 @@ test("the short 已记：… claim (outside the frozen table) is still reconcile
   assert.equal(replaced.text, honest("record", [], 1));
   const kept = await guardReceipts({ text: claim, accepted: [accepted("record")], failures: [] });
   assert.equal(kept.text, claim);
+});
+
+test("a record claim is replaced by the real ledger receipt when autoLand lands", async () => {
+  const say = "记好了（报销额度）：TOO ¥370.00，合计 ¥510.00。记录号 #abc123。";
+  const claim = "已记：TOO +10，报销额度已更新。";
+  const result = await guardReceipts({
+    text: claim,
+    accepted: [],
+    failures: [],
+    autoLand: async (family) => {
+      assert.equal(family, "record");
+      return { tool: "records_write", family: "record", id: "r1", ok: true, say };
+    },
+  });
+  assert.equal(result.text, say);
+  assert.deepEqual(result.violations, [{ family: "record", sentence: claim, fixed: "landed" }]);
+});
+
+test("ledger result phrasings outside the frozen table still trigger record reconciliation", async () => {
+  for (const claim of ["加上了，TOO 现在 ¥370。", "按这笔记：TOO 370，卡特龙 50。", "鸡蛋标好了。"]) {
+    const result = await guardReceipts({ text: claim, accepted: [], failures: [] });
+    assert.equal(result.text, honest("record", [], 1), claim);
+  }
 });
 
 test("a failed action's reason is quoted instead of a generic sentence", async () => {

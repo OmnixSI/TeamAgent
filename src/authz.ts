@@ -30,7 +30,7 @@ export function tainted(context: any, messages: any[]): boolean {
 }
 
 export const STRONG: Record<Exclude<WriteTool, "request_feature">, RegExp> = {
-  prepare_project_task: /(建|开|创建|新建|立|加|提)(一?[个条])?(任务|需求|工单|issue)|立项|排进(计划|任务)|交给(本地|AI|你)(去)?(做|干|实现|处理)/i,
+  prepare_project_task: /(建|开|创建|新建|立|加|提)(一?[个条])?(任务|需求|工单|issue)|立项|排进(计划|任务)|交给(本地|AI|你)(去)?(做|干|实现|处理)|把.{0,30}发布到工作台/i,
   create_file_task: /(做|写|生成|整理|导出|出|弄)(一?[个份])?(成)?(文档|文件|表格|报告|总结|PPT|CSV|XLSX|PDF|DOCX|幻灯片|方案|清单|纪要)/i,
   remember_correction: /记住|记一下|记下来|以后(要|别|不要)|不是.{1,20}是|纠正(一下)?|说错了|搞错了/,
 };
@@ -55,8 +55,14 @@ function imperativeMatch(clause: string, match: RegExpExecArray, dirty: boolean)
   const prefix = clause.slice(0, match.index), suffix = clause.slice(match.index + match[0].length);
   if (COMMAND_EXCLUSIONS.statementTail.test(suffix) || COMMAND_EXCLUSIONS.negatedLead.test(prefix) || COMMAND_EXCLUSIONS.reportedLead.test(prefix)) return false;
   const lead = prefix.replace(/^(?:现在|这次|接下来|明天|稍后|然后|再|先)\s*/, "");
+  // 「把这个发布到工作台…」这类把字句是明确命令；但带转述/引用标记的仍不算。
+  const baCommand =
+    !dirty &&
+    /^把/.test(String(match[0])) &&
+    Array.from(lead).length <= 16 &&
+    !/说|讲|问|写道|回复|提到|表示|称|转述|引用/.test(lead);
   return !lead || (dirty ? STRICT_REQUEST_TONE : REQUEST_TONE).test(lead) ||
-    /^(?:看完|读完|看了)[\s\S]{0,60}(?:帮我|帮忙|请你)$/.test(lead);
+    /^(?:看完|读完|看了)[\s\S]{0,60}(?:帮我|帮忙|请你)$/.test(lead) || baCommand;
 }
 
 function ownClauses(text: string): string[] {
