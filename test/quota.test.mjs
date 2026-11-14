@@ -270,6 +270,139 @@ test("balance is cached for ten minutes and a second question does not call out"
   }
 });
 
+test("the first recorded query says so and stores a numeric snapshot", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const stub = stubFetch(balancePayload("10.00"));
+  try {
+    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    assert.match(result.text, /较上次：这是第一次记录/);
+    const snapshot = JSON.parse(await get(e, api.QUOTA_LAST_KEY));
+    assert.equal(snapshot.at, NOW);
+    assert.equal(snapshot.deepseek.CNY, "10.00");
+    assert.equal(snapshot.dsCalls, 0);
+    assert.equal(snapshot.aiUsed, 0);
+    assert.equal(JSON.stringify(snapshot).includes(SECRET), false);
+    assert.equal(JSON.stringify(snapshot).includes("g1"), false);
+    assert.equal(JSON.stringify(snapshot).includes("u1"), false);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a second real read reports balance, calls and neurons deltas with signs", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const first = stubFetch(balancePayload("10.00"));
+  try {
+    await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+  } finally {
+    first.restore();
+  }
+  for (const id of ["delta-1", "delta-2"]) {
+    await e.DB.prepare("INSERT INTO ds_usage(id,purpose,status,error_kind,latency_ms,units,est_cost_micro_usd,created_at) VALUES(?,?,?,NULL,10,1,0,?)")
+      .bind(id, "search", "ok", NOW - 1800000)
+      .run();
+  }
+  const utcDay = new Date(NOW + 11 * 60000).toISOString().slice(0, 10);
+  await set(e, `budget:workers_ai_neurons:utc:${utcDay}`, 320);
+  const second = stubFetch(balancePayload("8.77"));
+  try {
+    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW + 11 * 60000 });
+    assert.match(result.text, /较上次（\d{2}:\d{2}）：DeepSeek 余额 −1\.23 元 \/ 今日调用 \+2 次 \/ neurons \+320/);
+  } finally {
+    second.restore();
+  }
+});
+
+test("a top-up shows a positive balance delta", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
+    at: NOW - 60000, deepseek: { CNY: "5.00" }, dsCalls: 0, dsMicroUsd: 0,
+    openaiCalls: 0, openaiMicroUsd: 0, aiUsed: 0, band: "critical",
+  }));
+  const stub = stubFetch(balancePayload("10.00"));
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /DeepSeek 余额 \+5\.00 元/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("an unchanged snapshot says no change", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
+    at: NOW - 60000, deepseek: { CNY: "8.88" }, dsCalls: 0, dsMicroUsd: 0,
+    openaiCalls: 0, openaiMicroUsd: 0, aiUsed: 0, band: "critical",
+  }));
+  const stub = stubFetch(balancePayload("8.88"));
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    assert.match(result.text, /较上次（\d{2}:\d{2}）：没变化/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a previous snapshot missing fields only compares the fields it has", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
+    at: NOW - 60000, deepseek: {}, dsCalls: 0, aiUsed: 0,
+  }));
+  for (const id of ["missing-1", "missing-2"]) {
+    await e.DB.prepare("INSERT INTO ds_usage(id,purpose,status,error_kind,latency_ms,units,est_cost_micro_usd,created_at) VALUES(?,?,?,NULL,10,1,0,?)")
+      .bind(id, "search", "ok", NOW - 60000)
+      .run();
+  }
+  const utcDay = new Date(NOW).toISOString().slice(0, 10);
+  await set(e, `budget:workers_ai_neurons:utc:${utcDay}`, 320);
+  const stub = stubFetch(balancePayload("8.88"));
+  try {
+    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const delta = result.text.split("\n").pop();
+    assert.match(delta, /今日调用 \+2 次/);
+    assert.match(delta, /neurons \+320/);
+    assert.equal(delta.includes("DeepSeek 余额"), false);
+    assert.equal(delta.includes("OpenAI 今日花费"), false);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a cache hit never overwrites the previous real snapshot", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  const stub = stubFetch(balancePayload("10.00"));
+  try {
+    await api.renderQuota(e, { owner: true, now: NOW });
+    await e.DB.prepare("INSERT INTO ds_usage(id,purpose,status,error_kind,latency_ms,units,est_cost_micro_usd,created_at) VALUES(?,?,?,NULL,10,1,0,?)")
+      .bind("cache-1", "search", "ok", NOW - 60000)
+      .run();
+    const result = await api.renderQuota(e, { owner: true, now: NOW + 60000 });
+    assert.match(result.text, /今日调用 \+1 次/);
+    assert.equal(stub.calls.length, 1);
+    const snapshot = JSON.parse(await get(e, api.QUOTA_LAST_KEY));
+    assert.equal(snapshot.at, NOW);
+    assert.equal(snapshot.dsCalls, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("non-owner gets the band and one-notch move, never a number", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
+    at: NOW - 60000, deepseek: { CNY: "100.00" }, dsCalls: 0, dsMicroUsd: 0,
+    openaiCalls: 0, openaiMicroUsd: 0, aiUsed: 0, band: "ok",
+  }));
+  const stub = stubFetch(balancePayload("8.88"));
+  try {
+    const result = await api.renderQuota(e, { owner: false, now: NOW });
+    assert.equal(result.text, "额度：快没了（比上次低了一档）。");
+    assert.equal(/[0-9¥$]/.test(result.text), false);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("a failed balance lookup says so honestly, hides the key and is not retried inside ten minutes", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   await seedUsage(e);

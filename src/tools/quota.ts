@@ -13,7 +13,7 @@ export const getQuotaTool: BotTool = {
     function: {
       name: "get_quota",
       description:
-        "查自己还剩多少额度：DeepSeek 余额（缓存十分钟）、今天/本月的 DeepSeek 次数与估算花费、OpenAI 与生图的每日限额已用/剩余、Workers AI 今日 neurons。被问「你还有多少额度/余额/今天用了多少」时调用。" +
+        "查自己还剩多少额度：DeepSeek 余额（缓存十分钟）、今天/本月的 DeepSeek 次数与估算花费、OpenAI 与生图的每日限额已用/剩余、Workers AI 今日 neurons；有上次快照时会带「较上次」的变化。被问「你还有多少额度/余额/今天用了多少」时调用。" +
         "只有群主本人直接问才给具体金额和数字；其他人只回答够用/偏低/快没了。只读，不要猜数字。",
       parameters: {
         type: "object",

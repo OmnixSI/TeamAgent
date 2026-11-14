@@ -1151,7 +1151,7 @@
       "tools": [
         "get_quota"
       ],
-      "how": "被问额度时 get_quota 读 DeepSeek 余额接口（D1 缓存十分钟）、ds_usage 的今天/本月次数与估算花费、openai_usage 的每日预算、生图每日限额和 Workers AI 的 UTC 日 neurons；只有群主本人直接问才给具体数字，其他人只给够用/偏低/快没了。低于 ¥10 或不足 3 天用量时，每天 08:00 写一行进开发室晨报，不发群。",
+      "how": "被问额度时 get_quota 读 DeepSeek 余额接口（D1 缓存十分钟）、ds_usage 的今天/本月次数与估算花费、openai_usage 的每日预算、生图每日限额和 Workers AI 的 UTC 日 neurons；每次真实取数后把纯数字快照写进 settings 的 quota:last_snapshot，并在回答里加一行「较上次」的余额/调用/neurons 变化（首次说第一次记录，缓存命中不覆盖快照）；只有群主本人直接问才给具体数字，其他人只给够用/偏低/快没了。低于 ¥10 或不足 3 天用量时，每天 08:00 写一行进开发室晨报，不发群。",
       "files": [
         {
           "path": "src/quota.ts",

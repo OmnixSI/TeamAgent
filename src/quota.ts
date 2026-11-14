@@ -26,6 +26,7 @@ export const CNY_PER_USD = 7.2;
 export const DEEPSEEK_LOW_BALANCE_USD = DEEPSEEK_LOW_BALANCE_CNY / CNY_PER_USD;
 
 export const QUOTA_MORNING_KEY = "quota:morning";
+export const QUOTA_LAST_KEY = "quota:last_snapshot";
 export const QUOTA_MORNING_HOUR = 8;
 const IMAGE_USER_DAILY_DEFAULT = 5;
 const IMAGE_GROUP_DAILY_DEFAULT = 20;
@@ -53,16 +54,30 @@ export type DeepSeekBalance =
       total: number;
       granted: number;
       toppedUp: number;
+      /** Every balance_infos entry, raw decimal strings, for snapshot deltas. */
+      totals: { currency: string; total: string }[];
+      /** True only for this read when the D1 cache answered. Never persisted. */
+      fromCache?: boolean;
+      /** True only when this read actually called the provider. Never persisted. */
+      fresh?: boolean;
     }
   | {
       ok: false;
       at: number;
       kind: BalanceFailureKind;
+      /** True only for this read when the D1 cache answered. Never persisted. */
+      fromCache?: boolean;
+      /** True only when this read actually called the provider. Never persisted. */
+      fresh?: boolean;
     };
 
 export type QuotaSnapshot = {
   at: number;
   balance: DeepSeekBalance;
+  /** True when this read came from the ten-minute D1 cache. */
+  balanceFromCache: boolean;
+  /** True only when this read actually called the balance endpoint. */
+  balanceFresh: boolean;
   deepseek: {
     todayCalls: number;
     todayMicroUsd: number;
@@ -188,15 +203,24 @@ function parseBalance(value: any): DeepSeekBalance | null {
       granted = Number(raw.granted),
       toppedUp = Number(raw.toppedUp);
     if (!Number.isFinite(total)) return null;
+    const currency = String(raw.currency || "UNKNOWN").toUpperCase();
+    const totals = (Array.isArray(raw.totals) ? raw.totals : [])
+      .map((entry: any) => ({
+        currency: String(entry?.currency || "UNKNOWN").toUpperCase(),
+        total: String(entry?.total ?? "").trim(),
+      }))
+      .filter((entry: any) => entry.total !== "");
+    if (!totals.length) totals.push({ currency, total: String(raw.total) });
     return {
       ok: true,
       at,
       available:
         raw.available === true ? true : raw.available === false ? false : null,
-      currency: String(raw.currency || "UNKNOWN").toUpperCase(),
+      currency,
       total,
       granted: Number.isFinite(granted) ? granted : 0,
       toppedUp: Number.isFinite(toppedUp) ? toppedUp : 0,
+      totals,
     };
   }
   const kind = String(raw.kind || "upstream");
@@ -229,17 +253,18 @@ export async function readDeepSeekBalance(
   const maxAgeMs = options.maxAgeMs ?? DEEPSEEK_BALANCE_TTL_MS;
   const cache = options.cache === undefined ? await readSetting(e, DEEPSEEK_BALANCE_CACHE_KEY) : options.cache;
   const hit = cachedBalance(cache, at, maxAgeMs);
-  if (hit) return hit;
+  if (hit) return { ...hit, fromCache: true, fresh: false };
 
   const key = String(e?.DEEPSEEK_API_KEY || "");
   if (!key)
-    return { ok: false, at, kind: "missing_key" };
+    return { ok: false, at, kind: "missing_key", fromCache: false, fresh: false };
 
   const store = async (value: DeepSeekBalance): Promise<DeepSeekBalance> => {
+    const fresh = { ...value, fromCache: false, fresh: true } as DeepSeekBalance;
     try {
-      await writeSetting(e, DEEPSEEK_BALANCE_CACHE_KEY, JSON.stringify(value));
+      await writeSetting(e, DEEPSEEK_BALANCE_CACHE_KEY, JSON.stringify(fresh));
     } catch {}
-    return value;
+    return fresh;
   };
 
   const controller = new AbortController();
@@ -288,6 +313,12 @@ export async function readDeepSeekBalance(
     const parsed = Number(String(value ?? "").replace(/,/g, ""));
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const totals = infos
+    .map((entry: any) => ({
+      currency: String(entry?.currency || "UNKNOWN").toUpperCase(),
+      total: String(entry?.total_balance ?? "").replace(/,/g, "").trim(),
+    }))
+    .filter((entry: any) => entry.total !== "");
   return store({
     ok: true,
     at,
@@ -297,6 +328,7 @@ export async function readDeepSeekBalance(
     total,
     granted: number(info?.granted_balance),
     toppedUp: number(info?.topped_up_balance),
+    totals,
   });
 }
 
@@ -427,6 +459,8 @@ export async function quotaSnapshot(
   return {
     at,
     balance,
+    balanceFromCache: balance.fromCache === true,
+    balanceFresh: balance.fresh === true,
     deepseek: {
       todayCalls: Number(ds.today_calls) || 0,
       todayMicroUsd: Number(ds.today_cost) || 0,
@@ -448,6 +482,144 @@ export async function quotaSnapshot(
     },
     ai: { used: aiUsed, cap: aiCap },
   };
+}
+
+type StoredQuota = {
+  at: number;
+  deepseek: Record<string, string>;
+  dsCalls: number | null;
+  dsMicroUsd: number | null;
+  openaiCalls: number | null;
+  openaiMicroUsd: number | null;
+  aiUsed: number | null;
+  band: QuotaBand | null;
+};
+
+function storedNumber(value: any): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function parseStoredQuota(raw: any): StoredQuota | null {
+  const parsed = parseJson(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+  const at = Number(parsed.at);
+  if (!Number.isFinite(at) || at <= 0) return null;
+  const deepseek: Record<string, string> = {};
+  if (parsed.deepseek && typeof parsed.deepseek === "object") {
+    for (const [currency, total] of Object.entries(parsed.deepseek)) {
+      const value = typeof total === "string" ? total.trim() : "";
+      if (/^[A-Z]{3,8}$/.test(currency) && value && Number.isFinite(Number(value))) {
+        deepseek[currency] = value;
+      }
+    }
+  }
+  const band =
+    parsed.band === "ok" || parsed.band === "low" || parsed.band === "critical"
+      ? parsed.band
+      : null;
+  return {
+    at,
+    deepseek,
+    dsCalls: storedNumber(parsed.dsCalls),
+    dsMicroUsd: storedNumber(parsed.dsMicroUsd),
+    openaiCalls: storedNumber(parsed.openaiCalls),
+    openaiMicroUsd: storedNumber(parsed.openaiMicroUsd),
+    aiUsed: storedNumber(parsed.aiUsed),
+    band,
+  };
+}
+
+/** Numbers and times only: no key, token or account identifier. */
+function storedFromSnapshot(snapshot: QuotaSnapshot, band: QuotaBand): StoredQuota {
+  const deepseek: Record<string, string> = {};
+  if (snapshot.balance.ok) {
+    for (const entry of snapshot.balance.totals) {
+      if (!(entry.currency in deepseek)) deepseek[entry.currency] = entry.total;
+    }
+  }
+  return {
+    at: snapshot.at,
+    deepseek,
+    dsCalls: snapshot.deepseek.todayCalls,
+    dsMicroUsd: snapshot.deepseek.todayMicroUsd,
+    openaiCalls: snapshot.openai.todayCalls,
+    openaiMicroUsd: snapshot.openai.todayMicroUsd,
+    aiUsed: snapshot.ai.used,
+    band,
+  };
+}
+
+function sydneyTime(at: number, reference: number): string {
+  const clock = sydneyClock(at).slice(-5);
+  return sydneyDate(at) === sydneyDate(reference) ? clock : sydneyClock(at);
+}
+
+function signed(value: number, digits = 2): string {
+  const rounded = Number(value.toFixed(digits));
+  if (rounded === 0) return "0";
+  return (rounded > 0 ? "+" : "−") + Math.abs(rounded).toFixed(digits);
+}
+
+function signedInt(value: number): string {
+  if (value === 0) return "0";
+  return (value > 0 ? "+" : "−") + Math.abs(value);
+}
+
+function signedUsd(microUsd: number): string {
+  const value = Number(microUsd) / 1e6;
+  const rounded = Number(value.toFixed(2));
+  if (rounded === 0) return "$0";
+  return (rounded > 0 ? "+" : "−") + "$" + Math.abs(rounded).toFixed(2);
+}
+
+function currencyUnit(currency: string): string {
+  if (currency === "CNY") return "元";
+  if (currency === "USD") return "美元";
+  return currency;
+}
+
+function deltaLine(previous: StoredQuota | null, snapshot: QuotaSnapshot): string {
+  if (!previous) return "较上次：这是第一次记录";
+  const items: string[] = [];
+  if (snapshot.balance.ok) {
+    for (const entry of snapshot.balance.totals) {
+      const before = previous.deepseek[entry.currency];
+      const current = Number(entry.total);
+      const old = Number(before);
+      if (before === undefined || !Number.isFinite(current) || !Number.isFinite(old)) continue;
+      const delta = Number((current - old).toFixed(2));
+      if (delta === 0) continue;
+      items.push("DeepSeek 余额 " + signed(delta) + " " + currencyUnit(entry.currency));
+    }
+  }
+  if (previous.dsCalls !== null) {
+    const delta = snapshot.deepseek.todayCalls - previous.dsCalls;
+    if (delta !== 0) items.push("今日调用 " + signedInt(delta) + " 次");
+  }
+  if (previous.dsMicroUsd !== null) {
+    const delta = snapshot.deepseek.todayMicroUsd - previous.dsMicroUsd;
+    if (Math.round(delta / 10000) !== 0) items.push("今日 DeepSeek 花费 " + signedUsd(delta));
+  }
+  if (previous.openaiMicroUsd !== null) {
+    const delta = snapshot.openai.todayMicroUsd - previous.openaiMicroUsd;
+    if (Math.round(delta / 10000) !== 0) items.push("OpenAI 今日花费 " + signedUsd(delta));
+  }
+  if (previous.aiUsed !== null) {
+    const delta = snapshot.ai.used - previous.aiUsed;
+    if (delta !== 0) items.push("neurons " + signedInt(delta));
+  }
+  if (!items.length) return "较上次（" + sydneyTime(previous.at, snapshot.at) + "）：没变化";
+  return "较上次（" + sydneyTime(previous.at, snapshot.at) + "）：" + items.join(" / ");
+}
+
+function notchNote(previous: StoredQuota | null, band: QuotaBand): string {
+  const rank: Record<string, number> = { critical: 0, low: 1, ok: 2 };
+  if (!previous || !previous.band) return "";
+  const before = rank[previous.band],
+    after = rank[band];
+  if (before === undefined || after === undefined || before === after) return "";
+  return after < before ? "（比上次低了一档）" : "（比上次高了一档）";
 }
 
 function balanceLine(balance: DeepSeekBalance): string {
@@ -537,6 +709,7 @@ export async function renderQuota(
   | { ok: false; error_kind: "unavailable"; retryable: true; reason_text: string; next_action: string }
 > {
   try {
+    const previous = parseStoredQuota(await readSetting(e, QUOTA_LAST_KEY));
     const snapshot = await quotaSnapshot(e, {
       at: options.now,
       group: options.group,
@@ -550,8 +723,20 @@ export async function renderQuota(
       aiUsed: snapshot.ai.used,
       aiCap: snapshot.ai.cap,
     });
-    if (!options.owner) return { ok: true, text: bandText(band), band };
-    return { ok: true, text: ownerQuotaText(snapshot), band };
+    // A cache hit must not overwrite the previous real fetch; only a fresh
+    // balance read advances the snapshot. The one exception is the very first
+    // record (a cache seeded by the morning job), which initializes it once.
+    if (snapshot.balanceFresh || !previous) {
+      try {
+        await writeSetting(e, QUOTA_LAST_KEY, JSON.stringify(storedFromSnapshot(snapshot, band)));
+      } catch {}
+    }
+    if (!options.owner) {
+      const note = notchNote(previous, band);
+      const text = bandText(band);
+      return { ok: true, text: note ? text.slice(0, -1) + note + "。" : text, band };
+    }
+    return { ok: true, text: ownerQuotaText(snapshot) + "\n" + deltaLine(previous, snapshot), band };
   } catch {
     return {
       ok: false,
