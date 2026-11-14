@@ -246,6 +246,22 @@ export function parseScheduleRequest(text: string): ParsedScheduleRequest | null
   };
 }
 
+/**
+ * L2：按 topic 生成去重键。ASCII 主题转 kebab-case；中文等转不出合法键时
+ * 退化为 rpt-<id 前 6 位>，保证符合 createSchedule 的 3–31 位小写规则。
+ */
+export function slug(topic: string, id = "") {
+  const ascii = String(topic ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 31);
+  if (/^[a-z][a-z0-9-]{2,30}$/.test(ascii)) return ascii;
+  const tail = String(id ?? "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6) || "000000";
+  return `rpt-${tail}`;
+}
+
 /** 2026-11-14 08:00（悉尼） */
 export function sydneyText(ts: number | null | undefined, tz = DEFAULT_TZ) {
   if (!ts) return "无";
