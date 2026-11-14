@@ -53,6 +53,12 @@ export interface Host {
   transcribe(audio: Uint8Array, seconds: number, type: string, name: string): Promise<string>;
   /** Link of a video someone posted, by the message number shown as [视频 123]; "" when unknown. */
   videoUrl(seq: number): string;
+  /** A file-box file (x12) as a download step for the cloud computer; null when it is not this conversation's. */
+  boxIn(ref: string): { name: string; command: string } | null;
+  /** An upload step that moves a big result from the cloud computer into the file box; `claim` after it ran. */
+  boxOut(path: string, name: string): { command: string; claim(): Promise<{ ref: string; name: string; size: number; link: string } | null> };
+  /** One sentence when a planned use is more than today's share of a monthly allowance, else null. */
+  advice(meter: string, amount: number): string | null;
   /** The added abilities (src/feat) and what each says about itself. */
   features(): { name: string; about?: string[] }[];
   /** A short progress line to the chat during a long job. */
@@ -623,10 +629,10 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "computer", work: true, slow: true,
-      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 26、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置一分半钟就关机并清空，隔了一阵再用要重新放文件，开机多等约 10 秒。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
+      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 26、中文字体；要用 LibreOffice（soffice）转文档、做 OCR、排 LaTeX 这些大件，在 packs 里写上对应的工具包，会先从缓存恢复（office 约一分多钟，其余二十来秒）；文件转换有现成技能的优先用 skill。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个；超过 25 MB 的自动放进文件箱，返回下载链接）。电脑闲置一分半钟就关机并清空，隔了一阵再用要重新放文件，开机多等约 10 秒。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
       parameters: obj({
         commands: { type: "array", items: { type: "string" }, description: "按顺序执行的 bash 命令。例：[\"git clone --depth 1 https://github.com/OmnixSI/WhalePartner repo\", \"cd repo && grep -rn 'TODO' src | head -50\"]" },
-        files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },
+        files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12）、之前存下的文件编号（f12），或文件箱编号（x12，大文件走这个，不受 25 MB 限制）" },
         collect: { type: "array", items: { type: "string" }, description: "跑完要取回的文件，如 \"out/report.pdf\"、\"frames/*.jpg\"" },
         timeout_seconds: { type: "integer", description: "整批命令的总时限，默认 300，最多 1800" },
         packs: { type: "array", items: { type: "string" }, description: "要用到的大件工具包，会先装好再跑命令：" + (Object.entries(PACKS).map(([k, p]) => k + "（" + p.what + "）").join("；") || "暂无") },
@@ -635,15 +641,37 @@ export function buildTools(host: Host): Tool[] {
       }, ["commands"]),
       run: async a => {
         if (!(await host.quota("computer", Number(host.cfg("computer_daily"))))) return { ok: false, error: "今天用云电脑的次数用完了" };
-        const files: { name: string; bytes: Uint8Array }[] = [];
-        for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) files.push(f); }
-        const commands = (Array.isArray(a.commands) ? a.commands : [a.commands]).map(String).filter(Boolean).slice(0, 20);
-        if (!commands.length) return { ok: false, error: "没有要跑的命令" };
-        const out = await host.computer({ commands, files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: Number(a.timeout_seconds) || 300, ...(Array.isArray(a.packs) && a.packs.length ? { packs: a.packs.map(String).filter((p: string) => PACKS[p]) } : {}), ...(a.workspace ? { workspace: String(a.workspace) } : {}) });
+        const files: { name: string; bytes: Uint8Array }[] = [], fetches: string[] = [], missing: string[] = [];
+        for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6).map(String)) {
+          if (/^x\d+$/i.test(ref.trim())) { const b = host.boxIn(ref.trim()); if (b) fetches.push(b.command); else missing.push(ref); continue; }
+          const f = await host.fileRef(ref).catch(() => null);
+          if (f) files.push(f); else missing.push(ref);
+        }
+        const asked = (Array.isArray(a.commands) ? a.commands : [a.commands]).map(String).filter(Boolean).slice(0, 20);
+        if (!asked.length) return { ok: false, error: "没有要跑的命令" };
+        const timeout = Number(a.timeout_seconds) || 300;
+        const out = await host.computer({ commands: [...fetches, ...asked], files, collect: Array.isArray(a.collect) ? a.collect.map(String) : [], timeoutSeconds: timeout, ...(Array.isArray(a.packs) && a.packs.length ? { packs: a.packs.map(String) } : {}), ...(a.workspace ? { workspace: String(a.workspace) } : {}) });
+        // Results over 25 MB cannot come back through the Worker: they go from the machine straight into the file box.
+        const TOO_BIG = "（超过 25 MB）", bigPaths = (out.skipped || []).filter(x => x.endsWith(TOO_BIG)).map(x => x.slice(0, -TOO_BIG.length)).slice(0, 4);
+        const boxed: { name: string; ref: string; link: string; mb: number }[] = [], moved = new Set<string>();
+        if (bigPaths.length) {
+          const ups = bigPaths.map(p => ({ p, up: host.boxOut(p.startsWith("/") ? p : "/work/" + p, p.split("/").pop() || p) }));
+          const second = await host.computer({ commands: ups.map(u => u.up.command + " || true"), timeoutSeconds: 900 }).catch(() => null);
+          if (second) for (const u of ups) { const c = await u.up.claim().catch(() => null); if (c) { moved.add(u.p + TOO_BIG); boxed.push({ name: c.name, ref: c.ref, link: c.link, mb: Math.round(c.size / 104857.6) / 10 }); } }
+        }
+        const left = (out.skipped || []).filter(x => !moved.has(x));
+        const shown = out.steps.slice(Math.min(fetches.length, out.steps.length)), failedFetch = out.steps.slice(0, fetches.length).find(st => st.exit !== 0);
+        // Only worth a word after a run long enough to matter.
+        const tip = out.seconds >= 120 ? host.advice("container_cpu_seconds", out.seconds) : null;
         return {
-          ok: out.ok, ...(out.error ? { error: out.error } : {}), seconds: out.seconds, ...(out.bootstrap_seconds ? { note_boot: "电脑刚开机，装软件用了 " + out.bootstrap_seconds + " 秒" } : {}),
-          steps: out.steps.map(st => ({ command: clip(st.command, 200), exit: st.exit, seconds: st.seconds, stdout: clip(st.stdout, 5000), ...(st.stderr.trim() ? { stderr: clip(st.stderr, 2000) } : {}) })),
-          ...(out.skipped?.length ? { not_collected: out.skipped } : {}), ...(out.files.length ? await handOver(host, out.files, a.deliver !== false) : {}),
+          ok: out.ok, ...(out.error ? { error: out.error } : {}), ...(failedFetch ? { error: "文件箱里的文件没取下来：" + clip(failedFetch.stderr || failedFetch.stdout, 200) } : {}),
+          seconds: out.seconds, ...(out.bootstrap_seconds ? { note_boot: "电脑刚开机，装软件用了 " + out.bootstrap_seconds + " 秒" } : {}),
+          ...(missing.length ? { files_not_found: missing } : {}),
+          ...(out.packs ? { packs: out.packs } : {}),
+          steps: shown.map(st => ({ command: clip(st.command, 200), exit: st.exit, seconds: st.seconds, stdout: clip(st.stdout, 5000), ...(st.stderr.trim() ? { stderr: clip(st.stderr, 2000) } : {}) })),
+          ...(left.length ? { not_collected: left } : {}), ...(out.files.length ? await handOver(host, out.files, a.deliver !== false) : {}),
+          ...(boxed.length ? { big_files: boxed, big_note: "这些文件超过 25 MB，放进了文件箱：把 link 原样发给群友下载（几小时内有效，过期了用 filebox 再要一个）；编号能放进下一次 computer 或 skill 的 files" } : {}),
+          ...(tip ? { budget_note: tip } : {}),
         };
       },
     },

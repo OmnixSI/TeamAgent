@@ -6,6 +6,7 @@ import type { Feature } from "./types.ts";
 import type { Hub } from "../hub.ts";
 import type { Tool } from "../core.ts";
 import { BJ, fmtDate, fmtFull, zonedToUtc } from "../util.ts";
+import { allowed } from "./steward.ts";
 
 export const DEFAULT_REPOS = ["TeamAgent", "peiwan-club-saas", "WhalePartner", "NextThought", "NextThought-Website"];
 export const LIMITS = { total: 480, tail: 40, line: 200, keep: 60, summary: 14000, fresh: 7 * 86400000, since: 8 };
@@ -756,7 +757,8 @@ export async function nightly(hub: Hub, repos: string[], now = Date.now()) {
   for (const repo of repos) {
     if (!hub.plan.fits("container_seconds", 600)) { hub.set("repocheck:skip", fmtDate(now, BJ) + "|云电脑时间额度不够，" + (repos.length - done.length) + " 个仓库没查"); break; }
     try {
-      const r = await checkOne(hub, repo, { announce: true, budget: cpuBudget, now });
+      // The steward turns the optional extras on only in months with plenty of machine time left.
+      const r = await checkOne(hub, repo, { announce: true, budget: cpuBudget, now, builds: allowed(hub, "repo_builds"), force: allowed(hub, "repo_full") });
       cpuBudget = Math.max(0, cpuBudget - (r.row.summary.cpu || 0));
       done.push(repo);
     } catch (e: any) {

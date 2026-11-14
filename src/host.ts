@@ -6,6 +6,8 @@ import { displayName } from "./core.ts";
 import { browse, render, renderPdf } from "./render.ts";
 import { runComputer } from "./computer.ts";
 import { FEATURES } from "./feat/index.ts";
+import { boxDownloadCommand, boxFile, boxUpload } from "./feat/filebox.ts";
+import { advice } from "./feat/steward.ts";
 import { checkHealth } from "./health.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, unb64 } from "./util.ts";
 
@@ -48,6 +50,15 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
     renderPdf: (html, width, height) => renderPdf(hub, html, width, height),
     browse: (url, shot) => browse(hub, url, shot),
     computer: req => runComputer(hub, req),
+    boxIn: ref => {
+      const f = boxFile(hub, conv, ref);
+      if (!f) return null;
+      const name = f.name.replace(/[\/\0]/g, "_") || f.ref;
+      const command = boxDownloadCommand(hub, conv, ref, "/work/" + name);
+      return command ? { name, command } : null;
+    },
+    boxOut: (path, name) => boxUpload(hub, conv, path, name),
+    advice: (meter, amount) => advice(hub, meter, amount),
     transcribe: (audio, seconds, type, name) => hub.transcribe(audio, seconds, type, name),
     videoUrl: seq => {
       const row = hub.sql.exec("SELECT meta FROM msg WHERE seq=? AND conv=?", seq, conv).toArray()[0] as any;

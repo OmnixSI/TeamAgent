@@ -6,7 +6,9 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Hub } from "./hub.ts";
 import type { Env } from "./util.ts";
-import { PART, CAP, cacheName, bootPlan, afterRestore, shouldSave, complete, issue, link, root, row, stored, remove, keysUnder, workspaceName } from "./feat/transfer.ts";
+import { PART, CAP, cacheName, bootPlan, afterRestore, shouldSave, complete, issue, link, root, row, stored, remove, keysUnder, workspaceName, fitsCap } from "./feat/transfer.ts";
+import { PACKS, PACK_MAX, PACK_PREP, PACK_SNAP, PACK_LINK, PACK_MERGE, FINGERPRINT, pickPacks, layerName, packPlan, afterPackRestore, savePack, packOrder, packReport, packFailure } from "./packs.ts";
+import type { PackPlan, PackSetup } from "./packs.ts";
 
 // With the prepared environment restored from R2 a wake-up costs seconds instead of half a minute, so a
 // short idle tail is cheaper than keeping the machine up on the chance of another call soon.
@@ -111,7 +113,13 @@ export type ComputerResult = {
   woke?: boolean; bootstrap_seconds?: number; skipped?: string[]; error?: string;
   /** How the tools got there after a wake-up: unpacked from the R2 cache, or installed from the internet. */
   setup?: "restored" | "installed"; restore_error?: string; workspace?: Workspace;
+  /** Per requested pack: already there, unpacked from its R2 layer, or installed from the internet. */
+  packs?: Record<string, PackSetup>;
 };
+/** What the machine needs to set up one pack: its recipe and signed links for its layer. */
+export type PackJob = { name: string; install: string; check: string; get?: string; put?: string };
+export type PackDone = PackSetup & { failed?: boolean; drop?: boolean; saved?: boolean; cpu?: number; bytes?: number };
+type Upload = { what: string; url: string; max: number; file: string; args: string[]; cpu: number };
 /** Signed links the machine uses to fetch or save the prepared environment (from the transfer feature). */
 export type CacheLinks = { get?: string; put?: string };
 
@@ -140,8 +148,13 @@ const text = (r: { bytes: Uint8Array; cut: boolean }) => new TextDecoder().decod
 export class Computer extends DurableObject<Env> {
   private booting: Promise<{ bootstrap_seconds: number; setup?: "restored" | "installed"; saving?: boolean; restore_error?: string }> | null = null;
   private saving: Promise<void> | null = null;
-  private pendingSave = "";
+  // Layers waiting to be uploaded once the run that made them is over (the environment, packs).
+  private pending: Upload[] = [];
   private busy = 0;
+  // Pack setups run one at a time; commands running meanwhile make an install unfit to be saved as a layer.
+  private packChain: Promise<unknown> = Promise.resolve();
+  private cmds = 0;
+  private cmdEpoch = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -212,7 +225,7 @@ export class Computer extends DurableObject<Env> {
     if (plan === "restore") {
       const r = await this.node(FETCH, [cache!.get!, "/"], 180);
       const ok = r.exit === 0 && await box.exec(["timeout", "30", "bash", "-c", CHECK]).then(p => p.exitCode) === 0;
-      if (afterRestore(ok) === "done") return { bootstrap_seconds: secs(t), setup: "restored" };
+      if (afterRestore(ok) === "done") { await this.markBase(); return { bootstrap_seconds: secs(t), setup: "restored" }; }
       restore_error = (r.err || "解开后检查没通过").slice(-300);
       // A half-unpacked system would make apt skip packages it believes are installed: start from a clean disk.
       await box.destroy().catch(() => {});
@@ -226,22 +239,112 @@ export class Computer extends DurableObject<Env> {
     const bootstrap_seconds = secs(t);
     // The file list is taken now, before any command runs, so nothing a job writes ends up in the cache.
     const saving = shouldSave((await this.sh(SNAPSHOT, 60)).exit === 0, cache?.put);
-    if (saving) this.pendingSave = cache!.put!;
+    if (saving) this.pending.push({ what: "environment", url: cache!.put!, max: ENV_MAX, file: "/tmp/computer-env.tar.zst", args: ["-cf", "-", "-C", "/", "-T", LIST], cpu: SAVE_CPU });
+    await this.markBase();
     return { bootstrap_seconds, setup: "installed", saving, restore_error };
   }
 
-  /** Uploads the environment packed after a full install. Runs in the background once the run that
-   *  woke the machine is over, so it neither slows those commands nor makes the caller wait. */
-  async saveEnvironment(): Promise<boolean> {
-    const url = this.pendingSave;
-    if (!url || this.saving || !this.box.running) return false;
-    this.pendingSave = "";
+  /** Remembers what the bare base looks like, so a pack install can tell whether anything else is on the machine. */
+  private async markBase() { await this.box.exec(["bash", "-c", FINGERPRINT + " > " + BASE_SUM]).then(p => p.exitCode).catch(() => {}); }
+
+  /** Uploads the environment and pack layers packed after full installs. Runs in the background once the
+   *  run that made them is over, so it neither slows those commands nor makes the caller wait. Returns the
+   *  CPU seconds the uploads it started are expected to take (they are charged to that run up front). */
+  async saveEnvironment(): Promise<number> {
+    if (!this.pending.length || !this.box.running) return 0;
+    const jobs = this.pending.splice(0);
     this.enter();
-    this.saving = this.node(SEND, [url, String(ENV_MAX), "/tmp/computer-env.tar.zst", "-cf", "-", "-C", "/", "-T", LIST], 900)
-      .then(r => { if (r.exit !== 0) console.log("environment cache upload failed", r.err.slice(-300)); })
-      .catch(e => console.log("environment cache upload failed", e?.message))
-      .finally(() => { this.leave(); this.saving = null; return this.touch(); });
-    return true;
+    const prev = this.saving || Promise.resolve();
+    const mine: Promise<void> = this.saving = prev.then(async () => {
+      for (const j of jobs) {
+        const r = await this.node(SEND, [j.url, String(j.max), j.file, ...j.args], 900).catch(e => ({ exit: 1, out: "", err: String(e?.message) }));
+        if (r.exit !== 0 || !r.out.includes('"ok":true')) console.log(j.what + " upload failed", (r.err || r.out).slice(-300));
+      }
+    }).finally(() => { this.leave(); if (this.saving === mine) this.saving = null; return this.touch(); });
+    return jobs.reduce((s, j) => s + j.cpu, 0);
+  }
+
+  /** Finishes pending uploads now: they read files a pack is about to change (the dpkg status, for one). */
+  private async flushSaves() {
+    if (this.pending.length) await this.saveEnvironment();
+    while (this.saving) await this.saving.catch(() => {});
+  }
+
+  /** Makes sure the packs are on the machine, one setup at a time: present ones are left alone, the rest
+   *  unpacked from their layer or installed (installs first, while the machine still holds only the base).
+   *  A clean install is snapshotted and uploaded as the pack's layer after the run. Stops at the first
+   *  pack that cannot be set up. */
+  async packs(jobs: PackJob[]): Promise<Record<string, PackDone>> {
+    const run = this.packChain.then(() => this.setupPacks(jobs));
+    this.packChain = run.catch(() => {});
+    return run;
+  }
+
+  private async setupPacks(jobs: PackJob[]): Promise<Record<string, PackDone>> {
+    this.enter();
+    try {
+      const done: Record<string, PackDone> = {};
+      const t = Date.now();
+      const state = await this.sh('for c in "$@"; do if timeout 60 bash -lc "$c" >/dev/null 2>&1; then echo 1; else echo 0; fi; done', 300, jobs.map(j => j.check));
+      const present = text(state.out).trim().split("\n");
+      const plans: Record<string, PackPlan> = {};
+      jobs.forEach((j, i) => { plans[j.name] = packPlan(present[i] === "1", !!j.get); });
+      for (const j of jobs) if (plans[j.name] === "present") done[j.name] = { setup: "present", seconds: secs(t) };
+      const todo = packOrder(jobs.map(j => j.name), plans);
+      if (todo.length) await this.flushSaves();
+      for (const { name, plan } of todo) {
+        const j = jobs.find(x => x.name === name)!, t0 = Date.now(), c0 = await this.cpuNow();
+        let error: string | undefined, drop = false, touched = false;
+        if (plan === "restore") {
+          const r = await this.restorePack(j);
+          if (afterPackRestore(r.ok) === "done") { done[name] = { setup: "restored", seconds: secs(t0), cpu: await this.cpuNow() - c0 }; continue; }
+          error = "存档没能恢复（" + r.error + "），重新装了一遍"; drop = true; touched = r.touched;
+        }
+        const quiet = this.cmds === 0, epoch = this.cmdEpoch;
+        const clean = !touched && quiet && (await this.sh(`[ "$(${FINGERPRINT})" = "$(cat ${BASE_SUM} 2>/dev/null)" ]`, 30)).exit === 0;
+        const r = await this.installPack(j, savePack(true, clean, j.put));
+        const d: PackDone = { setup: "installed", seconds: secs(t0), cpu: await this.cpuNow() - c0, ...(drop ? { drop } : {}) };
+        if (!r.ok) { done[name] = { ...d, failed: true, error: r.error }; break; }
+        if (error) d.error = error;
+        if (r.bytes !== undefined && this.cmds === 0 && this.cmdEpoch === epoch) {
+          this.pending.push({ what: "pack " + name, url: j.put!, max: PACK_MAX, file: "/tmp/pack-" + name + ".tar.zst", args: ["-cf", "-", "-C", "/", "-T", "/tmp/pack-" + name + ".list"], cpu: Math.round(r.bytes / 1048576 * PACK_SAVE_CPU_PER_MB) });
+          d.saved = true; d.bytes = r.bytes;
+        }
+        done[name] = d;
+      }
+      return done;
+    } finally { this.leave(); await this.touch(); }
+  }
+
+  private async cpuNow() { return (await this.meter().catch(() => ({ cpu: 0 }))).cpu; }
+
+  /** Unpacks a layer into a staging folder first and moves it into place only when the whole download
+   *  arrived intact; `touched` tells whether the system was changed before something failed. */
+  private async restorePack(j: PackJob): Promise<{ ok: boolean; touched: boolean; error?: string }> {
+    const stage = "/opt/computer/stage-" + j.name;
+    await this.sh('rm -rf -- "$1" && mkdir -p -- "$1"', 60, [stage]);
+    const f = await this.node(FETCH, [j.get!, stage], 600);
+    if (f.exit !== 0) {
+      await this.sh('rm -rf -- "$1"', 60, [stage]);
+      return { ok: false, touched: false, error: (f.err.trim() || "下载失败").slice(-200) };
+    }
+    const l = await this.sh(PACK_LINK, 300, [stage]);
+    if (l.exit !== 0) return { ok: false, touched: true, error: "放到位置时出错 " + text(l.err).slice(-200) };
+    if ((await this.sh(j.check, 120)).exit !== 0) return { ok: false, touched: true, error: "解开后检查没通过" };
+    await this.sh(PACK_MERGE, 60, [j.name]);
+    return { ok: true, touched: true };
+  }
+
+  /** Runs a pack's install and its check; with `snapshot` also lists what it added for the layer. */
+  private async installPack(j: PackJob, snapshot: boolean): Promise<{ ok: boolean; error?: string; bytes?: number }> {
+    if ((await this.sh(PACK_PREP, 30, [j.name])).exit !== 0) return { ok: false, error: "准备安装时出错" };
+    const r = await this.sh("set -e\n" + j.install, 900);
+    if (r.exit !== 0) return { ok: false, error: (r.exit === 124 ? "安装超时 " : "") + (text(r.err).trim() || text(r.out).trim()).slice(-400) };
+    if ((await this.sh(j.check, 120)).exit !== 0) return { ok: false, error: "装完了，但检查没通过" };
+    if (!snapshot) return { ok: true };
+    const s = await this.sh(PACK_SNAP, 120, [j.name]);
+    const bytes = Number(text(s.out).trim().split("\n").pop());
+    return s.exit === 0 && Number.isFinite(bytes) ? { ok: true, bytes } : { ok: true };
   }
 
   /** Unpacks a saved workspace into /work/<name> unless that directory is already there (the machine stayed
@@ -304,12 +407,13 @@ export class Computer extends DurableObject<Env> {
 
   async run(command: string, seconds: number, env?: Record<string, string>): Promise<Step> {
     this.enter();
+    this.cmds++; this.cmdEpoch++;
     const t = Date.now();
     try {
       const r = await this.sh(command, seconds, [], undefined, env);
       const stderr = text(r.err) + (r.exit === 124 ? "\n（超时，被停掉了）" : "");
       return { command, exit: r.exit, stdout: text(r.out), stderr, seconds: secs(t) };
-    } finally { this.leave(); await this.touch(); }
+    } finally { this.cmds = Math.max(0, this.cmds - 1); this.leave(); await this.touch(); }
   }
 
   /** Files to bring back (paths relative to the work directory, globs allowed) with their sizes. */
@@ -334,6 +438,9 @@ export class Computer extends DurableObject<Env> {
 // Measured: packing and uploading the environment after a full install takes about this much CPU. It runs
 // after the call returns, so it is charged up front and left out of the next run's CPU reading.
 const SAVE_CPU = 30;
+// Packing and uploading a pack layer, per MB of files before compression (measured with the office pack).
+const PACK_SAVE_CPU_PER_MB = 0.07;
+const BASE_SUM = "/opt/computer/base.sum";
 
 /** Links for the environment cache: a read link when a finished cache for this recipe exists, and a write
  *  link so a full install (first time, or after a failed restore) can save a fresh one. Older recipes'
@@ -350,6 +457,23 @@ async function cacheLinks(hub: Hub): Promise<CacheLinks> {
   if (stored(hub) - (row(hub, key)?.size || 0) + ENV_MAX <= CAP) links.put = link(hub, "put", issue(hub, { mode: "put", prefix, name }), name);
   hub.set("computer:env_links", JSON.stringify({ name, have, exp: now + 30 * 60000, links }));
   return links;
+}
+
+/** What each requested pack needs: the recipe, a read link when its current layer is stored, a write link
+ *  when there is room for a new one. Layers of changed recipes and of packs that no longer exist are dropped. */
+async function packJobs(hub: Hub, names: string[]): Promise<(PackJob & { key: string })[]> {
+  const prefix = root(hub) + "packs/";
+  const current = new Set(await Promise.all(Object.keys(PACKS).map(n => layerName(n))));
+  const bucket = !!hub.env.FILES && !!hub.env.PUBLIC_URL;
+  if (bucket) for (const k of keysUnder(hub, prefix)) if (!current.has(k.slice(prefix.length))) await remove(hub, k);
+  return Promise.all(names.map(async name => {
+    const file = await layerName(name), key = prefix + file, p = PACKS[name];
+    const job: PackJob & { key: string } = { name, install: p.install, check: p.check, key };
+    if (!bucket) return job;
+    if (complete(hub, key)) job.get = link(hub, "get", issue(hub, { mode: "get", prefix, name: file }), file);
+    if (fitsCap(stored(hub), row(hub, key)?.size || 0, PACK_MAX)) job.put = link(hub, "put", issue(hub, { mode: "put", prefix, name: file }, 3600), file);
+    return job;
+  }));
 }
 
 /** Charges the machine's CPU since the last reading (same start) or since it started. */
@@ -370,10 +494,11 @@ export async function runComputer(hub: Hub, req: ComputerRequest): Promise<Compu
   if (!hub.plan.fits("container_seconds", 60) || !hub.plan.fits("container_cpu_seconds", 30)) throw new Error("这个月云电脑的额度用到停止线了，下个周期才能再用");
   const box = hub.env.COMPUTER.get(hub.env.COMPUTER.idFromName("computer"));
   const started = Date.now();
-  const deadline = started + Math.min(Math.max(Number(req.timeoutSeconds) || 300, 10), 1800) * 1000;
+  let deadline = started + Math.min(Math.max(Number(req.timeoutSeconds) || 300, 10), 1800) * 1000;
   const out: ComputerResult = { ok: false, steps: [], files: [], seconds: 0 };
-  let woke = false, saving = false;
+  let woke = false;
   try {
+    const packs = pickPacks(req.packs);
     const ws = req.workspace === undefined ? null : workspaceName(String(req.workspace));
     if (req.workspace !== undefined && !ws) throw new Error("工作区名字只能用字母、数字、- 和 _，最多 40 个字");
     const w = await box.wake(await cacheLinks(hub).catch(() => ({})));
@@ -381,7 +506,17 @@ export async function runComputer(hub: Hub, req: ComputerRequest): Promise<Compu
     out.woke = w.woke; out.bootstrap_seconds = w.bootstrap_seconds;
     if (w.setup) out.setup = w.setup;
     if (w.restore_error) out.restore_error = w.restore_error;
-    saving = !!w.saving;
+    if (packs.length) {
+      // Setting up packs does not eat into the commands' time limit; it is still part of this run's bill.
+      const t = Date.now();
+      const jobs = await packJobs(hub, packs);
+      const done = await box.packs(jobs.map(({ key: _k, ...j }) => j));
+      out.packs = packReport(done, packs);
+      for (const j of jobs) if (done[j.name]?.drop) await remove(hub, j.key);
+      deadline += Date.now() - t;
+      const bad = packs.find(n => done[n]?.failed);
+      if (bad) throw new Error(packFailure(bad, done[bad].error));
+    }
     const wsKey = ws ? root(hub) + "ws/" + ws + ".tar.zst" : "";
     if (ws) {
       out.workspace = { name: ws, restored: false };
@@ -418,14 +553,15 @@ export async function runComputer(hub: Hub, req: ComputerRequest): Promise<Compu
     out.ok = !out.error && out.steps.length === req.commands.length && out.steps.every(s => s.exit === 0);
     return out;
   } catch (e: any) {
-    out.error = String(e?.message || e);
+    // After a deploy the machine's own object keeps its old code until the machine has slept once.
+    out.error = /does not implement the method/.test(String(e?.message)) ? "云电脑还在用上一个版本，要等它空闲关机一次（一两分钟没人用）才会换上新的，稍后再试" : String(e?.message || e);
     return out;
   } finally {
     // Billed from the start (or from the end of an idle tail already counted) until the machine sleeps.
     const end = Date.now(), until = Number(hub.get("computer:billed_until") || 0);
     hub.plan.add("container_seconds", (end + IDLE * 1000 - Math.max(started, until)) / 1000);
     hub.set("computer:billed_until", String(end + IDLE * 1000));
-    if (woke) await chargeCpu(hub, box, saving && await box.saveEnvironment().catch(() => false) ? SAVE_CPU : 0);
+    if (woke) await chargeCpu(hub, box, await box.saveEnvironment().catch(() => 0));
     out.seconds = secs(started);
   }
 }

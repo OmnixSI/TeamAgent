@@ -1,4 +1,5 @@
 // Worker entry: a health page, the admin surface, an optional QQ webhook, and a cron that keeps the Hub awake.
+import { liveTarget } from "./feat/previewlink.ts";
 import { buildOf } from "./util.ts";
 import type { Env } from "./util.ts";
 export { Hub } from "./hub.ts";
@@ -45,6 +46,9 @@ export default {
     // so the app's absolute paths (/assets/…) still reach it. The value is a short-lived token the Hub checks.
     const pv = req.headers.get("x-preview");
     if (pv && /^[a-z0-9]{16,64}$/.test(pv)) return hub(env).fetch(new Request(url.origin + "/x/preview/" + pv + url.pathname + url.search, req));
+    // A person who opened a preview link carries its cookie: their requests for the app's own paths go to the app.
+    const live = liveTarget(url, req.headers.get("cookie"));
+    if (live) return hub(env).fetch(new Request(url.origin + live, req));
     if (url.pathname === "/health") return json({ ok: true, service: "teamagent", build: buildOf(env).slice(0, 8), deployed: env.VERSION?.timestamp || "" });
     if (url.pathname === "/qq/events" && req.method === "POST") return webhook(req, env);
     // Downloads out of R2: the Hub checks the token and names the parts, the bytes go straight from the bucket.

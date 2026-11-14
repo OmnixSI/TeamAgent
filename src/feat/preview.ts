@@ -180,7 +180,7 @@ export function refspecOf(ref: string) {
 export const validRef = (ref: string) => /^[\w./-]{1,200}$/.test(ref) && !ref.includes("..") && !ref.startsWith("-") && !ref.endsWith(".lock");
 
 const tokensOf = (env: any) => [env.GITHUB_TOKEN_2, env.GITHUB_TOKEN].filter(Boolean) as string[];
-async function gh(env: any, path: string, raw = false): Promise<{ data: any; token: string }> {
+export async function gh(env: any, path: string, raw = false): Promise<{ data: any; token: string }> {
   let status = 0;
   for (const token of [...tokensOf(env), ""]) {
     const r = await fetch("https://api.github.com" + path, {

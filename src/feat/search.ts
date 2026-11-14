@@ -14,6 +14,7 @@ import type { Feature } from "./types.ts";
 import type { Hub } from "../hub.ts";
 import type { Tool } from "../core.ts";
 import { BJ, clip, fmtDate, fmtFull } from "../util.ts";
+import { allowed } from "./steward.ts";
 
 export const EMBED_MODEL = "@cf/baai/bge-m3";
 export const WHISPER_MODEL = "@cf/openai/whisper-large-v3-turbo";
@@ -30,6 +31,7 @@ const GAP_MS = 20 * 60000;          // a pause this long starts a new passage
 const PASSAGE_CHARS = 600;
 const LINE_CHARS = 300;             // one message's share of a passage
 const INDEX_DAILY = 3000;           // neurons a day the background indexing may use
+const INDEX_BOOST = 5000;           // the same on days the steward says the allowance is going spare
 const INDEX_KEEP = 500;             // and never when fewer than this are left today for everything else
 const PER_RUN = 8;                  // passages embedded per tick, forward and backfill each
 const WINDOW = 400;                 // messages read per step
@@ -351,7 +353,7 @@ function backward(hub: Hub, s: State, now: number, room: number) {
 
 export async function indexStep(hub: Hub, now: number) {
   discover(hub, now);
-  if (hub.plan.left("ai_neurons") < INDEX_KEEP || Number(hub.get(dayKey(now)) || 0) >= INDEX_DAILY) return { indexed: 0, why: "额度" };
+  if (hub.plan.left("ai_neurons") < INDEX_KEEP || Number(hub.get(dayKey(now)) || 0) >= (allowed(hub, "index_boost") ? INDEX_BOOST : INDEX_DAILY)) return { indexed: 0, why: "额度" };
   const states = (hub.sql.exec("SELECT conv FROM passage_state").toArray() as any[]).map(r => stateOf(hub, String(r.conv))!).filter(Boolean);
   const jobs: { s: State; p: Passage; dir: "fwd" | "back" }[] = [];
   const back = new Map<string, boolean>();
