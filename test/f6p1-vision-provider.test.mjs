@@ -285,3 +285,44 @@ test("F6P1-V8 显式 luna 缺 OpenAI 密钥时跳过 Luna、回退原链", async
   assert.equal(openai, 0, "缺密钥时不能向 OpenAI 发请求");
   assert.ok(!events.some(ev => ev.reason === "provider_auth"));
 });
+
+test("F6P1-V9 DeepSeek 成功看图写 ds_usage：purpose=vision、按 token 估价", async () => {
+  const e = env();
+  await setting(e, "vision:provider", "deepseek");
+  const note = await withFetch(
+    async () => dsResponse(undefined, { prompt_tokens: 1200, completion_tokens: 40 }),
+    () => v.describeBytes(e, png, "image/png", "看这张图", signal()),
+  );
+  assert.equal(note?.desc, answer.desc);
+  const rows = (await e.DB.prepare("SELECT * FROM ds_usage").all()).results;
+  assert.equal(rows.length, 1, JSON.stringify(rows));
+  assert.equal(rows[0].purpose, "vision");
+  assert.equal(rows[0].status, "ok");
+  assert.equal(rows[0].units, 1);
+  // 1200*0.15 + 40*0.6 = 204 µUSD；与 scripts/f6p1-live.mjs 的真实计价一致。
+  assert.equal(rows[0].est_cost_micro_usd, 204);
+});
+
+test("F6P1-V10 没有 usage 时按约 $0.0006/图兜底记账", async () => {
+  const e = env();
+  await setting(e, "vision:provider", "deepseek");
+  await withFetch(
+    async () => dsResponse(undefined, {}),
+    () => v.describeBytes(e, png, "image/png", "", signal()),
+  );
+  const rows = (await e.DB.prepare("SELECT * FROM ds_usage").all()).results;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].purpose, "vision");
+  assert.equal(rows[0].est_cost_micro_usd, 600);
+});
+
+test("F6P1-V11 看图失败不记成功账，避免把没花的钱算进去", async () => {
+  const e = env();
+  await setting(e, "vision:provider", "deepseek");
+  const note = await withFetch(
+    async () => Response.json({ error: { code: 402, message: "Insufficient Balance" } }, { status: 402 }),
+    () => v.describeBytes(e, png, "image/png", "", signal()),
+  );
+  assert.equal(note, null);
+  assert.equal((await e.DB.prepare("SELECT COUNT(*) AS n FROM ds_usage").all()).results[0].n, 0);
+});

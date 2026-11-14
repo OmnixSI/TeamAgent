@@ -157,6 +157,11 @@ export const IMAGE_MIME = new Set([
 const DS_VISION_URL = "https://api.deepseek.com/chat/completions";
 const DS_VISION_MODEL = "deepseek-flash";
 const DS_VISION_TIMEOUT_MS = 12000;
+// 2026-11-14 核对的 deepseek-flash 价格：$0.15/M input、$0.60/M output。
+const DS_VISION_INPUT_MICRO_USD_PER_TOKEN = 0.15;
+const DS_VISION_OUTPUT_MICRO_USD_PER_TOKEN = 0.6;
+/** 账单缺少 usage 时按施工单给的约 $0.0006/图兜底，宁可高估不低估。 */
+const DS_VISION_FALLBACK_MICRO_USD = 600;
 export const OPENAI_VISION_MODEL = "gpt-5.6-luna";
 const WORKERS_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const CAUTION = "识别结果可能有误：";
@@ -586,10 +591,36 @@ export function workersAiVision(e: any): VisionProvider {
   };
 }
 
+/** DeepSeek 看图按 token 记入 ds_usage（purpose=vision），记账失败不能影响识别结果。 */
+async function recordVisionUsage(e: any, usage: any, now = Date.now()) {
+  if (!e?.DB) return;
+  const input = Math.max(0, Number(usage?.prompt_tokens) || 0);
+  const output = Math.max(0, Number(usage?.completion_tokens) || 0);
+  const cost =
+    input || output
+      ? Math.max(
+          1,
+          Math.round(
+            input * DS_VISION_INPUT_MICRO_USD_PER_TOKEN +
+              output * DS_VISION_OUTPUT_MICRO_USD_PER_TOKEN,
+          ),
+        )
+      : DS_VISION_FALLBACK_MICRO_USD;
+  try {
+    await e.DB.prepare(
+      "INSERT INTO ds_usage(id,purpose,group_id,sender_id,status,error_kind,latency_ms,units,est_cost_micro_usd,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    )
+      .bind(crypto.randomUUID(), "vision", null, null, "ok", null, 0, 1, cost, now)
+      .run();
+  } catch {
+    // ds_usage 必须存在；缺表时只跳过记账，别把一次成功的看图变成失败。
+  }
+}
+
 export function deepseekVision(
   e: any,
   model = DS_VISION_MODEL,
-  onUsage?: (usage: any) => void,
+  onUsage?: (usage: any) => void | Promise<void>,
 ): VisionProvider {
   return {
     async describe(bytes, mime, hint, signal) {
@@ -637,7 +668,11 @@ export function deepseekVision(
         }
         const data: any = await untilAbort(() => r.json(), controller.signal);
         if (data?.error) throw dsFault(Number(data.error.code) || 400, String(data.error.message || ""));
-        onUsage?.(data?.usage || {});
+        try {
+          await onUsage?.(data?.usage || {});
+        } catch {
+          // 记账是旁路，不能影响已经成功的识别。
+        }
         return basicNote(parseJson(data?.choices?.[0]?.message?.content || ""));
       } catch (error: any) {
         if (controller.signal.aborted || error?.name === "AbortError" || error?.name === "TimeoutError")
@@ -656,7 +691,7 @@ export function deepseekVision(
 export const lunaVision = openAiVision;
 
 function providerFor(e: any, name: ProviderName, model: string): VisionProvider {
-  if (name === "deepseek") return deepseekVision(e, model);
+  if (name === "deepseek") return deepseekVision(e, model, usage => recordVisionUsage(e, usage));
   if (name === "workers") return workersAiVision(e);
   return openAiVision(e, model);
 }
