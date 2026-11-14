@@ -489,7 +489,7 @@ async function selfReportProbe(api) {
     const needs = api.capabilityNeeds("repo_read");
     const ok = snapshot.switches["off:repo_tools"] === "on" && repo?.readonly === true && file?.readonly === true &&
       web?.readonly === true && repo?.needs?.includes("switch") && needs.includes("github_token") && needs.includes("switch") &&
-      snapshot.tools_catalog.length === api.TOOLS_CATALOG.length && api.CATALOG_VERSION === "cat-v1";
+      snapshot.tools_catalog.length === api.TOOLS_CATALOG.length && api.CATALOG_VERSION === "cat-v2";
     detail = ok
       ? `catalog ${api.TOOLS_CATALOG.length} 工具；repo_* readonly=true、needs=github_token/switch；off:repo_tools=on 快照可读；模型是否按只读/开关/白名单自述需 D-7 turn_offers 后判`
       : "catalog 或开关快照与 D-2 目录不一致";

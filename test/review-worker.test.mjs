@@ -121,7 +121,7 @@ test('VD-R4-IDEM a retried p0 gap plan retains exactly one occurrence per findin
   const {e,db}=setup('propose');seed(db,4);
   const fetch=fakeFetch([],{gap:true,memory:true});
   // Historical offers identify a genuine missing capability, independent of now.
-  for(let i=0;i<4;i++)db.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,created_at) VALUES(?,? ,?,'[]','cat-v1','{}',1,?)").run('m'+i,'g','m'+i,night-86400000);
+  for(let i=0;i<4;i++)db.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,created_at) VALUES(?,? ,?,'[]','cat-v2','{}',1,?)").run('m'+i,'g','m'+i,night-86400000);
   let interrupted=false;
   for(let i=0;i<150;i++){
     const run=db.prepare('SELECT step,stats FROM review_runs').get();

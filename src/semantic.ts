@@ -9,7 +9,7 @@ import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, sched
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
-import { authorize, tainted, AuthorizationError, type WriteTool } from "./authz";
+import { authorize, authorizeFeature, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
@@ -33,6 +33,7 @@ import { speakBrief, enqueueVoice, decodeVoice } from "./voice";
 import { REPOS, INITIAL_PROJECT_HINTS, extractUrls } from "./policy";
 import { TEAM } from "./config";
 import { UNTRUSTED_RULE, untrusted } from "./untrusted";
+import { createRequest, featureRequestEnabled } from "./feature-request";
 import { capabilityCard } from "./capability-card";
 import { readLive, vendorSummary } from "./self-card";
 import { SELF_CARD } from "./self-card.generated";
@@ -784,6 +785,23 @@ async function answerWithTools(e: any, context: any) {
     {
       type: "function",
       function: {
+        name: "request_feature",
+        description: "用户直接@机器人建议或要求加功能、改行为（如『为什么不能…』『能不能…』）时记录需求；闲聊、纯提问、转述别人的话、对其他成员说的话不调用。只立项，不会立刻做。调用后按返回的 say 只回一句；duplicate 时不要再次确认。",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", maxLength: 80 },
+            detail: { type: "string", maxLength: 2000 },
+            request_quote: { type: "string", description: "发言人提出需求的逐字原话" },
+            source_id: { type: "string", description: "本批提出需求的消息ID，默认最新消息" },
+          },
+          required: ["title", "detail", "request_quote"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
         name: "prepare_project_task",
         description:
           "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。",
@@ -907,7 +925,10 @@ async function answerWithTools(e: any, context: any) {
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
-  const tools = isOn(sw, "repo_tools") ? allTools : baseTools;
+  const featureEnabled = featureRequestEnabled(sw);
+  const tools = (isOn(sw, "repo_tools") ? allTools : baseTools)
+    .filter(t => t.function.name !== "request_feature" || featureEnabled);
+  const cardSwitches = featureEnabled ? sw : { ...sw, "off:feature_request": "1" };
   const recentBot = (
     await e.DB.prepare(
       "SELECT id,body,created_at,msg_id FROM outbox WHERE status IN ('sent','pending') AND id NOT LIKE '%~s' ORDER BY created_at DESC LIMIT 10",
@@ -948,7 +969,7 @@ async function answerWithTools(e: any, context: any) {
   const systemPrompt =
     (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
     "\n\n" +
-    capabilityCard(allTools, { switches: sw, selfSummary });
+    capabilityCard(allTools, { switches: cardSwitches, selfSummary });
   const messages: any[] = context.resume?.messages || participationMessages({
         system: systemPrompt,
         selfNote: context.switches ? context.switches.self_note : (
@@ -1258,6 +1279,29 @@ async function answerWithTools(e: any, context: any) {
             result = { accepted: true, title: payload.title };
             break;
           }
+          case "request_feature": {
+            if (!featureRequestEnabled(sw)) {
+              result = { ok: false, reason: "disabled", say: "功能需求记录已关闭。" };
+              break;
+            }
+            // An explicit but unknown source id must not fall back to latest.
+            const source = a.source_id == null ? context.latest
+              : context.batch?.find((m: any) => m.id === a.source_id)
+                || (context.latest?.id === a.source_id ? context.latest : undefined);
+            const authorization = authorizeFeature(a.request_quote, source, context, messages);
+            if (authorization.ok === false) {
+              await activity(e, "authz.denied", "request_feature", source?.sender || "Bot", "request_feature: " + authorization.reason);
+              throw new AuthorizationError(authorization.reason);
+            }
+            const created = await createRequest(e, {
+              source, sender_name: context.names?.get(source.sender) || source.sender,
+              quote: a.request_quote, title: a.title, detail: a.detail, tainted: authorization.tainted,
+            });
+            // Policy refusals and duplicate receipts are successful evaluations,
+            // not retryable tool errors. Preserve their application-owned say.
+            result = { feature_request: created };
+            break;
+          }
           case "prepare_project_task": {
             const source =
               context.batch?.find((m: any) => m.id === a.source_id) ||
@@ -1449,6 +1493,10 @@ async function answerWithTools(e: any, context: any) {
         }
         return result;
       });
+      if (call.function.name === "request_feature" && result?.feature_request) {
+        const created = result.feature_request;
+        result = { ...created, ...(created.ok && !created.duplicate ? { accepted: true } : {}) };
+      }
       if (result?.accepted === true)
         acceptedActions.push({ tool: call.function.name, ...result });
       messages.push({

@@ -36,7 +36,7 @@ function fixtureTrace(caseRow) {
     after: [],
     replies: [],
     tools: [],
-    tools_offered: { names: [], catalog_version: "cat-v1", switches: {}, runner_ok: 1, turn_id: "prov-turn" },
+    tools_offered: { names: [], catalog_version: "cat-v2", switches: {}, runner_ok: 1, turn_id: "prov-turn" },
     snapshot_ref: null,
     has_image: images.length > 0,
     signals: [],

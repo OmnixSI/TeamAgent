@@ -180,7 +180,7 @@ test("D3 v2 tools_offered is unknown without turn_offers and stays historical wh
 
   addMessage(e, { id: "fx-m-tools", ts: "2026-11-13T22:20:00+08:00", body: "调工具", mentioned: 1 });
   e.raw.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,release,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
-    .run("turn-x", GROUP, "fx-m-tools", JSON.stringify(["repo_changes", "repo_commit"]), "cat-v1",
+    .run("turn-x", GROUP, "fx-m-tools", JSON.stringify(["repo_changes", "repo_commit"]), "cat-v2",
       JSON.stringify({ "off:repo_tools": "1" }), 1, "r-test", Date.parse("2026-11-13T22:20:00+08:00"));
   e.raw.prepare("INSERT INTO turn_tools(id,turn_id,group_id,name,args,ok,error_kind,ms,offered,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run("tt-1", "turn-x", GROUP, "repo_changes", "{}", 0, "timeout", 1200, 1, Date.parse("2026-11-13T22:20:01+08:00"));
@@ -188,7 +188,7 @@ test("D3 v2 tools_offered is unknown without turn_offers and stays historical wh
   page = await build(e);
   const trace = find(page, "tr-in-fx-m-tools");
   assert.deepEqual(trace.tools_offered.names, ["repo_changes", "repo_commit"]);
-  assert.equal(trace.tools_offered.catalog_version, "cat-v1");
+  assert.equal(trace.tools_offered.catalog_version, "cat-v2");
   assert.deepEqual(trace.tools_offered.switches, { "off:repo_tools": "on" });
   assert.equal(trace.tools_offered.runner_ok, 1);
   assert.equal(trace.tools_offered.turn_id, "turn-x");
@@ -197,7 +197,7 @@ test("D3 v2 tools_offered is unknown without turn_offers and stays historical wh
 
   // A batch decision's turn_offers row belongs to the latest inbound; every batch member sees it.
   e.raw.prepare("INSERT INTO turn_offers(turn_id,group_id,inbound_id,names,catalog_version,switches,runner_ok,release,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
-    .run("turn-batch", GROUP, "fx-m-432", JSON.stringify(["repo_changes"]), "cat-v1", "{}", 1, "r-test", Date.parse("2026-11-13T21:11:00+08:00"));
+    .run("turn-batch", GROUP, "fx-m-432", JSON.stringify(["repo_changes"]), "cat-v2", "{}", 1, "r-test", Date.parse("2026-11-13T21:11:00+08:00"));
   page = await build(e);
   assert.equal(find(page, "tr-in-fx-m-428").tools_offered.turn_id, "turn-batch");
   assert.deepEqual(find(page, "tr-in-fx-m-428").tools_offered.names, ["repo_changes"]);
@@ -280,7 +280,7 @@ test("D3 v2 snapshot uses the structured catalog and never reads auth values", a
   e.RELEASE = "r-test";
 
   const snapshot = await capabilitySnapshot(e);
-  assert.equal(snapshot.catalog_version, "cat-v1");
+  assert.equal(snapshot.catalog_version, "cat-v2");
   assert.equal(snapshot.switches["off:quote"], "on");
   assert.equal(snapshot.switches["off:wait"], "off");
   assert.equal(snapshot.switches["auth:bili"], "on");
