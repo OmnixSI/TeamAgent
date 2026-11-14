@@ -108,7 +108,7 @@ export async function enqueueSticker(e: any, x:{id:string;group:string;message:s
  * A claimed row is never retried, including ambiguous network outcomes. */
 export async function sendRichMedia(e:any,o:any,token:string,source:any,sequence:number,options:{
   failureStatus:'skipped'|'failed'; load:()=>Promise<any>; cache:(row:any,info:string,expires:number)=>Promise<void>;
-  acceptMessage?:(data:any)=>boolean; finish?:(ok:boolean)=>any[];
+  acceptMessage?:(data:any)=>boolean; finish?:(ok:boolean)=>any[]; recordId?:boolean;
 }):Promise<{http:number|null;ok:boolean;attempted:boolean;finalized?:any[]}> {
   const passive=()=>source&&o.msg_id&&Date.now()-Date.parse(source.ts)<240000;
   if(!passive()){
@@ -123,7 +123,10 @@ export async function sendRichMedia(e:any,o:any,token:string,source:any,sequence
     const post=async(path:string,body:any)=>{
       const r=await fetch('https://api.bot.qq.com/v2/groups/'+encodeURIComponent(o.group_id)+path,{method:'POST',headers:{Authorization:'QQBot '+token,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),redirect:'manual'});
       http=r.status;let d:any;try{d=await r.json();}catch{}
-      code=r.status>=300&&r.status<400?'redirect':String(d?.code||'');return {r,d};
+      // 生成图的成功回执把 QQ 消息 id 留在 code 里，冒烟能核对「id 存在且无错误码」。
+      code=r.status>=300&&r.status<400?'redirect':String(d?.code||'');
+      if(r.ok&&options.recordId&&d?.id)code='id:'+String(d.id);
+      return {r,d};
     };
     if(!fileInfo){
       const {r,d}=await post('/files',{file_type:1,file_data:b64(new Uint8Array(row.data)),srv_send_msg:false});

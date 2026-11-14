@@ -195,6 +195,7 @@ function quotaFailure(scope: string, used: number, limit: number) {
 const queued = () => ({
   ok: true,
   status: "queued",
+  accepted: true,
   note: "图片会随后单独发出；回复里只用一句话说明正在生成/已生成，不要贴链接，也不要描述图里有什么（你看不到图）",
 });
 

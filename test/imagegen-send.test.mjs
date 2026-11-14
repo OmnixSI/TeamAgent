@@ -26,7 +26,7 @@ test('G5 uploads base64 JPEG then sends exact QQ rich media shape and records ac
  const e=await fixture(),o=await row(e),{calls,result}=await qqMock(()=>send(e,o));assert.equal(result,200);
  assert.equal(calls[0].url,'https://api.bot.qq.com/v2/groups/A/files');assert.deepEqual(calls[0].body,{file_type:1,file_data:Buffer.from(jpeg).toString('base64'),srv_send_msg:false});
  assert.equal(calls[1].url,'https://api.bot.qq.com/v2/groups/A/messages');assert.deepEqual(calls[1].body,{msg_type:7,media:{file_info:'file-A'},msg_id:'source',msg_seq:23});
- assert.ok(calls.every(c=>c.init.headers.Authorization==='QQBot token'&&c.init.redirect==='manual'));assert.equal((await row(e)).status,'sent');assert.equal((await all(e,'outbox_attempts'))[0].http_status,200);
+ assert.ok(calls.every(c=>c.init.headers.Authorization==='QQBot token'&&c.init.redirect==='manual'));assert.equal((await row(e)).status,'sent');assert.equal((await all(e,'outbox_attempts'))[0].http_status,200);assert.equal((await all(e,'outbox_attempts'))[0].code,'id:accepted');
 });
 test('G6 expired/missing/invalid passive source or missing msg_id is skipped without any request',async()=>{
  for(const mode of ['expired','boundary','missing','invalid','id']){
