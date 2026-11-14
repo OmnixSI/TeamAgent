@@ -322,7 +322,7 @@ export class Hub extends DurableObject<Env> {
   addSchedule(conv: string, spec: any, task: string) {
     const count = this.sql.exec("SELECT COUNT(*) n FROM sched WHERE conv=? AND active=1", conv).toArray()[0].n;
     if (Number(count) >= 20) throw new Error("定时任务太多了（20 个），先取消几个");
-    const next = spec.type === "daily" ? nextDaily(spec.time, spec.tz, Date.now(), spec.days) : Number(spec.at);
+    const next = spec.type === "daily" ? nextDaily(spec.time, spec.tz, Date.now(), spec.days, spec.dom) : Number(spec.at);
     const row = this.sql.exec("INSERT INTO sched(conv,spec,task,next) VALUES(?,?,?,?) RETURNING id", conv, JSON.stringify(spec), task, next).toArray()[0];
     return { id: Number(row.id), next };
   }
@@ -517,7 +517,7 @@ export class Hub extends DurableObject<Env> {
       for (const s of this.sql.exec("SELECT * FROM sched WHERE active=1 AND next<=? ORDER BY next LIMIT 3", now).toArray()) {
         const spec = JSON.parse(String(s.spec)), conv = String(s.conv);
         if ([...this.jobs.values()].filter(j => j.conv === conv).length >= JOBS_PER_CONV) continue;
-        if (spec.type === "daily") this.sql.exec("UPDATE sched SET next=?, last=? WHERE id=?", nextDaily(spec.time, spec.tz, now, spec.days), now, s.id);
+        if (spec.type === "daily") this.sql.exec("UPDATE sched SET next=?, last=? WHERE id=?", nextDaily(spec.time, spec.tz, now, spec.days, spec.dom), now, s.id);
         else this.sql.exec("UPDATE sched SET active=0, last=? WHERE id=?", now, s.id);
         if (now - Number(s.next) < 6 * 3600000) this.ctx.waitUntil(this.runTask(conv, String(s.task)));
       }

@@ -231,7 +231,8 @@ function parseWhen(when: any, now: number) {
   if (when?.daily) {
     const tz = when.tz === "beijing" || when.tz === BJ ? BJ : SYD;
     if (!/^\d{1,2}:\d{2}$/.test(when.daily)) throw new Error("daily 要写成 HH:MM");
-    return { type: "daily", time: when.daily.padStart(5, "0"), tz, ...(Array.isArray(when.weekdays) && when.weekdays.length ? { days: when.weekdays } : {}) };
+    const dom = (Array.isArray(when.month_days) ? when.month_days : []).map(Number).filter((d: number) => d >= 1 && d <= 28);
+    return { type: "daily", time: when.daily.padStart(5, "0"), tz, ...(Array.isArray(when.weekdays) && when.weekdays.length ? { days: when.weekdays } : {}), ...(dom.length ? { dom } : {}) };
   }
   if (when?.in_minutes) return { type: "once", at: now + Math.max(1, Number(when.in_minutes)) * 60000 };
   if (when?.at) {
@@ -740,6 +741,7 @@ export function buildTools(host: Host): Tool[] {
         when: obj({
           daily: str("每天的 HH:MM"), tz: { type: "string", enum: ["sydney", "beijing"] },
           weekdays: { type: "array", items: { type: "integer" }, description: "只在这些星期几，0=周日" },
+          month_days: { type: "array", items: { type: "integer" }, description: "只在每月这几号（1 到 28），如每月 1 号填 [1]" },
           in_minutes: { type: "number" }, at: str("ISO 8601 带时区的一次性时间"),
         }),
         task: str("到点要做的事"), id: { type: "integer" },

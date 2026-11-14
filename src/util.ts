@@ -66,15 +66,16 @@ export function zonedToUtc(date: string, time: string, tz: string) {
   ts = guess - tzOffset(ts, tz);
   return ts;
 }
-/** Next occurrence of HH:MM in a zone strictly after `after`; `days` are 0=Sunday. */
-export function nextDaily(time: string, tz: string, after: number, days?: number[]) {
-  for (let i = 0; i < 9; i++) {
+/** Next occurrence of HH:MM in a zone strictly after `after`; `days` are weekdays (0=Sunday), `dom` days of the month. */
+export function nextDaily(time: string, tz: string, after: number, days?: number[], dom?: number[]) {
+  for (let i = 0; i < (dom?.length ? 63 : 9); i++) {
     const day = fmtDate(after + i * 86400000, tz), ts = zonedToUtc(day, time, tz);
     if (ts <= after) continue;
     if (days?.length) {
       const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts(ts, tz).weekday);
       if (!days.includes(wd)) continue;
     }
+    if (dom?.length && !dom.includes(Number(parts(ts, tz).day))) continue;
     return ts;
   }
   return after + 86400000;

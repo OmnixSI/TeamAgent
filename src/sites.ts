@@ -322,12 +322,19 @@ export async function hot(net: Net, source: string) {
 }
 
 // ---------- stocks (Tencent quotes: A shares, Hong Kong, US) ----------
+// The name search returns a company or an ETF for these; an index has to be asked for by its code.
+const INDEX_CODES: [RegExp, string][] = [
+  [/^(纳斯达克(综合)?(指数)?|纳指|ixic)$/i, "usIXIC"], [/^(标普\s*500(指数)?|标普|spx|s&p\s*500)$/i, "usINX"], [/^(道琼斯(工业)?(指数)?|道指|dji)$/i, "usDJI"],
+  [/^(恒生指数|恒指|hsi)$/i, "hkHSI"], [/^(恒生科技(指数)?|恒科)$/i, "hkHSTECH"],
+];
 export async function stock(query: string) {
   const text = async (url: string, charset: string) => new TextDecoder(charset).decode(await (await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) })).arrayBuffer());
   let symbols: string[] = [];
   for (const raw of query.split(/[,，\s]+/).filter(Boolean).slice(0, 6)) {
     if (/^(sh|sz|bj)\d{6}$/i.test(raw)) { symbols.push(raw.toLowerCase()); continue; }
     if (/^hk\d{5}$/i.test(raw)) { symbols.push(raw.toLowerCase()); continue; }
+    const index = INDEX_CODES.find(([re]) => re.test(raw));
+    if (index) { symbols.push(index[1]); continue; }
     const hint = await text("https://smartbox.gtimg.cn/s3/?v=2&t=all&q=" + encodeURIComponent(raw), "utf-8");
     const first = (hint.match(/v_hint="([^"]*)"/)?.[1] || "").split("^").map(e => e.split("~")).filter(e => e.length >= 5 && ["sh", "sz", "bj", "hk", "us"].includes(e[0]))
       .sort((x, y) => Number(y[4]?.startsWith("GP")) - Number(x[4]?.startsWith("GP")))[0];
