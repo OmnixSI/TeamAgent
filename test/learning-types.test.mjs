@@ -142,9 +142,12 @@ test('team config freezes the schedule limits and rejects unsafe values', () => 
   }
 });
 
-test('learning-confirm exposes the applyConfirmed stub L5 codes against', async () => {
+test('learning-confirm exposes the L6 interface and no auto applyConfirmed', async () => {
   const stubOut = '.wrangler/test-learning-confirm-' + process.pid + '.mjs';
   await build({ entryPoints: ['src/learning-confirm.ts'], bundle: true, format: 'esm', platform: 'browser', outfile: stubOut });
   const confirm = await import('../' + stubOut);
-  assert.equal(await confirm.applyConfirmed({ DB: {} }, 'g1'), 0);
+  assert.equal(typeof confirm.parseAnswer, 'function');
+  assert.equal(typeof confirm.handleLearningReply, 'function');
+  assert.equal(typeof confirm.applyLearning, 'function');
+  assert.equal(confirm.applyConfirmed, undefined);
 });

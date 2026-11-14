@@ -60,6 +60,7 @@ import { cleanupBudget } from "./budget";
 import { REPOS, EFFORT, command, validStatus, extractUrls } from "./policy";
 import { pullVoiceOutbox, reportVoice, voiceAvailable } from "./voice-outbox";
 import { handleCommand } from "./commands";
+import { handleLearningReply } from "./learning-confirm";
 import { dsSelfTest } from "./deepseek-tools";
 import { HTML } from "./ui";
 import { GUIDE } from "./guide";
@@ -392,6 +393,10 @@ async function receive(r: Request, e: Env) {
       .filter(v => v.name)
       .map(v => e.DB.prepare("INSERT INTO member_names VALUES(?,?,'qq',?) ON CONFLICT(member_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE member_names.source='qq'").bind(v.id, promptData(v.name), iso())),
   ]);
+  if (inserted && (await handleLearningReply(e, { groupId: m.group_openid, messageId: m.id, sender: ib.senderId, text, mentioned, replyTo }))) {
+    await sendOutbox(e);
+    return json({ op: 12, d: 0 });
+  }
   // Voice only: this block issues no statement for text, image or file messages.
   if (inserted && ib.media.some((x: any) => x.kind === "voice"))
     await enqueueVoiceJobs(e, ib.media, { message: m.id, group: m.group_openid, sender: ib.senderId });
