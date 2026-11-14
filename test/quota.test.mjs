@@ -165,7 +165,11 @@ test("any member sees exact balance, usage, OpenAI, image and neuron numbers", a
     assert.match(text, /DeepSeek 余额：¥8\.88/);
     assert.match(text, /DeepSeek 用量：今天 2 次 \/ \$1\.20/);
     assert.match(text, /本月 3 次 \/ \$2\.40/);
-    assert.match(text, /OpenAI：今天 2 次 \/ \$0\.50，上限 \$3\.00，剩 \$2\.50/);
+    assert.match(text, /OpenAI 每日预算（团队自设的闸门，不是账户余额）：今天已用 \$0\.50（2 次），预算还剩 \$2\.50/);
+    assert.match(text, /OpenAI 账户余额：查不到（没有公开接口），请看 OpenAI 后台/);
+    assert.match(text, /（粗略估算）/);
+    assert.equal(text.includes("OpenAI 还剩"), false);
+    assert.equal(/OpenAI：.*剩 \$/.test(text), false);
     assert.match(text, /生图：近 24 小时本群 2 \/ 20 张，你 1 \/ 5 张/);
     assert.match(text, /Workers AI：今天 1200 \/ 8000 neurons/);
     assert.match(text, /Cloudflare 账户级额度没有公开接口/);
@@ -752,7 +756,7 @@ test("A3b: a switched-off image generator is not advertised in the quota answer"
     const result = await api.renderQuota(off, { group: "g1", sender: "u1", now: NOW });
     assert.equal(result.ok, true);
     assert.equal(result.text.includes("生图"), false);
-    assert.match(result.text, /OpenAI：今天/);
+    assert.match(result.text, /OpenAI 每日预算（团队自设的闸门，不是账户余额）/);
     assert.match(result.text, /DeepSeek 余额：¥42\.50/);
   } finally {
     offStub.restore();

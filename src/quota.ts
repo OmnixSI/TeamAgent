@@ -686,18 +686,17 @@ export function quotaText(snapshot: QuotaSnapshot): string {
       usdMicro(snapshot.deepseek.monthMicroUsd) +
       "；" +
       average +
-      (days === null ? "" : "，按此估算余额约够 " + days.toFixed(1) + " 天"),
+      (days === null ? "" : "，按此估算余额约够 " + days.toFixed(1) + " 天（粗略估算）"),
   );
   parts.push(
-    "OpenAI：今天 " +
-      snapshot.openai.todayCalls +
-      " 次 / " +
+    "OpenAI 每日预算（团队自设的闸门，不是账户余额）：今天已用 " +
       usdMicro(snapshot.openai.todayMicroUsd) +
-      "，上限 " +
-      usdMicro(snapshot.openai.capMicroUsd) +
-      "，剩 " +
+      "（" +
+      snapshot.openai.todayCalls +
+      " 次），预算还剩 " +
       usdMicro(snapshot.openai.remainingMicroUsd),
   );
+  parts.push("OpenAI 账户余额：查不到（没有公开接口），请看 OpenAI 后台。");
   if (snapshot.imageGenOn)
     parts.push(
       "生图：近 24 小时本群 " +
