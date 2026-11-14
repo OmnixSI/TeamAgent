@@ -33,8 +33,8 @@ test('VF2 face names survive encoded and escaped ext.text, empty or malformed na
   for (const ext of ['%7B%22text%22%3A%22%E6%95%AC%E7%A4%BC%22%7D','{\\"text\\":\\"敬礼\\"}']) {
     assert.equal(view.displayText(`<faceType=6,faceId="0",ext="${ext}">`,[]),'[表情：敬礼]');
   }
-  assert.equal(view.displayText(face,[]),'[表情（名称未知）]');
-  assert.equal(view.displayText('<faceType=6,faceId="0",ext="broken">',[]),'[表情（名称未知）]');
+  assert.equal(view.displayText(face,[]),'[超级表情]');
+  assert.equal(view.displayText('<faceType=6,faceId="0",ext="broken">',[]),'[超级表情]');
   assert.equal(view.displayText('<faceType=6,faceId="0",ext="{\\"text\\":\\"100%赞同\\"}">',[]),'[表情：100%赞同]');
 });
 

@@ -1,0 +1,483 @@
+{
+ "source": "online D1 inkboard-team, read-only export 2026-11-14 17:2x Sydney",
+ "messages": [
+  {
+   "rowid": 171,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFblNJtFUcF9FqdaUjVa4piy4v.AV961utisal7r-Qh-vvq74i001zkGmH8fiijwUdbOfc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-11T20:38:36+08:00",
+   "body": "肥鱼我要给你完整的一生<faceType=1,faceId=\"5\",ext=\"eyJ0ZXh0Ijoi5rWB5rOqIn0=\">",
+   "meta": {
+    "direct": true,
+    "attachments": [],
+    "senderName": "Souvereign",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": []
+   }
+  },
+  {
+   "rowid": 224,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbtapxcskl.p1i7IQaezXAQRlMea1HQmL9zaRTCZE-A0qP9ExpIabRVKYQyCA7QiqJMWcH0kJro5L90MMgcfbEAE!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-11T21:02:02+08:00",
+   "body": "<faceType=1,faceId=\"182\",ext=\"eyJ0ZXh0Ijoi56yR5ZOtIn0=\">",
+   "meta": {
+    "direct": true,
+    "attachments": [],
+    "senderName": "Souvereign",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": []
+   }
+  },
+  {
+   "rowid": 265,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbrAh7CcYC7DRyKIHV5pMqVUKLKdBxi3kyQHyA0KLa3ptsSpDYTGELAxvlFwpQrkZAufc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-11T21:22:00+08:00",
+   "body": "<faceType=1,faceId=\"264\",ext=\"eyJ0ZXh0Ijoi5o2C6IS4In0=\"><faceType=1,faceId=\"264\",ext=\"eyJ0ZXh0Ijoi5o2C6IS4In0=\">",
+   "meta": {
+    "direct": true,
+    "attachments": [],
+    "senderName": "Souvereign",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": []
+   }
+  },
+  {
+   "rowid": 304,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbqwQkUWHZAE39TZgvU9JzzdTePIXTlqVgHdfbIgJLqjVep8Ien6bK6a6EPHoEhTFHOfc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-12T13:06:23+08:00",
+   "body": "<faceType=6,faceId=\"0\",ext=\"eyJ0ZXh0IjoiIn0=\">",
+   "meta": {
+    "direct": true,
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "D2CA5B4308698710F717D194B869CE94.jpg",
+      "height": 1271,
+      "size": 275673,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQYz16Xb2i8wJSTHYt3h_XyVPwdtRjZ6RAg_woo5v6BrtSBmAMyBHByb2RQgL2jAVoQggChozVhu1D0sG5fARyCOHoCJgOCAQJneg&rkey=CAMSOLgthq-6lGU_AoHZ6hGLVd8IDJyMqj32OfyE_VAdEwBNlZMrLgq4eEu2LOSvXOI6dZeKmcgnOZ_G&spec=0",
+      "width": 519
+     }
+    ],
+    "senderName": "Souvereign",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_RsslS5jwuvf7Oo3vclf5VMP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQYz16Xb2i8wJSTHYt3h_XyVPwdtRjZ6RAg_woo5v6BrtSBmAMyBHByb2RQgL2jAVoQggChozVhu1D0sG5fARyCOHoCJgOCAQJneg&rkey=CAMSOLgthq-6lGU_AoHZ6hGLVd8IDJyMqj32OfyE_VAdEwBNlZMrLgq4eEu2LOSvXOI6dZeKmcgnOZ_G&spec=0",
+      "contentType": "image/jpeg",
+      "width": 519,
+      "height": 1271,
+      "size": 275673,
+      "filename": "D2CA5B4308698710F717D194B869CE94.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  },
+  {
+   "rowid": 376,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT28j.WBYzCjV4CKh-LkxAo263I.0Y44utPgK3ENDzaKR3E0eydHD3x0zK-I1D3FFeOfc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-13T06:44:46+08:00",
+   "body": "<faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\"><faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\">",
+   "meta": {
+    "direct": true,
+    "attachments": [],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_9kyMRXABfNw6hxNLVVBUvUN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  },
+  {
+   "rowid": 475,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFbp7MPvUo4.OzgIK4deMfVbVAwU91rf3BE2JnGMCz.JPTjYafDu-CzTWq1OaGfjD.6Ofc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-14T12:37:47+08:00",
+   "body": "<faceType=6,faceId=\"0\",ext=\"eyJ0ZXh0IjoiIn0=\">",
+   "meta": {
+    "direct": true,
+    "memberRole": "owner",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "D2CA5B4308698710F717D194B869CE94.jpg",
+      "height": 1271,
+      "size": 275673,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQYz16Xb2i8wJSTHYt3h_XyVPwdtRjZ6RAg_woo3NPX2dGGmAMyBHByb2RQgL2jAVoQepHfz8Me2-E7UDiSfr5mwHoC8SmCAQJneg&rkey=CAMSOLgthq-6lGU_joo-i9b9D8Pv1_rTmc-H4vtERSYxs33B20hr_QxzK0E0yGjzmhVI7fW8QBMgOZ2X&spec=0",
+      "width": 519
+     }
+    ],
+    "senderName": "Souvereign",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_qeC4ovOOo982rJNViHUEfsP9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhQYz16Xb2i8wJSTHYt3h_XyVPwdtRjZ6RAg_woo3NPX2dGGmAMyBHByb2RQgL2jAVoQepHfz8Me2-E7UDiSfr5mwHoC8SmCAQJneg&rkey=CAMSOLgthq-6lGU_joo-i9b9D8Pv1_rTmc-H4vtERSYxs33B20hr_QxzK0E0yGjzmhVI7fW8QBMgOZ2X&spec=0",
+      "contentType": "image/jpeg",
+      "width": 519,
+      "height": 1271,
+      "size": 275673,
+      "filename": "D2CA5B4308698710F717D194B869CE94.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  },
+  {
+   "rowid": 497,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT1Ey0R3ERr6bJ6.R1dxTY22UfE36cK6wyuj92PPjRfO-A52IJuy.ASJdmg3Q89nYaefc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:15:46+08:00",
+   "body": "",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "F9EB7F627FB6EDE2AACF1FC22E722A85.jpg",
+      "height": 80,
+      "size": 1647,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTRKGhsJRimehEwPBckh565za30VxjvDCD_CijJ763N54aYAzIEcHJvZFCAvaMBWhCZIm1KalsPdJ7OaNT0YZYkegKJ5IIBAm5q&rkey=CAMSOLgthq-6lGU_yvxRXsPrpCivvJ--xqEQ9G6mVDYOVvASPHVobEm_PZHgUL-PcVNxf38rvclqqyqr&spec=0",
+      "width": 80
+     }
+    ],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": false,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_XBM4SPyWiInpUf9+kz/jTkN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTRKGhsJRimehEwPBckh565za30VxjvDCD_CijJ763N54aYAzIEcHJvZFCAvaMBWhCZIm1KalsPdJ7OaNT0YZYkegKJ5IIBAm5q&rkey=CAMSOLgthq-6lGU_yvxRXsPrpCivvJ--xqEQ9G6mVDYOVvASPHVobEm_PZHgUL-PcVNxf38rvclqqyqr&spec=0",
+      "contentType": "image/jpeg",
+      "width": 80,
+      "height": 80,
+      "size": 1647,
+      "filename": "F9EB7F627FB6EDE2AACF1FC22E722A85.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": "[图片]"
+   }
+  },
+  {
+   "rowid": 498,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTxjsL3EEDQoqjQQl3X2pfmnVbeXq6jv7UW026RTD6swkHJLQGD1WIIuvZB.jNDkENcWcH0kJro5L90MMgcfbEAE!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:15:47+08:00",
+   "body": "",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "0A4E6B6162FA1C30247745B4276FAF53.jpg",
+      "height": 80,
+      "size": 1661,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSGVdiO0ThJZWfKElxkSchWscIYnxj9DCD_CiiWy7PN54aYAzIEcHJvZFCAvaMBWhBHCMf_pxAbajyDS-srAnPUegI0SIIBAm5q&rkey=CAESOE4_cASDm1t1hqo6U8C_KAXPLrh7RQX5g3L8-8VFPa9M_giBne5v3_qMt5UtLtF4kO5tn1d1t7A4&spec=0",
+      "width": 80
+     }
+    ],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": false,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_hZ3vKKRZh7msA1u/V5TKMEN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhSGVdiO0ThJZWfKElxkSchWscIYnxj9DCD_CiiWy7PN54aYAzIEcHJvZFCAvaMBWhBHCMf_pxAbajyDS-srAnPUegI0SIIBAm5q&rkey=CAESOE4_cASDm1t1hqo6U8C_KAXPLrh7RQX5g3L8-8VFPa9M_giBne5v3_qMt5UtLtF4kO5tn1d1t7A4&spec=0",
+      "contentType": "image/jpeg",
+      "width": 80,
+      "height": 80,
+      "size": 1661,
+      "filename": "0A4E6B6162FA1C30247745B4276FAF53.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": "[图片]"
+   }
+  },
+  {
+   "rowid": 499,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTzopKmDi-o7PcsHBo7XeCknyoyD0d7mVegbyMC5o9CdJZkJUi7W9NyqGc83NOwJrhOfc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:15:47+08:00",
+   "body": "",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "0ABD880646F845A1E56AB7519C27A76A.jpg",
+      "height": 80,
+      "size": 1538,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhR48CjfdnmI9WT1gV8PKGVdrAGczhiCDCD_Cij47b_N54aYAzIEcHJvZFCAvaMBWhAwRUI3priPBjQOhXKFJZz9egIJAIIBAm5q&rkey=CAQSODOc_jvbthUj_q0z4Cp5vM3ZnRryGzCe7vo9TMIITytrN8JAtLVPXHK9tsjhC2p6SS4TW5ti6DWX&spec=0",
+      "width": 80
+     }
+    ],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": false,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_xcH8EKNvK3+33odkSVZ7wEN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhR48CjfdnmI9WT1gV8PKGVdrAGczhiCDCD_Cij47b_N54aYAzIEcHJvZFCAvaMBWhAwRUI3priPBjQOhXKFJZz9egIJAIIBAm5q&rkey=CAQSODOc_jvbthUj_q0z4Cp5vM3ZnRryGzCe7vo9TMIITytrN8JAtLVPXHK9tsjhC2p6SS4TW5ti6DWX&spec=0",
+      "contentType": "image/jpeg",
+      "width": 80,
+      "height": 80,
+      "size": 1538,
+      "filename": "0ABD880646F845A1E56AB7519C27A76A.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": "[图片]"
+   }
+  },
+  {
+   "rowid": 500,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTxv883V0OpK10HyPEepp0wWv-J1t84vzapdpRn4okY9DoB0.pE6kVXFpGnKCW6Xl0ufc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:15:48+08:00",
+   "body": "",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [
+     {
+      "content": "",
+      "content_type": "image/jpeg",
+      "filename": "1FB8C0BC70313BE2725DB7FC1CAD75D3.jpg",
+      "height": 80,
+      "size": 1531,
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTm6GNKpZm8VI9zXzZSowMajeMI3hj7CyD_CiiN4svN54aYAzIEcHJvZFCAvaMBWhBD5HoRRu39D-HNcFKR08-regJfv4IBAm5q&rkey=CAISONPsN0nSR8aLsJ-sTBGvDwX6kQcX9tGP0-dio5hdqYDLnEj1O8AsaCG53lzRQEe_tPtM6N6ZxyWF&spec=0",
+      "width": 80
+     }
+    ],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": false,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_2wlarHPC8PZlQCQTlqiRFEN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [
+     {
+      "kind": "image",
+      "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTm6GNKpZm8VI9zXzZSowMajeMI3hj7CyD_CiiN4svN54aYAzIEcHJvZFCAvaMBWhBD5HoRRu39D-HNcFKR08-regJfv4IBAm5q&rkey=CAISONPsN0nSR8aLsJ-sTBGvDwX6kQcX9tGP0-dio5hdqYDLnEj1O8AsaCG53lzRQEe_tPtM6N6ZxyWF&spec=0",
+      "contentType": "image/jpeg",
+      "width": 80,
+      "height": 80,
+      "size": 1531,
+      "filename": "1FB8C0BC70313BE2725DB7FC1CAD75D3.jpg"
+     }
+    ],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": "[图片]"
+   }
+  },
+  {
+   "rowid": 503,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT3HSvD5.H4yTZEN7DLoNmO5dADtKeeguwA1mwfK3NKPodNWKLYYbWY2ZKuHsydJNz2L-oOy34HOb9BjSf7-leoUNIqrVm3QhC6-bhktADRFg",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:17:17+08:00",
+   "body": "来看看<faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\"><faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\">",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "addressedOther": true,
+    "urls": [],
+    "mentions": [
+     {
+      "id": "0FC1E8A8BD28981E86866125AC3FCEFF",
+      "name": "Souvereign",
+      "isBot": false
+     }
+    ],
+    "msgIdx": "REFIDX_GxTHUo5WdtBUOji4Lnq5jkN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  },
+  {
+   "rowid": 509,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT9bZQXzayxitZK69D8.u9k5vgbAZ5autnI2Yv.1tRGlnxaHzMa1jwFp85VdxrvPu2Ofc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:17:45+08:00",
+   "body": "<faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\"><faceType=1,faceId=\"21\",ext=\"eyJ0ZXh0Ijoi5Y+v54ixIn0=\">",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_z9/gg/6XTExlQpbo+8jLAUN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  },
+  {
+   "rowid": 513,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yT1TYA8UIz08p48F08-Khi7jAodWRLfUNGr68XPaks-BjRySiL-UXwTtlkaRPWMPJMOfc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:18:16+08:00",
+   "body": "<faceType=1,faceId=\"178\",ext=\"eyJ0ZXh0Ijoi5pac55y856yRIn0=\"><faceType=1,faceId=\"178\",ext=\"eyJ0ZXh0Ijoi5pac55y856yRIn0=\">",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_D5K0AEdAiGoqHtKr1mx+e0N1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   }
+  }
+ ],
+ "bot_replies": [
+  {
+   "rowid": 183,
+   "body": "看不到，我这边就显示「图片（未查看）」，别让我硬猜成笑脸；看板那单的回执我记着。",
+   "created_at": 1794460009439
+  },
+  {
+   "rowid": 291,
+   "body": "哥，这张表情我这边只收到图片本身，519×1271的尺寸占位，画面内容读不到，卡特龙长啥样我是真看不见，也不能瞎编。你重发一张普通图或者截图，或者直接描述一下，我立马按看到的讲。",
+   "created_at": 1794631122233
+  },
+  {
+   "rowid": 292,
+   "body": "这次图能看到了啊：白背景，一个戴眼镜、短发的哥们，右手抬到头侧敬礼，穿件白短袖，上面有图案和字，我这边识别成 THE FIRST STEP，可能不准；下面浅色短裤、黑运动鞋。就这些",
+   "created_at": 1794631223575
+  },
+  {
+   "rowid": 307,
+   "body": "头像收了，但我这边只看到四个80×80的方框，画面完全看不见，等于给我发了四块砖。每张来一句描述，或者你直接点第几张，我认。真换头像得你们后台配置，我落地不了，别指望我自己换。",
+   "created_at": 1794636971688
+  },
+  {
+   "rowid": 308,
+   "body": "画面还是没进来，我这边只有四个80×80的砖，真挑不了。你报个序号，1、2、3、4都行，或者一句话说哪张最像群助手，我照你的选择认；换头像得后台配置，我这边动不了。",
+   "created_at": 1794636991273
+  },
+  {
+   "rowid": 309,
+   "body": "行，就这张：圆的黄的、笑眼粉脸还吐着红舌头，坏笑味儿挺足。剩下仨还是80×80的砖，没画面。换头像得你们后台配置，我这边只能选，落地不了。",
+   "created_at": 1794637108858
+  }
+ ]
+}

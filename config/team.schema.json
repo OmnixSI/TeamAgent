@@ -504,6 +504,11 @@
               "minimum": 1,
               "maximum": 40
             },
+            "read": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40
+            },
             "send": {
               "type": "integer",
               "minimum": 1,
@@ -512,6 +517,7 @@
           },
           "required": [
             "tag",
+            "read",
             "send"
           ]
         }

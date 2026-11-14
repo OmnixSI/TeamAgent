@@ -140,7 +140,8 @@
     "max_rows": 5000,
     "caps": {
       "tag": 40,
-      "send": 20
+      "send": 20,
+      "read": 40
     }
   },
   "feature_requests": {

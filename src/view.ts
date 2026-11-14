@@ -1,4 +1,5 @@
-import { renderMentions, mediaOf, extractBili, type Card, type Mention } from "./inbound";
+import { renderMentions, mediaOf, extractBili, isStickerMedia, type Card, type Mention } from "./inbound";
+import { FACE_TAG, faceTagText, hasSuperFace } from "./face";
 import { biliNoteText } from "./bilinote";
 
 export type ViewMsg = {
@@ -23,36 +24,22 @@ export function metaOf(row: any): any {
   if (row.meta) return withLegacy(row.meta);
   try { return withLegacy(JSON.parse(row.metadata || "{}")); } catch { return {}; }
 }
-// ext may contain raw JSON or escaped JSON; a > inside its text is not a tag end.
-const FACE = /\[<face,id=\d+\/>\]|<faceType=(?:ext="\{(?:[^{}"]|"(?:\\.|[^"\\])*")*\}"|"(?:\\.|[^"\\])*"|[^">])*>/g;
 export function withoutFaces(body: string): string {
-  return body.replace(FACE, "");
+  return body.replace(FACE_TAG, "");
 }
 export function hasFace(body: string): boolean {
   return withoutFaces(body) !== body;
 }
-function faceName(tag: string): string {
-  // QQ supplies URI-encoded JSON or a JSON string escaped inside ext="…".
-  const match = tag.match(/\bext="(.*)"\s*>$/);
-  if (!match) return "[表情（名称未知）]";
-  try {
-    let raw = match[1].startsWith("{") ? match[1] : decodeURIComponent(match[1]);
-    if (raw.startsWith("{\\\"")) raw = JSON.parse('"' + raw + '"');
-    const text = JSON.parse(raw)?.text;
-    const name = typeof text === "string" ? text.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80) : "";
-    return name ? "[表情：" + name + "]" : "[表情（名称未知）]";
-  } catch { return "[表情（名称未知）]"; }
-}
 export function displayText(body: string, mentions: Mention[]): string {
-  return renderMentions(body, mentions).replace(FACE, faceName);
+  return renderMentions(body, mentions).replace(FACE_TAG, faceTagText);
 }
 /** Attachment attributes and decoded labels are display material, not member prose. */
 export function evidenceText(body: string, mentions: Mention[]): string {
-  return renderMentions(body.replace(FACE, "[表情]"), mentions);
+  return renderMentions(body.replace(FACE_TAG, "[表情]"), mentions);
 }
 /** Only labels actually rendered from this message can become neutral evidence markers. */
 export function quoteEvidence(body: string, quote: string): string {
-  for (const tag of body.match(FACE) || []) quote = quote.replaceAll(faceName(tag), "[表情]");
+  for (const tag of body.match(FACE_TAG) || []) quote = quote.replaceAll(faceTagText(tag), "[表情]");
   return quote;
 }
 function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
@@ -61,7 +48,7 @@ function resolvedMentions(meta: any, names: Map<string, string>): Mention[] {
 export function quoteIn(row: { body: string; meta?: any }, quote: string, names = new Map<string, string>()): boolean {
   const mentions = resolvedMentions(metaOf(row), names);
   const evidence = quoteEvidence(row.body, quote);
-  return row.body.replace(FACE, "[表情]").includes(evidence) || evidenceText(row.body, mentions).includes(evidence);
+  return row.body.replace(FACE_TAG, "[表情]").includes(evidence) || evidenceText(row.body, mentions).includes(evidence);
 }
 const memberName = (id = "", name?: string) => name || "成员" + id.slice(-4);
 function named(id: string, name: string | undefined, names: Map<string, string>) {
@@ -112,8 +99,13 @@ export function mediaViews(
           ? "视频"
           : "文件" + (m.filename ? " " + m.filename : "");
     imageIdx++;
+    // Explicit QQ super-emoji/subType=1/GIF markers are stickers even before a
+    // note exists. A small square image becomes one only after vision returns a
+    // meaning line, so ordinary thumbnails are not mislabeled.
+    const sticker = m.sticker === true || m.subType === 1 || String(m.contentType || "").toLowerCase() === "image/gif";
     const note = imageNotes?.get(messageId)?.[imageIdx];
-    if (note) return note;
+    if (note) return sticker || note.includes("；表达/梗：") ? note.replace(/^图片：/, "表情包：") : note;
+    if (sticker) return imagePicks?.has(messageId + ":" + imageIdx) ? "表情包（正在识别）" : "一张表情包（还没识别）";
     if (imagePicks?.has(messageId + ":" + imageIdx)) return "图片（未分析：没有可用结果，原因未记录）";
     return "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
   });
@@ -138,7 +130,11 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
     };
   }
   else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
-  const media = mediaViews(meta, row.id, imageNotes, imagePicks);
+  const body = String(row.body || "");
+  const mediaMeta = (hasSuperFace(body) || !body.trim()) && Array.isArray(meta.media)
+    ? { ...meta, media: meta.media.map((m: any) => m.kind === "image" && (hasSuperFace(body) || isStickerMedia(m)) ? { ...m, sticker: true } : m) }
+    : meta;
+  const media = mediaViews(mediaMeta, row.id, imageNotes, imagePicks);
   if (media) material.media = media;
   const voice = (Array.isArray(meta.media) ? meta.media : []).find((m: any) => m.kind === "voice");
   const spoken = voice ? voiceText(voice) : undefined;

@@ -2,10 +2,22 @@ import { redact } from "./runtime";
 import {extractUrls} from './policy';
 import {parseBiliTarget,scanBiliPayload} from './bili-links';
 import {BILI_CARD_NOTE,cleanCardTitle,isBiliCard,titleRef} from './bilititle';
+import { hasSuperFace } from "./face";
 
 export type Mention = { id: string; name: string; isBot: boolean };
 export type Card = { type: string; name?: string; title?: string; desc?: string; url?: string; source?: string; preview?: string; note?: string };
-export type Media = { kind: "image" | "video" | "voice" | "file"; url?: string; contentType?: string; width?: number; height?: number; size?: number; filename?: string; asr?: string };
+export type Media = { kind: "image" | "video" | "voice" | "file"; url?: string; contentType?: string; width?: number; height?: number; size?: number; filename?: string; asr?: string; subType?: number; sticker?: boolean };
+
+/** QQ sticker images are square (80x80 or larger), GIFs, or explicit subType=1 attachments. */
+export function isStickerMedia(m: Media) {
+  if (m.kind !== "image") return false;
+  if (m.sticker === true || m.subType === 1) return true;
+  if (String(m.contentType || "").toLowerCase() === "image/gif") return true;
+  const width = m.width ?? 0, height = m.height ?? 0;
+  if (width < 72 || height < 72 || width > 300 || height > 300) return false;
+  const ratio = width / height;
+  return ratio >= 0.75 && ratio <= 1.33;
+}
 export type Bili = { bvid?: string; aid?: string; short?: string; page?: number; url: string };
 export type Quoted = { authorId?: string; authorName?: string; text: string; msgIdx?: string; media: Media[]; card?: Card; biliCard?: {title:string} };
 export type Inbound = {
@@ -55,7 +67,8 @@ export function mediaOf(attachments: any): Media[] {
   return (Array.isArray(attachments) ? attachments : []).map(a => {
     const contentType = String(a.content_type || "");
     const kind: Media["kind"] = contentType.startsWith("image/") ? "image" : contentType.startsWith("video/") ? "video" : contentType === "voice" || contentType.startsWith("audio/") || a.asr_refer_text ? "voice" : "file";
-    return { kind, url: a.url, contentType, width: a.width, height: a.height, size: a.size, filename: a.filename, ...(typeof a.asr_refer_text === "string" ? { asr: a.asr_refer_text } : {}) };
+    const subType = Number(a.sub_type ?? a.subType ?? a.file_sub_type);
+    return { kind, url: a.url, contentType, width: a.width, height: a.height, size: a.size, filename: a.filename, ...(Number.isFinite(subType) ? { subType } : {}), ...(typeof a.asr_refer_text === "string" ? { asr: a.asr_refer_text } : {}) };
   });
 }
 export function parseInbound(eventType: string, d: any): Inbound {
@@ -84,6 +97,8 @@ export function parseInbound(eventType: string, d: any): Inbound {
     else quoted.card = quotedCard.card;
   }
   const media = mediaOf(d.attachments), biliUrls = scanned.biliUrls, quotedBiliUrls = scanned.quotedBiliUrls;
+  if (hasSuperFace(body)) for (const m of media) if (m.kind === "image") m.sticker = true;
+  else if (!body.trim()) for (const m of media) if (m.kind === "image" && isStickerMedia(m)) m.sticker = true;
   const ownUrls = extractUrls(body + ' ' + JSON.stringify(d.ark_data || {}));
   const quotedUrls = extractUrls(JSON.stringify(elements));
   const bili = extractBili(biliUrls,body);
