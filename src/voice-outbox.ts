@@ -12,7 +12,7 @@ export async function pullVoiceOutbox(e:any) {
     WHERE o.status='voice' ORDER BY o.created_at LIMIT 2`).all()).results;
   const items:any[]=[];
   for (const o of rows) {
-    if (!o.ts || !(Date.now()-Date.parse(o.ts)<240000)) {
+    if (o.msg_id && (!o.ts || !(Date.now()-Date.parse(o.ts)<240000))) {
       await e.DB.prepare("UPDATE outbox SET status='skipped' WHERE id=? AND status='voice'").bind(o.id).run();continue;
     }
     // Persist the attempt before the claim, so a crash never leaves a claim
@@ -28,7 +28,7 @@ export async function pullVoiceOutbox(e:any) {
         e.DB.prepare("UPDATE outbox_attempts SET code=? WHERE id=?").bind('voice:'+('error_kind' in guard?guard.error_kind:'quota'),o.id),
       ]);continue;
     }
-    items.push({id:o.id,group_id:o.group_id,text:o.body,msg_id:o.msg_id,msg_seq:messageSequence(o.id),expires_at:Date.parse(o.ts)+240000,cfg:{...meta.cfg,enabled:true}});
+    items.push({id:o.id,group_id:o.group_id,text:o.body,msg_id:o.msg_id,msg_seq:messageSequence(o.id),expires_at:o.msg_id?Date.parse(o.ts)+240000:undefined,cfg:{...meta.cfg,enabled:true}});
   }
   return {items};
 }
