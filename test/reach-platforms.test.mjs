@@ -62,6 +62,16 @@ test('zhihu hot/search: fixture shapes parse and 401/captcha map to login_requir
   assert.equal(blocked.error.code, 'SECURITY_BLOCK');
 });
 
+test('zhihu hot web feed keeps the nested title/excerpt and question link', async () => {
+  const hot = parseZhihuHot(JSON.parse(await fixture('zhihu-hot-web.json')), 10);
+  assert.equal(hot.length, 2);
+  assert.match(hot[0].title, /航班/);
+  assert.ok(hot[0].text.length > 10);
+  assert.match(hot[0].source_url, /^https:\/\/www\.zhihu\.com\/question\/\d+$/);
+  const result = reach('zhihu', 'hot', '热榜', {ok: true, items: hot});
+  assert.equal(result.content_scope, 'search_results');
+});
+
 test('zhihu read: answer body and question detail stay post_text and route to the right API', async () => {
   const answer = parseZhihuAnswer(JSON.parse(await fixture('zhihu-answer.json')));
   assert.match(answer.text, /输入过滤/);

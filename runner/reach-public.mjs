@@ -201,15 +201,15 @@ export function parseZhihuHot(raw, limit = MAX_LIMIT) {
   const items = [];
   for (const row of rows) {
     const target = row?.target || row;
-    const title = cleanText(target?.title || '');
-    const excerpt = cleanText(target?.excerpt || target?.description || '');
+    const title = cleanText(target?.title || target?.title_area?.text || '');
+    const excerpt = cleanText(target?.excerpt || target?.description || target?.excerpt_area?.text || '');
     if (!title && !excerpt) continue;
     items.push({
       title,
       text: excerpt || title,
       author: cleanText(target?.author?.name || ''),
-      source_url: webZhihuUrl(target?.url || (target?.id ? `https://api.zhihu.com/questions/${target.id}` : '')),
-      published_at: iso(target?.created_time),
+      source_url: webZhihuUrl(target?.url || target?.link?.url || (target?.id ? `https://api.zhihu.com/questions/${target.id}` : '')),
+      published_at: iso(target?.created_time || target?.created),
     });
     if (items.length >= asLimit(limit)) break;
   }
@@ -487,7 +487,7 @@ async function weiboAction(req, opts) {
 
 async function zhihuAction(req, opts) {
   if (req.action === 'hot') {
-    const page = await getPage('https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=' + MAX_LIMIT, {channel: 'zhihu', ...opts});
+    const page = await getPage('https://www.zhihu.com/api/v3/feed/topstory/hot-list-web?limit=' + MAX_LIMIT, {channel: 'zhihu', ...opts});
     const kind = classifyResponse(page, 'zhihu');
     if (kind) return fail(kind, 'http');
     let raw;
