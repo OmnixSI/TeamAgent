@@ -723,10 +723,19 @@ async function scheduleNear(e: any, groupId: string | undefined, kind: string, n
 }
 
 /** L2：两处 recovery.voice 之前统一注入 finalizeSpoken 的回调；纯函数不直接碰 D1。 */
-function finalizeOptions(e: any, context: any, acceptedActions: any[]) {
+function finalizeOptions(
+  e: any,
+  context: any,
+  acceptedActions: any[],
+  generateImage?: (prompt: string) => Promise<any>,
+) {
   const latest = context.latest;
   return {
     acceptedActions,
+    imageGenerated: acceptedActions.some(
+      (a: any) => a?.tool === "generate_image" && a.accepted !== false,
+    ),
+    generateImage,
     avoid: context.groupRules?.avoid ?? [],
     userText: latest?.body,
     owner: latest?.sender,
@@ -1092,6 +1101,14 @@ async function answerWithTools(e: any, context: any) {
         ).results,
         context: promptContext,
   });
+  // 图片假回执的确定性重做：不依赖模型再想一次，直接用群友原话调同一个工具（额度/开关/审计都在工具里）。
+  const generateImageForReply = (prompt: string) =>
+    runExtraTool(e, "generate_image", { prompt }, {
+      context,
+      source: context.latest,
+      messages,
+      isTainted: () => tainted(context, messages),
+    });
   messages.push({ role: "system", content: "工具失败时先换路再放弃；如实说原因，不说『没拿到』了事。" });
   for (let turn = context.resume?.turn || 0; turn < 4; turn++) {
     let m: any;
@@ -1201,7 +1218,7 @@ async function answerWithTools(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
+      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply)));
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
@@ -1682,5 +1699,5 @@ async function answerWithTools(e: any, context: any) {
     recovery.retry(messages);
   }
   const spoken = await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
-  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
+  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply)));
 }

@@ -86,6 +86,7 @@ export async function sendGeneratedImage(e:any,o:any,token:string,source:any,seq
       return row;
     },
     cache:async(row,info,expires)=>{await e.DB.prepare('UPDATE generated_images SET file_info=?,file_info_expires=? WHERE id=? AND group_id=?').bind(info,expires,row.id,o.group_id).run();},
+    recordId:true,
   });
   return result.http;
 }

@@ -29,6 +29,10 @@ export type FinalizeOptions = {
   findDuplicate?: (kind: string, nextRunAt: number) => Promise<any | null>;
   /** L7：口头禅命中后由调用方写 activity rule.violation；本文件不碰 D1。 */
   onViolation?: (phrase: string, count: number) => void;
+  /** 本轮是否真的成功排入了一张生成图（generate_image 的 accepted 结果）。 */
+  imageGenerated?: boolean;
+  /** 图片承诺没有兑现时的重做：用群友原话直接调 generate_image。 */
+  generateImage?: (prompt: string) => Promise<any>;
 };
 
 function escapeRe(value: string) {
@@ -148,6 +152,22 @@ function promiseSentence(text: string) {
   return null;
 }
 
+const IMAGE_CLAIM_RE = /\[图片\]|画好了|画好啦|已经画好|图已发|图发你了|图给你了|这张补上|给你补上|上面那张就是|出图了/;
+const IMAGE_REQUEST_RE =
+  /(?:画|绘制|生成|做|整|来)\s*(?:一|两|几)?\s*(?:下|个|张|幅|只|条|版|套)|(?:画|绘制|生成)\s*(?:一张|一幅|一个|一只)|形象|头像|海报|插画|壁纸|表情包/;
+const NOT_IMAGE_REQUEST_RE = /数据图|图表|流程图|架构图|示意图|画饼|画重点/;
+const IMAGE_CLAIM_REPLY = "刚才那句不算：这一轮没有真的把图发出去";
+
+/** 模型常见假回执：文字里说图已经发了，但本轮没有任何 generate_image 成功记录。 */
+export function claimsGeneratedImage(text: string) {
+  return IMAGE_CLAIM_RE.test(String(text ?? ""));
+}
+/** 只把明确的画面请求拿去重做；「你单独发图」这类指令不会变成奇怪的生图提示词。 */
+export function isImageRequest(text: string) {
+  const value = String(text ?? "");
+  return !NOT_IMAGE_REQUEST_RE.test(value) && IMAGE_REQUEST_RE.test(value);
+}
+
 /**
  * 把 speakBrief 的 JSON / 纯文本做最后收口。没有可改的地方时原样返回，
  * 保证「没有 avoid、没有 accepted、没有承诺」的旧路径逐字不变。
@@ -234,6 +254,27 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
     changed = true;
   }
   for (const hit of scrubbed.hits) o.onViolation?.(hit.phrase, hit.count);
+
+  // ④ 图片假回执：说「画好了/[图片]」但本轮没有 generate_image 成功记录。
+  // 群友确实在要图时用原话补调一次；补不出来就把假回执换成实话，绝不发「画好了」。
+  if (!o.imageGenerated && claimsGeneratedImage(text)) {
+    let made: any = null;
+    if (o.generateImage && isImageRequest(o.userText || "")) {
+      try {
+        made = await o.generateImage(String(o.userText || "").trim().slice(0, 1000));
+      } catch {
+        made = null;
+      }
+    }
+    if (made?.ok !== true) {
+      const reason =
+        typeof made?.reason_text === "string" && made.reason_text
+          ? `（${made.reason_text}）`
+          : "";
+      text = `${IMAGE_CLAIM_REPLY}${reason}。你再说一句要画什么，我重画。`;
+      changed = true;
+    }
+  }
 
   if (!changed) return spoken;
   value.text = text;

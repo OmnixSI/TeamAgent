@@ -434,3 +434,124 @@ test("F10 the non-tool reply path is also finalised (real promise, no tool call)
   assert.ok(JSON.parse(answer).text.startsWith("记下了，"));
   console.log("B-l2 回放：QQ 真实发送 0 次（本地假 D1，未调用 sendOutbox），线上 D1 写入 0 行");
 });
+
+test("F8 假回执：没有 generate_image 成功记录时，不许发「画好了/[图片]」", async () => {
+  const spoken = JSON.stringify({
+    mode: "work",
+    text: "[图片] 画好了，形象和动作合成一张：Q版小青龙，圆滚滚的墨绿身子。",
+  });
+  let asked = "";
+  const out = await api.finalizeSpoken(spoken, {
+    userText: "画一个卡特龙吃子弹",
+    generateImage: async (prompt) => {
+      asked = prompt;
+      return { ok: false, error_kind: "upstream", reason_text: "图片服务暂时没有成功返回" };
+    },
+  });
+  const v = JSON.parse(out);
+  assert.equal(asked, "画一个卡特龙吃子弹", "重做必须用群友原话");
+  assert.ok(!v.text.includes("画好了"), "假回执必须被替换");
+  assert.ok(v.text.includes("没有真的把图发出去"));
+  assert.ok(v.text.includes("图片服务暂时没有成功返回"));
+});
+
+test("F8 假回执：补图成功就保留原话；已有成功记录不重复调用", async () => {
+  const spoken = JSON.stringify({ mode: "work", text: "[图片] 画好了。" });
+  let calls = 0;
+  const out = await api.finalizeSpoken(spoken, {
+    userText: "你自己拟定卡特龙的形象",
+    generateImage: async () => {
+      calls++;
+      return { ok: true, status: "queued", accepted: true };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(JSON.parse(out).text, "[图片] 画好了。");
+
+  const backed = JSON.stringify({ mode: "work", text: "[图片] 画好了。" });
+  const same = await api.finalizeSpoken(backed, {
+    acceptedActions: [{ tool: "generate_image", accepted: true }],
+    imageGenerated: true,
+    userText: "画一张猫",
+    generateImage: async () => {
+      calls++;
+      return { ok: true };
+    },
+  });
+  assert.equal(same, backed);
+  assert.equal(calls, 1, "本轮已有成功图片时不得重复生图");
+});
+
+test("F8 假回执：不是明确画面请求时只改成实话，不拿「你单独发图」当提示词", async () => {
+  let calls = 0;
+  const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text: "上面那张就是我的印象版。" }), {
+    userText: "你单独发图 先别发文字",
+    generateImage: async () => {
+      calls++;
+      return { ok: true };
+    },
+  });
+  assert.equal(calls, 0);
+  assert.ok(!JSON.parse(out).text.includes("印象版"), "没图时不能继续描述图");
+});
+
+test("F8 真实消息回放：模型只甩文字「[图片]画好了」时，semantic 用原话补图并留下 outbox", async () => {
+  const e = env();
+  e.OPENAI_API_KEY = "test-openai";
+  await e.DB.prepare("INSERT INTO settings(key,value) VALUES('off:image_gen','0')").run();
+  const jpeg = [255,216,255,224,0,4,0,0,255,192,0,17,8,4,0,4,0,3,1,17,0,2,17,0,3,17,0,255,217];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (url, opt) => {
+    if (/api\.openai\.com/.test(String(url)))
+      return Response.json({ data: [{ b64_json: Buffer.from(jpeg).toString("base64") }] });
+    if (!/api\.deepseek\.com/.test(String(url))) return Response.json({});
+    const body = JSON.parse(opt.body || "{}");
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+      return Response.json({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              mode: "work",
+              text: "[图片] 画好了，形象和动作合成一张：Q版小青龙，墨绿圆身。",
+            }),
+          },
+        }],
+      });
+    return Response.json({
+      choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"画。"}' } }],
+    });
+  };
+  let answer;
+  try {
+    answer = await sem.agentAnswer(e, await contextFor(e, {
+      id: "msg-665-real",
+      body: "你自己拟定卡特龙的形象",
+      sender: "0FC1E8A8BD28981E86866125AC3FCEFF",
+    }));
+  } finally {
+    globalThis.fetch = old;
+  }
+  const text = JSON.parse(answer).text;
+  const images = await rows(e, "SELECT * FROM generated_images");
+  assert.equal(images.length, 1, "代码必须用群友原话真的补一张图");
+  if (!images.length) assert.ok(!text.includes("画好了"), "没补出图就不能说画好了：" + text);
+  assert.equal(images[0].sender_id, "0FC1E8A8BD28981E86866125AC3FCEFF");
+  const out = await rows(e, "SELECT * FROM outbox WHERE id LIKE '%~g'");
+  assert.equal(out.length, 1);
+  assert.equal(out[0].msg_id, "msg-665-real");
+  console.log("F8 回放：真实原话「你自己拟定卡特龙的形象」+ 假回执 → 代码补图 1 张，QQ 发送 0 次");
+});
+
+test("F8 假回执：画饼/图表/「你单独发图」都不触发生图", async () => {
+  for (const body of ["你又画饼了", "帮我画一下架构图", "你单独发图 先别发文字"]) {
+    let calls = 0;
+    await api.finalizeSpoken(JSON.stringify({ mode: "work", text: "[图片] 画好了。" }), {
+      userText: body,
+      generateImage: async () => {
+        calls++;
+        return { ok: true };
+      },
+    });
+    assert.equal(calls, 0, body);
+  }
+});
