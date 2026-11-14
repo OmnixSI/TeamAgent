@@ -578,7 +578,7 @@ export async function muted(
   return !!row && (!latestId || row.source_msg_id !== latestId);
 }
 
-async function digestText(e: any, schedule: any, spec: ScheduleSpec, now: number) {
+export async function digestText(e: any, schedule: any, spec: ScheduleSpec, now: number) {
   const tz = schedule.tz || DEFAULT_TZ;
   const days = schedule.kind === "digest_weekly" ? 7 : 1;
   // L1：有 topic 就是自定义主题推送；成员原话含「精简/简短/简单」时把行数上限降到 5。
