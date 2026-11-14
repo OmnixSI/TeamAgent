@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--acceptance", required=True)
     parser.add_argument("--fixtures", default="replay/fixtures")
     parser.add_argument("--export", default="")
+    parser.add_argument("--post", action="store_true", help="post-acceptance: passes must be true and evidence non-empty")
     args = parser.parse_args()
     entries = json.loads(pathlib.Path(args.acceptance).read_text(encoding="utf-8"))
     messages, outbox = {}, {}
@@ -54,10 +55,16 @@ def main():
         for key in ("id", "场景", "输入", "期望", "负责包", "passes", "evidence"):
             if key not in entry:
                 errors.append(f"{entry.get('id')}: missing {key}")
-        if entry.get("passes") is not False:
-            errors.append(f"{entry.get('id')}: passes must be false before acceptance")
-        if entry.get("evidence") != "":
-            errors.append(f"{entry.get('id')}: evidence must be empty before acceptance")
+        if args.post:
+            if not isinstance(entry.get("passes"), bool):
+                errors.append(f"{entry.get('id')}: passes must be a boolean after acceptance")
+            if not str(entry.get("evidence") or "").strip():
+                errors.append(f"{entry.get('id')}: evidence must not be empty after acceptance")
+        else:
+            if entry.get("passes") is not False:
+                errors.append(f"{entry.get('id')}: passes must be false before acceptance")
+            if entry.get("evidence") != "":
+                errors.append(f"{entry.get('id')}: evidence must be empty before acceptance")
 
     refs = []
     for entry in entries:
@@ -97,6 +104,9 @@ def main():
             errors.append(f"{entry_id}: quote not in {table}.rid={rid}: {quote}")
 
     print(f"entries: {len(entries)}")
+    if args.post:
+        print(f"passes true: {sum(1 for entry in entries if entry.get('passes') is True)}")
+        print(f"passes false: {sum(1 for entry in entries if entry.get('passes') is False)}")
     print(f"rid references checked: {len(refs)}")
     print(f"verbatim quote checks: {len(quotes)}")
     print(f"errors: {len(errors)}")
