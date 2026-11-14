@@ -16,7 +16,8 @@
     "card": null,
     "can_request_artifact": true,
     "urls": []
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 224,
@@ -33,7 +34,8 @@
     "card": null,
     "can_request_artifact": true,
     "urls": []
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 265,
@@ -50,7 +52,8 @@
     "card": null,
     "can_request_artifact": true,
     "urls": []
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 304,
@@ -96,7 +99,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 376,
@@ -122,7 +126,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 475,
@@ -169,7 +174,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 497,
@@ -216,7 +222,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": "[图片]"
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 498,
@@ -263,7 +270,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": "[图片]"
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 499,
@@ -310,7 +318,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": "[图片]"
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 500,
@@ -357,7 +366,43 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": "[图片]"
-   }
+   },
+   "mentioned": 0
+  },
+  {
+   "rowid": 502,
+   "id": "ROBOT1.0_uMj7bSoGmOazRMZniW.yTzTGqUpM-R8iFE50cUfXL2SWcBqj8NUYUIch57lZVNVdlHb7lYOqFWb6q0737rKRc9p.CXiH2qF5ZU2sziBfRHUNIqrVm3QhC6-bhktADRFg",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "CBFDDE8B8487BC8C95C6907AA6193E90",
+   "ts": "2026-11-14T14:16:06+08:00",
+   "body": "你选一下你想要哪个？",
+   "meta": {
+    "direct": true,
+    "memberRole": "admin",
+    "attachments": [],
+    "senderName": "t.o.o.",
+    "forwarded": [],
+    "card": null,
+    "can_request_artifact": true,
+    "addressedOther": false,
+    "urls": [],
+    "mentions": [
+     {
+      "id": "204AE67DE34A4448CEE8EA52208A2BB0",
+      "name": "Bot",
+      "isBot": true
+     }
+    ],
+    "msgIdx": "REFIDX_ZAJ1MXhZQgQbkU2ij94BHUN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [],
+    "placeholder": ""
+   },
+   "mentioned": 1
   },
   {
    "rowid": 503,
@@ -391,7 +436,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 509,
@@ -418,7 +464,8 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
   },
   {
    "rowid": 513,
@@ -445,7 +492,75 @@
     "ownUrls": [],
     "quotedUrls": [],
     "placeholder": ""
-   }
+   },
+   "mentioned": 0
+  },
+  {
+   "rowid": 518,
+   "id": "ROBOT1.0_OyB7TgbASj-VgfcoKvzFblN1pmtfc4cgVjfWu51s8vynWTvtA9-ESRYfAChODGcvAnFwCm2zMdAgU-YRnvm01efc9CcD.q-wjum3kSu84kM!",
+   "group_id": "9968A083EE07797A987010E64CD421B9",
+   "sender": "0FC1E8A8BD28981E86866125AC3FCEFF",
+   "ts": "2026-11-14T14:21:37+08:00",
+   "body": "你个蠢货，这是我现在的表情\n你再看看你明明能读图的",
+   "meta": {
+    "direct": false,
+    "memberRole": "owner",
+    "attachments": [],
+    "senderName": "Souvereign",
+    "forwarded": [
+     {
+      "attachments": [
+       {
+        "content": "",
+        "content_type": "image/jpeg",
+        "filename": "1FB8C0BC70313BE2725DB7FC1CAD75D3.jpg",
+        "height": 80,
+        "size": 1531,
+        "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTm6GNKpZm8VI9zXzZSowMajeMI3hj7CyD_CiiN4svN54aYAzIEcHJvZFCAvaMBWhBD5HoRRu39D-HNcFKR08-regJfv4IBAm5q&rkey=CAMSOLgthq-6lGU_G2Ba1RotFfxfRRJXb-ossRjgrBQq1U1Rh7omlu0D0O-EzcKbgM0Xj_u4mDmtM_Kl&spec=0",
+        "width": 80
+       }
+      ],
+      "content": "",
+      "message_type": 103,
+      "msg_idx": "REFIDX_hcaYCUdR1Pe9wQQ0t8Bw/kN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI"
+     }
+    ],
+    "card": null,
+    "can_request_artifact": true,
+    "urls": [],
+    "mentions": [],
+    "msgIdx": "REFIDX_oPMDCMAu5lU7eKdu4WEDk8P9d0BENunOTUQO1b084W8Yu4CvEQjbc+xvA4SAduHRckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "refMsgIdx": "REFIDX_hcaYCUdR1Pe9wQQ0t8Bw/kN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+    "replyTo": {
+     "kind": "unknown",
+     "text": ""
+    },
+    "quoted": {
+     "text": "",
+     "msgIdx": "REFIDX_hcaYCUdR1Pe9wQQ0t8Bw/kN1vSbUFh629gHRqLqkLdML6fUllxZocV/vDBmWFUxNckJlVCVLSua+G4Egy9Jcyy/fszg2SNlLwuDZa1XsDsFfvwDUwoh1QbsBvMpfRHmI",
+     "media": [
+      {
+       "kind": "image",
+       "url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTm6GNKpZm8VI9zXzZSowMajeMI3hj7CyD_CiiN4svN54aYAzIEcHJvZFCAvaMBWhBD5HoRRu39D-HNcFKR08-regJfv4IBAm5q&rkey=CAMSOLgthq-6lGU_G2Ba1RotFfxfRRJXb-ossRjgrBQq1U1Rh7omlu0D0O-EzcKbgM0Xj_u4mDmtM_Kl&spec=0",
+       "contentType": "image/jpeg",
+       "width": 80,
+       "height": 80,
+       "size": 1531,
+       "filename": "1FB8C0BC70313BE2725DB7FC1CAD75D3.jpg"
+      }
+     ]
+    },
+    "media": [],
+    "bili": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "ownUrls": [],
+    "quotedUrls": [
+     "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=EhTm6GNKpZm8VI9zXzZSowMajeMI3hj7CyD_CiiN4svN54aYAzIEcHJvZFCAvaMBWhBD5HoRRu39D-HNcFKR08-regJfv4IBAm5q&rkey=CAMSOLgthq-6lGU_G2Ba1RotFfxfRRJXb-ossRjgrBQq1U1Rh7omlu0D0O-EzcKbgM0Xj_u4mDmtM_Kl&spec=0"
+    ],
+    "placeholder": ""
+   },
+   "mentioned": 0
   }
  ],
  "bot_replies": [
@@ -478,6 +593,11 @@
    "rowid": 309,
    "body": "行，就这张：圆的黄的、笑眼粉脸还吐着红舌头，坏笑味儿挺足。剩下仨还是80×80的砖，没画面。换头像得你们后台配置，我这边只能选，落地不了。",
    "created_at": 1794637108858
+  },
+  {
+   "rowid": 311,
+   "body": "能读的我不赖账——圆的黄的、笑眼粉脸吐红舌头那张，我看见了也选了；说\"四块砖\"是我嘴糙，准确讲是三张80×80没画面。但你新发这张我这儿只有下载链接、没识图结果，画面真没进来，不是装瞎。重发一遍，或者确认是不是跟刚选那张同一张。语音还欠着，edge-tts 链路没核实，我不糊你说已经发了。",
+   "created_at": 1794637317518
   }
  ]
 }

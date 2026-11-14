@@ -31,6 +31,17 @@ export async function loadBatch(e: { DB: any }, groupId: string, cursor: number)
   return rows.map((r: Row) => ({ ...r, meta: metaOf(r) }));
 }
 
+export async function loadRecent(e: { DB: any }, groupId: string, limit = 12) {
+  const rows = (
+    await e.DB.prepare(
+      "SELECT m.rowid AS ordinal,m.*,mm.json AS metadata FROM messages m LEFT JOIN message_meta mm ON mm.id=m.id WHERE m.group_id=? ORDER BY m.rowid DESC LIMIT ?",
+    )
+      .bind(groupId, limit)
+      .all()
+  ).results;
+  return rows.reverse().map((r: Row) => ({ ...r, meta: metaOf(r) }));
+}
+
 export async function loadChatContext(
   e: { DB: any },
   x: {
@@ -113,7 +124,8 @@ export async function loadChatContext(
   }
   const withImages = [...recent, ...batch, ...(latest ? [latest] : [])]
     .filter((r) =>
-      (r.meta?.media || []).some((m: any) => m.kind === "image"),
+      (r.meta?.media || []).some((m: any) => m.kind === "image") ||
+      (r.meta?.quoted?.media || []).some((m: any) => m.kind === "image"),
     )
     .map((r) => r.id);
   const imagePicks = new Set(x.imagePicks || []);

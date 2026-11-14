@@ -1,4 +1,4 @@
-import { renderMentions, mediaOf, extractBili, isStickerMedia, type Card, type Mention } from "./inbound";
+import { renderMentions, mediaOf, extractBili, isStickerMedia, QUOTED_IMAGE_BASE, type Card, type Mention } from "./inbound";
 import { FACE_TAG, faceTagText, hasSuperFace } from "./face";
 import { biliNoteText } from "./bilinote";
 
@@ -110,6 +110,19 @@ export function mediaViews(
     return "图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
   });
 }
+function quotedViews(quoted: any[], messageId: string, imageNotes?: Map<string, string[]>, imagePicks?: Set<string>) {
+  let imageIdx = -1;
+  return quoted.map((m: any) => {
+    if (m.kind !== "image")
+      return m.kind === "voice" ? "语音" : m.kind === "video" ? "视频" : "文件" + (m.filename ? " " + m.filename : "");
+    imageIdx++;
+    const idx = QUOTED_IMAGE_BASE + imageIdx;
+    const note = imageNotes?.get(messageId)?.[idx];
+    if (note) return note.replace(/^图片：/, "引用图片：");
+    if (imagePicks?.has(messageId + ":" + idx)) return "引用图片（正在识别）";
+    return "引用图片" + (m.width && m.height ? ` ${m.width}×${m.height}` : "");
+  });
+}
 export function viewMessage(row: any, names: Map<string, string>, refs: Map<string, RefTarget>, imageNotes?: Map<string, string[]>, imagePicks?: Set<string>): ViewMsg {
   const meta = metaOf(row), reply = meta.replyTo;
   const reId = reply?.kind === "bot" ? "b:" + reply.targetId : reply?.kind === "member" ? reply.targetId : undefined;
@@ -129,7 +142,14 @@ export function viewMessage(row: any, names: Map<string, string>, refs: Map<stri
       ...(media?.length ? { media } : {}),
     };
   }
-  else if (meta.quoted) material.quote = { from: named(meta.quoted.authorId || "", meta.quoted.authorName, names), text: String(meta.quoted.text || "").slice(0, 200) };
+  else if (meta.quoted) {
+    const media = Array.isArray(meta.quoted.media) ? quotedViews(meta.quoted.media, row.id, imageNotes, imagePicks) : undefined;
+    material.quote = {
+      from: named(meta.quoted.authorId || "", meta.quoted.authorName, names),
+      text: String(meta.quoted.text || "").slice(0, 200),
+      ...(media?.length ? { media } : {}),
+    };
+  }
   const body = String(row.body || "");
   const mediaMeta = (hasSuperFace(body) || !body.trim()) && Array.isArray(meta.media)
     ? { ...meta, media: meta.media.map((m: any) => m.kind === "image" && (hasSuperFace(body) || isStickerMedia(m)) ? { ...m, sticker: true } : m) }

@@ -218,3 +218,86 @@ test('E10 kill switch and the sticker daily cap fail closed without an error sen
   const message = view.viewMessage({ id: 'capped-sticker', body: '', ts: new Date().toISOString(), sender: 'U1', meta: byId(497).meta }, new Map(), new Map(), new Map(), new Set());
   assert.deepEqual(message.material.media, ['一张表情包（还没识别）']);
 });
+
+test('E11 cross-batch pick sees the four real 80x80 images when the @ arrives next', () => {
+  const images = [497, 498, 499, 500].map((rid) => {
+    const row = byId(rid);
+    return { id: 'r' + rid, group_id: 'GROUP000001', body: '', mentioned: 0, meta: row.meta };
+  });
+  const ask = { id: 'r502', group_id: 'GROUP000001', body: '你选一下你想要哪个？', mentioned: 1, meta: {} };
+  const picks = vision.pickImages([...images, ask], ask, new Map(), 4);
+  assert.deepEqual(picks.map((p) => p.messageId), ['r500', 'r499', 'r498', 'r497']);
+  assert.ok(picks.every((p) => p.sticker === true));
+});
+
+test('E12 a quoted image with replyTo.kind=unknown is picked from quoted.media', () => {
+  const latest = {
+    id: 'r518', group_id: 'GROUP000001', mentioned: 1,
+    body: '你个蠢货，这是我现在的表情\n你再看看你明明能读图的',
+    meta: { quoted: { authorName: 't.o.o.', text: '', media: [{ kind: 'image', url: 'https://multimedia.nt.qq.com.cn/quoted-500', width: 80, height: 80, size: 1531 }] } },
+  };
+  const picks = vision.pickImages([latest], latest, new Map(), 4);
+  assert.equal(picks.length, 1);
+  assert.equal(picks[0].messageId, 'r518');
+  assert.equal(picks[0].idx, inbound.QUOTED_IMAGE_BASE);
+  assert.equal(picks[0].sticker, true);
+});
+
+test('E13 a quoted image note is rendered in the quoted material, not lost', () => {
+  const notes = new Map([['r518', []]]);
+  notes.get('r518')[inbound.QUOTED_IMAGE_BASE] = '图片：圆形黄色表情，弯弯笑眼；表达/梗：调皮、坏笑';
+  const v = view.viewMessage({
+    id: 'r518', body: '你个蠢货，这是我现在的表情', sender: 'U1', ts: new Date().toISOString(),
+    meta: { quoted: { authorName: 't.o.o.', text: '', media: [{ kind: 'image', width: 80, height: 80 }] } },
+  }, new Map(), new Map(), notes, new Set());
+  assert.match(v.material.quote.media[0], /^引用图片：圆形黄色表情/);
+  assert.match(v.material.quote.media[0], /表达\/梗：调皮、坏笑/);
+});
+
+test('E14 worker lookback queues one vision turn for four images pushed before the @', async () => {
+  const e = env();
+  await req(e, '/api/admin/bind', { groupId: 'GROUP000001' });
+  await e.DB.prepare("INSERT INTO settings(key,value) VALUES('off:emoji_read','1')").run();
+  const urlToFile = new Map();
+  for (const rid of [497, 498, 499, 500]) {
+    const row = byId(rid);
+    urlToFile.set(row.meta.media[0].url, stickerFiles[row.meta.media[0].filename]);
+    await qq(e, { ...msg('r' + rid, ''), attachments: row.meta.attachments });
+  }
+  const cursor = (await e.DB.prepare("SELECT rowid FROM messages WHERE id='r500'").first()).rowid;
+  await e.DB.prepare("INSERT INTO settings(key,value) VALUES(?,?)").bind('chat_cursor:GROUP000001', String(cursor)).run();
+  await qq(e, { ...msg('r502', '你选一下你想要哪个？'), mentions: [{ member_openid: 'bot', is_you: true }] });
+  const chat = await e.DB.prepare("SELECT id FROM jobs WHERE kind='chat' AND id='chat-r502'").first();
+  assert.ok(chat);
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('api.deepseek.com')) {
+      const body = JSON.parse(init.body);
+      assert.ok(String(body.messages?.[0]?.content?.[0]?.text || '').includes('表情包'));
+      return Response.json({ choices: [{ message: { content: '{"desc":"圆形黄色表情","tags":["表情"],"meme":true}' }, finish_reason: 'stop' }] });
+    }
+    const file = urlToFile.get(String(url));
+    assert.ok(file, 'real fixture image URL');
+    return new Response(imageBytes(file), { headers: { 'content-type': 'image/jpeg' } });
+  };
+  try {
+    await worker.queue({ messages: [{ body: { id: chat.id }, ack() {} }] }, e);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const visionJob = await e.DB.prepare("SELECT payload FROM jobs WHERE kind='chat' AND id LIKE 'chat-v-r502%'").first();
+  assert.ok(visionJob, 'vision turn is queued');
+  assert.equal(JSON.parse(visionJob.payload).imageOutcomes.length, 4);
+});
+
+test('E15 message_meta keeps QQ attachment subType and the sticker flag', async () => {
+  const e = env();
+  await req(e, '/api/admin/bind', { groupId: 'GROUP000001' });
+  await qq(e, {
+    ...msg('subtype-sticker', ''),
+    attachments: [{ content_type: 'image/jpeg', url: 'https://example.test/subtype.jpg', filename: 'subtype.jpg', width: 80, height: 80, size: 900, sub_type: 1 }],
+  });
+  const meta = JSON.parse((await e.DB.prepare('SELECT json FROM message_meta WHERE id=?').bind('subtype-sticker').first()).json);
+  assert.equal(meta.media[0].subType, 1);
+  assert.equal(meta.media[0].sticker, true);
+  assert.equal(meta.attachments[0].sub_type, 1);
+});

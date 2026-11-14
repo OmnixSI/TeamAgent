@@ -40,12 +40,15 @@ const descriptions = {
   '500-1FB8C0BC70313BE2725DB7FC1CAD75D3.jpg': { desc: '圆形黄色表情，半睁眼，额头一滴汗。', tags: ['无语', '流汗'] },
 };
 
+const visionOut = '.wrangler/emoji-replay-vision.mjs';
+await build({ entryPoints: ['src/vision.ts'], bundle: true, format: 'esm', platform: 'node', outfile: visionOut });
+const vision = await import('../' + visionOut);
 const e = env();
 const groupId = fixture.messages[0].group_id;
 await req(e, '/api/admin/bind', { groupId });
 const urlToFile = new Map();
 for (const row of fixture.messages) {
-  const media = row.meta?.media || [];
+  const media = [...(row.meta?.media || []), ...(row.meta?.quoted?.media || [])];
   for (const m of media) if (m.kind === 'image' && m.url) urlToFile.set(m.url, fileFor(m.filename));
 }
 let currentFile = '';
@@ -79,22 +82,21 @@ try {
   }
   const jobs = (await e.DB.prepare("SELECT id,kind,payload,status FROM jobs WHERE kind='emoji_note' ORDER BY id").all()).results;
   for (const job of jobs) await worker.queue({ messages: [{ body: { id: job.id }, ack() {} }] }, e);
+  const quotedRow = rows.get(518);
+  const quotedLatest = { ...quotedRow, id: 'r518', meta: quotedRow.meta };
+  const quotedPicks = vision.pickImages([quotedLatest], quotedLatest, new Map(), 4);
+  if (quotedPicks.length) await vision.annotateTurn(e, quotedPicks, 20000);
 } finally {
   globalThis.fetch = originalFetch;
 }
 
-// imageNotesFor lives in vision; build it separately so the replay can render
-// the same note strings the Worker puts in the prompt.
-const visionOut = '.wrangler/emoji-replay-vision.mjs';
-await build({ entryPoints: ['src/vision.ts'], bundle: true, format: 'esm', platform: 'node', outfile: visionOut });
-const vision = await import('../' + visionOut);
 const ids = fixture.messages.map((m) => 'r' + m.rowid);
 const notes = await vision.imageNotesFor(e, ids);
 
 const render = (row) => {
   const id = 'r' + row.rowid;
   const v = view.viewMessage({ ...row, id, sender: 'U1', ts: row.ts, meta: row.meta }, new Map(), new Map(), notes, new Set());
-  return { text: v.text, media: v.material?.media || [] };
+  return { text: v.text, media: v.material?.media || [], quoteMedia: v.material?.quote?.media || [] };
 };
 const cases = [];
 const faceRows = [503, 509, 513];
@@ -124,6 +126,15 @@ for (const id of stickerRows) {
     after: render(row),
   });
 }
+const ask502 = { ...rows.get(502), id: 'r502', meta: rows.get(502).meta };
+const crossBatchPicks = vision.pickImages([...[497, 498, 499, 500].map((id) => ({ ...rows.get(id), id: 'r' + id, meta: rows.get(id).meta })), ask502], ask502, new Map(), 4);
+const quotedRow = rows.get(518);
+cases.push({
+  category: '引用图片（kind=unknown）',
+  rid: 518,
+  before: { text: quotedRow.body, media: ['只有下载链接，没有识图结果'] },
+  after: render(quotedRow),
+});
 
 const outbox = (await e.DB.prepare('SELECT COUNT(*) AS n FROM outbox').first()).n;
 const zero = { onlineD1Writes: 0, qqSends: outbox, cloudflareCalls };
@@ -135,6 +146,8 @@ const result = {
   emojiJobs: (await e.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE kind='emoji_note' AND status='done'").first()).n,
   notes: (await e.DB.prepare('SELECT COUNT(*) AS n FROM image_notes').first()).n,
   links: (await e.DB.prepare('SELECT COUNT(*) AS n FROM message_images').first()).n,
+  crossBatchPicks: crossBatchPicks.map((p) => p.messageId),
+  quotedPick: { messageId: quotedRow.id, idx: vision.pickImages([{ ...quotedRow, id: 'r518', meta: quotedRow.meta }], { ...quotedRow, id: 'r518', meta: quotedRow.meta }, new Map(), 4)[0]?.idx },
   cases,
   realBotRepliesBefore: fixture.bot_replies,
 };
@@ -150,6 +163,7 @@ const md = [
   '| 类别 | rid | 回放前 bot 看到 | 回放后 bot 看到 |',
   '|---|---|---|---|',
   ...cases.map((c) => `| ${c.category} | ${c.rid} | ${line(JSON.stringify(c.before))} | ${line(JSON.stringify(c.after))} |`),
+  `| 跨批次补图 | 502 | — | pickImages 回看最近 24 条，取到 ${crossBatchPicks.length} 张：${crossBatchPicks.map((p) => p.messageId).join('、')} |`,
   '',
   `统计：emoji_note 完成 ${result.emojiJobs} 个；image_notes ${result.notes} 条；message_images ${result.links} 条。`,
   `零写入/零发送：线上 D1 写入 0 行、QQ 真实发送 ${outbox} 次、Cloudflare API 调用 ${cloudflareCalls} 次。`,

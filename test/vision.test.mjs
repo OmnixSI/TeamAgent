@@ -462,7 +462,7 @@ test("V9 a mentioned image is described before the participation prompt", async 
   assert.match(view.material.media[0], /^图片：/);
 });
 
-test("V10 eight images in a mentioned batch stop at three vision calls", async () => {
+test("V10 eight images in a mentioned batch stop at four vision calls", async () => {
   const e = env();
   await req(e, "/api/admin/bind", { groupId: "GROUP000001" });
   const state = {};
@@ -475,14 +475,14 @@ test("V10 eight images in a mentioned batch stop at three vision calls", async (
   } finally {
     globalThis.fetch = original;
   }
-  assert.equal(state.visionCalls, 3);
+  assert.equal(state.visionCalls, 4);
   assert.equal(
     (await e.DB.prepare("SELECT COUNT(*) AS n FROM image_notes").first()).n,
-    3,
+    4,
   );
   const user = JSON.parse(state.participation.messages[1].content);
   const media = user.context.batch.flatMap((x) => x.material?.media || []);
-  assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 3);
+  assert.equal(media.filter((x) => String(x).startsWith("图片：")).length, 4);
   assert.ok(media.some((x) => /图片（未查看）|图片 64×64/.test(String(x))));
 });
 

@@ -5,7 +5,7 @@ import { ingestRepoIndex, cleanupRepoIndex } from "./repo";
 import { isOrgRepo } from "./repo-discovery";
 import {biliFailReply,biliFailMaterial} from './linkfail';
 import {isTitleRef,TITLE_FALLBACK} from './bilititle';
-import { looksLikeSticker } from "./vision";
+import { asksForImage, looksLikeSticker } from "./vision";
 import {loginState,requestLogin,cancelLogin} from './login-flow';
 import { sendGeneratedImage } from "./imagegen";
 import { collectSticker, tagSticker, retryStickerTags, importSticker, stickerSendOn, sendSticker } from "./stickers";
@@ -26,7 +26,7 @@ import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
 import { SELF_CARD } from "./self-card.generated";
 import { parseInbound, extractBili } from "./inbound";
-import { loadBatch, loadChatContext } from "./context";
+import { loadBatch, loadChatContext, loadRecent } from "./context";
 import { metaOf, viewMessage, withoutFaces, hasFace } from "./view";
 import {
   nameLogin,
@@ -850,14 +850,28 @@ async function processJob(e: Env, id: string) {
       const hardStop = !addressedMessages({batch:preloaded}).length && !mayBeForced(latestPre, preloaded.some((r: any) => r.mentioned), false)
         && !preloaded.some((row: any) => isDirectRequest(row, { batch: preloaded }))
         && await unansweredProactive(e, m.group_id);
-      const picks = !hardStop && visionProvider(e)
+      const visionOn = !hardStop && visionProvider(e);
+      let picks = visionOn
         ? pickImages(
             preloaded,
             latestPre,
             refRows,
-            TEAM.vision?.turn_max ?? 3,
+            TEAM.vision?.turn_max ?? 4,
           )
         : [];
+      // A picture batch can be pushed past the cursor before the @/question
+      // arrives in the next batch. When the latest message is addressed and the
+      // current batch has no image, look back a few messages (notes still win).
+      if (!picks.length && visionOn && !p.annotated && (
+        latestPre.mentioned === 1 || latestPre.mentioned === true || latestPre.meta?.mentionsBot ||
+        latestPre.meta?.replyTo?.kind === "bot" || asksForImage(String(latestPre.body || ""))
+      )) {
+        const recent = await loadRecent(e, m.group_id, 24);
+        const have = new Set(preloaded.map((r: any) => r.id));
+        const older = recent.filter((r: any) => !have.has(r.id));
+        if (older.length)
+          picks = pickImages([...older, ...preloaded], latestPre, refRows, TEAM.vision?.turn_max ?? 4);
+      }
       const cold = picks.length && !p.annotated ? await coldPicks(e, picks) : [];
       if (cold.length) {
         const imageOutcomes = await annotateTurn(e, cold);
