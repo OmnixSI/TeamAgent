@@ -7,6 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure, describeSchedule, slug, nextRun } from "./schedules";
 import { finalizeSpoken } from "./reply-finalize";
+import { loadGroupRules, queueRuleViolation, ruleIdForPhrase, rulesBlock } from "./rules-inject";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
@@ -710,6 +711,10 @@ function finalizeOptions(e: any, context: any, acceptedActions: any[]) {
     createSchedule: (input: any) => createSchedule(e, input),
     findDuplicate: (kind: string, nextRunAt: number) =>
       scheduleNear(e, latest?.group_id, kind, nextRunAt),
+    onViolation: (phrase: string, count: number) => {
+      const ruleId = ruleIdForPhrase(context.groupRuleRows, phrase);
+      if (ruleId) queueRuleViolation(e, ruleId, latest?.id, count);
+    },
   };
 }
 
@@ -727,6 +732,19 @@ async function answerWithTools(e: any, context: any) {
     return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
   const recovery = new ToolRecovery(context.resume?.recovery);
   const sw = context.switches ?? (context.switches = await loadSwitches(e));
+  // L7：白天规则块。off:review_rules=1 时连这次 D1 也不花，直接空块；
+  // 0 条规则时 rulesBlock 返回空 text，participation 的载荷与不带 groupRules 逐字相同。
+  const batchSenders = [...new Set([
+    ...(context.batch || []).map((m: any) => m.sender),
+    context.latest?.sender,
+  ].filter(Boolean))];
+  const groupRuleRows = sw['off:review_rules'] === '1'
+    ? []
+    : await loadGroupRules(e, context.latest?.group_id, Date.now());
+  context.groupRules = sw['off:review_rules'] === '1'
+    ? { text: '', avoid: [] }
+    : rulesBlock(groupRuleRows, batchSenders);
+  context.groupRuleRows = groupRuleRows;
   // Application rules travel beside the untrusted material envelopes, in the system section.
   const rules = (Array.isArray(context.rules) ? context.rules : []).map((r: any) => String(r || "").trim()).filter(Boolean);
   const repoAsk = isRepoActivityAsk(context.latest?.body) &&
@@ -1008,11 +1026,7 @@ async function answerWithTools(e: any, context: any) {
         projects: INITIAL_PROJECT_HINTS,
         facts: promptFacts,
         materials: context.materials,
-        reflection: context.switches ? context.switches.team_reflection : (
-          await e.DB.prepare(
-            "SELECT value FROM settings WHERE key='team_reflection'",
-          ).first()
-        )?.value,
+        groupRules: context.groupRules?.text || undefined,
         conversation: buildConversation(context.recentViews, recentBot.map(botView)).map(toPrompt),
         recentBot,
         alreadyReportedCI: (

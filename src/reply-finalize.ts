@@ -27,12 +27,68 @@ export type FinalizeOptions = {
   createSchedule?: (input: NewSchedule) => Promise<any>;
   /** 注入「本群同 kind、时间差 ≤10 分钟的 active 日程」查询。 */
   findDuplicate?: (kind: string, nextRunAt: number) => Promise<any | null>;
+  /** L7：口头禅命中后由调用方写 activity rule.violation；本文件不碰 D1。 */
+  onViolation?: (phrase: string, count: number) => void;
 };
 
-/** L7 会把这个桩填实；L2 只保证调用点已经接上。 */
+function escapeRe(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+/** 只命中单独成句的口头禅：前后是标点/空白或文本边界。 */
+function phrasePattern(phrase: string) {
+  // 边界先判、再吞掉紧跟的标点：「草，这个」整体删成「这个」；
+  // 「work：草，被骂」保留前导冒号，不会把词黏到上一段。
+  return new RegExp(
+    "(^|[，。！？!?,；;：:\\s])" + escapeRe(phrase) + "(?=$|[，。！？!?,；;：:\\s])" + "[！!。.~～…，,]*",
+    "g",
+  );
+}
+/** 内部带归因的版本；对外签名保持 L2 接好的 { text, count }。 */
+function scrubHits(
+  text: string,
+  phrases: string[],
+): { text: string; count: number; hits: { phrase: string; count: number }[] } {
+  const original = String(text ?? "");
+  let out = original;
+  const hits: { phrase: string; count: number }[] = [];
+  let count = 0;
+  for (const raw of phrases || []) {
+    const phrase = String(raw ?? "").trim();
+    if (!phrase) continue;
+    let removed = 0;
+    // 保留前导标点：「work：草，…」删完仍是「work：…」，不会把词黏到上一段。
+    // 前导标点会随匹配一起被跳过，连续两次命中时再扫一遍（最多 4 轮）。
+    for (let pass = 0; pass < 4; pass++) {
+      let hit = 0;
+      out = out.replace(phrasePattern(phrase), (_match, lead: string) => {
+        hit++;
+        return lead;
+      });
+      removed += hit;
+      if (!hit) break;
+    }
+    if (!removed) continue;
+    // ≤2 字的短语只删不计数：「草」可能只是「草稿/草案」的一部分。
+    if (Array.from(phrase).length >= 3) {
+      count += removed;
+      hits.push({ phrase, count: removed });
+    }
+  }
+  if (out !== original) {
+    out = out
+      .replace(/([，,。.；;：:])(?:\s*\1)+/g, "$1")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+    // 删空就退回原文（群里不能发空消息），但命中仍计数。
+    if (!out) return { text: original, count, hits };
+  }
+  return { text: out, count, hits };
+}
+
+/** L7：删除单独成句的口头禅；嵌入句子的不改。≥3 字才计 violation，删空退回原文。 */
 export function scrubAvoided(text: string, phrases: string[]): { text: string; count: number } {
-  void phrases;
-  return { text, count: 0 };
+  const result = scrubHits(text, phrases);
+  return { text: result.text, count: result.count };
 }
 
 function parseSpoken(spoken: string): Record<string, any> {
@@ -157,12 +213,13 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
     }
   }
 
-  // ③ 口头禅清理：L2 的桩不动文本，L7 填实后这里自动生效。
-  const scrubbed = scrubAvoided(text, o.avoid ?? []);
+  // ③ 口头禅清理：只删单独成句的词；命中计数经注入回调写 activity（本文件不碰 D1）。
+  const scrubbed = scrubHits(text, o.avoid ?? []);
   if (scrubbed.text !== text) {
     text = scrubbed.text;
     changed = true;
   }
+  for (const hit of scrubbed.hits) o.onViolation?.(hit.phrase, hit.count);
 
   if (!changed) return spoken;
   value.text = text;
