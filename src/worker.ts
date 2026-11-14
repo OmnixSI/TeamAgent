@@ -17,6 +17,7 @@ import { quoteRef, quoteOutcome } from "./quote";
 import { metered, COST, left, D1_BUDGET, chunks } from "./d1";
 import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBeForced, unansweredProactive, recordDecision } from "./rhythm";
 import { gateCheck, parseGateMode } from "./gate-wire";
+import {runReachReply} from "./reachreply";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
 import { docRoute } from "./docjobs";
@@ -751,6 +752,7 @@ async function processJob(e: Env, id: string) {
         id + "-done",
       );
     }
+    if (claim.kind === "reach_reply") await runReachReply(e,p,id);
     if (claim.kind === "semantic_reply")
       await proactiveReply(e, p, semanticServices(e));
     if (claim.kind === "links")

@@ -12,6 +12,7 @@ import { getQuotaTool } from "./quota";
 import { newsSearchTool } from "./news-search";
 import { readDocumentTool } from "./read-document";
 import { readImageTextTool } from "./read-image-text";
+import { readSocialTool } from "./read-social";
 import { repoSearchTools } from "./repo-search";
 import { searchHistoryTool } from "./search-history";
 import { stockQuoteTool } from "./stock-quote";
@@ -30,6 +31,7 @@ export const EXTRA_TOOLS: BotTool[] = [
   newsSearchTool,
   readDocumentTool,
   readImageTextTool,
+  readSocialTool,
   recallEpisodeTool,
   ...repoSearchTools,
   searchHistoryTool,
