@@ -1,0 +1,1 @@
+- [P2] test/mention-guard.test.mjs MG2：D1 语句预算断言（≤48）依赖整点/时段，19:00 悉尼（08:0x UTC）实测 50，main 3adfdf8 同样失败，非趟 D 引入。修法：断言按固定时钟（mock 到非整点）或放宽到当前 cron 实际预算。

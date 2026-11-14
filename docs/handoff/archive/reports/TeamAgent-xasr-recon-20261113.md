@@ -1,0 +1,11 @@
+# X-ASR 本机侦察（2026-11-13）
+
+**结论**：本机 X-ASR 是 **sherpa-onnx 版，不是 MLX**：官方 GitHub 仓库文件树（756 项）与 HuggingFace 模型卡都只提供 sherpa-onnx 运行时，仓库无 mlx 文件、无 mlx 分支，本机也没有 mlx ASR 包或模型。会议软件 NextThought 用的就是这套；调用参数照 `ZipformerStreaming.swift:458-495`，Python 实测中英都可用。离线模型单次输入上限 40.0 s，10 分钟音频切块后约 18–19 s。
+1) 会议软件/复用点：不在 `~/Projects`，实际是 `~/LocalProjects/NextThought`（af60a4d）；离线识别参数 `Sources/NextThoughtCore/ZipformerStreaming.swift:458-495`（transducer、bpe、modified_beam_search、2 线程、16k/80 维），模型清单 `Sources/NextThought/LocalASRModels.swift:55-99`，依赖 `Package.swift:15` sherpa-onnx 1.13.8；MLX 只用于文档 OCR/嵌入（`Tools/DocumentRuntime/requirements.lock.txt:28-31`），与 ASR 无关。
+2) 模型/版本：官方 `X-ASR-zh-en`（0.16B，中英，流式 160/480/960/1920 ms + 离线，自带标点与大小写，Apache-2.0）；本机 App `/Applications/InterviewHacker.app` 3.0.0 (3000)；模型在 `~/Library/Application Support/NextThought/models/`：离线 `sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03` 166.9 MB、流式 480 ms `...-480ms...-2026-06-05` 161.5 MB；160 ms 未安装；包来自 k2-fsa/sherpa-onnx release `asr-models`，SHA-256 见各目录 `installed.json`。
+3) 调用方式：**没有 CLI、没有本地 HTTP 服务**；外部程序走 Python `sherpa-onnx`（2.0.1 与 App 同版 1.13.8 均跑通；pip 包不带 `sherpa-onnx-offline` 可执行文件）。`uv venv .venv-xasr && uv pip install sherpa-onnx==2.0.1`；最小命令 `python /Users/yanghongming/Projects/xasr_transcribe.py a.wav`（参考脚本，30 s 附近最静音处切块）。加载：离线 1.0–1.6 s，流式约 2.2 s。
+4) 输入格式：16 kHz、单声道、s16le little-endian（与官方 deployment README 一致）；`ffmpeg -i in.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le out.wav`（m4a 同一命令，均已实测）。
+5) 中英试跑（同一 zh-en 模型，2 线程）：公开英文 6.62 s→0.16 s：“After early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels.”；公开中文 5.61 s→0.12 s：“对我做了介绍啊，那么我想说的是呢，大家如果对我的研究感兴趣呢，”（HF 公开样本 0.wav / DEV_T0000000000.wav）。中英混说 7.55 s→0.19 s 全对（cache invalidation / database consistency / trade off）；`say` 合成英文把 Bilibili 听成 bilibily（专名）。
+6) 10 分钟估算：15×40 s 块实测 600 s 音频解码 **17.5 s**（RTF 0.029）+ 加载 1.2 s；流式 480 ms 无 40 s 限制、RTF 0.046–0.05（64.5 s→3.0 s），10 分钟约 30 s。
+7) 时间戳/资源：官方 WebSocket 只回 `partial/final` 文本；实测 token 级 `result.timestamps` 可用（离线 40 s→187 个、流式 64.5 s→299 个，单位秒、从 0 起），做字幕需按标点/VAD 并句。官方要求每进程 ≥4 GB RAM；实测 `provider="cpu"`、2 线程、峰值 RSS 0.68 GB（单块）/1.03 GB（连续 15 块）；两个离线进程可并行（单块 1.01 s→各约 1.5 s，总墙钟 3.2 s）。
+**未核实**：B 站真实 10 分钟视频端到端（含下载/ffmpeg 墙钟）；Swift CLI 直调；160 ms 模型；与 Whisper 的同音频对照。

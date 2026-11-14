@@ -42,7 +42,10 @@ jobs:
           TEAM_QQ_APP_ID: ${{ secrets.TEAM_QQ_APP_ID }}
           TEAM_QQ_APP_SECRET: ${{ secrets.TEAM_QQ_APP_SECRET }}
           TEAM_AUTOLOOP_SOURCE_KEY: ${{ secrets.TEAM_AUTOLOOP_SOURCE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          # Without the secret, fall back to the runner machine's own `wrangler login`.
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then unset CLOUDFLARE_API_TOKEN; fi
           python3 scripts/sync-runtime-secrets.py
           npm run db:migrate
           npm run deploy
