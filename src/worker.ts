@@ -34,7 +34,8 @@ import {
 } from "./accounts";
 import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { queueFor } from "./lanes";
-import { runSchedules, planSchedule, createSchedule, publicSchedule, sydneyText } from "./schedules";
+import { runSchedules, planSchedule, createSchedule, backfillSchedule, publicSchedule, sydneyText } from "./schedules";
+import { proposeLearning } from "./learning-backfill";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
 import { model, activity, redact, promptData, utilityText } from "./runtime";
@@ -2428,14 +2429,54 @@ async function api(r: Request, e: Env) {
         .bind(sourceId)
         .first();
       if (!source) return json({ error: "source message not found" }, 404);
+      const dedup = String(b.dedup || "").trim();
+      const quote = String(b.request_quote || "").trim();
+      const ack = String(b.ack || "").trim();
       const input = {
         group_id: source.group_id,
         owner: source.sender,
         kind: "digest_daily" as const,
-        spec: { time: String(b.time || "08:00") },
+        spec: {
+          time: String(b.time || "08:00"),
+          ...(dedup ? { dedup } : {}),
+          ...(quote ? { request_quote: quote } : {}),
+          ...(dedup || quote ? { origin: "backfill" as const } : {}),
+        },
         source_msg_id: source.id,
       };
       try {
+        // 新字段缺省时保持原有路径与响应，现有 daily-push 断言不变。
+        if (dedup || quote || ack) {
+          const out = await backfillSchedule(e, input, { dry_run: !!b.dry_run, ack });
+          const sourceView = {
+            id: source.id,
+            ts: source.ts,
+            body: String(source.body || "").slice(0, 160),
+          };
+          if (b.dry_run) {
+            const plan = out.plan;
+            return json({
+              ok: true,
+              dry_run: true,
+              would_write: true,
+              schedule: {
+                ...plan,
+                spec: JSON.stringify(plan.spec),
+                next_run_text: sydneyText(plan.next_run_at, plan.tz),
+              },
+              ack: out.ack_outbox_id,
+              source: sourceView,
+            });
+          }
+          return json({
+            ok: true,
+            dry_run: false,
+            would_write: false,
+            schedule: publicSchedule(out.row),
+            ack: out.ack_outbox_id,
+            source: sourceView,
+          });
+        }
         if (b.dry_run) {
           const plan = planSchedule(input);
           return json({
@@ -2463,6 +2504,16 @@ async function api(r: Request, e: Env) {
         });
       } catch (error: any) {
         return json({ ok: false, error: String(error?.message || error) }, 400);
+      }
+    }
+    if (path === "/api/admin/learning-backfill" && method === "POST") {
+      try {
+        return json(await proposeLearning(e, b));
+      } catch (error: any) {
+        return json(
+          { ok: false, error: String(error?.message || error) },
+          Number(error?.status) || 400,
+        );
       }
     }
     if (path.endsWith("/name-members") && method === "POST")
