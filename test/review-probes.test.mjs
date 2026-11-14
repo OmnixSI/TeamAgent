@@ -133,7 +133,7 @@ test("gap comparison distinguishes every unknown and regression path", () => {
 });
 
 test("the probe JSON is written to replay/probes-<date>.json", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "review-probes-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-review-probes-"));
   try {
     const result = await runProbes({ write: true, outDir: dir });
     const files = readdirSync(dir);

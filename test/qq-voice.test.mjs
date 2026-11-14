@@ -38,7 +38,7 @@ async function mockQQ(handler) {
 }
 
 const scratch = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qq-voice-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-qq-voice-"));
   return { dir, clean: () => fs.rmSync(dir, { recursive: true, force: true }) };
 };
 

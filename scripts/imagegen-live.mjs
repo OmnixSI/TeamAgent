@@ -2,12 +2,14 @@
 // OPENAI_API_KEY_FILE is supplied by the caller; never print its value or contents.
 import assert from 'node:assert/strict';
 import {readFileSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {build} from 'esbuild';
 
-const root=new URL('../',import.meta.url),tmp=mkdtempSync('/tmp/f8-live-');
+const root=new URL('../',import.meta.url),tmp=mkdtempSync(join(tmpdir(),'teamagent-test-imagegen-live-'));
 const db=new DatabaseSync(':memory:');
 const originalFetch=globalThis.fetch;
 let calls=0,usage,apiError,elapsed=0;

@@ -68,7 +68,7 @@ test('VD-R-GUARD VD-R-SHADOW-LOCAL three real fixture nights finish with bounded
   };t.after(()=>{globalThis.fetch=priorFetch});
   const replay=process.env.REVIEW_REPLAY_DIR||fileURLToPath(new URL('../../TeamAgent-p4b-login/.agent/releases/V-D-reflection-loop/replay',import.meta.url));
   const real=existsSync(join(replay,'seed-437.sqlite'));
-  const dir=mkdtempSync(join(tmpdir(),'review-d6-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const dir=mkdtempSync(join(tmpdir(),'teamagent-test-review-d6-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const target=join(dir,'copy.sqlite');if(real)copyFileSync(join(replay,'seed-437.sqlite'),target);
   const {e,db}=setup('shadow',real?target:undefined);t.after(()=>db.close());if(!real)seed(db,40);
   const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'review_%' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();

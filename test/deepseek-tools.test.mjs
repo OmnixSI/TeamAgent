@@ -724,7 +724,7 @@ test("D10 owner selftest route: owner only, works without D1 writes", async () =
 });
 
 test("D11 runner client: same paths, key from file, same error mapping, no key in output", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "f9ds-client-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-f9ds-client-"));
   const keyFile = join(dir, "key.txt");
   writeFileSync(keyFile, "sk-file-SECRET-11a2\n", { mode: 0o600 });
   const saved = {

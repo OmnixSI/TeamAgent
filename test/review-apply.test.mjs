@@ -376,7 +376,7 @@ const seedPath = join(replayDir, 'seed-437.sqlite');
 const simNights = existsSync(join(replayDir, 'sim-nights.json')) ? JSON.parse(readFileSync(join(replayDir, 'sim-nights.json'), 'utf8')).nights : [];
 
 test('three simulated nights on the 437 seed produce three digests and <=9 evidenced tasks', { skip: !existsSync(seedPath) }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'review-d5a-'));
+  const dir = mkdtempSync(join(tmpdir(), 'teamagent-test-review-d5a-'));
   const target = join(dir, 'seed.sqlite');
   copyFileSync(seedPath, target);
   const db = new DatabaseSync(target);

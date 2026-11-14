@@ -70,7 +70,7 @@ test('runner pause gate also prevents login claims; invocation statement counts 
 test('owner to fake local fetcher to saved credentials and auth status works end to end within budget',async t=>{
  const {mkdtemp,rm,readFile}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
  const {runLoginFlow}=await import('../runner/qr-login.mjs'),{createBrowserAuth}=await import('../runner/browser-auth.mjs');
- const home=await mkdtemp(join(tmpdir(),'team-login-e2e-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-login-e2e-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const e=env();await start(e);const {login}=await claim(e);let i=0;
  const client={isPaused:()=>false,setSessionCookies(){},anonymousBuvid:async()=>secrets[3],biliPassport:async action=>action==='generate'?{body:{code:0,data:{url,qrcode_key:'a'.repeat(32)}}}:{body:{code:0,data:{code:[86101,86090,0][i++]}},headers:{'set-cookie':secrets.slice(0,3).map((s,j)=>['SESSDATA','bili_jct','DedeUserID'][j]+'='+s+'; Max-Age=3600')}}};
  const cloud=async(path,body)=>{const before=e.DB.executed,r=await runner(e,path,body);assert.ok(e.DB.executed-before<=48);if(!r.ok){const error=Error('conflict');error.status=r.status;throw error;}return r.json();};
@@ -83,7 +83,7 @@ test('owner to fake local fetcher to saved credentials and auth status works end
 test('P1 QR capability and cookies never occur in any Worker request, D1 binding, Worker response or log',async t=>{
  const {mkdtemp,rm,readFile}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
  const {runLoginFlow}=await import('../runner/qr-login.mjs'),{createBrowserAuth}=await import('../runner/browser-auth.mjs');
- const home=await mkdtemp(join(tmpdir(),'team-qr-private-e2e-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-qr-private-e2e-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const e=env(),payloads=[],bindings=[],responses=[],logs=[],local=[];
  const prepare=e.DB.prepare.bind(e.DB);
  e.DB.prepare=sql=>{const wrap=statement=>new Proxy(statement,{get(target,key){if(key==='bind')return (...args)=>{bindings.push(args);return wrap(target.bind(...args));};return target[key];}});return wrap(prepare(sql));};
@@ -118,7 +118,7 @@ test('P1 previously stored QR credentials are erased before returning owner stat
 test('QR login uses the local service lock so desktop/background login cannot overwrite it',async t=>{
  const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
  const {runLoginFlow}=await import('../runner/qr-login.mjs'),{createBrowserAuth}=await import('../runner/browser-auth.mjs');
- const home=await mkdtemp(join(tmpdir(),'team-login-lock-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-login-lock-'));t.after(()=>rm(home,{recursive:true,force:true}));
  let opened,release;const started=new Promise(r=>opened=r),blocked=new Promise(r=>release=r);
  const client={isPaused:()=>false,biliPassport:async action=>{if(action==='generate'){opened();await blocked;return {body:{code:0,data:{url,qrcode_key:'a'.repeat(32)}}};}return {body:{code:0,data:{code:86038}},headers:{}};}};
  const auth=createBrowserAuth({home,client,notify:async()=>{}});

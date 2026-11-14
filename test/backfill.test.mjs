@@ -255,7 +255,7 @@ test("B5 both admin routes are owner-only and reject a forged source_msg_id", as
 });
 
 test("B6 script without flags only lists candidates locally: 0 API calls, 0 D1 writes", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "teamagent-backfill-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-backfill-"));
   try {
     const dbFile = replayDb(dir);
     const out = join(dir, "candidates.json");
@@ -293,7 +293,7 @@ test("B6 script without flags only lists candidates locally: 0 API calls, 0 D1 w
 });
 
 test("B7 script --propose defaults to dry-run and sends the owner token without printing it", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "teamagent-backfill-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-backfill-"));
   const old = process.env.TEAM_ADMIN_TOKEN;
   process.env.TEAM_ADMIN_TOKEN = "owner-secret";
   try {
@@ -350,7 +350,7 @@ test("B8 backfillSchedule is idempotent without ack and keeps the existing creat
 });
 
 test("B9 script --apply targets exactly one candidate and forwards dedup/request_quote/ack as dry-run", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "teamagent-backfill-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-backfill-"));
   const old = process.env.TEAM_ADMIN_TOKEN;
   process.env.TEAM_ADMIN_TOKEN = "owner-secret";
   try {

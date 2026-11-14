@@ -717,7 +717,7 @@ test("VL-13 sixth schedule is invalid_args; the capped run is skipped(cap)", asy
 
 test("VL-14 backfill dry-run/apply builds morning-report and the report asks the other two", async () => {
   {
-    const dir = mkdtempSync(join(tmpdir(), "teamagent-vl14-"));
+    const dir = mkdtempSync(join(tmpdir(), "teamagent-test-vl14-"));
     try {
       const dbFile = join(dir, "replay.sqlite");
       const db = new DatabaseSync(dbFile);

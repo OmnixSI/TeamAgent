@@ -11,7 +11,7 @@ import {validateTeamConfig} from '../config/validate.mjs';
 import {pickAudio,downloadAudio,ffmpegArgs,ffmpegAudio,runMediaJob,redactUrl,startupGate,sweepLocal,acquireLock,sendReport,flushReports,runCycle,makeClient} from './media.mjs';
 import {classifyMedia,createFetchClient} from './fetcher.mjs';
 const BV='BV1GN4p6pEEP',cdn='https://audio.bilivideo.com/a?upsig=hidden&mid=123';
-const temporary=()=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'media-test-'));return {home,clean:()=>fs.rmSync(home,{recursive:true,force:true})}};
+const temporary=()=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'teamagent-test-media-'));return {home,clean:()=>fs.rmSync(home,{recursive:true,force:true})}};
 const job=()=>({id:'bmedia-'+BV,kind:'bili_media',payload:{bvid:BV,duration:120,until:Date.now()+60000,lease:'synthetic-lease'}});
 function stages(home,extra={}){
  return {home,settings:{'asr:provider':'local'},asrConfig:{python:'/python',model_dir:'/models'},client:{isPaused:()=>false,sanitize:x=>x,biliAudio:async()=>({duration:120,cid:1,urls:[{bandwidth:1,baseUrl:cdn,backupUrl:[]}]})},download:async(_u,dest)=>fs.writeFileSync(dest,'audio'),ffmpeg:async(_s,d)=>fs.writeFileSync(d,'wave'),asr:async()=>({segments:[{start:0,end:120,text:'这是超过十个字的一段中文转写文本。'}],audio_s:120,max_rss_mb:200,nice:15}),cloud:async()=>({status:200}),...extra};

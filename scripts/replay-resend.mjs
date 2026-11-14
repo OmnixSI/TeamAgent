@@ -7,7 +7,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 import {build} from 'esbuild';
 const root=fileURLToPath(new URL('../',import.meta.url));
-const temp=mkdtempSync(join(tmpdir(),'teamagent-resend-'));
+const temp=mkdtempSync(join(tmpdir(),'teamagent-test-resend-'));
 const originalFetch=globalThis.fetch;
 let db,networkCalls=0,simulatedQQSends=0;
 try{

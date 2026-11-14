@@ -9,6 +9,9 @@ export type Card = { type: string; name?: string; title?: string; desc?: string;
 export type Media = { kind: "image" | "video" | "voice" | "file"; url?: string; contentType?: string; width?: number; height?: number; size?: number; filename?: string; asr?: string; subType?: number; sticker?: boolean };
 
 /** QQ sticker images are square (80x80 or larger), GIFs, or explicit subType=1 attachments. */
+/** Notes for images inside a quoted/forwarded message use a separate index range. */
+export const QUOTED_IMAGE_BASE = 1000;
+
 export function isStickerMedia(m: Media) {
   if (m.kind !== "image") return false;
   if (m.sticker === true || m.subType === 1) return true;
@@ -97,8 +100,11 @@ export function parseInbound(eventType: string, d: any): Inbound {
     else quoted.card = quotedCard.card;
   }
   const media = mediaOf(d.attachments), biliUrls = scanned.biliUrls, quotedBiliUrls = scanned.quotedBiliUrls;
-  if (hasSuperFace(body)) for (const m of media) if (m.kind === "image") m.sticker = true;
-  else if (!body.trim()) for (const m of media) if (m.kind === "image" && isStickerMedia(m)) m.sticker = true;
+  if (hasSuperFace(body)) {
+    for (const m of media) if (m.kind === "image") m.sticker = true;
+  } else if (!body.trim()) {
+    for (const m of media) if (m.kind === "image" && isStickerMedia(m)) m.sticker = true;
+  }
   const ownUrls = extractUrls(body + ' ' + JSON.stringify(d.ark_data || {}));
   const quotedUrls = extractUrls(JSON.stringify(elements));
   const bili = extractBili(biliUrls,body);

@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "f9ds-3-live-"));
+const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-f9ds-3-live-"));
 const EVIDENCE = path.join(ROOT, ".agent", "releases", "F9DS", "notes", "DS-3-live.json");
 const OCR_PAGE_MICRO_USD = 225; // $0.225 / 1,000 pages
 const CHAT_IN_MICRO_USD_PER_TOKEN = 0.15; // $0.15 / M input tokens

@@ -18,7 +18,7 @@ const TOKEN = 'test-token-9f3c1d-do-not-print';
 const BASE = 'http://worker.test';
 
 function tempDir() {
-  return mkdtempSync(join(tmpdir(), 'fr-scripts-'));
+  return mkdtempSync(join(tmpdir(), 'teamagent-test-fr-scripts-'));
 }
 
 function jsonResponse(body, status = 200) {

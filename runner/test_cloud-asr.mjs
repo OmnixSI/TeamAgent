@@ -7,7 +7,7 @@ import * as adapter from './cloud-asr.mjs';
 import {runMediaJob} from './media.mjs';
 
 function fixture(seconds=220){
- const dir=fs.mkdtempSync(join(tmpdir(),'f9ds-1b-test-')),wav=join(dir,'a.wav');
+ const dir=fs.mkdtempSync(join(tmpdir(),'teamagent-test-cloud-asr-')),wav=join(dir,'a.wav');
  const pcm=Buffer.alloc(seconds*32000),h=Buffer.alloc(44);
  h.write('RIFF');h.writeUInt32LE(36+pcm.length,4);h.write('WAVEfmt ',8);h.writeUInt32LE(16,16);h.writeUInt16LE(1,20);h.writeUInt16LE(1,22);h.writeUInt32LE(16000,24);h.writeUInt32LE(32000,28);h.writeUInt16LE(2,32);h.writeUInt16LE(16,34);h.write('data',36);h.writeUInt32LE(pcm.length,40);
  fs.writeFileSync(wav,Buffer.concat([h,pcm]));return {dir,wav,clean:()=>fs.rmSync(dir,{recursive:true,force:true})};

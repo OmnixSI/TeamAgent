@@ -112,7 +112,7 @@ test('C5R-2 gateway wake file is a 0600 timestamp written only for bilibili mess
  assert.equal(mentionsBili('{"d":{"content":"https://www.bilibili.com/video/BV1xx411c7mD"}}'),true);
  assert.equal(mentionsBili('BV1xx411c7mD'),true);
  for(const raw of ['{"d":{"content":"https://example.com/video/1"}}','随便聊聊','{"d":{"content":""}}'])assert.equal(mentionsBili(raw),false);
- const home=await mkdtemp(join(tmpdir(),'team-fetch-wake-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-fetch-wake-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const file=writeFetchWake(home,1234567890);
  assert.equal(file,join(home,'fetch-wake'));
  assert.equal(await readFile(file,'utf8'),'1234567890');
@@ -148,7 +148,7 @@ test('C5R-6 a running login never blocks claiming fetch jobs',async()=>{
  assert.deepEqual(worked,['job-1']);
 });
 test('C5R-7 the local wake port notices a new file within one second',async t=>{
- const home=await mkdtemp(join(tmpdir(),'team-wake-port-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-wake-port-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const port=createWakePort(join(home,'fetch-wake')),started=Date.now();t.after(()=>port.close());
  const waiting=port.wait(10000);
  await new Promise(resolve=>setTimeout(resolve,20));
@@ -164,7 +164,7 @@ function fixture(handler=()=>({body:{code:0,data:{}}}),extra={}){
 }
 test('L13 a paused fetch client suppresses auth probes and preserves the last local status',async t=>{
  t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
- const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
  await writeBiliCookies(home,[{name:'SESSDATA',value:'private-session',expires:2000000000}]);
  const f=fixture(()=>({status:412})),reports=[];
  const auth=createBrowserAuth({home,client:f.client,report:async b=>reports.push(b),notify:async()=>{}});
@@ -174,7 +174,7 @@ test('L13 a paused fetch client suppresses auth probes and preserves the last lo
 });
 test('L14 login nav shares the fetch limiter and stops on its first risk response',async t=>{
  t.mock.method(https,'request',()=>{throw Error('unexpected separate client transport');});
- const home=await mkdtemp(join(tmpdir(),'team-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-shared-auth-'));t.after(()=>rm(home,{recursive:true,force:true}));
  let mode='ok',closed=0;
  const f=fixture(()=>mode==='ok'?{body:{code:0}}:{body:{code:-352}});
  await f.client.biliApi('/x');mode='risk';
@@ -360,7 +360,7 @@ test('N16 shared risk file makes pauseForRisk block another client and corrupt s
  const {mkdtemp,rm,readFile,writeFile}=await import('node:fs/promises');
  const {tmpdir}=await import('node:os');
  const {join}=await import('node:path');
- const home=await mkdtemp(join(tmpdir(),'team-risk-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-risk-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const risk=join(home,'state/bili-risk.json');
  const f=fixture(()=>({body:{code:0,data:{}}}),{riskPath:risk});
  f.client.pauseForRisk();
@@ -379,7 +379,7 @@ test('N16 shared risk file makes pauseForRisk block another client and corrupt s
 test('N17 shared pause written during rate sleep is checked before the next request',async t=>{
  const {mkdir,mkdtemp,rm,writeFile}=await import('node:fs/promises');
  const {tmpdir}=await import('node:os'),{join}=await import('node:path');
- const home=await mkdtemp(join(tmpdir(),'team-risk-sleep-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-risk-sleep-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const risk=join(home,'state/bili-risk.json');
  await mkdir(join(home,'state'),{recursive:true});
  let slept=0;

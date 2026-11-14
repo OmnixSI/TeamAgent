@@ -9,7 +9,7 @@ import {runLoginFlow} from './qr-login.mjs';
 const values={SESSDATA:'FAKE-SESSION-PRIVATE',bili_jct:'FAKE-CSRF-PRIVATE',DedeUserID:'FAKE-USER-PRIVATE',buvid3:'FAKE-BUVID-PRIVATE'};
 const key='a'.repeat(32),url='https://passport.bilibili.com/h5-app/passport/login/scan?navhide=1&qrcode_key='+key+'&from=';
 async function fixture(t,codes=[86101,86090,0],extra={}){
- const home=await mkdtemp(join(tmpdir(),'team-qr-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-qr-'));t.after(()=>rm(home,{recursive:true,force:true}));
  let time=10000,idx=0;const calls=[],states=[],auth=[],logs=[];
  const client=createFetchClient({now:()=>time,sleep:async ms=>time+=ms,random:()=>0,log:x=>logs.push(x),lookup:(_h,_o,cb)=>cb(null,[{address:'8.8.8.8',family:4}]),request:(options,callback)=>{
   const req=new EventEmitter();req.destroy=()=>{};req.end=()=>{

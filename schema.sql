@@ -351,3 +351,19 @@ CREATE TABLE IF NOT EXISTS pending_actions(
   status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','done','expired')),
   asked_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS pending_actions_open ON pending_actions(group_id,sender,status,expires_at);
+
+CREATE TABLE IF NOT EXISTS vision_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trace_id TEXT NOT NULL,
+  group_id TEXT,
+  message_id TEXT,
+  idx INTEGER,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT,
+  http INTEGER,
+  elapsed_ms INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vision_events_message ON vision_events(message_id, idx, created_at);
+CREATE INDEX IF NOT EXISTS vision_events_created ON vision_events(created_at);

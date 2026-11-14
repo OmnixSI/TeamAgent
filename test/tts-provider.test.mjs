@@ -6,7 +6,7 @@ import path from "node:path";
 import { synthesize, ttsKey, HARD_MAX_CHARS } from "../runner/tts.mjs";
 
 const scratch = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-provider-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-tts-provider-"));
   return { dir, cacheDir: path.join(dir, "cache"), clean: () => fs.rmSync(dir, { recursive: true, force: true }) };
 };
 

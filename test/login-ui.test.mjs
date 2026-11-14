@@ -40,7 +40,7 @@ test('historical Bili risk permits retry while actual active-flow and countdown 
 async function riskUi(t){
  const [{mkdtemp,rm,readFile},{join},{tmpdir},{EventEmitter},{createFetchClient},{createBrowserAuth},{runLoginFlow}]=await Promise.all([
   import('node:fs/promises'),import('node:path'),import('node:os'),import('node:events'),import('../runner/fetcher.mjs'),import('../runner/browser-auth.mjs'),import('../runner/qr-login.mjs')]);
- const home=await mkdtemp(join(tmpdir(),'team-risk-retry-')),e=env(),calls=[],tasks=[];
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-risk-retry-')),e=env(),calls=[],tasks=[];
  let f,auth,mode='risk',runningId,ready,release;
  t.after(async()=>{try{if(release){await owner({service:'bili',id:runningId},'DELETE');release();await Promise.all(tasks);}}finally{await rm(home,{recursive:true,force:true});}});
  const call=async(path,body,key='owner-secret',method)=>{

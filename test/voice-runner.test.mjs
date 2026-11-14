@@ -31,7 +31,7 @@ function makeWav(ms, rate = 16000) {
 }
 
 function temporary() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "f9ds-voice-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-f9ds-voice-"));
   return {
     home,
     clean() {

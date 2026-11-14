@@ -14,7 +14,7 @@ import {
 } from "../runner/silk.mjs";
 
 const scratch = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "silk-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "teamagent-test-silk-"));
   return {
     dir,
     wav: path.join(dir, "in.wav"),

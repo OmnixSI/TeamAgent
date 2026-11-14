@@ -219,7 +219,7 @@ function snapshotBefore(db) {
 export async function goldenRun({ mode = "full", variant = "base", extraNights = 0 } = {}) {
   const key = `${mode}:${variant}:${extraNights}`;
   if (CACHE.has(key)) return CACHE.get(key);
-  const dir = mkdtempSync(join(tmpdir(), "review-golden-"));
+  const dir = mkdtempSync(join(tmpdir(), "teamagent-test-review-golden-"));
   TEMP.push(dir);
   const file = join(dir, "seed-437.sqlite");
   copyFileSync(replayFile("seed-437.sqlite"), file);

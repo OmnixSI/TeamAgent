@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {loadBiliCookies,writeBiliCookies} from '../runner/browser-auth.mjs';
 
 test('B2 legacy flat cookies retain the same names and migrate on next save',async t=>{
- const home=await mkdtemp(join(tmpdir(),'team-F2a-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const home=await mkdtemp(join(tmpdir(),'teamagent-test-F2a-'));t.after(()=>rm(home,{recursive:true,force:true}));
  await mkdir(join(home,'secrets'));
  const path=join(home,'secrets/bili-cookie.json');
  const flat={SESSDATA:'fake-session',bili_jct:'fake-csrf',DedeUserID:'fake-user',buvid3:'fake-device',unrelated:'ignored'};

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {runDocJob,runDocCycle,downloadDoc,docUrl,safeDocName,pickPython} from '../runner/docread-job.mjs';
 
-const home=()=>fs.mkdtempSync(path.join(os.tmpdir(),'docread-job-'));
+const home=()=>fs.mkdtempSync(path.join(os.tmpdir(),'teamagent-test-docread-'));
 const job=()=>({id:'docread-m1-0-abc123',kind:'docread',payload:{message_id:'m1',group_id:'GROUP1',filename:'report.pdf',question:'第3页的金额',key:'doc:m1:0:abc123',url:'https://multimedia.nt.qq.com.cn/download?fileid=1',bytes:4,lease:'lease-1'}});
 const parsed={ok:true,kind:'pdf',filename:'report.pdf',bytes:4,text:'===== 第 3 页 =====\n12,345.67',pages:[{page:3,chars:8}],sheets:[],meta:{},warnings:[],hits:[],truncated:false};
 
