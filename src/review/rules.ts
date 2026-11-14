@@ -202,7 +202,7 @@ export async function revokeRule(e:ReviewEnv,id:string,who:string,reason:string)
   ]);
   return true;
 }
-export async function activeRulesFor(e:ReviewEnv,groupId:string,now=Date.now()):Promise<BehaviorRule[]> {
-  const rows=await reviewRead<BehaviorRule>(e,`SELECT * FROM behavior_rules WHERE group_id=? AND status IN ('canary','active') AND expires_at>? ORDER BY updated_at DESC,id LIMIT 5`,[groupId,now]);
+export async function activeRulesFor(e:ReviewEnv,groupId:string,now=Date.now(),limit=5):Promise<BehaviorRule[]> {
+  const rows=await reviewRead<BehaviorRule>(e,`SELECT * FROM behavior_rules WHERE group_id=? AND status IN ('canary','active') AND expires_at>? ORDER BY updated_at DESC,id LIMIT ?`,[groupId,now,limit]);
   return rows.map(row=>({...row,rule:text(row.rule,80)}));
 }
