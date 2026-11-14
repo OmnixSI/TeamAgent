@@ -125,8 +125,8 @@ class LocalLoginPageTests(unittest.TestCase):
         login._report = lambda state: None
         login._save = lambda fresh: (_ for _ in ()).throw(OSError('disk full'))
         started = login.start()
-        self.assertEqual(login.status(started['id']), {'phase':'failed'})
-        self.assertEqual(login.status(started['id']), {'phase':'failed'})
+        self.assertEqual(login.status(started['id'])['reason'], 'storage')
+        self.assertEqual(login.status(started['id'])['phase'], 'failed')
         self.assertFalse((self.runtime / 'secrets/bili-cookie.json').exists())
 
     def test_local_bili_lock_timeout_does_not_write_and_stale_lock_recovers(self):
