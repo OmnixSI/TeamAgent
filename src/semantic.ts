@@ -1,6 +1,6 @@
 import { addressedMessages, guardMentionDecision, withMentionReceipt } from './mention-guard';
 import {webFailText,LINK_FAIL_RULE} from './linkfail';
-import { COST, left, ResourceLimitError } from "./d1";
+import { COST, left, ResourceLimitError, chunks } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
@@ -17,6 +17,7 @@ import { requestPlan } from "./tasks";
 import { model, activity, redact, utilityText } from "./runtime";
 import { ToolRecovery } from "./tool-audit";
 import { rememberCorrection, recall } from "./memory";
+import { fitMemoryMessages } from "./memory-budget";
 import {
   PARTICIPATION,
   participationMessages,
@@ -73,14 +74,17 @@ export async function analyse(e: any, p: any, s: Services) {
       "SELECT id,repo,subject,predicate,substr(value,1,700) AS value,substr(evidence,1,500) AS evidence,status,valid_from FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
     ).all()
   ).results;
-  const placeholders = rows.map(() => "?").join(",");
-  const metadata = (
-    await e.DB.prepare(
-      "SELECT id,json FROM message_meta WHERE id IN (" + placeholders + ")",
+  // D1 caps a statement at 100 bound parameters; a 120-message night batch
+  // therefore reads message metadata in chunks.
+  const metadata: any[] = [];
+  for (const part of chunks(rows.map((m: any) => m.id))) {
+    const result = await e.DB.prepare(
+      "SELECT id,json FROM message_meta WHERE id IN (" + part.map(() => "?").join(",") + ")",
     )
-      .bind(...rows.map((m: any) => m.id))
-      .all()
-  ).results;
+      .bind(...part)
+      .all();
+    metadata.push(...result.results);
+  }
   for (const m of rows)
     m.meta = JSON.parse(metadata.find((x: any) => x.id === m.id)?.json || "{}");
   // Nightly learning has no interactive authorization step. Reject a tainted
@@ -94,6 +98,11 @@ export async function analyse(e: any, p: any, s: Services) {
           m.body,
         ),
     );
+  if (!rows.length) return;
+  // The batch stays countable, but only the newest messages that fit the model
+  // input budget reach the prompt. Trimmed messages are still marked processed.
+  const batchRows = rows;
+  rows = fitMemoryMessages(rows);
   if (!rows.length) return;
   const reflection = await s.setting("team_reflection");
   const catalog = (
@@ -135,28 +144,24 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
       },
     ),
   );
-  const sourceIds = rows.map((m: any) => m.id),
-    slots = sourceIds.map(() => "?").join(",");
-  const existingFacts = new Set(
-    (
-      await e.DB.prepare(
-        "SELECT id FROM facts WHERE source_id IN (" + slots + ")",
-      )
-        .bind(...sourceIds)
-        .all()
-    ).results.map((f: any) => f.id),
-  );
-  const blockedSources = new Set(
-    (
-      await e.DB.prepare(
-        "SELECT source_id FROM memory_blocks WHERE source_id IN (" +
-          slots +
-          ")",
-      )
-        .bind(...sourceIds)
-        .all()
-    ).results.map((f: any) => f.source_id),
-  );
+  const sourceIds = rows.map((m: any) => m.id);
+  const existingFacts = new Set<string>();
+  const blockedSources = new Set<string>();
+  for (const part of chunks(sourceIds)) {
+    const slots = part.map(() => "?").join(",");
+    const facts = await e.DB.prepare(
+      "SELECT id FROM facts WHERE source_id IN (" + slots + ")",
+    )
+      .bind(...part)
+      .all();
+    for (const f of facts.results) existingFacts.add(f.id);
+    const blocked = await e.DB.prepare(
+      "SELECT source_id FROM memory_blocks WHERE source_id IN (" + slots + ")",
+    )
+      .bind(...part)
+      .all();
+    for (const f of blocked.results) blockedSources.add(f.source_id);
+  }
   const names = await namesFor(e, rows.flatMap((r: any) => [r.sender, ...(r.meta?.mentions || []).map((m: any) => m.id)]));
   const factWrites = [];
   for (const f of Array.isArray(result.facts) ? result.facts.slice(0, 8) : []) {
@@ -227,9 +232,9 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
           0,
           3000,
         ),
-        JSON.stringify(rows.map((m: any) => m.id)),
+        JSON.stringify(batchRows.map((m: any) => m.id)),
         now(),
-        rows.length,
+        batchRows.length,
       )
       .run();
     await activity(

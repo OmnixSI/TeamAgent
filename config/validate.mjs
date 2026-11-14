@@ -39,8 +39,8 @@ export function validateTeamConfig(c) {
     "memory.batches_per_night",
   );
   check(
-    integer(c?.memory?.messages_per_batch, 1, 60),
-    "memory.messages_per_batch <= 60 (D1 budget)",
+    integer(c?.memory?.messages_per_batch, 1, 120),
+    "memory.messages_per_batch <= 120 (D1 budget)",
   );
   check(typeof c?.scout?.enabled === "boolean", "scout.enabled");
   check(
@@ -119,7 +119,7 @@ export function validateTeamConfig(c) {
   check(c?.rhythm?.wait_min <= c?.rhythm?.wait_max, "rhythm.wait_min <= wait_max");
   for (const key of ['enabled','collect','send_gif']) check(typeof c?.stickers?.[key] === 'boolean', 'stickers.'+key);
   // send is deliberately fail-closed at runtime: only literal true enables it.
-  for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
+  for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:5000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
   for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
   errors.push(...validateMcpServers(c?.mcp_servers));
   return errors;

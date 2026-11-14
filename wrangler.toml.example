@@ -14,10 +14,18 @@ binding = "WORK"
 queue = "inkboard-team"
 [[queues.consumers]]
 queue = "inkboard-team"
-max_batch_size = 1
+max_batch_size = 5
 max_batch_timeout = 1
-max_concurrency = 2
+max_concurrency = 3
 max_retries = 2
+dead_letter_queue = "inkboard-team-dlq"
+
+[[queues.consumers]]
+queue = "inkboard-team-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_concurrency = 1
+max_retries = 3
 
 [[queues.producers]]
 binding = "CHAT"
@@ -37,7 +45,15 @@ binding = "TOOLS"
 queue = "team-agent-tools"
 [[queues.consumers]]
 queue = "team-agent-tools"
-max_batch_size = 1
+max_batch_size = 5
 max_batch_timeout = 1
-max_concurrency = 2
+max_concurrency = 3
 max_retries = 2
+dead_letter_queue = "team-agent-tools-dlq"
+
+[[queues.consumers]]
+queue = "team-agent-tools-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_concurrency = 1
+max_retries = 3

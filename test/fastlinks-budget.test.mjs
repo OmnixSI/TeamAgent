@@ -24,10 +24,10 @@ test('R8-4 P0a zero tail budget drops msgref without a query or error',async()=>
  const base=env(),e=metered(base);e.meter.used=48;e.tail.cache.push(['msgref:v1:no-budget','{}',new Date().toISOString()]);stage(e,'t','sent');const before=base.DB.executed;
  await flushTail(e);assert.equal(base.DB.executed,before);assert.equal(e.tail.cache.length,0);assert.equal(e.tail.timing.length,0);
 });
-test('P0a tail bounds timing binds to ninety and cache binds to twenty-four',async()=>{
+test('P0a tail bounds timing binds under one hundred and cache binds to twenty-four',async()=>{
  const base=env(),e=metered(base),prepare=e.DB.prepare.bind(e.DB);const bindings=[];
- e.DB.prepare=sql=>{const s=prepare(sql),bind=s.bind;s.bind=(...args)=>{bindings.push(args.length);assert.ok(args.length<=90);return bind(...args);};return s;};
- for(let i=0;i<40;i++){stage(e,'t','model_start');e.tail.cache.push(['resource:v1:x:status:'+i,'{}',new Date().toISOString()]);}for(let i=0;i<3;i++)e.tail.cache.push(['msgref:v1:'+i,'{}',new Date().toISOString()]);await flushTail(e);assert.deepEqual(bindings,[24,88]);assert.equal((await stages(base)).length,22);assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM media_notes WHERE id LIKE 'resource:%'").first()).n,5);assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM media_notes WHERE id LIKE 'msgref:%'").first()).n,3);
+ e.DB.prepare=sql=>{const s=prepare(sql),bind=s.bind;s.bind=(...args)=>{bindings.push(args.length);assert.ok(args.length<=100);return bind(...args);};return s;};
+ for(let i=0;i<60;i++){stage(e,'t','model_start');e.tail.cache.push(['resource:v1:x:status:'+i,'{}',new Date().toISOString()]);}for(let i=0;i<3;i++)e.tail.cache.push(['msgref:v1:'+i,'{}',new Date().toISOString()]);await flushTail(e);assert.deepEqual(bindings,[24,96,96,48]);assert.equal((await stages(base)).length,60);assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM media_notes WHERE id LIKE 'resource:%'").first()).n,5);assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM media_notes WHERE id LIKE 'msgref:%'").first()).n,3);
 });
 test('P0a failed timing writes cannot fail a reply or retain buffers',async()=>{
  const base=env(),e=metered(base);stage(e,'t','sent');e.DB.prepare=()=>{throw Error('synthetic timing failure');};await assert.doesNotReject(()=>flushTail(e));assert.equal(e.tail.timing.length,0);
@@ -90,10 +90,11 @@ test('R8-4 P0a dropped msgref leaves the existing get_work_status media query us
  await base.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('fast-status','research',JSON.stringify({latestId:'status-source',batchIds:['status-source'],mentioned:true,background:true}),Date.now()).run();
  await modelFixture(async state=>{await measured(base,'P0a-research-work-status',e=>queue(e,'fast-status'));assert.ok(state.tools.some(t=>Array.isArray(t.tasks)&&Array.isArray(t.materials)));},n=>n===1?[{id:'status',type:'function',function:{name:'get_work_status',arguments:JSON.stringify({source_id:'status-source'})}}]:null);
 });
-test('P0a thrown processJob failure does not flush or acknowledge',async()=>{
- const base=env(),e=metered(base),prepare=e.DB.prepare.bind(e.DB);let acked=0;stage(e,'failed','chat_claimed');
+test('CF-5 a thrown processJob failure retries that message only and hides its partial tail',async()=>{
+ const base=env(),e=metered(base),prepare=e.DB.prepare.bind(e.DB);let acked=0,retried=0;stage(e,'failed','chat_claimed');
  e.DB.prepare=sql=>{if(sql.startsWith("UPDATE jobs SET status=") && sql.includes("RETURNING *"))throw Error('synthetic claim failure');return prepare(sql);};
- await assert.rejects(()=>worker.queue({messages:[{body:{id:'fail'},ack(){acked++;}}]},e),/synthetic claim failure/);assert.equal(acked,0);assert.equal(e.tail.timing.length,1);assert.equal((await stages(base)).length,0);
+ await assert.doesNotReject(()=>worker.queue({messages:[{body:{id:'fail'},ack(){acked++;},retry(){retried++;}}]},e));
+ assert.equal(acked,0);assert.equal(retried,1);assert.equal(e.tail.timing.length,0);assert.equal((await stages(base)).length,0);
 });
 test('P0a fetcherSeen still counts one query but only updates after thirty seconds',async()=>{
  const base=env(),old=Date.now;let now=1800000000000;Date.now=()=>now;

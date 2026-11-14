@@ -6,6 +6,12 @@ import { queueFor } from './lanes';
 import { left } from './d1';
 
 const cfg = TEAM.stickers;
+/** Paid D1: 10 GB per database, 5 GB included per account. We hold our own ceiling
+ *  below the included storage so message/KB growth never starts a $0.75/GB bill. */
+export const D1_STORE_MAX_BYTES = 5_000_000_000;
+/** 5,000 rows x 400 KB max = 2 GB. The rest of the 5 GB stays available to the
+ *  message log and knowledge base; the INSERT checks this atomically. */
+export const STICKER_STORE_MAX_BYTES = 2_000_000_000;
 export const stickerSendOn = (sw: Record<string,string|undefined>, now: number) =>
   cfg?.send === true && sw['off:sticker_send'] !== '1' && !(Number(sw.sticker_paused_until || 0) > now);
 
@@ -26,11 +32,12 @@ export async function collectSticker(e: any, p: any) {
   await prune(e);
   const row=await e.DB.prepare(`INSERT INTO stickers(sha,mime,bytes,data,senders,source_message,created_at)
     SELECT ?1,?2,?3,?4,json_array(?5),?6,?7
-    WHERE EXISTS(SELECT 1 FROM stickers WHERE sha=?1) OR (SELECT COUNT(*) FROM stickers)<?8
+    WHERE EXISTS(SELECT 1 FROM stickers WHERE sha=?1)
+      OR ((SELECT COUNT(*) FROM stickers)<?8 AND (SELECT COALESCE(SUM(bytes),0) FROM stickers)+?3<=?9)
     ON CONFLICT(sha) DO UPDATE SET seen=stickers.seen+1,
       senders=CASE WHEN EXISTS(SELECT 1 FROM json_each(stickers.senders) WHERE value=?5) OR json_array_length(stickers.senders)>=5
         THEN stickers.senders ELSE json_insert(stickers.senders,'$[#]',?5) END RETURNING sha`)
-    .bind(sha,fetched.mime,fetched.bytes.length,fetched.bytes.buffer.slice(fetched.bytes.byteOffset,fetched.bytes.byteOffset+fetched.bytes.byteLength),p.sender,p.message,Date.now(),cfg.max_rows).first();
+    .bind(sha,fetched.mime,fetched.bytes.length,fetched.bytes.buffer.slice(fetched.bytes.byteOffset,fetched.bytes.byteOffset+fetched.bytes.byteLength),p.sender,p.message,Date.now(),cfg.max_rows,STICKER_STORE_MAX_BYTES).first();
   if(!row){await activity(e,'sticker.full','stickers','Bot','表情库已满，本次图片未收集');return;}
   const promoted=await e.DB.prepare('UPDATE stickers SET state=1 WHERE sha=? AND state=0 AND json_array_length(senders)>=? RETURNING sha')
     .bind(sha,cfg.min_senders).first();
@@ -58,9 +65,11 @@ export async function importSticker(e: any, b: any): Promise<Response> {
   if(!data.length||data.length>cfg.max_bytes)return Response.json({error:'invalid image'},{status:400});
   const sha=await sha256(data);await prune(e);
   const row=await e.DB.prepare(`INSERT INTO stickers(sha,mime,bytes,data,state,senders,created_at)
-    SELECT ?1,?2,?3,?4,1,'[]',?5 WHERE EXISTS(SELECT 1 FROM stickers WHERE sha=?1) OR (SELECT COUNT(*) FROM stickers)<?6
+    SELECT ?1,?2,?3,?4,1,'[]',?5
+    WHERE EXISTS(SELECT 1 FROM stickers WHERE sha=?1)
+      OR ((SELECT COUNT(*) FROM stickers)<?6 AND (SELECT COALESCE(SUM(bytes),0) FROM stickers)+?3<=?7)
     ON CONFLICT(sha) DO UPDATE SET state=1 RETURNING sha,state`)
-    .bind(sha,b.mime,data.length,data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength),Date.now(),cfg.max_rows).first();
+    .bind(sha,b.mime,data.length,data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength),Date.now(),cfg.max_rows,STICKER_STORE_MAX_BYTES).first();
   if(!row)return Response.json({error:'sticker storage full'},{status:409});
   await enqueue(e,'sticker-tag-'+sha,'sticker-tag',{sha});return Response.json(row);
 }
