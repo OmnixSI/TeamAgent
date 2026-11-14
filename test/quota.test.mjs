@@ -12,7 +12,8 @@ await build({
       'export * from "./src/quota";' +
       'export { getQuotaTool } from "./src/tools/quota";' +
       'export { EXTRA_TOOLS } from "./src/tools/index";' +
-      'export { TOOLS_CATALOG } from "./src/review/catalog";',
+      'export { TOOLS_CATALOG } from "./src/review/catalog";' +
+      'export { agentAnswer, LOCAL_TOOLS, isQuotaQuestion } from "./src/semantic";',
     resolveDir: process.cwd(),
     loader: "ts",
   },
@@ -35,6 +36,7 @@ function db() {
     prepare(sql) {
       const statement = (args = []) => ({
         sql,
+        args,
         bind(...values) {
           return statement(values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v)));
         },
@@ -51,7 +53,10 @@ function db() {
       return statement();
     },
     async batch(statements) {
-      return statements.map((s) => d.prepare(s.sql).run(...s.args));
+      return statements.map((s) => {
+        const inner = s.__s || s;
+        return d.prepare(inner.sql).run(...(inner.args || []));
+      });
     },
   };
 }
@@ -124,15 +129,15 @@ function bal(currency, total, available = true) {
   return { ok: true, at: NOW, available, currency, total, granted: 0, toppedUp: 0 };
 }
 
-function balancePayload(total = "8.88") {
+function balancePayload(total = "8.88", { granted = "2.00", toppedUp = "6.88" } = {}) {
   return {
     is_available: true,
     balance_infos: [
       {
         currency: "CNY",
         total_balance: total,
-        granted_balance: "2.00",
-        topped_up_balance: "6.88",
+        granted_balance: granted,
+        topped_up_balance: toppedUp,
       },
     ],
   };
@@ -149,21 +154,26 @@ test("get_quota is registered as a read-only tool in the catalog", () => {
   );
 });
 
-test("owner sees exact balance, usage, OpenAI, image and neuron numbers", async () => {
+test("any member sees exact balance, usage, OpenAI, image and neuron numbers", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   await seedUsage(e);
   const stub = stubFetch(balancePayload());
   try {
-    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
     assert.equal(result.ok, true);
     const text = result.text;
     assert.match(text, /DeepSeek 余额：¥8\.88/);
     assert.match(text, /DeepSeek 用量：今天 2 次 \/ \$1\.20/);
     assert.match(text, /本月 3 次 \/ \$2\.40/);
-    assert.match(text, /OpenAI：今天 2 次 \/ \$0\.50，上限 \$3\.00，剩 \$2\.50/);
+    assert.match(text, /OpenAI 每日预算（团队自设的闸门，不是账户余额）：今天已用 \$0\.50（2 次），预算还剩 \$2\.50/);
+    assert.match(text, /OpenAI 账户余额：查不到（没有公开接口），请看 OpenAI 后台/);
+    assert.match(text, /（粗略估算）/);
+    assert.equal(text.includes("OpenAI 还剩"), false);
+    assert.equal(/OpenAI：.*剩 \$/.test(text), false);
     assert.match(text, /生图：近 24 小时本群 2 \/ 20 张，你 1 \/ 5 张/);
     assert.match(text, /Workers AI：今天 1200 \/ 8000 neurons/);
     assert.match(text, /Cloudflare 账户级额度没有公开接口/);
+    assert.match(text, /较上次：这是第一次记录/);
     assert.equal(text.includes(SECRET), false);
     assert.equal(/sk-[a-z0-9-]{8,}/i.test(text), false);
   } finally {
@@ -171,82 +181,23 @@ test("owner sees exact balance, usage, OpenAI, image and neuron numbers", async 
   }
 });
 
-test("the image quota line disappears when image generation is switched off", async () => {
-  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  await seedUsage(e);
-  await set(e, "off:image_gen", "1");
-  const stub = stubFetch(balancePayload());
-  try {
-    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
-    assert.equal(result.ok, true);
-    assert.equal(result.text.includes("生图"), false);
-    assert.match(result.text, /OpenAI：今天 2 次/);
-    assert.match(result.text, /Workers AI：/);
-  } finally {
-    stub.restore();
-  }
-});
-
-test("the tool grants exact numbers only to an owner who directly asked", async () => {
+test("the tool gives any member exact numbers with or without an @mention", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   await seedUsage(e);
   const stub = stubFetch(balancePayload("8.88"));
   try {
-    const owner = await api.getQuotaTool.run(
-      e,
-      {},
-      { context: { mentioned: true, latest: { group_id: "g1", sender: "u1", meta: { memberRole: "owner", direct: true } } }, messages: [], isTainted: () => false },
-    );
+    const ctx = (sender, mentioned = false, meta = {}) => ({
+      context: { mentioned, latest: { group_id: "g1", sender, meta } },
+      messages: [],
+      isTainted: () => false,
+    });
+    const noMention = await api.getQuotaTool.run(e, {}, ctx("u2"));
+    assert.match(noMention.text, /DeepSeek 余额：¥8\.88/);
+    assert.match(noMention.text, /较上次/);
+    const member = await api.getQuotaTool.run(e, {}, ctx("u2", false, { memberRole: "member", direct: false }));
+    assert.match(member.text, /DeepSeek 余额：¥8\.88/);
+    const owner = await api.getQuotaTool.run(e, {}, ctx("u1", true, { memberRole: "owner", direct: true }));
     assert.match(owner.text, /DeepSeek 余额：¥8\.88/);
-    const quotedOwner = await api.getQuotaTool.run(
-      e,
-      {},
-      { context: { mentioned: false, latest: { group_id: "g1", sender: "u1", meta: { memberRole: "owner", direct: false } } }, messages: [], isTainted: () => false },
-    );
-    assert.match(quotedOwner.text, /^额度：快没了。$/);
-    const member = await api.getQuotaTool.run(
-      e,
-      {},
-      { context: { mentioned: true, latest: { group_id: "g1", sender: "u2", meta: { memberRole: "member", direct: true } } }, messages: [], isTainted: () => false },
-    );
-    assert.match(member.text, /^额度：快没了。$/);
-  } finally {
-    stub.restore();
-  }
-});
-
-test("owner recognised from the members table when the QQ payload has no member_role", async () => {
-  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  await seedUsage(e);
-  await e.DB.prepare("INSERT INTO members(id,name,token_hash,role,revoked) VALUES(?,?,?,?,?)").bind("qq:oid-owner", "o", "h1", "owner", 0).run();
-  await e.DB.prepare("INSERT INTO members(id,name,token_hash,role,revoked) VALUES(?,?,?,?,?)").bind("qq:oid-gone", "g", "h2", "owner", 1).run();
-  const stub = stubFetch(balancePayload("8.88"));
-  try {
-    const ctx = (sender, mentioned = true) => ({ context: { mentioned, latest: { group_id: "g1", sender, meta: {} } }, messages: [], isTainted: () => false });
-    const owner = await api.getQuotaTool.run(e, {}, ctx("oid-owner"));
-    assert.match(owner.text, /DeepSeek 余额：¥8\.88/);
-    const notDirect = await api.getQuotaTool.run(e, {}, ctx("oid-owner", false));
-    assert.match(notDirect.text, /^额度：/);
-    assert.doesNotMatch(notDirect.text, /¥/);
-    const revoked = await api.getQuotaTool.run(e, {}, ctx("oid-gone"));
-    assert.doesNotMatch(revoked.text, /¥/);
-    const stranger = await api.getQuotaTool.run(e, {}, ctx("oid-x"));
-    assert.doesNotMatch(stranger.text, /¥/);
-  } finally {
-    stub.restore();
-  }
-});
-
-test("non-owner gets only one coarse band word, never numbers", async () => {
-  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  await seedUsage(e);
-  const stub = stubFetch(balancePayload("8.88"));
-  try {
-    const result = await api.renderQuota(e, { owner: false, group: "g1", sender: "u1", now: NOW });
-    assert.equal(result.ok, true);
-    assert.equal(result.text, "额度：快没了。");
-    assert.equal(/[0-9¥$]/.test(result.text), false);
-    assert.equal(result.text.includes(SECRET), false);
   } finally {
     stub.restore();
   }
@@ -257,7 +208,7 @@ test("an unavailable account and an omitted is_available are reported without in
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const off = stubFetch({ ...body, is_available: false });
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /DeepSeek 余额：账户当前不可用/);
     assert.equal(result.band, "critical");
   } finally {
@@ -266,7 +217,7 @@ test("an unavailable account and an omitted is_available are reported without in
   const e2 = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const unknown = stubFetch(body);
   try {
-    const result = await api.renderQuota(e2, { owner: true, now: NOW });
+    const result = await api.renderQuota(e2, { now: NOW });
     assert.match(result.text, /官方未返回可用状态/);
     assert.equal(result.text.includes("（可用；"), false);
   } finally {
@@ -282,7 +233,7 @@ test("USD-only balance uses its own threshold and is never compared to ¥10", as
     balance_infos: [{ currency: "USD", total_balance: "5.00", granted_balance: "0.00", topped_up_balance: "5.00" }],
   });
   try {
-    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
     assert.match(result.text, /DeepSeek 余额：\$5\.00/);
     assert.equal(result.text.includes("¥5.00"), false);
     assert.equal(await api.morningQuotaLine(e, NOW), "");
@@ -295,8 +246,8 @@ test("balance is cached for ten minutes and a second question does not call out"
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(balancePayload());
   try {
-    await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
-    await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW + 60000 });
+    await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
+    await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW + 60000 });
     assert.equal(stub.calls.length, 1);
     assert.equal(stub.calls[0].url, api.DEEPSEEK_BALANCE_URL);
     assert.equal(stub.calls[0].init.headers.Authorization, "Bearer " + SECRET);
@@ -312,11 +263,14 @@ test("the first recorded query says so and stores a numeric snapshot", async () 
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(balancePayload("10.00"));
   try {
-    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
     assert.match(result.text, /较上次：这是第一次记录/);
     const snapshot = JSON.parse(await get(e, api.QUOTA_LAST_KEY));
     assert.equal(snapshot.at, NOW);
     assert.equal(snapshot.deepseek.CNY, "10.00");
+    assert.equal(snapshot.currency, "CNY");
+    assert.equal(snapshot.granted, 2);
+    assert.equal(snapshot.toppedUp, 6.88);
     assert.equal(snapshot.dsCalls, 0);
     assert.equal(snapshot.aiUsed, 0);
     assert.equal(JSON.stringify(snapshot).includes(SECRET), false);
@@ -331,7 +285,7 @@ test("a second real read reports balance, calls and neurons deltas with signs", 
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const first = stubFetch(balancePayload("10.00"));
   try {
-    await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
   } finally {
     first.restore();
   }
@@ -344,7 +298,7 @@ test("a second real read reports balance, calls and neurons deltas with signs", 
   await set(e, `budget:workers_ai_neurons:utc:${utcDay}`, 320);
   const second = stubFetch(balancePayload("8.77"));
   try {
-    const result = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW + 11 * 60000 });
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW + 11 * 60000 });
     assert.match(result.text, /较上次（\d{2}:\d{2}）：DeepSeek 余额 −1\.23 元 \/ 今日调用 \+2 次 \/ neurons \+320/);
   } finally {
     second.restore();
@@ -359,8 +313,26 @@ test("a top-up shows a positive balance delta", async () => {
   }));
   const stub = stubFetch(balancePayload("10.00"));
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /DeepSeek 余额 \+5\.00 元/);
+  } finally {
+    stub.restore();
+  }
+});
+
+
+test("gift and top-up balance changes appear in the since-last line", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
+    at: NOW - 60000, deepseek: { CNY: "8.88" }, currency: "CNY",
+    granted: 2.00, toppedUp: 6.88, dsCalls: 0, dsMicroUsd: 0,
+    openaiCalls: 0, openaiMicroUsd: 0, aiUsed: 0, band: "critical",
+  }));
+  const stub = stubFetch(balancePayload("8.88", { granted: "1.50", toppedUp: "7.38" }));
+  try {
+    const result = await api.renderQuota(e, { now: NOW });
+    assert.match(result.text, /赠送余额 −0\.50 元 \/ 充值余额 \+0\.50 元/);
+    assert.equal(result.text.includes("DeepSeek 余额 "), false);
   } finally {
     stub.restore();
   }
@@ -374,7 +346,7 @@ test("an unchanged snapshot says no change", async () => {
   }));
   const stub = stubFetch(balancePayload("8.88"));
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /较上次（\d{2}:\d{2}）：没变化/);
   } finally {
     stub.restore();
@@ -395,11 +367,13 @@ test("a previous snapshot missing fields only compares the fields it has", async
   await set(e, `budget:workers_ai_neurons:utc:${utcDay}`, 320);
   const stub = stubFetch(balancePayload("8.88"));
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     const delta = result.text.split("\n").pop();
     assert.match(delta, /今日调用 \+2 次/);
     assert.match(delta, /neurons \+320/);
     assert.equal(delta.includes("DeepSeek 余额"), false);
+    assert.equal(delta.includes("赠送余额"), false);
+    assert.equal(delta.includes("充值余额"), false);
     assert.equal(delta.includes("OpenAI 今日花费"), false);
   } finally {
     stub.restore();
@@ -410,11 +384,11 @@ test("a cache hit never overwrites the previous real snapshot", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(balancePayload("10.00"));
   try {
-    await api.renderQuota(e, { owner: true, now: NOW });
+    await api.renderQuota(e, { now: NOW });
     await e.DB.prepare("INSERT INTO ds_usage(id,purpose,status,error_kind,latency_ms,units,est_cost_micro_usd,created_at) VALUES(?,?,?,NULL,10,1,0,?)")
       .bind("cache-1", "search", "ok", NOW - 60000)
       .run();
-    const result = await api.renderQuota(e, { owner: true, now: NOW + 60000 });
+    const result = await api.renderQuota(e, { now: NOW + 60000 });
     assert.match(result.text, /今日调用 \+1 次/);
     assert.equal(stub.calls.length, 1);
     const snapshot = JSON.parse(await get(e, api.QUOTA_LAST_KEY));
@@ -425,17 +399,20 @@ test("a cache hit never overwrites the previous real snapshot", async () => {
   }
 });
 
-test("non-owner gets the band and one-notch move, never a number", async () => {
-  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  await set(e, api.QUOTA_LAST_KEY, JSON.stringify({
-    at: NOW - 60000, deepseek: { CNY: "100.00" }, dsCalls: 0, dsMicroUsd: 0,
-    openaiCalls: 0, openaiMicroUsd: 0, aiUsed: 0, band: "ok",
-  }));
-  const stub = stubFetch(balancePayload("8.88"));
+
+test("a quota read that cannot run says so without inventing a number", async () => {
+  const e = {
+    DB: { prepare() { throw new Error("D1 unavailable"); } },
+    DEEPSEEK_API_KEY: SECRET,
+  };
+  const stub = stubFetch(null, { fail: new Error("upstream down") });
   try {
-    const result = await api.renderQuota(e, { owner: false, now: NOW });
-    assert.equal(result.text, "额度：快没了（比上次低了一档）。");
-    assert.equal(/[0-9¥$]/.test(result.text), false);
+    const result = await api.renderQuota(e, { now: NOW });
+    assert.equal(result.ok, false);
+    assert.equal(result.error_kind, "unavailable");
+    assert.equal(result.reason_text, "暂时查不到额度，这次不猜数字");
+    assert.equal(JSON.stringify(result).includes(SECRET), false);
+    assert.equal(/[0-9]/.test(result.reason_text), false);
   } finally {
     stub.restore();
   }
@@ -446,12 +423,12 @@ test("a failed balance lookup says so honestly, hides the key and is not retried
   await seedUsage(e);
   const stub = stubFetch(null, { fail: new Error("upstream boom") });
   try {
-    const first = await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW });
+    const first = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
     assert.equal(first.ok, true);
     assert.match(first.text, /DeepSeek 余额：暂时查不到/);
     assert.equal(first.text.includes(SECRET), false);
     assert.equal(first.text.includes("boom"), false);
-    await api.renderQuota(e, { owner: true, group: "g1", sender: "u1", now: NOW + 60000 });
+    await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW + 60000 });
     assert.equal(stub.calls.length, 1);
   } finally {
     stub.restore();
@@ -482,7 +459,7 @@ test("missing optional balance fields are tolerated without crashing", async () 
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch({ is_available: true, balance_infos: [{ currency: "CNY", total_balance: "12.00" }] });
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /¥12\.00/);
     assert.match(result.text, /赠送 ¥0\.00 \/ 充值 ¥0\.00/);
   } finally {
@@ -491,7 +468,7 @@ test("missing optional balance fields are tolerated without crashing", async () 
   const e2 = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const empty = stubFetch({ is_available: true, balance_infos: [{ currency: "CNY" }] });
   try {
-    const result = await api.renderQuota(e2, { owner: true, now: NOW });
+    const result = await api.renderQuota(e2, { now: NOW });
     assert.match(result.text, /暂时查不到（返回内容无法识别/);
     assert.match(result.text, /请看 DeepSeek 后台/);
   } finally {
@@ -503,7 +480,7 @@ test("a missing currency is never turned into an invented CNY amount", async () 
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch({ is_available: true, balance_infos: [{ total_balance: "5.00" }] });
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /5\.00（币种未知）/);
     assert.equal(result.text.includes("¥5.00"), false);
     assert.equal(result.band, "unknown");
@@ -517,7 +494,7 @@ test("401, 402 and 429 degrade to a plain console-check answer, never a throw", 
     const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
     const stub = stubFetch({ error: {} }, { status });
     try {
-      const result = await api.renderQuota(e, { owner: true, now: NOW });
+      const result = await api.renderQuota(e, { now: NOW });
       assert.equal(result.ok, true);
       assert.match(result.text, new RegExp(phrase));
       assert.match(result.text, /请看 DeepSeek 后台/);
@@ -532,10 +509,10 @@ test("a timeout is reported as a timeout and cached for ten minutes", async () =
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
   const stub = stubFetch(null, { fail: Object.assign(new Error("aborted"), { name: "AbortError" }) });
   try {
-    const result = await api.renderQuota(e, { owner: true, now: NOW });
+    const result = await api.renderQuota(e, { now: NOW });
     assert.match(result.text, /暂时查不到（查询超时/);
     assert.match(result.text, /请看 DeepSeek 后台/);
-    await api.renderQuota(e, { owner: true, now: NOW + 60000 });
+    await api.renderQuota(e, { now: NOW + 60000 });
     assert.equal(stub.calls.length, 1);
   } finally {
     stub.restore();
@@ -585,11 +562,219 @@ test("review morning report prints the quota line when the digest carries one", 
   assert.ok(report.split("\n").length <= 15);
 });
 
-test("inbound message metadata keeps the QQ member role for the owner check", async () => {
+test("a simple quota question stays local and answers in one step", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  const row = {
+    id: "quota-local-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "你还有多少额度",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  await e.DB.prepare("INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,0)")
+    .bind(row.id, row.group_id, row.sender, row.body, row.ts)
+    .run();
+  const context = {
+    latest: row,
+    batch: [row],
+    recent: [row],
+    names: new Map(),
+    refs: new Map(),
+    mentioned: false,
+  };
+  assert.ok(api.LOCAL_TOOLS.has("get_quota"));
+  const old = globalThis.fetch;
+  let turn = 0;
+  globalThis.fetch = async (url, opt) => {
+    if (String(url) === api.DEEPSEEK_BALANCE_URL)
+      return new Response(JSON.stringify(balancePayload("8.88")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const body = JSON.parse(opt.body);
+    if (body.messages?.[0]?.content.includes("最后的嘴替模块"))
+      return Response.json({
+        choices: [{ message: { content: '{"mode":"work","text":"当前余额 ¥8.88，较上次少 1.23 元。"}' } }],
+      });
+    if (turn++ === 0)
+      return Response.json({
+        choices: [{ message: { role: "assistant", tool_calls: [
+          { id: "quota-call", type: "function", function: { name: "get_quota", arguments: "{}" } },
+        ] } }],
+      });
+    return Response.json({
+      choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"按工具结果回答余额"}' } }],
+    });
+  };
+  try {
+    const answer = await api.agentAnswer(e, context);
+    assert.match(answer, /当前余额 ¥8\.88/);
+    assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE kind='research'").first()).n, 0);
+    assert.equal((await e.DB.prepare("SELECT COUNT(*) n FROM activity WHERE kind='research.queued'").first()).n, 0);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("inbound message metadata still records the QQ member role", async () => {
   const { env, qq, msg } = await import("./support.mjs");
   const e = env();
   await e.DB.prepare("INSERT INTO settings(key,value) VALUES('group_id','GROUP000001')").run();
   await qq(e, msg("quota-role-1", "你还有多少额度"));
   const row = await e.DB.prepare("SELECT json FROM message_meta WHERE id='quota-role-1'").first();
   assert.equal(JSON.parse(row.json).memberRole, "owner");
+});
+
+test("A3b: quota-question detection covers the replay fixtures without widening chat", () => {
+  assert.equal(api.isQuotaQuestion("DeepSeek 还有多少余额"), true);
+  assert.equal(api.isQuotaQuestion("你还有多少额度"), true);
+  assert.equal(api.isQuotaQuestion("查下你的api额度"), true);
+  assert.equal(api.isQuotaQuestion("今天余额只有30了，我就又充了一些，过两天你们充一充"), false);
+  assert.equal(api.isQuotaQuestion("今天群里好安静"), false);
+});
+
+// The no-@ path spends 19 of the 48 chat statements before the model, so only
+// 29 are left: below the normal 32-statement tool floor. A plain quota question
+// must still be answered from get_quota, and only get_quota.
+test("A3b: a no-@ quota question gets the exact balance with 29 statements left", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  await seedUsage(e);
+  const row = {
+    id: "quota-budget-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "DeepSeek 还有多少余额",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  await e.DB.prepare("INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,0)")
+    .bind(row.id, row.group_id, row.sender, row.body, row.ts)
+    .run();
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: false };
+  const requests = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (url, opt) => {
+    if (String(url) === api.DEEPSEEK_BALANCE_URL)
+      return new Response(JSON.stringify(balancePayload("8.88")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const body = JSON.parse(opt.body);
+    requests.push(body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块")) {
+      const facts = String(JSON.parse(body.messages[1].content).brief?.facts ?? "");
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        mode: "work",
+        text: facts.includes("8.88") ? "DeepSeek 余额：¥8.88（较上次 −1.23 元）" : "【模型桩】按真实结果回答。",
+      }) } }] });
+    }
+    if (body.tools) {
+      return Response.json({ choices: [{ message: { role: "assistant", tool_calls: [
+        { id: "quota-budget-call", type: "function", function: { name: "get_quota", arguments: "{}" } },
+      ] } }] });
+    }
+    const tool = [...(body.messages || [])].reverse().find((m) => m.role === "tool");
+    const hasBalance = /8\.88/.test(String(tool?.content ?? ""));
+    return Response.json({ choices: [{ message: { content: JSON.stringify({
+      action: "reply",
+      kind: "direct",
+      brief: hasBalance ? "当前余额 ¥8.88，较上次少 1.23 元。" : "按真实结果回答。",
+    }) } }] });
+  };
+  try {
+    const answer = await api.agentAnswer(e, context);
+    const toolRequests = requests.filter((r) => Array.isArray(r.tools));
+    assert.equal(toolRequests.length, 1);
+    assert.deepEqual(toolRequests[0].tools.map((t) => t.function.name), ["get_quota"]);
+    assert.match(answer, /¥8\.88/);
+    const audit = await e.DB.prepare("SELECT name,ok,error_kind,offered FROM turn_tools").all();
+    assert.deepEqual(audit.results.map((r) => ({ ...r })), [{ name: "get_quota", ok: 1, error_kind: null, offered: 1 }]);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: ordinary chat with 29 statements left still gets no tools", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  const row = {
+    id: "chat-budget-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "今天群里好安静",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: false };
+  const requests = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (_url, opt) => {
+    const body = JSON.parse(opt.body);
+    requests.push(body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+      return Response.json({ choices: [{ message: { content: '{"mode":"banter","text":"是挺安静。"}' } }] });
+    return Response.json({ choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"是挺安静。"}' } }] });
+  };
+  try {
+    await api.agentAnswer(e, context);
+    assert.equal(requests.some((r) => Array.isArray(r.tools)), false);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: a failed balance read never overwrites the last good snapshot", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(e);
+  const good = stubFetch(balancePayload("50.00", { granted: "2.00", toppedUp: "48.00" }));
+  await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW });
+  good.restore();
+  const before = await get(e, api.QUOTA_LAST_KEY);
+  assert.match(before, /"total":"50.00"|"deepseek":\{"CNY":"50\.00"\}/);
+  const bad = stubFetch(null, { fail: new Error("upstream 503") });
+  try {
+    const result = await api.renderQuota(e, { group: "g1", sender: "u1", now: NOW + 11 * 60000 });
+    assert.match(result.text, /DeepSeek 余额：暂时查不到/);
+    assert.equal(await get(e, api.QUOTA_LAST_KEY), before);
+  } finally {
+    bad.restore();
+  }
+});
+
+test("A3b: a switched-off image generator is not advertised in the quota answer", async () => {
+  const off = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(off);
+  await set(off, "off:image_gen", "1");
+  const offStub = stubFetch(balancePayload("42.50", { granted: "1.50", toppedUp: "41.00" }));
+  try {
+    const result = await api.renderQuota(off, { group: "g1", sender: "u1", now: NOW });
+    assert.equal(result.ok, true);
+    assert.equal(result.text.includes("生图"), false);
+    assert.match(result.text, /OpenAI 每日预算（团队自设的闸门，不是账户余额）/);
+    assert.match(result.text, /DeepSeek 余额：¥42\.50/);
+  } finally {
+    offStub.restore();
+  }
+
+  const on = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(on);
+  await set(on, "off:image_gen", "0");
+  const onStub = stubFetch(balancePayload("42.50", { granted: "1.50", toppedUp: "41.00" }));
+  try {
+    const result = await api.renderQuota(on, { group: "g1", sender: "u1", now: NOW });
+    assert.equal(result.ok, true);
+    assert.match(result.text, /生图：近 24 小时本群 2 \/ 20 张，你 1 \/ 5 张/);
+  } finally {
+    onStub.restore();
+  }
+});
+
+test("A3b: the quota tool description does not promise image generation", () => {
+  assert.equal(api.getQuotaTool.def.function.description.includes("生图"), false);
 });

@@ -283,3 +283,9 @@ test("N4 a switch that appears nowhere in the code fails the build", () => {
     /no_such_switch/,
   );
 });
+
+test("S6 document reading is off by default and names its positive gate", () => {
+  const doc = capability("document_reading");
+  assert.equal(doc.default_state, "off_by_default");
+  assert.deepEqual(doc.switches, ["docread"]);
+});

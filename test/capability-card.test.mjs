@@ -148,12 +148,13 @@ test('C4-2 real tool table card keeps base rows whole with generate_image squeez
   for(const name of ['calc','search_kb','summarize_chat']) assert.ok(line.includes(name),name);
 });
 
-test('C4-3 off:generate_image / off:openai mark the image tool closed',()=>{
+test('C4-3 off:image_gen / off:generate_image / off:openai mark the image tool closed',()=>{
   const table=[tool('generate_image','按提示词生成图片。'),tool('calc','安全计算数学表达式。')];
-  for(const sw of ['off:generate_image','off:openai']){
+  for(const sw of ['off:image_gen','off:generate_image','off:openai']){
     const card=api.capabilityCard(table,{switches:{[sw]:'1'},extraNames:['generate_image','calc']});
     assert.ok(card.includes('generate_image（按你给的描述生成一张图并发到群里 / 需成员明确要求，每人每天限 5 张，会被内容安全拒绝；当前已关闭）'),sw+'\n'+card);
   }
+  assert.equal(api.toolDisabled('generate_image',{'off:image_gen':'1'}),true);
   assert.equal(api.toolDisabled('generate_image',{'off:generate_image':'1'}),true);
   assert.equal(api.toolDisabled('generate_image',{'off:openai':'1'}),true);
   assert.equal(api.toolDisabled('generate_image',{}),false);

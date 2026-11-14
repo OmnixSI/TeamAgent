@@ -180,3 +180,41 @@ test('S9 系统提示含 SELF_HINT 与底层服务行',async()=>{
   assert.ok(system.includes('能力卡'),'capability card missing');
   assert.ok(system.includes('我对代码仓库只读'),'read-only boundary missing');
 });
+
+// S9: docread is a positive gate (`docread:enabled`), not an `off:*` kill switch.
+test('S9 docread 默认关，按 docread:enabled 正向开关判断', async()=>{
+  const doc={...cap('voice_asr'),id:'docread',title:'文档阅读',switches:['docread'],default_state:'off_by_default',requires_env:[],runs_on:'local'};
+  assert.equal(api.capabilityState(doc,live()).state,'off_by_default');
+  assert.match(api.capabilityState(doc,live()).reason,/docread:enabled/);
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'1'}})).state,'local_unverified');
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'0'}})).state,'off_by_default');
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'1','off:docread':'1'}})).state,'switched_off');
+
+  const themed={...card,capabilities:[...card.capabilities,doc]};
+  const off=api.renderSelf(themed,live(),'switches');
+  assert.match(off,/docread：已关闭（未设置）/);
+  const on=api.renderSelf(themed,live({switches:{'docread:enabled':'1'}}),'switches');
+  assert.match(on,/docread：开启（docread:enabled=1）/);
+
+  const e=env();
+  await e.DB.prepare("INSERT INTO settings VALUES('docread:enabled','1')").run();
+  const state=await api.readLive(e,undefined,card);
+  assert.equal(state.switches['docread:enabled'],'1');
+});
+
+// A3b: image generation is off in production. The self card must say so and
+// must not present it as a current ability when off:image_gen=1.
+test('A3b 生图默认关，off:image_gen=1 时不自知卡当现有能力',()=>{
+  const image=api.SELF_CARD.capabilities.find(c=>c.id==='image_generation');
+  assert.equal(image.default_state,'off_by_default');
+  const envPresent={...live().envPresent,OPENAI_API_KEY:true};
+  const offState=api.capabilityState(image,live({switches:{'off:image_gen':'1'},envPresent}));
+  assert.equal(offState.state,'switched_off');
+  const off=api.renderSelf(api.SELF_CARD,live({switches:{'off:image_gen':'1'},envPresent}),'capability','生图');
+  assert.match(off,/状态：当前已关闭/);
+  assert.equal(off.includes('可以生图'),false);
+  const overview=api.renderSelf(api.SELF_CARD,live({switches:{'off:image_gen':'1'},envPresent}),'overview');
+  assert.match(overview,/- 生图：.*当前已关闭/);
+  assert.equal(api.capabilityState(image,live({switches:{'off:image_gen':'0'},envPresent})).state,'enabled');
+  assert.equal(api.capabilityState(image,live({envPresent})).state,'off_by_default');
+});

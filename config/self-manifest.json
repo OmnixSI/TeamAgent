@@ -157,7 +157,7 @@
       "tools": [
         "generate_image"
       ],
-      "how": "成员明确要求时 generate_image 先查每人/每群 24 小时滚动额度，再把描述发给 OpenAI 图片接口，拿到 b64 图片存进 D1，经 QQ 富媒体接口上传并发送；被内容安全拒绝会如实告知，每人每天限 5 张。",
+      "how": "默认关闭；off:image_gen=1 时 generate_image 直接不可用，额度回答也不列生图行。管理员开启后，成员明确要求时 generate_image 先查每人/每群 24 小时滚动额度，再把描述发给 OpenAI 图片接口，拿到 b64 图片存进 D1，经 QQ 富媒体接口上传并发送；被内容安全拒绝会如实告知，每人每天限 5 张。",
       "files": [
         {
           "path": "src/tools/generate-image.ts",
@@ -203,7 +203,7 @@
         "file": "src/tools/generate-image.ts",
         "pattern": "DEFAULT_USER_DAILY = (\\d+)"
       },
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "image_vision",
@@ -607,7 +607,7 @@
       "requires_env": [],
       "runs_on": "both",
       "local_component": "runner/docread.py",
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "ocr",
@@ -1227,7 +1227,7 @@
       "tools": [
         "get_quota"
       ],
-      "how": "被问额度时 get_quota 读 DeepSeek 余额接口（D1 缓存十分钟）、ds_usage 的今天/本月次数与估算花费、openai_usage 的每日预算、生图每日限额和 Workers AI 的 UTC 日 neurons；每次真实取数后把纯数字快照写进 settings 的 quota:last_snapshot，并在回答里加一行「较上次」的余额/调用/neurons 变化（首次说第一次记录，缓存命中不覆盖快照）；只有群主本人直接问才给具体数字，其他人只给够用/偏低/快没了。低于 ¥10 或不足 3 天用量时，每天 08:00 写一行进开发室晨报，不发群。",
+      "how": "被问额度时 get_quota 读 DeepSeek 余额接口（D1 缓存十分钟）、ds_usage 的今天/本月次数与估算花费、openai_usage 的每日预算闸门（团队自设，不是 OpenAI 账户余额）、生图开放后的生图每日限额和 Workers AI 的 UTC 日 neurons；每次真实取数后把纯数字快照（含赠送/充值余额）写进 settings 的 quota:last_snapshot，并在回答里加一行「较上次」的余额、赠送/充值余额、调用/neurons 变化（首次说第一次记录，缓存命中不覆盖快照）；群里任何成员问都给具体余额和较上次变化，不用 @。低于 ¥10 或不足 3 天用量时，每天 08:00 写一行进开发室晨报，不发群。",
       "files": [
         {
           "path": "src/quota.ts",
@@ -1237,7 +1237,7 @@
         {
           "path": "src/tools/quota.ts",
           "anchor": "export const getQuotaTool",
-          "role": "工具入口与 owner 判定"
+          "role": "工具入口"
         },
         {
           "path": "scripts/review-pull.mjs",
@@ -1332,6 +1332,7 @@
     "src/inbound.ts": "QQ 事件解析：消息、附件、语音转写、卡片与引用",
     "src/fetchjobs.ts": "视频/链接任务识别与等待",
     "src/mediajobs.ts": "视频素材与音轨转写写回",
+    "src/docjobs.ts": "文档读取作业的云端端点：领取、租约与回写",
     "src/vision.ts": "图片下载、限流、描述与缓存",
     "src/voice.ts": "按人格生成回复文本、分条与表情",
     "src/stickers.ts": "表情收集、标签与 QQ 富媒体发送",
@@ -1343,6 +1344,7 @@
     "runner/bridge.py": "本机任务桥：租约、上下文回填、仓库索引",
     "runner/execute.py": "本机执行入口（dsh/CLI）",
     "runner/docread.py": "本机文档解析（PDF/DOCX/XLSX/PPTX/CSV）",
+    "runner/docread-job.mjs": "本机文档读取作业：下载、调用 docread.py 与回写",
     "runner/asr.mjs": "本机 X-ASR 适配器",
     "runner/tts.mjs": "出站语音合成（edge-tts / DeepSeek）",
     "runner/silk.mjs": "WAV 转 SILK",

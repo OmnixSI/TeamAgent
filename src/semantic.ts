@@ -7,7 +7,7 @@ import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
+export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self", "get_quota"]);
 import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, authorizeFeature, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
@@ -41,11 +41,26 @@ import { SELF_CARD } from "./self-card.generated";
 // A question about repository activity must reach the read-only repo tools even
 // in a round whose remaining D1 budget would normally hide every tool.
 const REPO_ACTIVITY_ASK = /新提交|最近.{0,6}(?:提交|改动|改了)|改得怎么样|做了哪些.{0,4}修改|仓库.{0,8}(?:动态|进展|更新)|commit|pkg\/|release\//i;
+// A3b: an explicit quota question must reach get_quota even in a no-@ round
+// whose remaining D1 budget is below the normal 32-statement tool floor.
+const QUOTA_TOPIC = /额度|余额|还剩|还有多少|用了多少/;
+const QUOTA_ASK = /多少|还剩|几|吗|？|\?/;
+// Imperative requests (查下你的api额度) ask the same thing without a question word.
+const QUOTA_CHECK = /(?:^|[，。！？\s])(?:帮我|给我|请)?(?:查|看)(?:一下|下|查)?[^，。！？\n]{0,10}(?:额度|余额)/;
+export function isQuotaQuestion(body: unknown): boolean {
+  const text = String(body ?? "");
+  return QUOTA_TOPIC.test(text) && (QUOTA_ASK.test(text) || QUOTA_CHECK.test(text));
+}
 export function isRepoActivityAsk(body: unknown): boolean {
   return REPO_ACTIVITY_ASK.test(String(body ?? ""));
 }
 const REPO_ASK_HINT = { role: "system", content: "用户在问仓库动态，必须先调用 repo_changes" };
 const REPO_ASK_FLOOR = 16;
+// get_quota costs one switch read, a cached balance read and three aggregates.
+// 26 before the model leaves 24 after its two usage rows, which still covers the
+// quota read, the decision/voice calls and the 10-statement send.
+const QUOTA_ASK_FLOOR = 26;
+const QUOTA_TOOL_FLOOR = 24;
 import { biliNoteText } from "./fetchjobs";
 export type Services = {
   llm: (
@@ -1004,11 +1019,19 @@ async function answerWithTools(e: any, context: any) {
   for (let turn = context.resume?.turn || 0; turn < 4; turn++) {
     let m: any;
     let offerTools = true;
+    let offeredTools = tools;
+    let quotaOnly = false;
     if (context.resume?.pending) {
       m = context.resume.pending;
       context.resume.pending = null;
     } else {
-      offerTools = (turn < 2 || recovery.retrying && turn < 3) && left(e) >= (repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail);
+      const normalFloor = repoAsk ? REPO_ASK_FLOOR : COST.turn * 2 + COST.tool + COST.tail;
+      // A no-@ round spends 19 statements before the model, so a plain quota
+      // question sits at 29 and would lose every tool. Offer only get_quota.
+      quotaOnly = turn === 0 && !repoAsk && isQuotaQuestion(context.latest?.body)
+        && left(e) >= QUOTA_ASK_FLOOR && left(e) < normalFloor;
+      offerTools = (turn < 2 || recovery.retrying && turn < 3) && (quotaOnly || left(e) >= normalFloor);
+      if (quotaOnly) offeredTools = tools.filter(t => t.function.name === "get_quota");
       const d = await model(
         e,
         context.background ? "research" : "participation",
@@ -1016,7 +1039,7 @@ async function answerWithTools(e: any, context: any) {
         {
           max_tokens: 8192,
           messages: offerTools && repoAsk ? [...messages, REPO_ASK_HINT] : messages,
-          ...(offerTools ? { tools } : {}),
+          ...(offerTools ? { tools: offeredTools } : {}),
         },
       );
       m = d.choices?.[0]?.message;
@@ -1106,8 +1129,9 @@ async function answerWithTools(e: any, context: any) {
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
       let result: any;
-      result = await recovery.run(e, context, call, offerTools && tools.some(t => t.function.name === call.function.name), async (a) => {
-        if (left(e) < COST.tool + COST.turn + COST.tail) throw new ResourceLimitError();
+      result = await recovery.run(e, context, call, offerTools && offeredTools.some(t => t.function.name === call.function.name), async (a) => {
+        const floor = quotaOnly && call.function.name === "get_quota" ? QUOTA_TOOL_FLOOR : COST.tool + COST.turn + COST.tail;
+        if (left(e) < floor) throw new ResourceLimitError();
         if (index >= 3) throw new ResourceLimitError();
         switch (call.function.name) {
           case "get_work_status": {
