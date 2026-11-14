@@ -44,6 +44,7 @@ export interface GuardViolation {
 
 export interface GuardResult {
   text: string;
+  /** 只记「本轮没有同 family 成功结果」的承诺句，以及它怎么被处理（补建/查库保留/换措辞）。 */
   violations: GuardViolation[];
 }
 
