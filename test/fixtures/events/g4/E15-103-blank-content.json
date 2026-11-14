@@ -1,0 +1,38 @@
+{
+  "id": "E15-103-blank-content",
+  "event": "GROUP_MESSAGE_CREATE",
+  "source": {
+    "kind": "d1",
+    "where": "messages + message_meta.forwarded",
+    "collected": "2026-11-13",
+    "note": "线上真实样本：message_type=103，content 为顶层正文，msg_elements 为被引用消息。"
+  },
+  "raw": {
+    "id": "MSG_SAMPLE_02",
+    "group_openid": "GROUP_SAMPLE_01",
+    "author": {
+      "member_openid": "OPENID_SAMPLE_01",
+      "username": "成员甲"
+    },
+    "timestamp": "2026-11-11T16:50:06+08:00",
+    "content": "",
+    "msg_elements": [
+      {
+        "content": "测试引用文本",
+        "message_type": 103,
+        "msg_idx": "REFIDX_SAMPLE_01"
+      }
+    ]
+  },
+  "expect": {
+    "body": "",
+    "refIdx": "REFIDX_SAMPLE_01",
+    "segmentTypes": [
+      "reply"
+    ],
+    "quoted": {
+      "text": "测试引用文本",
+      "media": []
+    }
+  }
+}

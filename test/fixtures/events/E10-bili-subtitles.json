@@ -1,0 +1,34 @@
+[
+ {
+  "id": "EV10-1",
+  "group": "G10",
+  "source": "doc",
+  "note": "有字幕直接读",
+  "kind": "todo",
+  "skip": "bili v2 门控未进本版（有字幕直接读）"
+ },
+ {
+  "id": "EV10-2",
+  "group": "G10",
+  "source": "doc",
+  "note": "无字幕只下音频走本机 X-ASR",
+  "kind": "todo",
+  "skip": "bili v2 门控未进本版（无字幕只下音频走本机 X-ASR）"
+ },
+ {
+  "id": "EV10-3",
+  "group": "G10",
+  "source": "doc",
+  "note": "ASR 失败如实告知",
+  "kind": "todo",
+  "skip": "bili v2 门控未进本版（ASR 失败如实告知）"
+ },
+ {
+  "id": "EV10-4",
+  "group": "G10",
+  "source": "doc",
+  "note": "B站视频总结",
+  "kind": "todo",
+  "skip": "bili v2 门控未进本版（B站视频总结）"
+ }
+]

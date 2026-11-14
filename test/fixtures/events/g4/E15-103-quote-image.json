@@ -15,7 +15,7 @@
       "username": "成员甲"
     },
     "timestamp": "2026-11-13T07:50:13+08:00",
-    "content": "这黄仁勋怎么回事 怎么这么多出轨对象",
+    "content": "测试正文",
     "message_scene": {
       "ext": [
         "msg_idx=REFIDX_SAMPLE_03",
@@ -49,7 +49,7 @@
     ]
   },
   "expect": {
-    "body": "这黄仁勋怎么回事 怎么这么多出轨对象",
+    "body": "测试正文",
     "refIdx": "REFIDX_SAMPLE_02",
     "segmentTypes": [
       "text",

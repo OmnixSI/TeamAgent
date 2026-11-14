@@ -1,0 +1,240 @@
+[
+ {
+  "id": "EV14-1",
+  "group": "G14",
+  "source": "doc",
+  "note": "GROUP_ADD_ROBOT 记 activity",
+  "event": {
+   "op": 0,
+   "t": "GROUP_ADD_ROBOT",
+   "d": {
+    "group_openid": "GROUP000001",
+    "op_member_openid": "u4",
+    "timestamp": "2026-11-13T00:00:00.000Z"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "activity": {
+    "kind": "qq.bot_added",
+    "count": 1,
+    "summary": "机器人已加入群聊"
+   },
+   "inbound": {
+    "senderId": "u4",
+    "senderName": "",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "notice 事件是 v2 新契约；legacy 当消息解析",
+   "maxStatements": 2
+  }
+ },
+ {
+  "id": "EV14-2",
+  "group": "G14",
+  "source": "doc",
+  "note": "GROUP_DEL_ROBOT 记 activity",
+  "event": {
+   "op": 0,
+   "t": "GROUP_DEL_ROBOT",
+   "d": {
+    "group_openid": "GROUP000001",
+    "op_member_openid": "u4",
+    "timestamp": "2026-11-13T00:00:00.000Z"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "activity": {
+    "kind": "qq.bot_removed",
+    "count": 1,
+    "summary": "机器人已离开群聊"
+   },
+   "inbound": {
+    "senderId": "u4",
+    "senderName": "",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "notice 事件是 v2 新契约；legacy 当消息解析",
+   "maxStatements": 2
+  }
+ },
+ {
+  "id": "EV14-3",
+  "group": "G14",
+  "source": "doc",
+  "note": "GROUP_MSG_REJECT 打开 active_rejected",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MSG_REJECT",
+   "d": {
+    "group_openid": "GROUP000001",
+    "op_member_openid": "u4",
+    "timestamp": "2026-11-13T00:00:00.000Z"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "settings": {
+    "qq:active_rejected": "1"
+   },
+   "inbound": {
+    "senderId": "u4",
+    "senderName": "",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "notice 事件是 v2 新契约；legacy 当消息解析",
+   "maxStatements": 2
+  }
+ },
+ {
+  "id": "EV14-4",
+  "group": "G14",
+  "source": "doc",
+  "note": "GROUP_MSG_RECEIVE 关闭 active_rejected",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MSG_RECEIVE",
+   "d": {
+    "group_openid": "GROUP000001",
+    "op_member_openid": "u4",
+    "timestamp": "2026-11-13T00:00:00.000Z"
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 0,
+    "message_meta": 0,
+    "jobs": 0
+   },
+   "settings": {
+    "qq:active_rejected": "0"
+   },
+   "inbound": {
+    "senderId": "u4",
+    "senderName": "",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "$undefined": true
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": ""
+   },
+   "golden": "v2",
+   "difference": "notice 事件是 v2 新契约；legacy 当消息解析",
+   "maxStatements": 2
+  },
+  "setup": [
+   {
+    "sql": "INSERT OR REPLACE INTO settings VALUES('qq:active_rejected','1')",
+    "args": []
+   }
+  ]
+ }
+]

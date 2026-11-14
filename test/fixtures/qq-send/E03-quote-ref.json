@@ -1,0 +1,73 @@
+[
+ {
+  "id": "EV03-7",
+  "group": "G3",
+  "source": "d1",
+  "note": "24h 内的成员引用会带上 message_reference",
+  "scenario": "quoteRef",
+  "setup": {
+   "sql": [
+    "INSERT INTO message_refs VALUES('REFIDX_SYNTH_0001','member','a','g',(unixepoch('now')*1000-3600000))"
+   ]
+  },
+  "expect": {
+   "ref": "REFIDX_SYNTH_0001"
+  },
+  "decision": {
+   "target": "a"
+  }
+ },
+ {
+  "id": "EV03-8",
+  "group": "G3",
+  "source": "synth",
+  "note": "超过 24h 的引用不再带",
+  "scenario": "quoteRef",
+  "setup": {
+   "sql": [
+    "INSERT INTO message_refs VALUES('REFIDX_SYNTH_0002','member','m-old','g',(unixepoch('now')*1000-90000000))"
+   ]
+  },
+  "expect": {
+   "ref": null
+  },
+  "decision": {
+   "target": "a"
+  }
+ },
+ {
+  "id": "EV03-9",
+  "group": "G3",
+  "source": "synth",
+  "note": "off:quote=1 关闭引用",
+  "scenario": "quoteRef",
+  "setup": {
+   "sql": [
+    "INSERT INTO message_refs VALUES('REFIDX_SYNTH_0003','member','a','g',(unixepoch('now')*1000-3600000))"
+   ]
+  },
+  "expect": {
+   "ref": null
+  },
+  "decision": {
+   "target": "a"
+  },
+  "switches": {
+   "off:quote": "1"
+  }
+ },
+ {
+  "id": "EV03-10",
+  "group": "G3",
+  "source": "synth",
+  "note": "目标不在本轮批次时不引用",
+  "scenario": "quoteRef",
+  "setup": {},
+  "expect": {
+   "ref": null
+  },
+  "decision": {
+   "target": "x"
+  }
+ }
+]

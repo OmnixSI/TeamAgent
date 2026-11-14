@@ -1,0 +1,59 @@
+TeamAgent
+Copyright (c) 2026 InkBoard contributors
+Licensed under the MIT License; see LICENSE.
+
+This NOTICE lists third-party code and behavior references used by the event layer v2.
+It is not a replacement for the upstream license texts.
+
+1. MaiBot — MIT
+   Repository: https://github.com/Mai-with-u/MaiBot
+   Commit: 03347c9b8f6fa2208e763da3cd4713db22af87bf
+   Used in: src/event/normalize.ts (codec.py::decode_message, _extract_content,
+   _rewrite_mention_tokens, extract_message_scene_fields); src/media/quoted.ts
+   (quoted_media.py::quoted_image_attachments); src/send/passive.ts and
+   src/send/codes.ts (plugin.py::_claim_passive_fields, behavior/reimplementation).
+   Copyright (c) 2026 MaiBot Team. The full MIT text is retained at the top of
+   src/event/normalize.ts.
+
+2. NoneBot2 / adapter-onebot — MIT
+   Repository: https://github.com/nonebot/adapter-onebot
+   Commit: 8e0d1145a7106f0c4e2b383e39e5bcf1dfd1d86d
+   Used in: src/event/wake.ts (_check_at_me/_check_reply/_check_nickname).
+   Copyright (c) NoneBot Team. MIT text retained at the top of src/event/wake.ts.
+
+3. LangBot — Apache-2.0
+   Repository: https://github.com/langbot-app/LangBot
+   Commit: 4625b5772a63968129ff92bf10d1388ad3578c49
+   Used in: src/send/split.ts, behavior reference for long-text splitting only.
+   No upstream implementation was copied; QQ needs bounded segments rather than
+   LangBot's forward/image strategy.
+
+4. Koishi — MIT
+   Repository: https://github.com/koishijs/koishi
+   Commit: 97d5c39
+   Used in: src/send/lane.ts, behavior reference for per-channel serial sending
+   (sendQueued). The D1 lease/claim statements are this project's own design.
+
+5. AstrBot — AGPL-3.0
+   Repository: https://github.com/AstrBotDevs/AstrBot
+   Used in: src/media/quoted.ts and src/vision.ts, behavior reference only
+   (cache-before-download, bounded quote images, unified degradation placeholders).
+   No AstrBot source code is copied into this repository.
+
+6. QQ official bot documentation
+   https://bot.q.qq.com/wiki/develop/api-v2/
+   Event field names, message_type 101/102/103 semantics, group notice events,
+   passive reply limits and send error codes. Documentation reference only.
+
+7. Fixtures and frozen legacy code
+   test/fixtures/events/* and test/fixtures/qq-send/* are built from:
+   - d1: this project's own D1 rows, reverse-constructed and sanitized by
+     scripts/fixtures-from-d1.mjs (no raw openid, name, group id, message id,
+     REFIDX or media query token is retained);
+   - doc: examples transcribed from the QQ official documentation above;
+   - synth: mutations of the d1 shape created for this repository.
+   No third-party test fixture files are copied.
+   test/fixtures/legacy/inbound-68ef1c3.ts is this repository's own
+   src/inbound.ts at commit 68ef1c3 (import specifiers rebased only).
+   test/legacy/send-68ef1c3.mjs is this repository's own src/worker.ts sender at
+   the same commit (import specifiers relocated, TypeScript annotations erased).

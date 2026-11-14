@@ -10,9 +10,16 @@ await build({
 });
 const api = await import('../' + outfile);
 
-const dir = 'test/fixtures/events';
+// G4's real-sample fixtures live in the g4/ subdirectory so the table-driven
+// event-replay suite can own test/fixtures/events/*.json (88 fixtures, 121 total).
+const dir = 'test/fixtures/events/g4';
+// This suite owns the single-object G4 fixtures; the table-driven event-replay suite owns
+// the array files written by scripts/fixtures-from-d1.mjs.
 const fixtures = readdirSync(dir).filter(name => name.endsWith('.json'))
-  .map(name => ({file: name, ...JSON.parse(readFileSync(dir + '/' + name, 'utf8'))}));
+  .flatMap(name => {
+    const value = JSON.parse(readFileSync(dir + '/' + name, 'utf8'));
+    return Array.isArray(value) ? [] : [{file: name, ...value}];
+  });
 const byId = id => {
   const fixture = fixtures.find(f => f.id === id);
   assert.ok(fixture, 'missing fixture ' + id);

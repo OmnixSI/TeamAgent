@@ -1,0 +1,327 @@
+[
+ {
+  "id": "EV16-1",
+  "group": "G16",
+  "source": "doc",
+  "note": "markdown 卡片",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e16-1",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "markdown",
+     "fields": {
+      "title": "测试标题",
+      "desc": "测试描述",
+      "jump_url": "https://example.com/doc"
+     }
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "markdown",
+     "name": {
+      "$undefined": true
+     },
+     "title": "测试标题",
+     "desc": "测试描述",
+     "url": "https://example.com/doc",
+     "preview": {
+      "$undefined": true
+     },
+     "source": {
+      "$undefined": true
+     }
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://example.com/doc"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] ：测试标题"
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV16-2",
+  "group": "G16",
+  "source": "doc",
+  "note": "keyboard 卡片",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e16-2",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "keyboard",
+     "fields": {
+      "title": "按钮标题",
+      "desc": "按钮说明"
+     }
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "keyboard",
+     "name": {
+      "$undefined": true
+     },
+     "title": "按钮标题",
+     "desc": "按钮说明",
+     "url": {
+      "$undefined": true
+     },
+     "preview": {
+      "$undefined": true
+     },
+     "source": {
+      "$undefined": true
+     }
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] ：按钮标题"
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV16-3",
+  "group": "G16",
+  "source": "doc",
+  "note": "未知 ark 走通用 card，不报错",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e16-3",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "unknown",
+     "fields": {}
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "unknown",
+     "name": {
+      "$undefined": true
+     },
+     "title": {
+      "$undefined": true
+     },
+     "desc": {
+      "$undefined": true
+     },
+     "url": {
+      "$undefined": true
+     },
+     "preview": {
+      "$undefined": true
+     },
+     "source": {
+      "$undefined": true
+     }
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] "
+   },
+   "maxStatements": 9
+  }
+ },
+ {
+  "id": "EV16-4",
+  "group": "G16",
+  "source": "doc",
+  "note": "fields 数组形式也能取标题",
+  "event": {
+   "op": 0,
+   "t": "GROUP_MESSAGE_CREATE",
+   "d": {
+    "id": "e16-4",
+    "group_openid": "GROUP000001",
+    "timestamp": "2026-11-13T00:00:00.000Z",
+    "author": {
+     "id": "u1",
+     "username": "成员A",
+     "bot": false
+    },
+    "content": "",
+    "ark_data": {
+     "ark_type": "miniapp",
+     "ark_name": "小程序",
+     "fields": [
+      {
+       "key": "title",
+       "value": "数组标题"
+      },
+      {
+       "key": "jump_url",
+       "value": "https://example.com/a"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "rows": {
+    "messages": 1,
+    "message_meta": 1,
+    "jobs": 1
+   },
+   "inbound": {
+    "senderId": "u1",
+    "senderName": "成员A",
+    "body": "",
+    "mentions": [],
+    "mentionsBot": false,
+    "msgIdx": {
+     "$undefined": true
+    },
+    "refMsgIdx": {
+     "$undefined": true
+    },
+    "quoted": {
+     "$undefined": true
+    },
+    "card": {
+     "type": "miniapp",
+     "name": "小程序",
+     "title": "数组标题",
+     "desc": {
+      "$undefined": true
+     },
+     "url": "https://example.com/a",
+     "preview": {
+      "$undefined": true
+     },
+     "source": {
+      "$undefined": true
+     }
+    },
+    "media": [],
+    "bili": [],
+    "biliCard": {
+     "$undefined": true
+    },
+    "ownUrls": [
+     "https://example.com/a"
+    ],
+    "quotedUrls": [],
+    "biliUrls": [],
+    "quotedBiliUrls": [],
+    "placeholder": "[卡片] 小程序：数组标题"
+   },
+   "maxStatements": 9
+  }
+ }
+]
