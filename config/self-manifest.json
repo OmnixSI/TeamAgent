@@ -507,6 +507,49 @@
       "default_state": "on"
     },
     {
+      "id": "stock_quote",
+      "title": "股票行情",
+      "aliases": [
+        "股票",
+        "股价",
+        "行情",
+        "A股",
+        "港股",
+        "美股",
+        "stock_quote"
+      ],
+      "tools": [
+        "stock_quote"
+      ],
+      "how": "stock_quote 用腾讯行情的公开只读接口查沪深北、港股、美股的最新价、涨跌额、涨跌幅、今开/昨收/最高/最低和报价时间；代码或中文名都行（中文名先走 smartbox 搜索，优先个股而不是指数），同一代码缓存 15 秒，超时 5 秒；只查行情，不登录、不读社区帖子，结果按外部资料包起来，回答须写「来源：腾讯行情」和报价时间。",
+      "files": [
+        {
+          "path": "src/tools/stock-quote.ts",
+          "anchor": "export function createStockQuoteTool",
+          "role": "行情/搜索、代码归一、缓存与结构化错误"
+        },
+        {
+          "path": "src/tools/index.ts",
+          "anchor": "stockQuoteTool",
+          "role": "注册到 EXTRA_TOOLS"
+        }
+      ],
+      "providers": [
+        {
+          "role": "只读行情与代码搜索",
+          "vendor": "腾讯行情",
+          "file": "src/tools/stock-quote.ts",
+          "host_pattern": "(qt\\.gtimg\\.cn)"
+        }
+      ],
+      "switches": [
+        "stock_quote"
+      ],
+      "requires_env": [],
+      "runs_on": "cloud",
+      "default_state": "on"
+    },
+    {
       "id": "bili_video",
       "title": "B站视频理解",
       "aliases": [
@@ -1302,6 +1345,11 @@
       "vendor": "Jina",
       "env_names": [],
       "key_location": "无需密钥（公开 Reader 接口）"
+    },
+    {
+      "vendor": "腾讯行情",
+      "env_names": [],
+      "key_location": "无需密钥（公开只读行情接口）"
     },
     {
       "vendor": "X-ASR",
