@@ -142,7 +142,7 @@ npm run check                      # 类型检查 + 离线测试
 npm run deploy                     # check 通过才部署
 ```
 
-Hub 握着 QQ 长连接，部署不会自动替换它；定时触发（每 2 分钟）发现版本号不一致会让它自己重启，想立刻生效就 `POST /admin/restart`。重启后 QQ 会话自动续上，期间没回的 @ 消息会补回。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `ADMIN_TOKEN` `RELAY_KEY`。
+Hub 握着 QQ 长连接，部署不会自动替换它；定时触发（每 2 分钟）发现版本号不一致会让它自己重启，想立刻生效就 `POST /admin/restart`。重启后 QQ 会话自动续上，期间没回的 @ 消息会补回。密钥（`wrangler secret put`）：`DEEPSEEK_API_KEY` `QQ_APP_ID` `QQ_APP_SECRET` `OPENAI_API_KEY` `GITHUB_TOKEN` `GITHUB_TOKEN_2`（可选，优先用；读不了的内容退回前一把） `ADMIN_TOKEN` `RELAY_KEY`。
 
 QQ 的 Webhook 用不了（腾讯访问不到 `*.workers.dev`），所以用长连接。`/qq/events` 已经写好，有了自己的域名就能切过去，Hub 就不必常驻。
 

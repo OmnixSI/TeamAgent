@@ -2,6 +2,7 @@
 // that runs low, plan allowances that fill up. Problems are told to the group once, not every day.
 import type { Hub } from "./hub.ts";
 import { relay } from "./sites.ts";
+import { githubTokens } from "./tools.ts";
 import type { Net } from "./sites.ts";
 import { BJ, fmtDate } from "./util.ts";
 
@@ -16,13 +17,24 @@ export async function checkHealth(hub: Hub): Promise<Check[]> {
   };
   await Promise.all([
     guard("github", async () => {
-      if (!env.GITHUB_TOKEN) return { key: "github", ok: false, text: "没有配置 GitHub 令牌，查不了仓库" };
-      const r = await fetch("https://api.github.com/orgs/" + (env.GITHUB_ORG || "OmnixSI"), { headers: { Authorization: "Bearer " + env.GITHUB_TOKEN, "User-Agent": "teamagent" }, signal: AbortSignal.timeout(15000) });
-      if (r.status === 401 || r.status === 403) return { key: "github", ok: false, text: "GitHub 令牌失效了（" + r.status + "），现在查不了仓库，要群主换一个" };
-      const exp = r.headers.get("github-authentication-token-expiration");
-      if (!exp) return { key: "github", ok: true, text: "GitHub 令牌有效，没有设过期时间" };
-      const days = Math.floor((Date.parse(exp.replace(" UTC", "Z").replace(" ", "T")) - Date.now()) / 86400000);
-      return { key: "github", ok: days > 5, text: "GitHub 令牌 " + exp.slice(0, 10) + " 过期（还有 " + days + " 天）" + (days > 5 ? "" : "，过期后我查不了仓库，要群主换一个长期的") };
+      const tokens = githubTokens(env), org = env.GITHUB_ORG || "OmnixSI";
+      if (!tokens.length) return { key: "github", ok: false, text: "没有配置 GitHub 令牌，查不了仓库" };
+      // A token is good when it is valid, can read the code of a private repository, and is not about to expire.
+      const look = async (token: string) => {
+        const h = { Authorization: "Bearer " + token, "User-Agent": "teamagent" };
+        const r = await fetch("https://api.github.com/orgs/" + org, { headers: h, signal: AbortSignal.timeout(15000) });
+        if (r.status === 401 || r.status === 403) return { valid: false, reads: false, days: 0, until: "" };
+        const exp = r.headers.get("github-authentication-token-expiration") || "";
+        const days = exp ? Math.floor((Date.parse(exp.replace(" UTC", "Z").replace(" ", "T")) - Date.now()) / 86400000) : 99999;
+        const code = await fetch("https://api.github.com/repos/" + org + "/TeamAgent/readme", { headers: h, signal: AbortSignal.timeout(15000) });
+        return { valid: true, reads: code.ok, days, until: exp.slice(0, 10) };
+      };
+      const seen = await Promise.all(tokens.map(look));
+      if (seen.some(t => t.valid && t.reads && t.days > 5)) return { key: "github", ok: true, text: "GitHub 令牌有效，能读私有仓库" + (seen.every(t => t.days < 99999) ? "，" + seen.filter(t => t.reads)[0].until + " 过期" : "") };
+      const reader = seen.find(t => t.valid && t.reads), lasting = seen.find(t => t.valid && t.days > 5);
+      if (reader && lasting) return { key: "github", ok: false, text: "GitHub：长期的那把令牌读不了私有仓库的代码（缺 Contents 只读权限），现在靠旧令牌顶着，旧的 " + reader.until + " 过期（还有 " + reader.days + " 天）。群主给新令牌补上 Contents 权限就行，不用换令牌" };
+      if (reader) return { key: "github", ok: false, text: "GitHub 令牌 " + reader.until + " 过期（还有 " + reader.days + " 天），过期后我查不了仓库，要群主换一个长期的" };
+      return { key: "github", ok: false, text: seen.some(t => t.valid) ? "GitHub 令牌读不了私有仓库的代码（缺 Contents 只读权限），提交和文件现在都查不了" : "GitHub 令牌失效了，查不了仓库，要群主换一个" };
     }),
     guard("deepseek", async () => {
       const cny = await hub.accounts.balance(), floor = Number(hub.edit.cfg(main, "balance_alert"));
