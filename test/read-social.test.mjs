@@ -31,6 +31,11 @@ test('trial §4 dedicated URL actions precede generic read and signed short link
  await assert.rejects(resolveSocialTarget({url:'https://xueqiu.com/123/456'}));
  await assert.rejects(resolveSocialTarget({url:'https://b23.tv/abc'}));
 });
+test('xiaohongshu short links must expand to a signed note URL, not a bare id',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async()=>new Response('',{status:302,headers:{location:'https://www.xiaohongshu.com/explore/6371c72a000000001501476b'}});
+ try{await assert.rejects(resolveSocialTarget({url:'https://xhslink.com/a/abc'}));}finally{globalThis.fetch=original;}
+});
 test('reject arbitrary action/backend/command, SSRF redirects and non-requested background crawling',async()=>{
  const e=await ready();
  for(const args of [{url,action:'post'},{url,backend:'sh'},{url,argv:['sh']},{channel:'x',action:'setup',target:'x'},{url:'https://127.0.0.1'},{channel:'x',action:'search',target:'AI;whoami'}])assert.equal((await call(e,args)).error_kind,'unsupported');

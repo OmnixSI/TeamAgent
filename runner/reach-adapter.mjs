@@ -3,11 +3,12 @@ import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,rmSync} from 'node:fs';
 import {join,isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
-import {validTarget,scopeFor} from '../src/reach-contract.mjs';
+import {validTarget,scopeFor} from './reach-contract.mjs';
 import {normalizeReachResult} from './reach-result.mjs';
+import {XHS_COMMANDS} from './reach-xiaohongshu.mjs';
 
 // F9 platform packages add read-only descriptors here; missing components fail closed, never setup.
-export const REACH_COMMANDS={};
+export const REACH_COMMANDS={...XHS_COMMANDS};
 const MAX_BYTES=1024*1024;
 const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);
 function readState(path){try{return JSON.parse(readFileSync(path,'utf8'));}catch{return {};}}
