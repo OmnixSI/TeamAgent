@@ -77,9 +77,11 @@ export type Services = {
 const now = () => new Date().toISOString();
 const parse = (s: string) =>
   JSON.parse(s.replace(/^```(?:json)?\s*|\s*```$/g, ""));
-export async function analyse(e: any, p: any, s: Services) {
+/** D-7：夜间整理的完成情况交给调用方核对，跳过必须带原因，不能静默。 */
+export type AnalyseOutcome = { ran: boolean; reason?: "tainted" | "filtered" | "empty"; count?: number };
+export async function analyse(e: any, p: any, s: Services): Promise<AnalyseOutcome> {
   let rows = p.messages;
-  if (!rows?.length) return;
+  if (!rows?.length) return { ran: false, reason: "empty" };
   const previous = (
     await e.DB.prepare(
       "SELECT id,sender,substr(body,1,800) AS body,ts FROM messages WHERE group_id=? ORDER BY ts DESC LIMIT 30",
@@ -107,7 +109,7 @@ export async function analyse(e: any, p: any, s: Services) {
     m.meta = JSON.parse(metadata.find((x: any) => x.id === m.id)?.json || "{}");
   // Nightly learning has no interactive authorization step. Reject a tainted
   // round entirely, including facts, expressions, reflection and self_note.
-  if (tainted({ ...p, batch: rows }, rows.map((m: any) => ({ role: "user", content: m.body })))) return;
+  if (tainted({ ...p, batch: rows }, rows.map((m: any) => ({ role: "user", content: m.body })))) return { ran: false, reason: "tainted" };
   if (p.dream)
     rows = rows.filter(
       (m: any) =>
@@ -116,12 +118,12 @@ export async function analyse(e: any, p: any, s: Services) {
           m.body,
         ),
     );
-  if (!rows.length) return;
+  if (!rows.length) return { ran: false, reason: "filtered" };
   // The batch stays countable, but only the newest messages that fit the model
   // input budget reach the prompt. Trimmed messages are still marked processed.
   const batchRows = rows;
   rows = fitMemoryMessages(rows);
-  if (!rows.length) return;
+  if (!rows.length) return { ran: false, reason: "empty" };
   const reflection = await s.setting("team_reflection");
   const catalog = (
     await e.DB.prepare("SELECT repo,json,updated_at FROM repo_cache").all()
@@ -263,8 +265,9 @@ self_note像自己的近况，不是工作汇报：从真实互动里反思自�
       "夜间整理完成，事实与近况已更新",
       p.key,
     );
-    return;
+    return { ran: true, count: batchRows.length };
   }
+  return { ran: true };
 }
 
 export async function proactiveReply(e: any, p: any, s: Services) {
