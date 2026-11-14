@@ -3038,6 +3038,8 @@ function deskRecordsTable(current, records) {
     const th = el("th", label);
     th.setAttribute("scope", "col");
     if (num) th.className = "num";
+    if (label === "时间" || label === "创建时间")
+      th.setAttribute("style", "width:96px");
     head.append(th);
   }
   thead.append(head);
@@ -3077,6 +3079,7 @@ function deskRecordsTable(current, records) {
     };
     const addCreator = () => {
       const td = deskTd("创建人");
+      td.setAttribute("style", "font-size:12px");
       td.textContent = row.creator_name || "—";
       tr.append(td);
     };
@@ -3290,7 +3293,14 @@ function renderDeskSkills(host) {
     const name = deskTd("名字");
     const nameLine = el("b", "「" + skill.name + "」");
     if (skill.status === "disabled") nameLine.className = "desk-done";
-    name.append(nameLine, el("small", skill.owner_name, skill.status === "disabled" ? "desk-done" : ""));
+    name.append(
+      nameLine,
+      el(
+        "small",
+        skill.owner_name,
+        "desk-sub" + (skill.status === "disabled" ? " desk-done" : ""),
+      ),
+    );
     tr.append(name);
 
     const triggers = deskTd("触发词");
@@ -3318,6 +3328,7 @@ function renderDeskSkills(host) {
       el(
         "small",
         skill.last_used_at ? "上次 " + date(skill.last_used_at) : "还没用过",
+        "desk-sub",
       ),
     );
     tr.append(uses);
