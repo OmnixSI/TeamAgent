@@ -10,8 +10,8 @@ import type { Feature } from "./types.ts";
 export const PART = 80 * 1024 * 1024;
 export const PART_MAX = 95 * 1024 * 1024;
 const MAX_PARTS = 64;
-/** Caches and workspaces together. */
-export const CAP = 1.5 * 1024 ** 3;
+/** Everything kept through this path: the file box (up to 3 GB) plus caches and workspaces. */
+export const CAP = 4.5 * 1024 ** 3;
 const TTL = 30 * 60;
 const STALE = 24 * 3600 * 1000;
 

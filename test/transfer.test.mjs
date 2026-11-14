@@ -166,9 +166,9 @@ describe("multipart upload and download", () => {
 });
 
 describe("byte accounting", () => {
-  test("stored bytes add up and the 1.5 GB cap holds", async () => {
+  test("stored bytes add up and the cap holds", async () => {
     const hub = fakeHub();
-    assert.equal(T.CAP, 1.5 * 1024 ** 3);
+    assert.equal(T.CAP, 4.5 * 1024 ** 3);
     assert.equal(T.fitsCap(T.CAP - 10, 0, 10), true);
     assert.equal(T.fitsCap(T.CAP - 10, 0, 11), false);
     assert.equal(T.fitsCap(T.CAP, 100, 100), true, "replacing an object frees its old bytes");
