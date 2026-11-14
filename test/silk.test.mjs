@@ -7,6 +7,8 @@ import {
   wavToSilk,
   decodeSilkToWav,
   isSilkData,
+  loadSilkModule,
+  silkToolchain,
   SILK_MAGIC,
   SILK_SAMPLE_RATE,
 } from "../runner/silk.mjs";
@@ -65,7 +67,7 @@ const fakeFfmpeg = ({ fail = false, out = canonicalWav } = {}) => async (command
   return { code: 0, stdout: "", stderr: "" };
 };
 
-test("wavToSilk reports tool_not_ready when silk-wasm is absent and leaves no temp files", async () => {
+test("wavToSilk reports tts_silk_missing when silk-wasm is absent and leaves no temp files", async () => {
   const s = scratch();
   try {
     fs.writeFileSync(s.wav, canonicalWav);
@@ -78,12 +80,41 @@ test("wavToSilk reports tool_not_ready when silk-wasm is absent and leaves no te
       },
     );
     assert.equal(result.ok, false);
-    assert.equal(result.error_kind, "tool_not_ready");
+    assert.equal(result.error_kind, "tts_silk_missing");
     assert.match(result.reason_text, /silk-wasm/);
     assert.deepEqual(fs.readdirSync(s.dir), ["in.wav"]);
   } finally {
     s.clean();
   }
+});
+
+test("silkToolchain names a missing package instead of degrading silently", async () => {
+  const missing = await silkToolchain({
+    loadSilk: async () => {
+      throw Object.assign(new Error("Cannot find package 'silk-wasm'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      });
+    },
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error_kind, "tts_silk_missing");
+  assert.equal(missing.missing, "silk-wasm");
+  assert.match(missing.error, /ERR_MODULE_NOT_FOUND/);
+
+  const broken = await silkToolchain({ loadSilk: async () => ({ encode: () => {} }) });
+  assert.equal(broken.ok, false);
+  assert.equal(broken.error_kind, "tts_silk_missing");
+
+  const ready = await silkToolchain({ loadSilk: async () => fakeSilk() });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.error_kind, "");
+});
+
+test("loadSilkModule raises the named fault when silk-wasm is absent", async () => {
+  await assert.rejects(
+    loadSilkModule({ loadSilk: async () => null }),
+    (error) => error.reason === "tts_silk_missing" && error.missing === "silk-wasm",
+  );
 });
 
 test("wavToSilk normalizes to 24 kHz mono and encodes without leaving .work directories", async () => {
@@ -157,7 +188,7 @@ test("decodeSilkToWav rebuilds a canonical 24 kHz mono WAV from SILK", async () 
   assert.equal(wav.readUInt32LE(40), 4800);
   const silent = await decodeSilkToWav(silk, {}, { loadSilk: async () => null });
   assert.equal(silent.ok, false);
-  assert.equal(silent.error_kind, "tool_not_ready");
+  assert.equal(silent.error_kind, "asr_silk_missing");
 });
 
 // The runner dependency is installed by the lead; when it is present this runs for real.
@@ -165,6 +196,16 @@ let realSilk = null;
 try {
   realSilk = await import("silk-wasm");
 } catch {}
+
+test(
+  "silkToolchain passes with the real installed dependency",
+  { skip: realSilk ? false : "silk-wasm not installed in this worktree" },
+  async () => {
+    const tool = await silkToolchain();
+    assert.equal(tool.ok, true, tool.error);
+    assert.equal(tool.error_kind, "");
+  },
+);
 
 test(
   "real silk-wasm round trip: 200 ms WAV -> SILK -> 200 ms WAV",
