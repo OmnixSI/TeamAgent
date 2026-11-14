@@ -9,9 +9,9 @@
 | 小红书 | `read` / `search` / `comments` | 是（本机 Edge profile） | 正文必须带搜索返回的完整链接（含 `xsec_token`）；裸 `explore/<id>` 会被拒绝。评论只返回已加载的部分 |
 | X / 推特 | `thread` / `profile` / `tweets` / `search` | 是（本机 Edge profile） | 走本机登录会话的 GraphQL，长推按 25k 字符上限保留；只读 |
 | 雪球 | `quote` | 否 | 只读 `/S/<代码>` 行情，走腾讯行情并标注来源；社区热帖/搜索未接入（需雪球 Cookie，几小时过期） |
-| 微博 | `hot` / `search` / `profile` | 否 | 公开页与公开 JSON；登录墙会返回 `login_required`，不绕过 |
-| 知乎 | `hot` / `search` / `read` | 否 | 公开接口与页面；风控页返回 `platform_blocked` |
-| 抖音 | `read` | 否 | 短链最多 6 次跳转；页面里取结构化详情，不下载音视频 |
+| 微博 | `hot` / `search` / `profile` | 热搜否；搜索/主页是 | 热搜走公开 JSON；搜索与主页实测撞登录墙，返回 `login_required`，不绕过 |
+| 知乎 | `hot` / `search` / `read` | 热榜否；正文常需登录 | 热榜有网页兜底；正文实测 `login_required`，风控页返回 `platform_blocked` |
+| 抖音 | `read` | 否，但常触发验证 | 短链最多 6 次跳转；实测公开页/分享页都被风控，返回 `platform_blocked`，不下载音视频 |
 | 微信公众号 | `read` | 否 | 只读公开文章页；删除/验证码分别返回 `not_found` / `platform_blocked` |
 | B 站 | — | — | 保持原有 `fetch` 链路（标题、字幕、热评、音轨 ASR），不经过 `read_social` |
 
