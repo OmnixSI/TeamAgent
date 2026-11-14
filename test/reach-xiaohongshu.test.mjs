@@ -182,3 +182,10 @@ test('CLI fails closed without a login and never echoes the signed token',()=>{
   assert.doesNotMatch(child.stdout+child.stderr,/SUPER_SECRET_VALUE|xsec_token/i);
  }finally{rmSync(home,{recursive:true,force:true});}
 });
+
+test('a missing xsec_token gets a xiaohongshu-specific next action',async()=>{
+ const {nextActions}=await import('../runner/reach-result.mjs');
+ await import('../runner/reach-xiaohongshu.mjs');
+ assert.match(nextActions.get('xiaohongshu').unsupported,/xsec_token/);
+ assert.match(nextActions.get('xiaohongshu').login_required,/xiaohongshu\.com/);
+});

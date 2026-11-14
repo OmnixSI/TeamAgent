@@ -127,3 +127,34 @@ test('F9-5 platform URLs route only to the registered read-only actions',async()
  assert.deepEqual(await resolveSocialTarget({url:'https://www.douyin.com/video/7298145681699622182'}),{channel:'douyin',action:'read',target:'https://www.douyin.com/video/7298145681699622182'});
  assert.deepEqual(await resolveSocialTarget({url:'https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=x'}),{channel:'weixin',action:'read',target:'https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=x'});
 });
+
+test('xueqiu quote links return the unified envelope with Tencent as the named source',async()=>{
+ const {xueqiuSymbol,quoteEnvelope}=await import('../.wrangler/f9-'+process.pid+'/tools/read-social.js');
+ assert.equal(xueqiuSymbol('https://xueqiu.com/S/SH600519'),'SH600519');
+ assert.equal(xueqiuSymbol('https://www.xueqiu.com/S/hk00700/'),'HK00700');
+ assert.equal(xueqiuSymbol('https://xueqiu.com/123/456'),null);
+ const link='https://xueqiu.com/S/SH600519';
+ const ok=quoteEnvelope('SH600519',link,{ok:true,name:'贵州茅台',code:'SH600519',price:1435.26,change:25.1,change_pct:1.77,open:1410,prev_close:1410.16,high:1440,low:1405,quote_time:'2026-11-14 15:00:00'});
+ assert.equal(ok.ok,true);assert.equal(ok.channel,'xueqiu');assert.equal(ok.action,'quote');assert.equal(ok.content_scope,'quote');
+ assert.equal(ok.items.length,1);assert.match(ok.items[0].text,/1435\.26/);assert.match(ok.items[0].text,/来源：腾讯行情/);
+ assert.equal(ok.source_url,link);assert.equal(ok.error,null);
+ const miss=quoteEnvelope('SH600519',link,{ok:false,error_kind:'not_found',reason_text:'没有这只股票',next_action:'核对代码'});
+ assert.equal(miss.ok,false);assert.equal(miss.error.error_kind,'not_found');assert.match(miss.error.next_action,/核对代码/);assert.deepEqual(miss.items,[]);
+ const broken=quoteEnvelope('SH600519',link,{ok:false,error_kind:'weird'});
+ assert.equal(broken.error.error_kind,'upstream_unavailable');
+});
+
+test('a pasted xueqiu link is answered from the existing quote tool, not queued as a browser job',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const {readSocialTool}=await import('../.wrangler/f9-'+process.pid+'/tools/read-social.js');
+ const e=await ready();const link='https://xueqiu.com/S/SH600519';
+ const qctx={...ctx,context:{latest:{id:'m1',group_id:'g1',body:'看下 '+link}}};
+ const original=globalThis.fetch;const seen=[];
+ globalThis.fetch=async(url)=>{seen.push(String(url));assert.match(String(url),/qt\.gtimg\.cn/);return new Response(readFileSync(new URL('./fixtures/stock-quote/sh600519.gbk',import.meta.url)));};
+ try{
+  const r=await readSocialTool.run(e,{url:link},qctx);
+  assert.equal(r.ok,true,JSON.stringify(r));assert.equal(r.content_scope,'quote');
+  assert.match(r.items[0].text,/贵州茅台/);assert.match(r.items[0].text,/来源：腾讯行情/);
+  assert.equal((await e.DB.prepare("SELECT count(*) n FROM jobs WHERE kind='fetch'").first()).n,0);
+ }finally{globalThis.fetch=original;}
+});
