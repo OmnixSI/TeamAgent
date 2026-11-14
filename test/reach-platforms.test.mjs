@@ -122,8 +122,35 @@ test('douyin deleted and security block map to not_found and platform_blocked', 
   assert.equal(reach('douyin', 'read', 'https://www.douyin.com/video/123', blocked).error.error_kind, 'platform_blocked');
 });
 
-test('registered commands are read-only and API-bound', () => {
-  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile', 'zhihu:hot', 'zhihu:search', 'zhihu:read', 'douyin:read'];
+test('wechat article: title, author, publish time and body; scripts, images and media URLs removed', async () => {
+  const item = parseWechatArticle(await fixture('weixin-article.html'));
+  assert.ok(item);
+  assert.equal(item.title, '端侧模型落地的三个工程细节');
+  assert.equal(item.author, '示例公众号');
+  assert.equal(item.published_at, new Date(1794391038000).toISOString());
+  assert.ok(item.text.includes('输入要先过滤'));
+  assert.doesNotMatch(JSON.stringify(item), /<script|<img|mmbiz\.qpic\.cn|data-src|__track/i);
+  const result = reach('weixin', 'read', 'https://mp.weixin.qq.com/s?__biz=MzU2OTM4MTU1Mg==&mid=2247502233&idx=1&sn=SIGNATURE', {ok: true, items: [item]});
+  assert.equal(result.ok, true);
+  assert.equal(result.content_scope, 'post_text');
+  const identity = new URL(result.source_url);
+  assert.equal(identity.hostname, 'mp.weixin.qq.com');
+  assert.equal(identity.searchParams.get('__biz'), 'MzU2OTM4MTU1Mg==');
+  assert.equal(identity.searchParams.get('mid'), '2247502233');
+  assert.equal(identity.searchParams.get('idx'), '1');
+  assert.equal(identity.searchParams.get('sn'), null);
+  assert.doesNotMatch(JSON.stringify(result), /SIGNATURE/);
+});
+
+test('wechat captcha and deleted pages map to platform_blocked and not_found', async () => {
+  const blocked = await runPublicRead({channel: 'weixin', action: 'read', target: 'https://mp.weixin.qq.com/s?__biz=x'}, {fetchImpl: async () => reply(await fixture('weixin-captcha.html'))});
+  assert.equal(blocked.error.code, 'SECURITY_BLOCK');
+  const gone = await runPublicRead({channel: 'weixin', action: 'read', target: 'https://mp.weixin.qq.com/s?__biz=x'}, {fetchImpl: async () => reply(await fixture('weixin-deleted.html'))});
+  assert.equal(gone.error.code, 'NOT_FOUND');
+});
+
+test('registered commands are read-only, API-bound and cover the four channels', () => {
+  const expected = ['weibo:hot', 'weibo:search', 'weibo:profile', 'zhihu:hot', 'zhihu:search', 'zhihu:read', 'douyin:read', 'weixin:read'];
   for (const key of expected) {
     const entry = REACH_COMMANDS[key + ':local'];
     assert.ok(entry, key);
