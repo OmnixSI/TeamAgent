@@ -182,3 +182,26 @@ test('adapter exposes only fixed read-only X commands with the skeleton scope co
  assert.equal(REACH_COMMANDS['x:post:local'],undefined);
  assert.equal(REACH_COMMANDS['x:thread:public-web'],undefined);
 });
+
+test('profile parsing falls back to the core object when legacy screen_name is absent',async()=>{
+ const {parseUserProfile}=await import('../runner/x-graphql.mjs');
+ const core={rest_id:'42',core:{screen_name:'alice',name:'Alice',description:'hi'},legacy:{followers_count:7,friends_count:3,statuses_count:9}};
+ const user=parseUserProfile({data:{user:{result:core}}});
+ assert.equal(user.handle,'alice');assert.equal(user.name,'Alice');assert.equal(user.id,'42');assert.equal(user.followers,7);
+ const legacy=parseUserProfile({data:{user:{result:{rest_id:'7',legacy:{screen_name:'bob',name:'Bob',followers_count:1}}}}});
+ assert.equal(legacy.handle,'bob');assert.equal(legacy.name,'Bob');
+});
+
+test('a killed browser lock is cleared only when its owner pid is gone',async()=>{
+ const {clearStaleLock}=await import('../runner/x-reader.mjs');
+ const {mkdtemp,symlink,writeFile,readdir}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const dir=await mkdtemp(join(tmpdir(),'x-lock-'));
+ await writeFile(join(dir,'DevToolsActivePort'),'1');
+ await symlink('host-999999999',join(dir,'SingletonLock'));
+ await clearStaleLock(dir);
+ assert.deepEqual((await readdir(dir)).filter(n=>n.startsWith('Singleton')||n==='DevToolsActivePort'),[]);
+ await symlink('host-'+process.pid,join(dir,'SingletonLock'));
+ await clearStaleLock(dir);
+ assert.deepEqual((await readdir(dir)).filter(n=>n.startsWith('Singleton')),['SingletonLock']);
+});
