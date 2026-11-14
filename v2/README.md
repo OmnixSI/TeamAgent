@@ -43,6 +43,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | `src/draw.ts` | 画图四步、找参考图、云端 Python 沙箱（含中文字体的固定做法） |
 | `src/self.ts` | 自述：链路、接入、能力清单、运行状态 |
 | `src/config.ts` | 它被允许自己改的参数和做法说明 |
+| `src/meter.ts` | 记账：价格表、每次调用的用量和花费估算 |
 | `src/hub.ts` | Durable Object：QQ 连接、存储、发送、定时、夜间整理、管理接口 |
 | `src/memory.ts` | 每晚把当天聊天整理成长期记忆、教训和小结 |
 | `src/qq.ts` | QQ 接口与消息解析 |
@@ -55,7 +56,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 |---|---|
 | 查资料 | `web_search` `read_url`（网页、推文、小红书笔记、知乎、公众号） `research`（多轮联网调研） `think_hard`（最高推理档） |
 | 平台 | `bilibili`（视频字幕/无字幕转写/热评/搜索） `hot`（微博、抖音、B站、知乎、百度、GitHub、HN 热榜） `x_search` `stock`（A股/港股/美股行情） |
-| 团队 | `github`（只读） `ledger`（群内账本） `balance`（DeepSeek 余额） |
+| 团队 | `github`（只读） `ledger`（群内账本） `balance`（DeepSeek 余额） `usage`（它自己每天花了多少、花在哪） |
 | 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图） `save_reference` `view_image` `speak`（语音回复） |
 | 计算 | `run_python`（云端沙箱：算数据、画图表、生成 Excel/CSV/PDF，产物直接发群） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
@@ -76,6 +77,12 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 ## 它怎么回答“你是怎么实现的”
 
 `about_self` 工具返回一份自述（`src/self.ts`）：消息链路、接入的服务、存储、记忆、画图、做不到的事、源码地图。其中能力清单由实际注册的工具生成，运行状态从 Hub 实时读取，所以不会和现实脱节；文字说明部分要在改架构的同一次提交里一起改。问到具体实现，它用 `github` 读 `v2/` 里的源码。
+
+## 记账
+
+每次调用 DeepSeek 和 OpenAI 都经过 `src/meter.ts` 记一笔：用途、次数、输入/缓存/输出 token、按官方价格表估的花费，按北京时间的天累加在 Hub 的 `spend` 表里。DeepSeek 另外每天记一次账户余额（`snap` 表），用余额变化对账；余额有几分钟的延迟。`usage` 工具和 `GET /admin/usage?days=3` 能查。
+
+OpenAI 的真实账单需要 key 带 `api.usage.read` 权限，目前没有，所以 OpenAI 部分只有估算。价格变了改 `meter.ts` 里的 `PRICE`。
 
 ## 自我迭代
 

@@ -3,7 +3,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { displayName, runTurn } from "./core.ts";
 import type { Row, TurnResult } from "./core.ts";
-import { dsChat } from "./llm.ts";
+import { dsBalance, dsChat } from "./llm.ts";
+import { PRICE, setMeter } from "./meter.ts";
+import type { Use } from "./meter.ts";
 import { caption, reflect } from "./memory.ts";
 import { QQ, parseEvent } from "./qq.ts";
 import type { Inbound } from "./qq.ts";
@@ -53,8 +55,11 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS ledger_log(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, name TEXT, delta REAL, balance REAL, note TEXT, ts INTEGER);
       CREATE TABLE IF NOT EXISTS img(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, mime TEXT, data BLOB, note TEXT, name TEXT);
       CREATE TABLE IF NOT EXISTS change(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, ts INTEGER, by TEXT, kind TEXT, key TEXT, before TEXT, after TEXT, reason TEXT, status TEXT);
+      CREATE TABLE IF NOT EXISTS spend(day TEXT, provider TEXT, item TEXT, unit TEXT, calls INTEGER DEFAULT 0, in_tok INTEGER DEFAULT 0, cached_tok INTEGER DEFAULT 0, out_tok INTEGER DEFAULT 0, units REAL DEFAULT 0, usd REAL DEFAULT 0, PRIMARY KEY(day, provider, item));
+      CREATE TABLE IF NOT EXISTS snap(day TEXT PRIMARY KEY, cny REAL, ts INTEGER);
       CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT, kind TEXT, body TEXT, ts INTEGER);
     `);
+    setMeter(u => this.record(u));
     const gw = this.get("gw");
     if (gw) { try { const s = JSON.parse(gw); this.session = s.session; this.lastSeq = s.seq; } catch {} }
   }
@@ -74,6 +79,56 @@ export class Hub extends DurableObject<Env> {
     return out ? Number(out.seq) : 0;
   }
   on(flag: string) { return this.get("flag:" + flag) === "1"; }
+
+  // ---------- its own books ----------
+  record(u: Use) {
+    this.sql.exec(
+      "INSERT INTO spend(day,provider,item,unit,calls,in_tok,cached_tok,out_tok,units,usd) VALUES(?,?,?,?,1,?,?,?,?,?) " +
+      "ON CONFLICT(day,provider,item) DO UPDATE SET calls=calls+1, in_tok=in_tok+excluded.in_tok, cached_tok=cached_tok+excluded.cached_tok, out_tok=out_tok+excluded.out_tok, units=units+excluded.units, usd=usd+excluded.usd",
+      fmtDate(Date.now(), BJ), u.provider, u.item, u.unit || "", u.inTok || 0, u.cachedTok || 0, u.outTok || 0, u.units || 0, u.usd || 0);
+  }
+  /** DeepSeek balance at the start of each Beijing day; the difference between days is what was really spent. */
+  async snapshot() {
+    const day = fmtDate(Date.now(), BJ);
+    if (this.sql.exec("SELECT 1 FROM snap WHERE day=?", day).toArray().length) return;
+    const d: any = await dsBalance(this.env);
+    const cny = Number((d.balance_infos || []).find((b: any) => b.currency === "CNY")?.total_balance);
+    if (Number.isFinite(cny)) this.sql.exec("INSERT OR IGNORE INTO snap(day,cny,ts) VALUES(?,?,?)", day, cny, Date.now());
+  }
+  async usage(days: number) {
+    await this.snapshot().catch(() => {});
+    const since = fmtDate(Date.now() - (days - 1) * 86400000, BJ), today = fmtDate(Date.now(), BJ);
+    const rows = this.sql.exec("SELECT * FROM spend WHERE day>=? ORDER BY day DESC, usd DESC", since).toArray();
+    const cny = (usd: number) => Math.round(usd * PRICE.dsCnyPerUsd * 1000) / 1000, r4 = (n: number) => Math.round(n * 10000) / 10000;
+    const byDay: Record<string, any> = {};
+    for (const r of rows as any[]) {
+      const d = (byDay[r.day] ||= { date: r.day, deepseek_estimate_cny: 0, openai_estimate_usd: 0, items: [] });
+      if (r.provider === "deepseek") d.deepseek_estimate_cny += Number(r.usd) * PRICE.dsCnyPerUsd; else d.openai_estimate_usd += Number(r.usd);
+      d.items.push({
+        what: r.item, via: r.provider === "deepseek" ? "DeepSeek" : "OpenAI", calls: r.calls,
+        ...(r.in_tok || r.out_tok ? { input_tokens: r.in_tok, cached_input_tokens: r.cached_tok, output_tokens: r.out_tok } : {}),
+        ...(r.units && r.unit ? { amount: Math.round(Number(r.units) * 10) / 10 + " " + r.unit } : {}),
+        cost: r.provider === "deepseek" ? "约 ¥" + cny(Number(r.usd)) : "约 $" + r4(Number(r.usd)),
+      });
+    }
+    let balanceNow: number | null = null;
+    try { const d: any = await dsBalance(this.env); balanceNow = Number((d.balance_infos || []).find((b: any) => b.currency === "CNY")?.total_balance); } catch {}
+    const snaps = this.sql.exec("SELECT day,cny FROM snap WHERE day>=? ORDER BY day", fmtDate(Date.now() - days * 86400000, BJ)).toArray() as any[];
+    const real: any[] = [];
+    for (let i = 0; i < snaps.length; i++) {
+      const end = i + 1 < snaps.length ? Number(snaps[i + 1].cny) : snaps[i].day === today ? balanceNow : null;
+      if (end === null || !Number.isFinite(end)) continue;
+      const diff = Math.round((Number(snaps[i].cny) - end) * 100) / 100;
+      real.push({ date: snaps[i].day, ...(diff >= 0 ? { really_spent_cny: diff } : { topped_up_cny: -diff }), ...(snaps[i].day === today ? { note: "今天到现在" } : {}) });
+    }
+    const list = Object.values(byDay).map((d: any) => ({ ...d, deepseek_estimate_cny: Math.round(d.deepseek_estimate_cny * 1000) / 1000, openai_estimate_usd: r4(d.openai_estimate_usd) }));
+    return {
+      days: list,
+      total: { deepseek_estimate_cny: Math.round(list.reduce((n, d: any) => n + d.deepseek_estimate_cny, 0) * 100) / 100, openai_estimate_usd: r4(list.reduce((n, d: any) => n + d.openai_estimate_usd, 0)) },
+      deepseek_account: { balance_now_cny: balanceNow, real_spend_by_day: real, note: "真实花费是账户余额的变化，包含这个 key 在别处的用量；记账是从 2026-11-14 晚上开始的，之前的没有明细" },
+      about_the_numbers: "DeepSeek 按官方价格表估（工作日北京时间 9–12 点、14–18 点是双倍价），以余额变化为准。OpenAI 是按每次调用返回的用量和官方价格估的美元，真实账单要这把 key 有读账单的权限才能查，现在没有。日期按北京时间。",
+    };
+  }
 
   // ---------- the layer the bot may edit by itself ----------
   /** Test rooms read the main group's values unless they have their own. */
@@ -318,6 +373,7 @@ export class Hub extends DurableObject<Env> {
   host(conv: string, askers: { id: string; name: string }[] = []): Host {
     const hub = this;
     return {
+      usage: days => hub.usage(days),
       cfg: key => hub.cfg(conv, key),
       play: slot => hub.play(conv, slot),
       selfUpdate: args => hub.selfUpdate(conv, askers, args),
@@ -464,7 +520,7 @@ export class Hub extends DurableObject<Env> {
   }
   deps(conv: string, interim: boolean, askers: { id: string; name: string }[] = []) {
     return {
-      chat: (body: any, effort: any, timeout?: number) => dsChat(this.env, body, effort, timeout),
+      chat: (body: any, effort: any, timeout?: number) => dsChat(this.env, { ...body, label: "聊天" }, effort, timeout),
       tools: buildTools(this.host(conv, askers)),
       ...(interim ? { interim: async (text: string) => { await this.say(conv, text, { queue: false }); } } : {}),
     };
@@ -593,6 +649,8 @@ export class Hub extends DurableObject<Env> {
         if (now - Number(s.next) < 6 * 3600000) this.ctx.waitUntil(this.runTask(conv, String(s.task)).catch(e => console.log("task failed", e?.message)));
       }
 
+      if (this.get("snap:day") !== fmtDate(now, BJ)) { this.set("snap:day", fmtDate(now, BJ)); this.ctx.waitUntil(this.snapshot().catch(() => {})); }
+
       // Memory consolidation once a night, at 04:30 Sydney, when the group is asleep.
       const today = fmtDate(now, SYD);
       if (this.get("reflect:day") !== today && now >= zonedToUtc(today, "04:30", SYD)) {
@@ -697,6 +755,7 @@ export class Hub extends DurableObject<Env> {
       for (const [name, amount] of Object.entries(body.set || {})) await h.ledger("set", name, Number(amount), "初始化");
       return json(await h.ledger("list"));
     }
+    if (path === "/admin/usage") return json(await this.usage(Number(url.searchParams.get("days") || 3)));
     if (path === "/admin/changes") return json(this.sql.exec("SELECT * FROM change ORDER BY id DESC LIMIT ?", Number(url.searchParams.get("n") || 30)).toArray());
     if (path === "/admin/img") {
       if (body.delete) { this.sql.exec("DELETE FROM img WHERE id=?", Number(body.delete)); return json({ ok: true }); }

@@ -1,6 +1,7 @@
 // Image generation in two steps: an art-director pass decides what the picture should be and writes
 // the prompt, then the image model draws it. Reference images are passed to both.
 import { dsChat, dsJson } from "./llm.ts";
+import { PRICE, meter } from "./meter.ts";
 import { clip, unb64 } from "./util.ts";
 import type { Env } from "./util.ts";
 
@@ -47,7 +48,7 @@ export async function scout(env: Env, input: { request: string; context: string;
         { role: "user", content: "【群友的要求】\n" + input.request + "\n\n【最近的聊天】\n" + clip(input.context, 3000) + "\n\n【Bot 记得的事】\n" + clip(input.memory, 2500) + "\n\n【已保存的形象】" + (input.saved.join("、") || "（无）") +
           "\n\n【群友的昵称】" + ((input.members || []).join("、") || "（未知）") + "。这些是群里的真人，不是网上的角色或梗，绝对不要拿他们的昵称去搜图；他们的样子只能来自保存的形象、他们发过的照片，或记忆里的描述。" },
       ],
-      max_tokens: 3000,
+      max_tokens: 3000, label: "画图构思",
     }, "high", 45000);
     const raw = String(r.message.content || ""), d = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     return {
@@ -88,7 +89,7 @@ export async function design(env: Env, input: { request: string; intent?: string
         { role: "system", content: DIRECTOR + (input.extra ? "\n\n【群里对画图的额外要求】\n" + input.extra : "") },
         { role: "user", content: input.refs.length ? [{ type: "text", text }, ...input.refs.map(ref => ({ type: "image_url", image_url: { url: dataUrl(ref) } }))] : text },
       ],
-      max_tokens: 12000,
+      max_tokens: 12000, label: "画图构思",
     }, "max", 120000);
     const raw = String(r.message.content || ""), json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
     const d = JSON.parse(json);
@@ -170,6 +171,10 @@ export async function draw(env: Env, d: Design, refs: Ref[]) {
       : "图像模型返回错误（" + r.status + "）" + (data.error?.message ? "：" + clip(data.error.message, 120) : "")),
     { blocked, detail: clip(data.error?.message || "", 300) });
   }
+  const u = data.usage || {}, det = u.input_tokens_details || {};
+  const imageIn = Number(det.image_tokens || 0), textIn = Number(det.text_tokens ?? Math.max(0, Number(u.input_tokens || 0) - imageIn)), out = Number(u.output_tokens || 0);
+  meter({ provider: "openai", item: refs.length ? "改图/带参考图画图" : "画图", inTok: textIn + imageIn, outTok: out, units: 1, unit: "张",
+    usd: textIn * PRICE.image.textIn + imageIn * PRICE.image.imageIn + out * PRICE.image.imageOut });
   return unb64(data.data[0].b64_json);
 }
 
@@ -203,7 +208,7 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST", headers: { ...auth, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: env.CODE_MODEL || "gpt-5.4-mini",
+      model: env.CODE_MODEL || "gpt-6.1-terra",
       tools: [{ type: "code_interpreter", container: { type: "auto", ...(fileIds.length ? { file_ids: fileIds } : {}) } }],
       instructions: SANDBOX + (extra ? "\n\n【群里对这类活的额外要求】\n" + extra : ""),
       input: task,
@@ -212,6 +217,9 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
   });
   const d: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error("代码沙箱返回错误（" + r.status + "）" + (d.error?.message ? "：" + clip(d.error.message, 160) : ""));
+  const cu = d.usage || {}, cachedIn = Number(cu.input_tokens_details?.cached_tokens || 0);
+  meter({ provider: "openai", item: "跑代码", inTok: Number(cu.input_tokens || 0), cachedTok: cachedIn, outTok: Number(cu.output_tokens || 0), units: 1, unit: "次",
+    usd: Math.max(0, Number(cu.input_tokens || 0) - cachedIn) * PRICE.code.in + cachedIn * PRICE.code.cached + Number(cu.output_tokens || 0) * PRICE.code.out + PRICE.code.container });
   const messages = (d.output || []).filter((o: any) => o.type === "message");
   const text = messages.flatMap((m: any) => m.content.map((c: any) => c.text || "")).join("\n").replace(/\[([^\]]+)\]\(sandbox:[^)]+\)/g, "$1").trim();
   const cites = messages.flatMap((m: any) => m.content.flatMap((c: any) => c.annotations || [])).filter((a: any) => a.type === "container_file_citation");
@@ -224,6 +232,9 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
     const bytes = new Uint8Array(await f.arrayBuffer());
     if (bytes.length && bytes.length <= 20 * 1024 * 1024) files.push({ name: String(a.filename || "file"), bytes });
   }
+  // The sandbox also cites inline previews under generated ids; when real files were written, those are duplicates.
+  const named = files.filter(f => !/^cfile_/.test(f.name));
+  if (named.length) files.splice(0, files.length, ...named);
   const code = (d.output || []).filter((o: any) => o.type === "code_interpreter_call").map((o: any) => o.code || "").join("\n# ----\n");
   return { text, files, code: clip(code, 3000) };
 }

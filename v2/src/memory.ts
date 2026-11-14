@@ -32,7 +32,7 @@ export async function reflect(env: Env, input: { memory: string; notes: string[]
   let last = "";
   // Reasoning shares the output budget, so the first attempt can come back empty; retry with less thinking.
   for (const effort of ["max", "high"] as const) {
-    const r = await dsChat(env, { messages, max_tokens: 24000 }, effort, 280000);
+    const r = await dsChat(env, { messages, max_tokens: 24000, label: "夜间记忆整理" }, effort, 280000);
     const text = String(r.message.content || "");
     const cut = text.split(/={2,}\s*小结\s*={2,}/);
     const memory = cut[0].replace(/^[\s\S]*?={2,}\s*记忆\s*={2,}/, "").trim();
@@ -52,7 +52,7 @@ export async function caption(env: Env, dataUrl: string) {
         { type: "text", text: "用一句话说清这张图（50 字以内）：是什么、有什么梗；图里有字就把关键的字抄上。只输出这句话。" },
       ],
     }],
-    max_tokens: 200,
+    max_tokens: 200, label: "看图配文",
   }, "none", 30000);
   return String(r.message.content || "").trim().slice(0, 160);
 }
