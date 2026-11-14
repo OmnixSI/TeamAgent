@@ -41,6 +41,11 @@ test('L4 browser routing confines exact service hosts and denies third-party, lo
  for(const url of ['https://x.com/home','https://twitter.com/login','https://abs.twimg.com/a','https://pbs.twimg.com/a'])assert.equal(allowedBrowserUrl('x',url),true);
  for(const url of ['https://x.com.evil.test/a','https://evilx.com/a','https://api.bilibili.com/x','http://x.com','https://x.com:8443','file:///etc/passwd','https://u:p@x.com','https://127.0.0.1/a'])assert.equal(allowedBrowserUrl('x',url),false,url);
  assert.equal(allowedBrowserUrl('bili','https://passport.bilibili.com/login'),true);assert.equal(allowedBrowserUrl('bili','https://a.hdslb.com/a'),true);assert.equal(allowedBrowserUrl('bili','https://x.com'),false);
+ assert.equal(allowedBrowserUrl('xiaohongshu','http://www.xiaohongshu.com/website-login/error'),true);
+ assert.equal(allowedBrowserUrl('xiaohongshu','https://www.rednote.com/404?error_code=300031'),true);
+ assert.equal(allowedBrowserUrl('xiaohongshu','https://fe-static.xhscdn.com/a'),true);
+ assert.equal(allowedBrowserUrl('xiaohongshu','https://evil.test'),false);
+ assert.equal(allowedBrowserUrl('xiaohongshu','http://x.com'),false);
  const f=fixture(await temp(t));await f.auth.login('x');let aborted=0,continued=0;
  await f.ctx.handler({request:()=>({url:()=> 'https://evil.test'}),abort:async()=>aborted++,continue:async()=>continued++});assert.equal(aborted,1);assert.equal(continued,0);
 });
@@ -160,4 +165,22 @@ test('L21 a page that never answers hasFocus cannot stall X login',async t=>{
  f.ctx.pages=()=>[stuck,live];
  const result=await Promise.race([f.auth.login('x'),new Promise(r=>setTimeout(()=>r('hung'),3000))]);
  assert.equal(result,'ok');
+});
+test('L22 xiaohongshu login accepts only a web_session and risk pages stop before export',async t=>{
+ const home=await temp(t);
+ let time=0,calls=0,body='请登录',cookies=[];
+ const page={goto:async()=>{},url:()=> 'https://www.xiaohongshu.com/explore',
+  evaluate:async()=>{calls++;if(calls>=3){body='';cookies=[{name:'web_session',value:'xhs-session-private',domain:'.xiaohongshu.com'}];}return body;},
+  context:()=>({cookies:async()=>cookies})};
+ const ctx={pages:()=>[page],route:async()=>{},routeWebSocket:async()=>{},cookies:async()=>cookies,close:async()=>{}};
+ const reports=[],notices=[];
+ const auth=createBrowserAuth({home,now:()=>time,sleep:async ms=>{time+=ms;},launch:async()=>ctx,report:async b=>reports.push(b),notify:async text=>notices.push(text)});
+ assert.equal(await auth.login('xiaohongshu'),'ok');
+ assert.equal(reports.at(-1).state,'ok');
+ assert.ok(!JSON.stringify([reports,notices]).includes('xhs-session-private'));
+ let riskTime=0;
+ const riskPage={goto:async()=>{},url:()=> 'https://www.xiaohongshu.com/website-login/error',evaluate:async()=> '安全限制 当前网络存在风险',context:()=>({cookies:async()=>[]})};
+ const riskCtx={pages:()=>[riskPage],route:async()=>{},routeWebSocket:async()=>{},cookies:async()=>[],close:async()=>{}};
+ const risk=createBrowserAuth({home:await temp(t),now:()=>riskTime,sleep:async ms=>{riskTime+=ms;},launch:async()=>riskCtx,report:async()=>{},notify:async()=>{}});
+ assert.equal(await risk.login('xiaohongshu'),'risk');
 });
