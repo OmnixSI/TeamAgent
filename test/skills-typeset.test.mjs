@@ -13,6 +13,9 @@ import resume, { parseResumeMd, normalizeResume, resumeTypst, inl } from "../src
 const has = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8" }).status === 0;
 const HAVE_PY = has("python3", ["--version"]);
 const HAVE_PPTX = HAVE_PY && has("python3", ["-c", "import pptx"]);
+// The interpreter itself, not a version manager's shim: run() below changes HOME, and a shim (asdf on the
+// build machine) then no longer knows which Python to start.
+const REAL_PY = HAVE_PY ? (spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout || "").trim() : "";
 const throwsZh = (fn, re) => assert.throws(fn, (e) => e instanceof Error && /[\u4e00-\u9fff]/.test(e.message) && (!re || re.test(e.message)));
 
 const tmp = (p = "ts-") => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -21,6 +24,7 @@ const shimDir = () => {
   // fake typst: "compile" writes a tiny PDF with the right number of /Type /Page objects (pages = 1 unless INPUT says otherwise)
   fs.writeFileSync(path.join(d, "typst"), `#!/bin/sh\nout=""; for a in "$@"; do out="$a"; done\nprintf '%%PDF-1.4\\n<< /Type /Pages >>\\n<< /Type /Page >>\\n' > "$out"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(d, "soffice"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  if (REAL_PY && fs.existsSync(REAL_PY)) fs.symlinkSync(REAL_PY, path.join(d, "python3"));
   return d;
 };
 /** Runs the skill's commands in a real bash inside a fresh run directory; returns { dir, stdout[] }. */

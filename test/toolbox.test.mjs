@@ -155,7 +155,7 @@ describe("zip", () => {
       fs.writeFileSync(f, zip);
       assert.match(execFileSync(unzip, ["-t", f]).toString(), /No errors detected/);
       const list = execFileSync(unzip, ["-l", f]).toString();
-      assert.match(list, /70000\s+11-15-2026 14:30\s+big\.bin/);
+      assert.match(list, /70000\s+(11-15-2026|2026-11-15) 14:30\s+big\.bin/);   // Info-ZIP prints the date either way round
       assert.equal(execFileSync(unzip, ["-p", f, "big.bin"]).equals(Buffer.from(big)), true);
       // macOS's bundled unzip cannot write UTF-8 names; Python's zipfile reads them through the UTF-8 flag.
       let py = "";
