@@ -138,6 +138,8 @@ function whenFromArgs(args: any, now: number, tz: string): When | null {
     const runAt = parseRunAt(args.run_at, tz);
     if (runAt > now) return { cadence: "once", run_at: runAt, tz };
   }
+  // 旧工具支持的「N 分钟后」：没有 run_at 也能从 minutes 得到一次性时间。
+  if (Number(args?.minutes) > 0) return { cadence: "once", run_at: now + Number(args.minutes) * 60_000, tz };
   return null;
 }
 
@@ -234,6 +236,9 @@ function displayTitle(kind: string, spec: ScheduleSpec, fallback: string) {
   const title = String(spec.title || spec.topic || "").trim();
   if (title) return title;
   if (kind === "reminder") return String(spec.text || fallback).slice(0, 40);
+  if (kind === "digest_daily") return "昨日总结";
+  if (kind === "digest_weekly") return "上周总结";
+  if (kind === "mute") return "定时闭嘴";
   if (kind === "agent_task") {
     const actions = (Array.isArray(spec.steps) ? spec.steps : []).map((s: any) => String(s?.action || "")).filter(Boolean);
     return actions.length ? actions.join("+") : "定时任务";
