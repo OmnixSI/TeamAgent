@@ -3,11 +3,11 @@
  * Calls OpenAI through the shared channel with DB removed, so the smoke
  * never writes usage rows or image logs.  At most two calls per hour.
  */
+import { IMAGE_MODEL } from "./imagegen";
 import { callOpenAi } from "./openai";
 
 const HOUR_MS = 3_600_000;
 const MAX_PER_HOUR = 2;
-const DEFAULT_MODEL = "gpt-image-1";
 const SMOKE_PROMPT =
   "A single flat red circle centered on a plain white background, minimal icon, no text.";
 const calls = new Map<number, number>();
@@ -23,9 +23,9 @@ async function modelFor(e: any): Promise<string> {
     const row = await e.DB.prepare(
       "SELECT value FROM settings WHERE key='imagegen:model'",
     ).first();
-    return row?.value || DEFAULT_MODEL;
+    return row?.value || IMAGE_MODEL;
   } catch {
-    return DEFAULT_MODEL;
+    return IMAGE_MODEL;
   }
 }
 

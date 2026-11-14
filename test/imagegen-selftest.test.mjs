@@ -4,6 +4,24 @@ import { env, req } from './support.mjs';
 
 const URL = '/api/team/imagegen/selftest';
 
+// Load the production constant itself so this expectation cannot drift from
+// src/imagegen.ts the way the selftest default once did.
+const { IMAGE_MODEL } = await (async () => {
+  const { build } = await import('esbuild');
+  const { outputFiles } = await build({
+    entryPoints: ['src/imagegen.ts'],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+    logLevel: 'silent',
+  });
+  return import(
+    'data:text/javascript;base64,' +
+    Buffer.from(outputFiles[0].text).toString('base64')
+  );
+})();
+
 // Minimal JPEG header carrying SOF0 dimensions; enough for the selftest parser.
 function jpeg(width = 1024, height = 1024, pad = 64) {
   const bytes = new Uint8Array(21 + pad);
@@ -72,7 +90,7 @@ test('F8-3 owner selftest returns image metrics and writes no D1 rows', async ()
     assert.equal(body.width, 1024);
     assert.equal(body.height, 1024);
     assert.ok(body.bytes > 0);
-    assert.equal(body.model, 'gpt-image-1');
+    assert.equal(body.model, IMAGE_MODEL);
     assert.equal(typeof body.latency_ms, 'number');
   } finally {
     restore();
@@ -80,6 +98,7 @@ test('F8-3 owner selftest returns image metrics and writes no D1 rows', async ()
   assert.deepEqual(writes, [], writes.join('\n'));
   assert.equal(request.url, 'https://api.openai.com/v1/images/generations');
   const sent = JSON.parse(request.init.body);
+  assert.equal(sent.model, IMAGE_MODEL);
   assert.equal(sent.size, '1024x1024');
   assert.equal(sent.quality, 'low');
   assert.equal(sent.n, 1);
@@ -142,6 +161,27 @@ test('F8-3 selftest allows at most two calls per hour', async () => atHour(3, as
     assert.equal(body.error_kind, 'quota');
     assert.match(body.next_action, /小时/);
     assert.equal(calls, 2);
+  } finally {
+    restore();
+  }
+}));
+
+test('F8 selftest prefers the imagegen:model setting', async () => atHour(4, async () => {
+  const e = env();
+  e.OPENAI_API_KEY = 'sk-test-settings-model';
+  await e.DB.prepare("INSERT INTO settings VALUES('imagegen:model',?)")
+    .bind('gpt-image-2.5-studio').run();
+  let request = null;
+  const restore = stubFetch(async (input, init) => {
+    request = { url: String(input), init };
+    return imageResponse();
+  });
+  try {
+    const response = await req(e, URL);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.model, 'gpt-image-2.5-studio');
+    assert.equal(JSON.parse(request.init.body).model, 'gpt-image-2.5-studio');
   } finally {
     restore();
   }
