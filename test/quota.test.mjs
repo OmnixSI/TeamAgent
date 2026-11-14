@@ -742,3 +742,35 @@ test("A3b: a failed balance read never overwrites the last good snapshot", async
     bad.restore();
   }
 });
+
+test("A3b: a switched-off image generator is not advertised in the quota answer", async () => {
+  const off = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(off);
+  await set(off, "off:image_gen", "1");
+  const offStub = stubFetch(balancePayload("42.50", { granted: "1.50", toppedUp: "41.00" }));
+  try {
+    const result = await api.renderQuota(off, { group: "g1", sender: "u1", now: NOW });
+    assert.equal(result.ok, true);
+    assert.equal(result.text.includes("生图"), false);
+    assert.match(result.text, /OpenAI：今天/);
+    assert.match(result.text, /DeepSeek 余额：¥42\.50/);
+  } finally {
+    offStub.restore();
+  }
+
+  const on = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  await seedUsage(on);
+  await set(on, "off:image_gen", "0");
+  const onStub = stubFetch(balancePayload("42.50", { granted: "1.50", toppedUp: "41.00" }));
+  try {
+    const result = await api.renderQuota(on, { group: "g1", sender: "u1", now: NOW });
+    assert.equal(result.ok, true);
+    assert.match(result.text, /生图：近 24 小时本群 2 \/ 20 张，你 1 \/ 5 张/);
+  } finally {
+    onStub.restore();
+  }
+});
+
+test("A3b: the quota tool description does not promise image generation", () => {
+  assert.equal(api.getQuotaTool.def.function.description.includes("生图"), false);
+});

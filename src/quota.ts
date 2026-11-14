@@ -93,6 +93,8 @@ export type QuotaSnapshot = {
     remainingMicroUsd: number;
   };
   images: { group: number; groupCap: number; user: number; userCap: number };
+  /** False when off:image_gen is set; a closed feature must not appear in the answer. */
+  imageGenOn: boolean;
   ai: { used: number; cap: number };
 };
 
@@ -184,6 +186,12 @@ async function readSettings(e: any, keys: string[]): Promise<Record<string, stri
   } catch {
     return {};
   }
+}
+
+/** Same kill-switch spelling as toolkit.toolSwitchedOff: empty/0/false mean on. */
+function switchOffValue(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value) !== ""
+    && String(value) !== "0" && String(value) !== "false";
 }
 
 async function writeSetting(e: any, key: string, value: string): Promise<void> {
@@ -411,6 +419,7 @@ export async function quotaSnapshot(
     "imagegen:group_daily",
     aiKey,
     "workers_ai:neurons_cap",
+    "off:image_gen",
   ]);
   const balance = await readDeepSeekBalance(e, at, {
     cache: settings[DEEPSEEK_BALANCE_CACHE_KEY] ?? null,
@@ -474,6 +483,7 @@ export async function quotaSnapshot(
       user: Number(images.mine) || 0,
       userCap: positive(settings["imagegen:user_daily"], IMAGE_USER_DAILY_DEFAULT),
     },
+    imageGenOn: !switchOffValue(settings["off:image_gen"]),
     ai: { used: aiUsed, cap: aiCap },
   };
 }
@@ -688,17 +698,18 @@ export function quotaText(snapshot: QuotaSnapshot): string {
       "，剩 " +
       usdMicro(snapshot.openai.remainingMicroUsd),
   );
-  parts.push(
-    "生图：近 24 小时本群 " +
-      snapshot.images.group +
-      " / " +
-      snapshot.images.groupCap +
-      " 张，你 " +
-      snapshot.images.user +
-      " / " +
-      snapshot.images.userCap +
-      " 张",
-  );
+  if (snapshot.imageGenOn)
+    parts.push(
+      "生图：近 24 小时本群 " +
+        snapshot.images.group +
+        " / " +
+        snapshot.images.groupCap +
+        " 张，你 " +
+        snapshot.images.user +
+        " / " +
+        snapshot.images.userCap +
+        " 张",
+    );
   parts.push(
     "Workers AI：今天 " + snapshot.ai.used + " / " + snapshot.ai.cap + " neurons（UTC 日）",
   );
