@@ -23,7 +23,7 @@
     --acceptance ../TeamAgent-p4b-login/.agent/releases/V-D-learning/acceptance.json \
     --fixtures replay/fixtures
   ```
-  本次 → entries 20、rid 引用 37、逐字引用 13、errors 0。
+  本次 → entries 20、rid 引用 38、逐字引用 13、errors 0。
 
 ## 文件
 
