@@ -121,7 +121,7 @@ function tidy(content: unknown) {
   // Tool-call markup occasionally leaks into the text channel; never show it.
   text = text.split("\n").filter(l => !/DSML|<｜|<\|tool|function_calls>/.test(l)).join("\n");
   // Lines like "[你发了一张图 g12：…]" are the log's record of media you sent, never something to say.
-  text = text.split("\n").filter(l => !/^\s*\[你发了(一张图|一个文件|一条语音)/.test(l)).join("\n");
+  text = text.split("\n").filter(l => !/^\s*\[你发了(一张图|一个文件|一条语音|表情包)/.test(l)).join("\n");
   text = text.replace(/^\s*(\[\d\d:\d\d\]\s*)?(bot|我|奶蛙)\s*[:：]\s*/i, "");
   return text.trim();
 }

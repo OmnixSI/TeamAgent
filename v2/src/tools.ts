@@ -11,6 +11,8 @@ import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
 import { PRICE, meter } from "./meter.ts";
+import { buildPage } from "./show.ts";
+import type { Page } from "./show.ts";
 import type { LiveStatus } from "./self.ts";
 
 /** What tools need from the place they run in (the Durable Object, or a stub in replay). */
@@ -28,6 +30,13 @@ export interface Host {
   members(): string[];
   status(): LiveStatus;
   usage(days: number): Promise<any>;
+  /** The Python sandbox that is still inside its paid session ("" when none); call with an id to remember one. */
+  sandbox(id?: string, opened?: boolean): string;
+  /** Renders a web page to a JPEG in a headless browser. */
+  render(page: Page): Promise<{ bytes: Uint8Array; truncated: boolean }>;
+  stickerNames(): string[];
+  sendSticker(name: string): Promise<{ ok: boolean; error?: string }>;
+  saveSticker(ref: string, name: string): Promise<boolean>;
   cfg(key: string): number | string;
   play(slot: string): string;
   selfUpdate(args: any): Promise<any>;
@@ -333,13 +342,13 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "generate_image", slow: true,
-      description: "画图或改图，直接发到群里。request 里把群友的要求原样写全（要画什么、给谁、什么梗、特别要求），不要自己压缩成几个词，也不用写英文提示词：后面会先揣摩意图、自动找参考图（保存过的形象和网上的图）、再设计画面，整个过程要半分钟到一分多钟。要参考或修改某张图，把编号填进 references：聊天里的图是 [图片 123-0] 里的 123-0，你发过的图是 g12 这种，保存过的形象直接写名字（如 奶蛙）。返回 sent=true 才算发出去了。",
+      description: "画图或改图，直接发到群里。request 里把群友的要求原样写全（要画什么、给谁、什么梗、特别要求），不要自己压缩成几个词，也不用写英文提示词：后面会先揣摩意图、自动找参考图（保存过的形象和网上的图）、再设计画面，整个过程要半分钟到一分多钟。要参考或修改某张图，把编号填进 references：聊天里的图是 [图片 123-0] 里的 123-0，你发过的图是 g12 这种，保存过的形象直接写名字（如 奶蛙）。群友提了尺寸、比例或清晰度（4K、2K、16:9、具体分辨率）就填进 size，越大越清楚也越贵越慢，没提就不填。返回 sent=true 才算发出去了。",
       parameters: obj({
         request: str("群友的完整要求和相关上下文"),
         references: { type: "array", items: { type: "string" }, description: "参考图或要修改的图，最多 4 张" },
         look_up: str("要画的是现成的东西（某个角色、梗图形象、真实的人、产品、地点）而手头没有它的参考图时，填它的名字，会先上网找它长什么样再画"),
-        size: { type: "string", enum: ["square", "portrait", "landscape"], description: "群友指定了才填" },
-        quality: { type: "string", enum: ["low", "medium", "high"], description: "群友指定了才填" },
+        size: str("群友对尺寸、比例、清晰度提了要求才填，照原话写，如“4K”“2K”“16:9”“1920x1080”“手机壁纸”“竖版”。最高支持 4K（3840x2160）"),
+        quality: { type: "string", enum: ["low", "medium", "high"], description: "群友要高清、最好的画质填 high，说随便画画填 low；没提就不填" },
       }, ["request"]),
       run: async a => {
         if (!(await host.quota("image", Number(host.cfg("image_daily"))))) return { ok: false, sent: false, error: "今天画图次数用完了，明天再画" };
@@ -374,10 +383,40 @@ export function buildTools(host: Host): Tool[] {
           }
         }
         if (!image) return { ok: false, sent: false, error: "画图接口连着三版都拒了", tried: rejected.map(r => r.idea), service_reason: rejected[rejected.length - 1]?.reason || "" };
-        const sent = await host.sendImage(image, plan.idea);
+        let sent = await host.sendImage(image, plan.idea);
+        let asFile = false;
+        // Very large pictures can be more than QQ takes as an inline image; a file keeps the full resolution.
+        if (!sent.ok && image.length > 2_000_000) { const f = await host.sendFile("image-" + plan.size + "-" + host.now() + ".jpg", image); if (f.ok) { sent = { ok: true, id: sent.id }; asFile = true; } }
         return sent.ok
-          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, ...(rejected.length ? { adjusted: "照原话画被画图接口拒了 " + rejected.length + " 次，这张是改过的最接近的一版。回话时说清哪里跟要求不一样", refused_versions: rejected.map(r => r.idea), service_reason: rejected[0].reason } : {}), looked_up: queries, references_used: plan.use.map(i => refs[i]?.label).filter(Boolean), ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
+          ? { ok: true, sent: true, id: sent.id, drew: plan.idea, size: plan.size, quality: plan.quality, ...(asFile ? { note: "图太大，QQ 不收成图片，已经按原画质当文件发了" } : {}), ...(rejected.length ? { adjusted: "照原话画被画图接口拒了 " + rejected.length + " 次，这张是改过的最接近的一版。回话时说清哪里跟要求不一样", refused_versions: rejected.map(r => r.idea), service_reason: rejected[0].reason } : {}), looked_up: queries, references_used: plan.use.map(i => refs[i]?.label).filter(Boolean), ...(missing.length ? { note: "参考图 " + missing.join("、") + " 没取到，没用上" } : {}) }
           : { ok: false, sent: false, error: "图生成了但发到 QQ 失败：" + (sent.error || "未知原因") };
+      },
+    },
+    {
+      name: "sticker",
+      description: "发表情包。op=send 发一张你存着的表情包（name 从这里选：" + (host.stickerNames().join("、") || "还没有存货") + "）；op=save 把群友发的一张好用的表情包存下来以后用（image 是图的编号，name 起个能看出情绪的名字）。聊天时情绪到位就来一张，别每句都发。",
+      parameters: obj({ op: { type: "string", enum: ["send", "save"] }, name: str("表情包名字"), image: str("op=save 时要存的图的编号，如 123-0") }, ["op", "name"]),
+      run: async a => {
+        if (a.op === "save") return (await host.saveSticker(String(a.image || ""), String(a.name))) ? { ok: true, saved: a.name } : { ok: false, error: "这张图取不到或太大" };
+        const r = await host.sendSticker(String(a.name));
+        return r.ok ? { ok: true, sent: true } : { ok: false, sent: false, error: r.error };
+      },
+    },
+    {
+      name: "show", work: true, slow: true,
+      description: "把成块的内容做成排版好的图发到群里，同时把源文件发出去。kind=doc：Markdown 文档（方案、总结、对比表、教程、清单），渲染成一张长图；kind=mindmap：思维导图，content 用 Markdown 的标题和列表层级写；kind=diagram：Mermaid 图（流程图、时序图、架构图、甘特图、状态图），content 只写 Mermaid 代码；kind=html：你自己写网页（数据看板、卡片、时间线、任何自定义排版，可以用 CDN 上的库如 ECharts；动画要关掉），最外层用一个定宽 860px 的 div 包住全部内容，会按这个块截图。内容超过两三百字、有结构、有表格、有层级时用它，不要把一大段 Markdown 直接发在聊天里。",
+      parameters: obj({
+        kind: { type: "string", enum: ["doc", "mindmap", "diagram", "html"] },
+        title: str("标题，也用作文件名"), content: str("Markdown / Mermaid 代码 / 完整 HTML"),
+        attach_source: { type: "boolean", description: "要不要把源文件也发到群里，默认发" },
+      }, ["kind", "title", "content"]),
+      run: async a => {
+        const page = buildPage(String(a.kind), clip(a.title, 60), String(a.content || ""), fmtFull(host.now(), BJ));
+        const shot = await host.render(page);
+        const sent = await host.sendImage(shot.bytes, String(a.kind) + "：" + clip(a.title, 40), "image/jpeg");
+        if (!sent.ok) return { ok: false, sent: false, error: "图渲染好了但发到 QQ 失败：" + (sent.error || "未知原因") };
+        const file = a.attach_source === false ? null : await host.sendFile(page.file.name, new TextEncoder().encode(page.file.text));
+        return { ok: true, sent: true, id: sent.id, ...(shot.truncated ? { note: "内容太长，图只截了前面一段，完整内容在源文件里" } : {}), source_file: file ? (file.ok ? page.file.name + " 已发" : "源文件没发出去：" + file.error) : "没发" };
       },
     },
     {
@@ -409,7 +448,8 @@ export function buildTools(host: Host): Tool[] {
         const inputs: { name: string; bytes: Uint8Array }[] = [];
         for (const ref of (Array.isArray(a.files) ? a.files : []).slice(0, 6)) { const f = await host.fileRef(String(ref)).catch(() => null); if (f) inputs.push(f); }
         if (Number(a.chat_days) > 0) inputs.push({ name: "chat.csv", bytes: host.chatCsv(Math.min(Number(a.chat_days), 60)) });
-        const out = await runPython(env as any, String(a.task || ""), inputs, host.play("python"));
+        const out = await runPython(env as any, String(a.task || ""), inputs, host.play("python"), host.sandbox());
+        host.sandbox(out.container, out.opened);
         const sent: string[] = [], failed: string[] = [];
         for (const f of out.files) {
           const isImage = /\.(png|jpe?g|gif|webp)$/i.test(f.name);
