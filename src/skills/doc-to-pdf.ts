@@ -323,7 +323,8 @@ print("用时 %d 秒" % round(time.time() - T0))
 `.replace("%IMAGES%", JSON.stringify(IMAGES));
 
 // Documents written on Windows or macOS name fonts the machine does not have (宋体, 微软雅黑, PingFang…), and
-// fontconfig's own fallback picks the Hong Kong glyph set. This maps them to the Simplified Chinese Noto fonts.
+// fontconfig's own fallback picks the Japanese or Hong Kong glyph set. This maps them to the Simplified Chinese
+// Noto fonts. The file must load after 49-sansserif and 60-latin (so Latin text keeps its own font) and before 65-nonlatin.
 const FONT_ALIASES: [string, string[]][] = [
   ["Noto Serif CJK SC", ["serif", "SimSun", "宋体", "NSimSun", "新宋体", "STSong", "华文宋体", "Songti SC", "FangSong", "仿宋", "KaiTi", "楷体", "STKaiti"]],
   ["Noto Sans CJK SC", ["sans-serif", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体", "PingFang SC", "苹方-简", "STHeiti", "华文黑体", "Heiti SC", "DengXian", "等线"]],
@@ -331,7 +332,7 @@ const FONT_ALIASES: [string, string[]][] = [
 ];
 const FONT_CONF = `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig>` +
   FONT_ALIASES.map(([to, from]) => from.map(f => `<alias><family>${f}</family><prefer><family>${to}</family></prefer></alias>`).join("")).join("") + `</fontconfig>`;
-export const FONT_SETUP = `if [ "$(id -u)" = 0 ] && [ -d /etc/fonts/conf.d ] && [ ! -f /etc/fonts/conf.d/09-cjk-sc.conf ]; then printf '%s' ${sh(FONT_CONF)} > /etc/fonts/conf.d/09-cjk-sc.conf && fc-cache -f >/dev/null 2>&1; fi; true`;
+export const FONT_SETUP = `if [ "$(id -u)" = 0 ] && [ -d /etc/fonts/conf.d ] && [ ! -f /etc/fonts/conf.d/64-cjk-sc.conf ]; then printf '%s' ${sh(FONT_CONF)} > /etc/fonts/conf.d/64-cjk-sc.conf && fc-cache -f >/dev/null 2>&1; fi; true`;
 
 const skill: Skill = {
   name: "doc-to-pdf",
