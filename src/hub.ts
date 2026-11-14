@@ -222,8 +222,8 @@ export class Hub extends DurableObject<Env> {
     this.maybeRestart();
   }
   /** Saves where a job has got to. Picture data is left out; the steps and their results are what a restart needs. */
-  async checkpoint(id: number, messages: any[]) {
-    this.sql.exec("UPDATE job SET steps=steps+1, updated=? WHERE id=?", Date.now(), id);
+  async checkpoint(id: number, messages: any[], roundDone: boolean) {
+    this.sql.exec("UPDATE job SET steps=steps+?, updated=? WHERE id=?", roundDone ? 1 : 0, Date.now(), id);
     if (!this.env.FILES || !this.plan.take("r2_writes", 1)) return;
     const slim = JSON.stringify(messages, (_k, v) => (typeof v === "string" && v.length > 4000 && v.startsWith("data:") ? "data:omitted" : v));
     await this.env.FILES.put("job/" + id + ".json", slim).catch(() => {});
@@ -369,7 +369,7 @@ export class Hub extends DurableObject<Env> {
       chat: (body: any, effort: any, timeout?: number) => dsChat(this.env, { ...body, label: "聊天" }, effort, timeout),
       tools: this.tools(conv, askers),
       ...(interim ? { interim: async (text: string) => { await this.say(conv, text, { queue: false }); } } : {}),
-      checkpoint: (messages: any[]) => (jobId() ? this.checkpoint(jobId(), messages) : undefined),
+      checkpoint: (messages: any[], roundDone: boolean) => (jobId() ? this.checkpoint(jobId(), messages, roundDone) : undefined),
       cancelled: () => !!this.jobs.get(jobId())?.cancel,
     };
   }

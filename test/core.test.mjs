@@ -263,14 +263,32 @@ describe("runTurn", () => {
     assert.deepEqual(res.replies, ["书做好了"]);
   });
 
-  test("(k) checkpoint is called after every round of tool results", async () => {
+  test("(k) checkpoint is called before a round of tools runs and again after its results are in", async () => {
     const look = tool("lookup", () => ({ ok: true }));
     const seen = [];
     const m = fakeChat([{ content: "", tool_calls: [tc("a", "lookup")] }, { content: "", tool_calls: [tc("b", "lookup"), tc("c", "lookup")] }, "好了"]);
-    await runTurn(input({ mentioned: true }), { chat: m.chat, tools: [look], checkpoint: msgs => { seen.push(msgs.map(x => x.role)); } });
-    assert.equal(seen.length, 2);
-    assert.equal(seen[0].at(-1), "tool");
-    assert.deepEqual(seen[1].slice(-3), ["assistant", "tool", "tool"]);
+    await runTurn(input({ mentioned: true }), { chat: m.chat, tools: [look], checkpoint: (msgs, done) => { seen.push([done, msgs.map(x => x.role)]); } });
+    assert.deepEqual(seen.map(x => x[0]), [false, true, false, true]);
+    assert.equal(seen[0][1].at(-1), "assistant", "saved with the calls still to run");
+    assert.equal(seen[1][1].at(-1), "tool");
+    assert.deepEqual(seen[3][1].slice(-3), ["assistant", "tool", "tool"]);
+  });
+
+  test("(k'') a resumed job repeats the round of tool calls that the restart cut short, with the same arguments", async () => {
+    const ran = [];
+    const book = tool("make_book", a => { ran.push(a); return { ok: true, title: "书" }; }, { long: true });
+    const saved = [
+      { role: "system", content: "S" }, { role: "user", content: "做本书" },
+      { role: "assistant", content: "", reasoning_content: "", tool_calls: [tc("x1", "make_book", { brief: "奶蛙上云", pages: 3 })] },
+    ];
+    const m = fakeChat(["书做好了"]);
+    const res = await runTurn({ rows: [], cursor: 0, mentioned: true, memory: "", notes: [], now: T, resume: saved }, { chat: m.chat, tools: [book] });
+    assert.deepEqual(ran, [{ brief: "奶蛙上云", pages: 3 }]);
+    const msgs = m.calls[0].messages;
+    assert.deepEqual(msgs.slice(2).map(x => x.role), ["assistant", "tool", "user"]);
+    assert.equal(msgs[3].tool_call_id, "x1");
+    assert.match(msgs[4].content, /重启/);
+    assert.deepEqual(res.replies, ["书做好了"]);
   });
 
   test("(k') a rejecting async checkpoint does not break the turn", async () => {

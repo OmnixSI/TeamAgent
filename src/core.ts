@@ -39,7 +39,7 @@ export type TurnDeps = {
   /** Called once when the turn turns into a long job; the host lets other turns run meanwhile. */
   detach?(what: string): void;
   /** Called after every round of tool results, so a long job can be picked up again after a restart. */
-  checkpoint?(messages: any[]): Promise<void> | void;
+  checkpoint?(messages: any[], roundDone: boolean): Promise<void> | void;
   cancelled?(): boolean;
 };
 export type ToolRun = { name: string; ms: number; ok: boolean; args: string; error?: string };
@@ -146,7 +146,6 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
   const started = Date.now();
   const stats: TurnResult["stats"] = { calls: 0, tools: [], runs: [], inTok: 0, outTok: 0, cached: 0, ms: 0, firstMs: 0 };
   const messages = input.resume ? input.resume.slice() : buildMessages(input);
-  if (input.resume) messages.push({ role: "user", content: "[中途重启过一次。上面是已经做完的步骤和拿到的结果，不要重做；接着把剩下的做完并交付。]" });
   const defs = toolDefs(deps.tools);
   const mustReply = input.mentioned || !!input.task;
   // A scheduled task or a resumed job runs in the background from the start, so it gets the long budget.
@@ -164,7 +163,45 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
     return r.message;
   };
 
+  /** Runs one round of tool calls and appends their results (and any pictures they brought back). */
+  const execute = async (calls: any[]) => {
+    const used = calls.map(c => deps.tools.find(t => t.name === c.function?.name));
+    const results = await Promise.all(calls.map(async (c, i) => {
+      const tool = used[i], name = c.function?.name || "?", at = Date.now();
+      stats.tools.push(name);
+      const done = (result: any) => {
+        const failed = result?.ok === false || (result?.error && result?.ok !== true);
+        stats.runs.push({ name, ms: Date.now() - at, ok: !failed, args: clip(c.function?.arguments || "", 400), ...(failed ? { error: clip(result?.error || "", 300) } : {}) });
+        return result;
+      };
+      if (!tool) return done({ error: "没有这个工具" });
+      let args: any = {};
+      try { args = JSON.parse(c.function.arguments || "{}"); } catch { return done({ error: "参数不是合法 JSON" }); }
+      try { return done(await tool.run(args)); }
+      catch (err: any) { return done({ ok: false, error: clip(err?.message || String(err), 300) }); }
+    }));
+    // Pictures a tool brought back are shown to the model right after the tool results.
+    const pictures: string[] = [];
+    calls.forEach((c, i) => {
+      const result: any = results[i];
+      if (result && Array.isArray(result._images)) { pictures.push(...result._images.slice(0, 4)); delete result._images; result.images_shown = true; }
+      messages.push({ role: "tool", tool_call_id: c.id, content: clip(JSON.stringify(result), 120000) });
+    });
+    if (pictures.length) messages.push({
+      role: "user",
+      content: [{ type: "text", text: "[上面工具拿回来的图片，共 " + Math.min(pictures.length, 6) + " 张，按顺序]" }, ...pictures.slice(0, 6).map(url => ({ type: "image_url", image_url: { url } }))],
+    });
+    if (used.some(t => t?.work)) careful = true;
+    await Promise.resolve(deps.checkpoint?.(messages, true)).catch(() => {});
+  };
+
   try {
+    if (input.resume) {
+      // The restart may have cut a round of tool calls short: run those again as they were asked.
+      const last = messages[messages.length - 1];
+      if (last?.role === "assistant" && last.tool_calls?.length) await execute(last.tool_calls);
+      messages.push({ role: "user", content: "[中途重启过一次。上面是已经做完的步骤和拿到的结果，不要重做；接着把剩下的做完并交付。]" });
+    }
     for (let round = 0; round < maxRounds; round++) {
       if (deps.cancelled?.()) { stats.error = "cancelled"; final = ""; break; }
       const lastRound = round === maxRounds - 1;
@@ -212,33 +249,9 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnRes
       if (longOne) deps.detach?.(longOne.name === "plan" ? "按计划做一个多步骤的成品" : longOne.name === "make_book" ? "做一本插画书" : longOne.name);
       // Thinking mode requires the reasoning of earlier tool-call turns to be passed back.
       messages.push({ role: "assistant", content: msg.content || "", reasoning_content: msg.reasoning_content || "", tool_calls: calls });
-      const results = await Promise.all(calls.map(async (c, i) => {
-        const tool = used[i], name = c.function?.name || "?", at = Date.now();
-        stats.tools.push(name);
-        const done = (result: any) => {
-          const failed = result?.ok === false || (result?.error && result?.ok !== true);
-          stats.runs.push({ name, ms: Date.now() - at, ok: !failed, args: clip(c.function?.arguments || "", 400), ...(failed ? { error: clip(result?.error || "", 300) } : {}) });
-          return result;
-        };
-        if (!tool) return done({ error: "没有这个工具" });
-        let args: any = {};
-        try { args = JSON.parse(c.function.arguments || "{}"); } catch { return done({ error: "参数不是合法 JSON" }); }
-        try { return done(await tool.run(args)); }
-        catch (err: any) { return done({ ok: false, error: clip(err?.message || String(err), 300) }); }
-      }));
-      // Pictures a tool brought back are shown to the model right after the tool results.
-      const pictures: string[] = [];
-      calls.forEach((c, i) => {
-        const result: any = results[i];
-        if (result && Array.isArray(result._images)) { pictures.push(...result._images.slice(0, 4)); delete result._images; result.images_shown = true; }
-        messages.push({ role: "tool", tool_call_id: c.id, content: clip(JSON.stringify(result), 120000) });
-      });
-      if (pictures.length) messages.push({
-        role: "user",
-        content: [{ type: "text", text: "[上面工具拿回来的图片，共 " + Math.min(pictures.length, 6) + " 张，按顺序]" }, ...pictures.slice(0, 6).map(url => ({ type: "image_url", image_url: { url } }))],
-      });
-      if (used.some(t => t?.work)) careful = true;
-      await Promise.resolve(deps.checkpoint?.(messages)).catch(() => {});
+      // Saved before the tools run, so a restart in the middle repeats exactly these calls.
+      await Promise.resolve(deps.checkpoint?.(messages, false)).catch(() => {});
+      await execute(calls);
     }
   } catch (err: any) {
     stats.error = clip(err?.message || String(err), 300);
