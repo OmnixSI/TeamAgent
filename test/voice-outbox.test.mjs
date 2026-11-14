@@ -79,3 +79,10 @@ test('stale claimed voice is unknown and never returned; concurrent pulls claim 
  await e.DB.prepare('UPDATE outbox_attempts SET started_at=?').bind(Date.now()-241000).run();
  assert.equal((await pull(e)).items.length,0);assert.equal((await row(e,'v1')).status,'unknown');
 });
+test('proactive voice without msg_id (self-test) is delivered, not skipped as expired',async()=>{
+ const e=await voiceEnv();
+ await e.DB.prepare("INSERT INTO outbox(id,group_id,body,status,msg_id,created_at) VALUES('selftest',?,?,'voice',NULL,?)").bind(group,'自测语音',Date.now()).run();
+ const items=(await pull(e)).items;
+ assert.equal(items.length,1);assert.equal(items[0].msg_id,null);assert.equal(items[0].expires_at,undefined);
+ assert.equal((await row(e,'selftest')).status,'voice_sending');
+});
