@@ -16,7 +16,7 @@ test('cloud schemas broaden only readonly repository tools and expose defaults a
   assert.equal(schema.repo.type,'string');assert.equal(schema.repo.enum,undefined);assert.ok(schema.ref);
  }
 });
-async function measured(base,label,work,max=48){const e=api.metered(base),before=base.DB.executed;const result=await work(e);assert.equal(e.meter.used,base.DB.executed-before,label);assert.ok(e.meter.used<=max,label+' '+e.meter.used);counts[label]=e.meter.used;writeFileSync('.agent/c1-counts.json',JSON.stringify(counts,null,2));return {result,used:e.meter.used};}
+async function measured(base,label,work,max=48){const e=api.metered(base,48),before=base.DB.executed;const result=await work(e);assert.equal(e.meter.used,base.DB.executed-before,label);assert.ok(e.meter.used<=max,label+' '+e.meter.used);counts[label]=e.meter.used;writeFileSync('.agent/c1-counts.json',JSON.stringify(counts,null,2));return {result,used:e.meter.used};}
 const call=(name,args)=>({id:'tool-'+name,type:'function',function:{name,arguments:JSON.stringify(args)}});
 async function context(e,body='最近仓库改了什么'){
  const row={id:'current',group_id:'GROUP000001',sender:'U1',body,ts:new Date().toISOString(),mentioned:1,meta:{direct:true,media:[]}};
@@ -108,7 +108,7 @@ test('W-14 daily cron prunes old and excess commits with two fixed statements wi
  const e=env(),NativeDate=Date,at=Date.UTC(2026,10,13,0,0);class Clock extends NativeDate{constructor(...args){super(args.length?args[0]:at);}static now(){return at;}}
  for(let i=0;i<503;i++)await e.DB.prepare('INSERT INTO repo_commits VALUES(?,?,?,?,?,?,?,?,?)').bind(repo,i.toString(16).padStart(40,'0'),at-i,'a','s','','[]','',0).run();await e.DB.prepare('INSERT INTO repo_commits VALUES(?,?,?,?,?,?,?,?,?)').bind('other/repo','f'.repeat(40),at-91*86400000,'a','s','','[]','',0).run();
  globalThis.Date=Clock;try{await measured(e,'cron',async x=>{let task;await worker.scheduled({},x,{waitUntil(p){task=p;}});await task;});}finally{globalThis.Date=NativeDate;}
- assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM repo_commits').first()).n,500);let invoked=false;const metered=api.metered(e);metered.meter.used=31;await api.optionalCron(metered,async()=>{invoked=true;},2);assert.equal(invoked,false);
+ assert.equal((await e.DB.prepare('SELECT COUNT(*) n FROM repo_commits').first()).n,500);let invoked=false;const metered=api.metered(e,48);metered.meter.used=31;await api.optionalCron(metered,async()=>{invoked=true;},2);assert.equal(invoked,false);
 });
 test('W-15 pending and queued research calls recheck the disabled switch and do not read repo tables',async()=>{
  for(const pending of [false,true]){const e=env(),ctx=await context(e);ctx.background=true;await e.DB.prepare("INSERT INTO settings(key,value) VALUES('off:repo_tools','1')").run();const prepare=e.DB.prepare.bind(e.DB);e.DB.prepare=sql=>{assert.ok(!/FROM repo_(?:commits|state)/.test(sql));return prepare(sql);};if(pending)ctx.resume={messages:[{role:'system',content:'恢复旧回合'}],pending:{role:'assistant',tool_calls:[call('repo_changes',{repo})]},turn:0};await model(pending?[]:[[call('repo_changes',{repo})]],async s=>{await api.agentAnswer(e,ctx);assert.ok(s.tools.some(t=>t.error_kind==='denied'));});}

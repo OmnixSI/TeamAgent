@@ -308,6 +308,14 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
             : "";
         text = `${IMAGE_CLAIM_REPLY}${reason}。你再说一句要画什么，我重画。`;
         changed = true;
+      } else if (o.generateImage && requested && !o.imageAttempted) {
+        // 代码强制补图失败：把模型的假失败话术换成真实原因，不编「通道没通」。
+        const reason =
+          typeof made?.reason_text === "string" && made.reason_text
+            ? `：${made.reason_text}`
+            : "：生图服务暂时没有成功返回";
+        text = `这次没画成${reason}。`;
+        changed = true;
       }
     }
   }

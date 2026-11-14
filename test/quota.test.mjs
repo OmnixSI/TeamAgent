@@ -636,12 +636,12 @@ test("A3b: quota-question detection covers the replay fixtures without widening 
   assert.equal(api.isQuotaQuestion("今天群里好安静"), false);
 });
 
-// The no-@ path spends 19 of the 48 chat statements before the model, so only
-// 29 are left: below the normal 32-statement tool floor. A plain quota question
-// must still be answered from get_quota, and only get_quota.
+// The no-@ path spends 19 of the 64 chat statements before the model, leaving
+// 45: enough for tools. A heavy round can still fall to 29 left (below the normal
+// 32-statement tool floor); a plain quota question must then use only get_quota.
 test("A3b: a no-@ quota question gets the exact balance with 29 statements left", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  e.meter = { used: 35, limit: 64, left() { return this.limit - this.used; } };
   await seedUsage(e);
   const row = {
     id: "quota-budget-1",
@@ -701,7 +701,7 @@ test("A3b: a no-@ quota question gets the exact balance with 29 statements left"
 
 test("A3b: ordinary chat with 29 statements left still gets no tools", async () => {
   const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
-  e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+  e.meter = { used: 35, limit: 64, left() { return this.limit - this.used; } };
   const row = {
     id: "chat-budget-1",
     group_id: "g1",
@@ -724,6 +724,74 @@ test("A3b: ordinary chat with 29 statements left still gets no tools", async () 
   try {
     await api.agentAnswer(e, context);
     assert.equal(requests.some((r) => Array.isArray(r.tools)), false);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: 19/64 leaves enough for generate_image on an explicit drawing request", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 19, limit: 64, left() { return this.limit - this.used; } };
+  e.tail = { timing: [], cache: [], ruleActivities: [] };
+  const row = {
+    id: "chat-image-budget-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "画一张猫",
+    ts: new Date().toISOString(),
+    mentioned: 1,
+    meta: { memberRole: "", direct: true },
+  };
+  await e.DB.prepare("INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,1)")
+    .bind(row.id, row.group_id, row.sender, row.body, row.ts)
+    .run();
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: true };
+  const requests = [];
+  const old = globalThis.fetch;
+  globalThis.fetch = async (_url, opt) => {
+    const body = JSON.parse(opt.body);
+    requests.push(body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ mode: "work", text: "我看看。" }) } }] });
+    return Response.json({ choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"画一张猫。"}' } }] });
+  };
+  try {
+    await api.agentAnswer(e, context);
+    const offered = requests.find((r) => Array.isArray(r.tools));
+    assert.ok(offered, "19/64 must still offer tools");
+    assert.ok(offered.tools.some((t) => t.function.name === "generate_image"), "generate_image must be offered");
+    assert.equal(e.tail.ruleActivities.length, 0, "tools were not stripped by budget");
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("A3b: budget-stripped tools leave a tools.skipped_budget activity", async () => {
+  const e = { DB: db(), DEEPSEEK_API_KEY: SECRET };
+  e.meter = { used: 40, limit: 64, left() { return this.limit - this.used; } };
+  e.tail = { timing: [], cache: [], ruleActivities: [] };
+  const row = {
+    id: "chat-budget-log-1",
+    group_id: "g1",
+    sender: "u2",
+    body: "今天群里好安静",
+    ts: new Date().toISOString(),
+    mentioned: 0,
+    meta: { memberRole: "", direct: false },
+  };
+  const context = { latest: row, batch: [row], recent: [row], names: new Map(), refs: new Map(), mentioned: false };
+  const old = globalThis.fetch;
+  globalThis.fetch = async (_url, opt) => {
+    const body = JSON.parse(opt.body);
+    if (String(body.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+      return Response.json({ choices: [{ message: { content: '{"mode":"banter","text":"是挺安静。"}' } }] });
+    return Response.json({ choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"是挺安静。"}' } }] });
+  };
+  try {
+    await api.agentAnswer(e, context);
+    const logs = e.tail.ruleActivities.filter((x) => x.kind === "tools.skipped_budget");
+    assert.equal(logs.length, 1);
+    assert.match(logs[0].summary, /left=24 floor=32/);
   } finally {
     globalThis.fetch = old;
   }
