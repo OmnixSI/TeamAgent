@@ -548,7 +548,8 @@ async function douyinAction(req, opts) {
   const kind = classifyResponse(page, 'douyin');
   if (kind) return fail(kind, 'http');
   const item = parseDouyinPage(page.body);
-  if (item) return {ok: true, items: [item]};
+  // A share page may embed related videos; only accept the requested aweme id.
+  if (item && (!item.source_url || item.source_url.endsWith('/' + id))) return {ok: true, items: [item]};
   if (/encrypt_data_miss|ArgusSecurityPlugin/i.test(apiPage.body + page.body)) return fail('SECURITY_BLOCK', 'detail');
   return insufficient('empty');
 }
