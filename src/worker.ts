@@ -1397,11 +1397,11 @@ async function scheduled(e: Env, cron = "") {
 
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
-  // Feature maintenance shares the background budget with existing delivery work.
-  if (left(e) >= 3) await sweepFeatureRequests(e);
   // Guarantee cheap discovery before the sender and optional extras spend the
   // remaining budget. Schedules and daily repo pruning have already run.
   const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
+  // Keep timing/cache flush capacity while F11 shares the background budget.
+  await sweepFeatureRequests(e, Date.now(), COST.tail);
   await sendOutbox(e, 10);
   // Give scheduled replies first use of the sending budget, then fit each
   // retry/failure to the actual remainder. New notices go out next tick.

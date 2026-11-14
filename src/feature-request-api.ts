@@ -422,12 +422,15 @@ async function failStale(e: any, row: any, now: number) {
 export async function sweepFeatureRequests(
   e: any,
   now = Date.now(),
+  reserve = 0,
 ): Promise<{ requeued: number; failed: number }> {
   const cfg = loadFrConfig();
   let requeued = 0;
   let failed = 0;
   let handled = 0;
 
+  // Two discovery reads are mandatory; callers can reserve the cron tail.
+  if (left(e) < reserve + 2) return { requeued, failed };
   let expired: any[];
   try {
     expired = (
@@ -446,7 +449,7 @@ export async function sweepFeatureRequests(
   }
   for (const row of expired) {
     if (handled >= 20) break;
-    if (left(e) < 2) break;
+    if (left(e) < reserve + 2) break;
     if (row.attempts < 3) {
       handled++;
       const statement = transition(e, row, "queued", { claimed_by: null, lease_until: null }, now);
@@ -454,7 +457,7 @@ export async function sweepFeatureRequests(
       if (changesOf(await statement.run()) === 1) requeued++;
       continue;
     }
-    if (left(e) < 5) break;
+    if (left(e) < reserve + 7) break;
     handled++;
     if (await failStale(e, row, now)) failed++;
   }
@@ -468,7 +471,7 @@ export async function sweepFeatureRequests(
   ).results;
   for (const row of stale) {
     if (handled >= 20) break;
-    if (left(e) < 5) break;
+    if (left(e) < reserve + 6) break;
     handled++;
     if (await failStale(e, row, now)) failed++;
   }

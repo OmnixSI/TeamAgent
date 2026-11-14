@@ -14,8 +14,8 @@ try {
   throw new Error("feature-request-api.test.mjs requires FR-1's migrations/0070_feature_requests.sql (merge FR-1 into this branch first)");
 }
 const apiPath = `.wrangler/test-feature-request-api-${process.pid}.mjs`;
-await build({ entryPoints: ["src/feature-request-api.ts"], bundle: true, format: "esm", platform: "browser", outfile: apiPath });
-const { sweepFeatureRequests } = await import("../" + apiPath);
+await build({ stdin: { contents: 'export { sweepFeatureRequests } from "./src/feature-request-api"; export { metered } from "./src/d1";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, format: "esm", platform: "browser", outfile: apiPath });
+const { sweepFeatureRequests, metered } = await import("../" + apiPath);
 
 const GROUP = "GROUP-FR";
 const DAY = "2026-11-14";
@@ -478,3 +478,18 @@ test("S3 proposal 单可写提案；owner approve 后 build 单才可领，rejec
   assert.equal((await getFr(e, "fr-reject")).status, "rejected");
   assert.equal((await getFr(e, "fr-reject")).approved_by, "hongming");
 });
+
+// A referenced stale reply costs six statements; scheduled must keep tail capacity.
+for (const available of [0, 1, 2, 6, 7, 8, 9, 14, 22]) {
+  test(`F11 sweep keeps the reserved tail budget with ${available} available statements`, async () => {
+    const base = await newEnv();
+    const now = Date.now();
+    await insertFr(base, { id: "fr-budget", msg_id: "m-budget", status: "developing", attempts: 3, lease_until: now - 1, created_at: now - 73 * 3600000 });
+    await base.DB.prepare("INSERT INTO message_refs(ref_idx,kind,target_id,group_id,created_at) VALUES('budget-ref','member','m-budget',?,?)").bind(GROUP, now).run();
+    const e = metered(base, available);
+    await sweepFeatureRequests(e, now, 6);
+    assert.ok(e.meter.used <= Math.max(0, available - 6), `used ${e.meter.used} of ${available}, reserve 6`);
+    const row = await getFr(base, "fr-budget");
+    assert.equal(row.status, available >= 14 ? "failed" : "developing");
+  });
+}

@@ -979,6 +979,44 @@
       "default_state": "on"
     },
     {
+      "id": "feature_request",
+      "title": "功能需求登记与开发接力",
+      "aliases": [
+        "提需求",
+        "加功能",
+        "自动开发",
+        "request_feature"
+      ],
+      "tools": [
+        "request_feature"
+      ],
+      "how": "成员直接 @ 提出功能或行为需求，request_feature 只登记到独立于聊天任务的 D1 feature_request 表，由工作室领取、报告上线并回复原消息；敏感需求和非授权成员需求需要管理员确认，proposal 只出方案，绝不自动批准。",
+      "files": [
+        {
+          "path": "src/feature-request.ts",
+          "anchor": "export async function createRequest",
+          "role": "需求登记、风险分级与原子限额"
+        },
+        {
+          "path": "src/feature-request-api.ts",
+          "anchor": "export async function featureRequestRoute",
+          "role": "工作室领取、人工确认与上线回执"
+        },
+        {
+          "path": "scripts/fr-pull.mjs",
+          "anchor": "#!/usr/bin/env node",
+          "role": "工作室拉单入口"
+        }
+      ],
+      "providers": [],
+      "switches": [
+        "feature_request"
+      ],
+      "requires_env": [],
+      "runs_on": "both",
+      "default_state": "on"
+    },
+    {
       "id": "tasks",
       "title": "任务与本机执行",
       "aliases": [
