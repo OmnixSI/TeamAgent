@@ -4,18 +4,30 @@ import { COST, left, ResourceLimitError, chunks } from "./d1";
 import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
-import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
-import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure, describeSchedule, slug, nextRun } from "./schedules";
+import { extraToolDefs, extraUntrustedNames, findExtraTool, runExtraTool, toolSwitchedOff } from "./toolkit";
+import { muted } from "./schedules";
 import { finalizeSpoken } from "./reply-finalize";
 import { loadGroupRules, queueRuleSkip, queueRuleViolation, ruleIdForPhrase, ruleReserve, rulesBlock, rulesBudgetAllows } from "./rules-inject";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
-export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self", "get_quota"]);
+// Tools that run against D1 inside this turn. Anything outside this set hands the
+// turn to background research (semantic.ts:1125), so every local write tool must
+// be listed here or its call silently becomes 「后台处理」 with zero DB rows.
+export const LOCAL_TOOLS = new Set([
+  "remember_correction", "recall_memory", "get_work_status", "list_repos",
+  "repo_changes", "repo_commit", "repo_file", "describe_self", "get_quota",
+  "records_read", "records_write", "summarize_chat", "search_history", "search_kb",
+  "schedule_create", "schedule_update", "schedule_list", "schedule_cancel",
+  "skill_save", "skill_run", "skill_list", "skill_disable",
+  "run_steps", "run_task",
+]);
 import { fetchPageCore } from "./tools/fetch-page";
 import { authorize, authorizeFeature, tainted, AuthorizationError, type WriteTool } from "./authz";
 import { loadChatContext, buildViews, namesFor } from "./context";
 import { quoteIn, botView, buildConversation, toPrompt } from "./view";
 import { queueFor } from "./lanes";
-import { requestPlan } from "./tasks";
+import { BOARD_INBOX, requestPlan } from "./tasks";
+import { scheduleCreateTool } from "./tools/schedule-tools";
+import { familyOfTool, type Accepted, type Family } from "./receipt-guard";
 import { model, activity, redact, utilityText } from "./runtime";
 import { ToolRecovery } from "./tool-audit";
 import { rememberCorrection, recall } from "./memory";
@@ -698,33 +710,128 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
   return result;
 }
 
-/** L2：本群同 kind、下一次执行相差 ≤10 分钟的 active 日程（promiseGuard 去重用）。 */
-async function scheduleNear(e: any, groupId: string | undefined, kind: string, nextRunAt: number) {
-  if (!groupId) return null;
-  const rows = (
-    await e.DB.prepare(
-      "SELECT * FROM schedules WHERE group_id=? AND kind=? AND status='active'",
-    )
-      .bind(groupId, kind)
-      .all()
-  ).results as any[];
-  for (const row of rows) {
-    let spec: any = {};
-    try {
-      spec = JSON.parse(row.spec || "{}");
-    } catch {}
-    const due =
-      row.kind === "reminder" || row.kind === "mute"
-        ? Number(row.next_run_at)
-        : nextRun(spec, Date.now(), row.tz);
-    if (due && Math.abs(due - nextRunAt) <= 10 * 60000) return row;
+/** D4：本人本群 30 分钟内 open 的 pending_actions，下一轮补时直接建（RC-07）。 */
+const TIME_HINT_RE = /[点时]|分钟|小时|每天|每日|每周|每月|每星期|明早|明晚|明天|后天|今天|今晚|中午|早上|上午|下午|晚上|凌晨|半夜|周[一二三四五六日天]/;
+
+async function pendingNote(e: any, latest: any): Promise<string> {
+  const group = latest?.group_id, sender = latest?.sender;
+  // 只有这句话像在补时间才查 pending：普通闲聊不花这条 D1 语句（48 条/轮很紧）。
+  if (!group || !sender || !TIME_HINT_RE.test(String(latest?.body || ""))) return "";
+  let rows: any[] = [];
+  try {
+    rows = (
+      await e.DB.prepare(
+        "SELECT id,tool,draft,missing FROM pending_actions WHERE group_id=? AND sender=? AND status='open' AND expires_at>? ORDER BY asked_at DESC LIMIT 3",
+      )
+        .bind(group, sender, Date.now())
+        .all()
+    ).results as any[];
+  } catch {
+    return "";
   }
-  return null;
+  if (!rows.length) return "";
+  const lines = rows.map((row) => {
+    let draft: any = {};
+    try {
+      draft = JSON.parse(String(row.draft || "{}"));
+    } catch {}
+    const summary = [draft.when_text, draft.content_text, draft.title]
+      .filter(Boolean)
+      .join(" / ")
+      .slice(0, 160);
+    return `${row.id}（缺${row.missing === "time" ? "时间" : String(row.missing || "信息")}${summary ? "；草稿：" + summary : ""}）`;
+  });
+  return `待补全（本人本群，30 分钟内有效）：${lines.join("；")}。用户这次给了缺的信息，就直接带 pending_id 调 schedule_create，不要再问一遍；没给就只问一次。`;
+}
+
+/** D5 合并前的兼容：skills 表不在时静默跳过；在时只注入「名字+触发词」一行。 */
+async function skillsNote(e: any, group: string | undefined): Promise<string> {
+  // D5 未合时没有 skills 表，也没有这些工具；有工具才值得花这条查询。
+  if (!group || !findExtraTool("skill_save")) return "";
+  try {
+    const rows = (
+      await e.DB.prepare(
+        "SELECT name,triggers FROM skills WHERE group_id=? AND status='active' ORDER BY updated_at DESC LIMIT 30",
+      )
+        .bind(group)
+        .all()
+    ).results as any[];
+    if (!rows.length) return "";
+    const parts = rows.map((row) => {
+      let triggers: string[] = [];
+      try {
+        const value = JSON.parse(String(row.triggers || "[]"));
+        if (Array.isArray(value)) triggers = value.map(String).filter(Boolean);
+      } catch {}
+      return `${row.name}${triggers.length ? "（触发词：" + triggers.join("、") + "）" : ""}`;
+    });
+    return ("本群可用技能：" + parts.join("；")).slice(0, 400);
+  } catch {
+    return "";
+  }
+}
+
+/** D4 few-shot：账本/定时/工作台/执行分别该调什么，禁止把本地写活转成「后台处理」。 */
+function toolRoutingNote(): string {
+  const lines = [
+    "D 版工具路由（这些交办必须当场调工具，不要转后台、不要只口头答应）：",
+    "• 记账/账本/清单/报销/改一笔/删一笔 → records_write；查账、合计、导出 → records_read。几个人一起报账就一次写多行。",
+    "• 「我加10」「再加一笔」必须调 records_write{op:'add'}，不能只口头说记上了，也不能只用 records_read 代替写。",
+    "• 「可以每天固定时间发…吗」也是要建日程，不是现在报一次数；缺时间就调一次 schedule_create 拿到 pending，只问一句「几点发？」。",
+    "• 账本动词：加/再加/又记一笔 → records_write{op:'add'}（新行，不是改旧行）；把某人那笔改成 N → quote_update；删掉刚记的那笔 → quote_delete；改/删返回的 token 要留着，成员回「确认」时再调 records_write{op:'confirm',token}；合计/总账单 → records_read{op:'summarize'}，本群只有一个账本时不要填 type。",
+    "• 每天/每周/每月/每 N 分钟/明天几点 要发或提醒 → schedule_create：when_text 原样抄讲时间那段，content_text 抄要发什么；没说几点只问一次「几点发？」，拿到 pending_id 下一轮带上直接建。只建最新这条交办要求的；历史消息里没建的请求不要补建，一次交办只建一条。没说时区就默认悉尼，不要自己填北京时间。",
+    "• 发到工作台/建任务 → prepare_project_task；说不清是哪个仓库就把 repo 留空（默认收件箱 inbox）。",
+    "• 立刻查余额/账本/聊天总结 → run_steps；要在成员本人电脑跑长任务 → run_task（仅管理员）。",
+    "例子：「记账：我￥360，卡特龙￥50」→ records_write{op:'add',kind:'ledger',name:'账本',rows:[{person:'我',amount_cents:36000},{person:'卡特龙',amount_cents:5000}],request_quote:原话}；「每天北京时间0点发余额」→ schedule_create{when_text:'每天北京时间0点',content_text:'发余额'}；「发布到工作台当个新任务」→ prepare_project_task{title,detail,request_quote}（repo 空=收件箱）。",
+  ];
+  if (findExtraTool("skill_save"))
+    lines.splice(
+      4,
+      0,
+      "• 建技能/小工具/指令 → skill_save；执行技能 → skill_run；查看 → skill_list。",
+    );
+  return lines.join("\n");
 }
 
 /** L2：两处 recovery.voice 之前统一注入 finalizeSpoken 的回调；纯函数不直接碰 D1。 */
-function finalizeOptions(e: any, context: any, acceptedActions: any[]) {
+function finalizeOptions(e: any, context: any, acceptedActions: Accepted[], messages: any[]) {
   const latest = context.latest;
+  const group = latest?.group_id;
+  // D4 autoLand：守卫发现 schedule 承诺没落地时，直接用用户原话补建，不经模型。
+  const autoLand = async (family: Family): Promise<Accepted | null> => {
+    if (family !== "schedule" || !group || !latest?.id || !latest?.body) return null;
+    if (await toolSwitchedOff(e, scheduleCreateTool)) return null;
+    const result = await scheduleCreateTool.run(
+      e,
+      { when_text: String(latest.body), content_text: String(latest.body) },
+      { context, source: latest, messages, isTainted: () => tainted(context, messages) },
+    );
+    if (result?.ok !== true || !result?.id) return null;
+    return {
+      tool: "schedule_create",
+      family: "schedule",
+      id: String(result.id),
+      ok: true,
+      next_run_text: result.next_run_text,
+      say: result.say,
+    } as Accepted;
+  };
+  // ② 状态类追问（「已经建好」）只认库里真有的行。
+  const existing = async (family: Family): Promise<boolean> => {
+    if (!group) return false;
+    const sql: Partial<Record<Family, string>> = {
+      schedule: "SELECT 1 AS x FROM schedules WHERE group_id=? AND status='active' LIMIT 1",
+      record: "SELECT 1 AS x FROM records WHERE group_id=? LIMIT 1",
+      feature: "SELECT 1 AS x FROM feature_request WHERE group_id=? LIMIT 1",
+    };
+    const query = sql[family];
+    if (!query) return false;
+    try {
+      return !!(await e.DB.prepare(query).bind(group).first());
+    } catch {
+      return false;
+    }
+  };
   return {
     acceptedActions,
     avoid: context.groupRules?.avoid ?? [],
@@ -732,9 +839,8 @@ function finalizeOptions(e: any, context: any, acceptedActions: any[]) {
     owner: latest?.sender,
     groupId: latest?.group_id,
     sourceMsgId: latest?.id,
-    createSchedule: (input: any) => createSchedule(e, input),
-    findDuplicate: (kind: string, nextRunAt: number) =>
-      scheduleNear(e, latest?.group_id, kind, nextRunAt),
+    autoLand,
+    existing,
     onViolation: (phrase: string, count: number) => {
       const ruleId = ruleIdForPhrase(context.groupRuleRows, phrase);
       if (ruleId) queueRuleViolation(e, ruleId, latest?.id, count);
@@ -790,7 +896,9 @@ async function answerWithTools(e: any, context: any) {
       "SELECT id,repo,subject,predicate,value,evidence,status FROM facts WHERE valid_to IS NULL ORDER BY valid_from DESC LIMIT 60",
     ).all()
   ).results;
-  const acceptedActions: any[] = [];
+  const acceptedActions: Accepted[] = [];
+  // schedule_create 缺时间只问一次：它不是「已建」，但这一轮确实有要回的话。
+  const pendingAsks: any[] = [];
   const baseTools = [
     {
       type: "function",
@@ -898,11 +1006,14 @@ async function answerWithTools(e: any, context: any) {
       function: {
         name: "prepare_project_task",
         description:
-          "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。",
+          "创建开发任务（复杂的转人工），不是我亲手改代码。明确要求出方案或动手开发时创建任务；闲聊和泛泛建议不调用。不知道属于哪个仓库就留空 repo，默认进工作台收件箱（inbox），不要因为选不出仓库拒绝交办。",
         parameters: {
           type: "object",
           properties: {
-            repo: { type: "string", enum: REPOS },
+            repo: {
+              type: "string",
+              description: "owner/repo、项目代称或短名；说不清是哪个仓库就不填，默认 inbox（收件箱）",
+            },
             source_id: {
               type: "string",
               description:
@@ -925,7 +1036,7 @@ async function answerWithTools(e: any, context: any) {
               description: "重要规划和复杂开发才max，普通整理high",
             },
           },
-          required: ["repo", "title", "detail", "request_quote", "complexity"],
+          required: ["title", "detail", "request_quote", "complexity"],
         },
       },
     },
@@ -971,57 +1082,6 @@ async function answerWithTools(e: any, context: any) {
       },
     },
     ...(await extraToolDefs(e, context)),
-    {
-      type: "function",
-      function: {
-        name: "schedule_create",
-        description:
-          "群友要求每天/每周 X 点发 XX（日报/早报/晨报/提醒）时调用，当场登记，不要只口头答应。用现有消息就能写出来的定时推送直接登记，不要提功能需求。时间按悉尼时间 HH:MM；没说时间就问，不要猜。没调用成功前，不要说『明早 X 点会发』。",
-        parameters: {
-          type: "object",
-          properties: {
-            kind: { type: "string", enum: ["digest_daily", "digest_weekly", "reminder", "mute"] },
-            time: { type: "string", description: "每日/每周推送的悉尼时间 HH:MM，例如 08:00" },
-            weekdays: { type: "array", items: { type: "integer" }, description: "周报星期，0=周日" },
-            minutes: { type: "integer", description: "几分钟后提醒，或闭嘴多少分钟" },
-            run_at: { type: "string", description: "一次性提醒/闭嘴结束的绝对时间，ISO 8601 带时区" },
-            text: { type: "string", description: "提醒内容" },
-            topic: {
-              type: "string",
-              description: "推送的主题/内容，例如「礼物日早报」「昨天的 PR 进展」；只是总结昨天聊天就不填",
-            },
-            source_id: { type: "string", description: "本条交办的消息ID，默认最新消息" },
-          },
-          required: ["kind"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "schedule_list",
-        description: "查本群当前的定时推送、提醒和闭嘴，带悉尼时间的下次执行时间与失败次数。",
-        parameters: {
-          type: "object",
-          properties: { include_done: { type: "boolean", description: "是否连已取消/已完成一起列出" } },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "schedule_cancel",
-        description:
-          "取消本群一个定时任务。先用 schedule_list 拿到任务ID；群友只说了主题、没给ID时，可以只传 topic 按主题匹配。",
-        parameters: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "schedule_list 返回的任务ID" },
-            topic: { type: "string", description: "群友说的主题，例如「礼物日早报」「周报」；没给ID时用" },
-          },
-        },
-      },
-    },
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
@@ -1066,6 +1126,8 @@ async function answerWithTools(e: any, context: any) {
   } catch {
     // The card summary is an optimisation; never fail a turn because it is unreadable.
   }
+  const pending = await pendingNote(e, context.latest);
+  const skills = await skillsNote(e, context.latest?.group_id);
   const systemPrompt =
     (rules.length ? PARTICIPATION + "\n" + rules.join("\n") : PARTICIPATION) +
     "\n\n" +
@@ -1083,6 +1145,9 @@ async function answerWithTools(e: any, context: any) {
         facts: promptFacts,
         materials: context.materials,
         groupRules: context.groupRules?.text || undefined,
+        toolRouting: toolRoutingNote(),
+        ...(pending ? { pendingActions: pending } : {}),
+        ...(skills ? { groupSkills: skills } : {}),
         conversation: buildConversation(context.recentViews, recentBot.map(botView)).map(toPrompt),
         recentBot,
         alreadyReportedCI: (
@@ -1160,14 +1225,16 @@ async function answerWithTools(e: any, context: any) {
       stage(e, context.latest.id, "research_queued");
       if (!context.mentioned && !addressedMessages(context).length)
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
-      return speakBrief(
+      const spoken = await speakBrief(
         e,
         {
           facts: "已开始后台处理这件事，结果稍后单独回这条消息。不要写报告。",
-          acceptedActions: [{ tool: "research", task: id }],
+          acceptedActions: [{ tool: "research", task: id } as any],
         },
         context,
       );
+      // 本轮前面已经落库的写操作（如 schedule_create）不能因为转后台就丢掉回执。
+      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, messages)));
     }
     if (!m.tool_calls?.length) {
       if (offerTools && turn < 3 && recovery.retry(messages)) continue;
@@ -1183,7 +1250,11 @@ async function answerWithTools(e: any, context: any) {
         );
       const decision = guardMentionDecision(parseDecision(m.content, { forced, allowWait: !!context.allowWait }), context);
       Object.assign(context.decisionOut ?? {}, decision, { forced });
-      if (((decision.action === "wait" || decision.action === "stop") && !acceptedActions.length) || !(await maySpeak(e, decision, forced, acceptedActions.length > 0)))
+      if (
+        ((decision.action === "wait" || decision.action === "stop") &&
+          !acceptedActions.length && !pendingAsks.length) ||
+        !(await maySpeak(e, decision, forced, acceptedActions.length > 0 || pendingAsks.length > 0))
+      )
         return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
       const spoken = await speakBrief(
         e,
@@ -1195,13 +1266,13 @@ async function answerWithTools(e: any, context: any) {
         },
         context,
       );
-      if (decision.kind !== "direct" && !forced && !acceptedActions.length) {
+      if (decision.kind !== "direct" && !forced && !acceptedActions.length && !pendingAsks.length) {
         if (alreadySaid(decodeVoice(spoken).text, recentBot)) {
           Object.assign(context.decisionOut ?? {}, { action: "dup" });
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
+      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, messages)));
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
@@ -1412,10 +1483,12 @@ async function answerWithTools(e: any, context: any) {
               context.batch?.find((m: any) => m.id === a.source_id) ||
               context.latest;
             const authorization = await authorizeWrite(e, "prepare_project_task", a.request_quote, source, context, messages);
+            // RC-04：说不清仓库的「发布到工作台」不再 6 选 1 拒办，默认进收件箱。
+            const repo = String(a.repo || "").trim() || BOARD_INBOX;
             if (
               !source?.id ||
               source.meta?.direct !== true ||
-              !REPOS.includes(a.repo) ||
+              (repo !== BOARD_INBOX && !REPOS.includes(repo)) ||
               typeof a.request_quote !== "string" ||
               !a.request_quote.trim() ||
               !quoteIn(source, a.request_quote, context.names)
@@ -1427,7 +1500,7 @@ async function answerWithTools(e: any, context: any) {
             )
               .bind(
                 id,
-                a.repo,
+                repo,
                 String(a.title).slice(0, 300),
                 String(a.detail).slice(0, 12000),
                 authorization.tainted ? "proposal" : a.execute_requested === true
@@ -1448,7 +1521,8 @@ async function answerWithTools(e: any, context: any) {
             )
               .bind(id)
               .first();
-            if (!existingPlan)
+            // 收件箱任务还没有仓库，先不排队做方案；等工作台补上仓库再规划。
+            if (!existingPlan && repo !== BOARD_INBOX)
               await requestPlan(
                 e,
                 created,
@@ -1526,131 +1600,6 @@ async function answerWithTools(e: any, context: any) {
               : { unavailable: true, repo };
             break;
           }
-          case "schedule_create": {
-            const source =
-              context.batch?.find((m: any) => m.id === a.source_id) ||
-              context.latest;
-            if (!source?.group_id || source.group_id !== context.latest?.group_id)
-              throw Error("只能在本群建日程");
-            try {
-              const topic = typeof a.topic === "string" ? a.topic.trim() : "";
-              const quote = String(source.body || "").trim().slice(0, 200);
-              const schedule = await createSchedule(e, {
-                group_id: source.group_id,
-                owner: source.sender || "群友",
-                kind: a.kind,
-                spec: {
-                  time: a.time,
-                  weekdays: a.weekdays,
-                  minutes: a.minutes,
-                  run_at: a.run_at,
-                  text: a.text,
-                  ...(topic ? { topic } : {}),
-                  origin: "chat",
-                  ...(quote ? { request_quote: quote } : {}),
-                  ...(topic ? { dedup: slug(topic, source.id) } : {}),
-                },
-                source_msg_id: source.id,
-              });
-              const first = sydneyText(schedule.next_run_at, schedule.tz);
-              result = {
-                accepted: true,
-                ok: true,
-                id: schedule.id,
-                kind: schedule.kind,
-                next_run_at: schedule.next_run_at,
-                next_run_text: first,
-                say: `记下了，${describeSchedule(schedule)}，第一次是 ${first}。不想要了回那条推送说「不用再发了」。`,
-              };
-            } catch (error: any) {
-              result = scheduleFailure(error?.message);
-            }
-            break;
-          }
-          case "schedule_list": {
-            const group = context.latest?.group_id;
-            if (!group) throw Error("缺少群信息");
-            result = {
-              ok: true,
-              schedules: await listSchedules(e, group, {
-                includeDone: a.include_done === true,
-              }),
-            };
-            break;
-          }
-          case "schedule_cancel": {
-            const group = context.latest?.group_id;
-            if (!group) throw Error("缺少群信息");
-            const id = String(a.id || "").trim();
-            const topic = String(a.topic || "").trim();
-            if (id) {
-              const schedule = await cancelSchedule(e, group, id);
-              result = schedule
-                ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
-                : {
-                    ok: false,
-                    error_kind: "not_found",
-                    retryable: false,
-                    next_action: "先用 schedule_list 看本群任务，再拿ID取消",
-                  };
-              break;
-            }
-            if (!topic) {
-              result = {
-                ok: false,
-                error_kind: "invalid_args",
-                retryable: false,
-                next_action: "给任务ID或主题；先用 schedule_list 看本群任务",
-              };
-              break;
-            }
-            // 没给ID：按主题模糊匹配本群 active 日程，唯一命中才取消。
-            const active = (
-              await e.DB.prepare(
-                "SELECT * FROM schedules WHERE group_id=? AND status='active' ORDER BY next_run_at",
-              )
-                .bind(group)
-                .all()
-            ).results as any[];
-            const needle = topic.toLowerCase();
-            const hits = active.filter((row) => {
-              let spec: any = {};
-              try {
-                spec = JSON.parse(row.spec || "{}");
-              } catch {}
-              return (
-                String(spec.topic || "").toLowerCase().includes(needle) ||
-                describeSchedule(row).toLowerCase().includes(needle)
-              );
-            });
-            if (hits.length === 1) {
-              const schedule = await cancelSchedule(e, group, hits[0].id);
-              result = schedule
-                ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
-                : {
-                    ok: false,
-                    error_kind: "not_found",
-                    retryable: false,
-                    next_action: "先用 schedule_list 看本群任务",
-                  };
-            } else if (hits.length > 1) {
-              result = {
-                ok: false,
-                error_kind: "ambiguous",
-                retryable: false,
-                candidates: hits.map((row) => ({ id: row.id, description: describeSchedule(row) })),
-                next_action: "把匹配到的任务列给群友，问清是哪一个再取消",
-              };
-            } else {
-              result = {
-                ok: false,
-                error_kind: "not_found",
-                retryable: false,
-                next_action: "schedule_list 里没有这个主题，先让群友确认主题",
-              };
-            }
-            break;
-          }
           case "repo_changes": case "repo_commit": case "repo_file": case "list_repos":
             result = isOn(sw, "repo_tools") ? await runRepoTool(e, call.function.name, a, { text: context.latest?.body })
               : toolFailure(call.function.name, null, { kind: 'denied', detail: '该功能已被管理员关闭' });
@@ -1665,12 +1614,20 @@ async function answerWithTools(e: any, context: any) {
         }
         return result;
       });
+      if (result?.need === "time" && result?.pending_id) pendingAsks.push({ tool: call.function.name, ...result });
       if (call.function.name === "request_feature" && result?.feature_request) {
         const created = result.feature_request;
         result = { ...created, ...(created.ok && !created.duplicate ? { accepted: true } : {}) };
       }
-      if (result?.accepted === true)
-        acceptedActions.push({ tool: call.function.name, ...result });
+      if (result?.accepted === true) {
+        const family = (result.family as Family) || familyOfTool(call.function.name);
+        acceptedActions.push({
+          tool: call.function.name,
+          ...(family ? { family } : {}),
+          ok: result.ok !== false,
+          ...result,
+        });
+      }
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -1682,5 +1639,5 @@ async function answerWithTools(e: any, context: any) {
     recovery.retry(messages);
   }
   const spoken = await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
-  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
+  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, messages)));
 }

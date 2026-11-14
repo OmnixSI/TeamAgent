@@ -262,7 +262,9 @@ export const recordsWriteTool: BotTool = {
     function: {
       name: "records_write",
       description:
-        "记账或清单：建类型、记一笔、改或删先确认、撤销上一笔；只有成员本人原话能作为依据，改删确认限记录人或管理员",
+        "记账或清单：建类型、记一笔、改或删先确认、撤销上一笔；只有成员本人原话能作为依据，改删确认限记录人或管理员。" +
+        "「我加10/再加一笔」= op:add（新行，不是改旧行）；「把某人那笔改成60」= op:quote_update + match:{person} + patch:{amount:'60'}；" +
+        "「删掉刚记的那笔」= op:quote_delete；改删会返回 token，成员回「确认」后再 op:confirm + token。",
       parameters: {
         type: "object",
         properties: {

@@ -92,9 +92,10 @@ function pickKind(input: {
   const base = known.includes(asked as ScheduleKind) ? (asked as ScheduleKind) : null;
   const actionful = input.steps.some((s) => s?.action && s.action !== "text" && s.action !== "chat_digest");
   const pureDigest = input.steps.length > 0 && input.steps.every((s) => s?.action === "chat_digest");
+  // 纯聊天总结必须留在 digest 路径：模型常把「精简」写成 note，不能因此变成 agent_task（RC-02）。
+  if (pureDigest) return input.cadence === "weekly" ? "digest_weekly" : "digest_daily";
   if (actionful || input.note) return "agent_task";
   if (input.steps.length && base === "agent_task") return "agent_task";
-  if (pureDigest) return input.cadence === "weekly" ? "digest_weekly" : "digest_daily";
   if (input.steps.length && input.cadence !== "once") return "agent_task";
   if (base) return base;
   if (input.cadence === "once") return "reminder";
@@ -250,9 +251,10 @@ function receiptOf(kind: string, spec: ScheduleSpec, tz: string, nextRunAt: numb
   const absolute = dualText(nextRunAt, tz);
   const scheduleText = when ? describeWhen(when, now) : describeSchedule({ kind, tz, spec: JSON.stringify(spec) });
   const what = displayTitle(kind, spec, "定时推送");
+  const capNote = kind === "agent_task" && spec.cadence === "every" ? "每群每天最多跑 24 次，超出会顺延。" : "";
   return {
     next_run_text: absolute,
-    say: `${head}，${scheduleText} 发${what}，下次是 ${absolute}。`,
+    say: `${head}，${scheduleText} 发${what}，第一次是 ${absolute}。${capNote}`,
   };
 }
 
@@ -314,6 +316,7 @@ export const scheduleCreateTool: BotTool = {
       description:
         "在群里登记定时任务/提醒。群友说「每天/每周/每月/每N分钟/明天几点」要发什么或提醒什么时当场调用，不要只口头答应。" +
         "把用户讲时间的那段原话原样放进 when_text（例如「每天北京时间0点」），把说要发什么放进 content_text。" +
+        "只登记本轮最新消息的请求；历史消息只作背景，不补建，一次交办只建一条。没说时区就默认悉尼，不要自己填北京时间。" +
         "原话里没写几点就调用一次、不要猜：工具会返回 need=time，你只问一句「几点发？」。" +
         "没调用成功前不要说「记下了」「会发」。",
       parameters: createParameters,
@@ -327,10 +330,17 @@ export const scheduleCreateTool: BotTool = {
     const draft = pending ? parseDraft(pending.draft) : {};
     const continuing = !!pending;
 
-    // 1) 时间：原话 > 模型字段。补时间的第二轮只看这一条新消息。
-    const whenText = String(args?.when_text || (continuing ? body : body) || "").trim();
+    // 1) 时间：原话 > 模型字段。补时间的第二轮先试这一条新消息；新消息只有
+    //    「北京时间0点」这种缺节奏词的说法时，再拼上一轮草稿里讲时间的那段（RC-07）。
+    const said = String(args?.when_text || body || "").trim();
+    const draftWhen = continuing && draft.when_text ? String(draft.when_text).trim() : "";
     const tzFromArgs = normalizeTz(args?.tz) || normalizeTz(draft.tz) || DEFAULT_TZ;
-    const parsed = whenText ? parseWhen(whenText, now, tzFromArgs) : null;
+    let whenText = said;
+    let parsed = said ? parseWhen(said, now, tzFromArgs) : null;
+    if (continuing && !parsed?.ok && draftWhen) {
+      whenText = `${draftWhen} ${said}`.trim();
+      parsed = parseWhen(whenText, now, tzFromArgs);
+    }
     const violations = parsed?.ok ? violationsOf(args, parsed.when) : [];
     const when: When | null = parsed?.ok ? parsed.when : whenFromArgs({ ...draft, ...stripEmpty(args) }, now, tzFromArgs);
     if (violations.length && violationHook) {
@@ -358,6 +368,7 @@ export const scheduleCreateTool: BotTool = {
     if (!when) {
       const pendingId = String(args?.pending_id || pending?.id || `pa-${sourceId || now}`);
       const draftNext = {
+        when_text: whenText.slice(0, 500),
         kind: args?.kind || draft.kind,
         cadence: args?.cadence || draft.cadence,
         time: args?.time || draft.time,

@@ -3,9 +3,23 @@ import type { Decision } from './rhythm';
 
 export const RECOVERY_MAX_AGE_MS = 15 * 60 * 1000;
 
+// 「我的日报呢」「怎么还没发」是在追已经答应过的东西，等于对 bot 说话；
+// 不把它算 addressed，hard_unanswered 闸会把这条追问埋掉（RC-03）。
+const CHASE_RE = /我的.{0,4}(日报|周报|总结|推送|提醒|余额|账本|清单).{0,4}(呢|怎么|还没)|怎么(还)?没发/;
+export function chasingDeliverable(body: unknown): boolean {
+  return CHASE_RE.test(String(body || ''));
+}
+// 「机器人可以每天…吗」是在问 bot 本人，不是群友互相聊天（RC-07）。
+const TO_BOT_RE = /^(?:机器人|助手|bot)[，,：:\s]*(?:你)?(?:可以|能不能|能|会|帮|给我|在)/i;
 export function addressedMessages(context: any): any[] {
   const rows = [...(context.batch || []), ...(context.latest ? [context.latest] : [])];
-  const explicit = rows.filter((m: any) => m.mentioned || m.meta?.replyTo?.kind === 'bot');
+  const explicit = rows.filter(
+    (m: any) =>
+      m.mentioned ||
+      m.meta?.replyTo?.kind === 'bot' ||
+      chasingDeliverable(m.body) ||
+      TO_BOT_RE.test(String(m.body || '').trim()),
+  );
   if (!explicit.length && context.mentioned && context.latest) explicit.push(context.latest);
   return [...new Map<string, any>(explicit.map((m: any) => [m.id, m])).values()];
 }
