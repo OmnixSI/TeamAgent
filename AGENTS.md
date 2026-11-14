@@ -2,7 +2,7 @@
 
 常驻“做 AI 高手”群的项目搭子和团队开发台。本仓库独立于个人 InkBoard。
 
-先读 README.md、docs/decisions.md、docs/declined.md、docs/review.md。已确定的产品行为不要反复询问；新的明确用户要求优先。
+先读 HANDOFF.md（2026-11-14 接手包：现状、未合并分支、遗留需求），再读 README.md、docs/decisions.md、docs/declined.md、docs/review.md。已确定的产品行为不要反复询问；新的明确用户要求优先。
 
 ## 实现约定
 

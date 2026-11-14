@@ -4,7 +4,7 @@
 
 源码、文档、Issue、CI 与后续 PR 统一在 **[OmnixSI/TeamAgent](https://github.com/OmnixSI/TeamAgent)**。本项目从个人 InkBoard 的 `team/` 拆出并保留该目录的提交历史；不依赖墨水屏、账本、邮件或私人记忆。既有服务地址暂时保留，群公告、成员登录和历史任务继续使用。
 
-**[打开团队开发台](https://inkboard-team.inkboard-server.workers.dev)** · [完整复盘](docs/review.md) · [产品决定](docs/decisions.md) · [不再采用的做法](docs/declined.md) · [维护与发布](docs/maintenance.md) · [运维与恢复](docs/operations.md) · [验收记录](docs/verification.md)
+**[打开团队开发台](https://inkboard-team.inkboard-server.workers.dev)** · **[接手包（先读）](HANDOFF.md)** · [完整复盘](docs/review.md) · [产品决定](docs/decisions.md) · [不再采用的做法](docs/declined.md) · [维护与发布](docs/maintenance.md) · [运维与恢复](docs/operations.md) · [验收记录](docs/verification.md)
 
 ## 怎么运转
 
