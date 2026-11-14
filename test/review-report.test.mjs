@@ -141,8 +141,8 @@ function learning(db, patch = {}) {
 }
 function schedule(db, { id = 'sched-1', status = 'active', spec = { time: '08:00', topic: '昨日聊天内容总结' }, kind = 'digest_daily' } = {}) {
   db.prepare(`INSERT OR REPLACE INTO schedules(id,group_id,owner,kind,tz,spec,status,next_run_at,fail_count,created_at,source_msg_id)
-    VALUES(?,?,?,'digest_daily','Australia/Sydney',?,?,?,0,?,?)`)
-    .run(id, GROUP, 'qq:' + SENDER, JSON.stringify(spec), status, NOW + DAY, NOW, TOO_MSG.id);
+    VALUES(?,?,?,?,'Australia/Sydney',?,?,?,0,?,?)`)
+    .run(id, GROUP, 'qq:' + SENDER, kind, JSON.stringify(spec), status, NOW + DAY, NOW, TOO_MSG.id);
 }
 // 依次把 learnings 阶段跑到 report；commit 只落 review_* 语句。
 async function runLearnings(e, run, stats = { phase: 'learnings' }, now = NOW) {
@@ -325,6 +325,21 @@ test('covered by an existing rule or a matching active schedule is not proposed'
     judgment(db, result({ schedule_requests: [scheduleReq()] }));
     await runLearnings(e, run);
     assert.equal(learningRows(db).length, 1);
+  }
+  {
+    // 已有每天 08:00 → 每周日 08:00 的请求已被覆盖；反过来不成立。
+    const daily = learnEnv();
+    schedule(daily.db, { spec: { time: '08:00', topic: '别的事' } });
+    const run1 = runRow(daily.db);
+    judgment(daily.db, result({ schedule_requests: [scheduleReq({ cadence: 'weekly', weekdays: [0] })] }));
+    await runLearnings(daily.e, run1);
+    assert.equal(learningRows(daily.db).length, 0);
+    const weekly = learnEnv();
+    schedule(weekly.db, { kind: 'digest_weekly', spec: { time: '08:00', weekdays: [0], topic: '别的事' } });
+    const run2 = runRow(weekly.db);
+    judgment(weekly.db, result({ schedule_requests: [scheduleReq()] }), { id: 'j2' });
+    await runLearnings(weekly.e, run2);
+    assert.equal(learningRows(weekly.db).length, 1);
   }
 });
 

@@ -159,8 +159,9 @@ async function isCovered(e: ReviewEnv, run: Row, seed: Seed, now: number): Promi
       if (seed.params.topic && spec.topic === seed.params.topic) return true;
       if (!sameTime(spec.time, seed.params.time)) continue;
       const weekly = row.kind === 'digest_weekly';
-      if ((seed.subkind === 'weekly') !== weekly) continue;
-      if (weekly && !sameWeekdays(spec.weekdays, seed.params.weekdays)) continue;
+      // 每周只覆盖那一天，不能顶掉每天；每天能覆盖每周的同一条。
+      if (seed.subkind === 'daily' && weekly) continue;
+      if (seed.subkind === 'weekly' && weekly && !sameWeekdays(spec.weekdays, seed.params.weekdays)) continue;
       return true;
     }
   }
