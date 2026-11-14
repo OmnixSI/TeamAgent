@@ -24,8 +24,10 @@ export function normalizeReachResult(req,raw={},options={}){
  if(status===412||code==='SECURITY_BLOCK'||/SECURITY_BLOCK|人机验证|请完成验证码|captcha_required|verify you are human|安全验证/i.test(evidence))kind='platform_blocked';
  else if(req.channel==='xiaohongshu'&&/300031|note.*unavailable/i.test(evidence))kind='insufficient_content';
  const input=Array.isArray(raw?.items)?raw.items:[];
+ // X long posts (note_tweet) can reach 25k characters; do not cut them at the generic 12k bound.
+ const textMax=req.channel==='x'?25000:12000;
  const items=input.slice(0,20).map(i=>({
-  title:safeReachText(i?.title,300),text:safeReachText(i?.text,12000),author:safeReachText(i?.author,100),
+  title:safeReachText(i?.title,300),text:safeReachText(i?.text,textMax),author:safeReachText(i?.author,100),
   source_url:publicSourceUrl(i?.source_url||i?.url||req.target),
   published_at:Number.isFinite(Date.parse(i?.published_at))?new Date(i.published_at).toISOString():null,
  })).filter(i=>i.text.trim()||(scopeFor(req.action)==='search_results'&&i.title.trim()&&i.source_url));
@@ -43,8 +45,15 @@ export function normalizeReachResult(req,raw={},options={}){
   ...(Number.isFinite(retry)&&retry>0?{retry_after:Math.min(86400,Math.ceil(retry))}:{}),
  }:null;
  return {schema_version:1,ok:!kind,channel:req.channel,action:req.action,backend:token(req.backend)||'local',
-  items:kind?[]:items,meta:{...(options.output_truncated||raw?.meta?.output_truncated?{output_truncated:true}:{})},error,
-  source_url:publicSourceUrl(req.target||req.source_url),fetched_at:new Date().toISOString(),content_scope:scopeFor(req.action),
+  items:kind?[]:items,meta:{...(options.output_truncated||raw?.meta?.output_truncated?{output_truncated:true}:{}),loaded:kind?0:items.length},error,
+  source_url:publicSourceUrl(req.source_url||req.target),fetched_at:new Date().toISOString(),content_scope:scopeFor(req.action),
   // Completeness requires independently verified platform evidence; never trust a backend flag alone.
   completeness_verified:false,attempts:[{backend:token(req.backend)||'local',ok:!kind,...(kind?{error_kind:kind}:{})}]};
 }
+
+// X posts must contain readable text: a media-only shell or a login/challenge page is not content.
+validators.set('x',(raw,req)=>{
+ if(!Array.isArray(raw?.items)||!raw.items.length)return 'insufficient_content';
+ if(['thread','tweets','search'].includes(req.action)&&!raw.items.some(item=>String(item?.text||'').trim()))return 'insufficient_content';
+ return null;
+});
