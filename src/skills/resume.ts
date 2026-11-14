@@ -174,7 +174,10 @@ export function resumeTypst(r: Resume, style: string, lang: "zh" | "en", photo?:
   }
   if (r.skills.length) {
     o.push(`#sec[${L("专业技能", "Skills")}]`);
-    o.push(r.skills.map((s) => { const m = /^([^：:]{1,24})[：:]\s*(.+)$/.exec(s); return m ? `#strong[${inl(m[1])}]${lang === "zh" ? "：" : ": "}${inl(m[2])}` : inl(s); }).join(" \\\n"));
+    // A plain list of short names (Go, Rust, …) reads better on one line than one name per line.
+    const bare = r.skills.every((s) => s.length <= 24 && !/[：:]/.test(s));
+    o.push(bare ? r.skills.map(inl).join(lang === "zh" ? "、" : ", ")
+      : r.skills.map((s) => { const m = /^([^：:]{1,24})[：:]\s*(.+)$/.exec(s); return m ? `#strong[${inl(m[1])}]${lang === "zh" ? "：" : ": "}${inl(m[2])}` : inl(s); }).join(" \\\n"));
   }
   for (const x of r.extra) { o.push(`#sec[${inl(x.title)}]`); o.push(`#list(..${arr(x.items)})`); }
   return o.join("\n\n") + "\n";
