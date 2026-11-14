@@ -1,11 +1,12 @@
 // A-quota: truthful, read-only quota self-knowledge.
 //
 // One balance lookup at a time, cached in D1 settings for ten minutes; every
-// number the owner sees comes from a real provider table or the provider's own
-// balance endpoint. Non-owners only ever get one coarse band word, so a public
-// group can ask without publishing the team's spending. The developer-room
-// morning report gets one line from `quota:morning`, refreshed once a day by
-// `quotaMorningJob`; the bot never posts quota numbers to a chat by itself.
+// number a member sees comes from a real provider table or the provider's own
+// balance endpoint. Any group member may ask, and always gets the exact numbers
+// plus a "since last time" delta, because the allowance is shared across the
+// group. The developer-room morning report gets one line from `quota:morning`,
+// refreshed once a day by `quotaMorningJob`; the bot never posts quota numbers
+// to a chat by itself.
 import type { CronJob } from "./cron-extra";
 import { TEAM } from "./config";
 import { AI_NEURONS_DAILY_CAP } from "./ai-budget";
@@ -390,13 +391,6 @@ export function quotaBand(input: {
   return "ok";
 }
 
-function bandText(band: QuotaBand): string {
-  if (band === "critical") return "额度：快没了。";
-  if (band === "low") return "额度：偏低。";
-  if (band === "unknown") return "额度：暂时查不到。";
-  return "额度：够用。";
-}
-
 function positive(value: any, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -487,6 +481,10 @@ export async function quotaSnapshot(
 type StoredQuota = {
   at: number;
   deepseek: Record<string, string>;
+  /** Selected balance currency and its gift/top-up split. Old snapshots lack these. */
+  currency: string | null;
+  granted: number | null;
+  toppedUp: number | null;
   dsCalls: number | null;
   dsMicroUsd: number | null;
   openaiCalls: number | null;
@@ -518,9 +516,15 @@ function parseStoredQuota(raw: any): StoredQuota | null {
     parsed.band === "ok" || parsed.band === "low" || parsed.band === "critical"
       ? parsed.band
       : null;
+  const currency = /^[A-Z]{3,8}$/.test(String(parsed.currency || ""))
+    ? String(parsed.currency)
+    : null;
   return {
     at,
     deepseek,
+    currency,
+    granted: currency ? storedNumber(parsed.granted) : null,
+    toppedUp: currency ? storedNumber(parsed.toppedUp) : null,
     dsCalls: storedNumber(parsed.dsCalls),
     dsMicroUsd: storedNumber(parsed.dsMicroUsd),
     openaiCalls: storedNumber(parsed.openaiCalls),
@@ -541,6 +545,9 @@ function storedFromSnapshot(snapshot: QuotaSnapshot, band: QuotaBand): StoredQuo
   return {
     at: snapshot.at,
     deepseek,
+    currency: snapshot.balance.ok ? snapshot.balance.currency : null,
+    granted: snapshot.balance.ok ? snapshot.balance.granted : null,
+    toppedUp: snapshot.balance.ok ? snapshot.balance.toppedUp : null,
     dsCalls: snapshot.deepseek.todayCalls,
     dsMicroUsd: snapshot.deepseek.todayMicroUsd,
     openaiCalls: snapshot.openai.todayCalls,
@@ -592,6 +599,17 @@ function deltaLine(previous: StoredQuota | null, snapshot: QuotaSnapshot): strin
       if (delta === 0) continue;
       items.push("DeepSeek 余额 " + signed(delta) + " " + currencyUnit(entry.currency));
     }
+    if (previous.currency === snapshot.balance.currency) {
+      const unit = currencyUnit(snapshot.balance.currency);
+      if (previous.granted !== null) {
+        const delta = Number((snapshot.balance.granted - previous.granted).toFixed(2));
+        if (delta !== 0) items.push("赠送余额 " + signed(delta) + " " + unit);
+      }
+      if (previous.toppedUp !== null) {
+        const delta = Number((snapshot.balance.toppedUp - previous.toppedUp).toFixed(2));
+        if (delta !== 0) items.push("充值余额 " + signed(delta) + " " + unit);
+      }
+    }
   }
   if (previous.dsCalls !== null) {
     const delta = snapshot.deepseek.todayCalls - previous.dsCalls;
@@ -611,15 +629,6 @@ function deltaLine(previous: StoredQuota | null, snapshot: QuotaSnapshot): strin
   }
   if (!items.length) return "较上次（" + sydneyTime(previous.at, snapshot.at) + "）：没变化";
   return "较上次（" + sydneyTime(previous.at, snapshot.at) + "）：" + items.join(" / ");
-}
-
-function notchNote(previous: StoredQuota | null, band: QuotaBand): string {
-  const rank: Record<string, number> = { critical: 0, low: 1, ok: 2 };
-  if (!previous || !previous.band) return "";
-  const before = rank[previous.band],
-    after = rank[band];
-  if (before === undefined || after === undefined || before === after) return "";
-  return after < before ? "（比上次低了一档）" : "（比上次高了一档）";
 }
 
 function balanceLine(balance: DeepSeekBalance): string {
@@ -649,7 +658,7 @@ function balanceLine(balance: DeepSeekBalance): string {
   );
 }
 
-export function ownerQuotaText(snapshot: QuotaSnapshot): string {
+export function quotaText(snapshot: QuotaSnapshot): string {
   const parts = [balanceLine(snapshot.balance)];
   const days = daysLeft(snapshot.balance, snapshot.deepseek.avg7MicroUsd);
   const average =
@@ -698,12 +707,13 @@ export function ownerQuotaText(snapshot: QuotaSnapshot): string {
 }
 
 /**
- * Read-only answer for the get_quota tool. The owner gets the real numbers;
- * everyone else gets one band word, because this is a public group.
+ * Read-only answer for the get_quota tool. Any member gets the real numbers and
+ * the since-last-time delta; the allowance is shared, so the numbers are public
+ * inside the group.
  */
 export async function renderQuota(
   e: any,
-  options: { owner: boolean; group?: string; sender?: string; now?: number },
+  options: { group?: string; sender?: string; now?: number },
 ): Promise<
   | { ok: true; text: string; band: QuotaBand }
   | { ok: false; error_kind: "unavailable"; retryable: true; reason_text: string; next_action: string }
@@ -731,12 +741,7 @@ export async function renderQuota(
         await writeSetting(e, QUOTA_LAST_KEY, JSON.stringify(storedFromSnapshot(snapshot, band)));
       } catch {}
     }
-    if (!options.owner) {
-      const note = notchNote(previous, band);
-      const text = bandText(band);
-      return { ok: true, text: note ? text.slice(0, -1) + note + "。" : text, band };
-    }
-    return { ok: true, text: ownerQuotaText(snapshot) + "\n" + deltaLine(previous, snapshot), band };
+    return { ok: true, text: quotaText(snapshot) + "\n" + deltaLine(previous, snapshot), band };
   } catch {
     return {
       ok: false,
