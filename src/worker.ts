@@ -18,6 +18,7 @@ import { debounceSeconds, shouldProcessNow, allowWait, loadSwitches, isOn, mayBe
 import { gateCheck, parseGateMode } from "./gate-wire";
 import { videoTarget, biliCached, biliFailure, startVideoWait, runVideoWait, sweepVideoWaits, wakeVideoWait, fetchRoute, videoMaterial, videoWaitExists, biliResearchMaterials, materialInjected } from "./fetchjobs";
 import { enqueueVoiceJobs, runVoiceCloudJob, voiceRoute, gateVoiceChat, usableVoiceText } from "./voice-asr";
+import { docRoute } from "./docjobs";
 import { runCronExtras } from "./cron-extra";
 import { prefetchTurn } from "./prefetch";
 import { TEAM } from "./config";
@@ -567,7 +568,7 @@ async function processJob(e: Env, id: string) {
       lease_until=CASE WHEN ${expired} THEN lease_until ELSE ?1 END,
       attempts=CASE WHEN ${expired} THEN attempts ELSE attempts+1 END,
       error=CASE WHEN ${expired} THEN 'expired' ELSE error END
-      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner')
+      WHERE id=?2 AND kind NOT IN ('fetch','bili_media','voice_runner','docread')
       AND (status='pending' OR (status='running' AND lease_until<?4))
       AND (${expired} OR (attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=?4)) RETURNING *`,
   )
@@ -1322,7 +1323,7 @@ async function scheduled(e: Env, cron = "") {
     .bind(Date.now() - AUTO_REPLY_MAX_AGE_MS, Date.now()).run();
   const pending = (
     await e.DB.prepare(
-      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
+      "SELECT id,kind,payload FROM jobs WHERE kind NOT IN ('media','fetch','bili_media','voice_runner','docread') AND attempts<3 AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? AND (status='pending' OR (status='running' AND lease_until<?)) ORDER BY CASE WHEN kind='chat' THEN 0 WHEN kind IN ('research','voice_notice') THEN 1 ELSE 2 END,created_at LIMIT 20",
     )
       .bind(Date.now(), Date.now())
       .all()
@@ -1371,7 +1372,7 @@ async function scheduled(e: Env, cron = "") {
       .bind(Date.now() - 30 * 86400000)
       .run();
     await e.DB.prepare(
-      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner') AND created_at<?",
+      "DELETE FROM jobs WHERE status='done' AND kind IN ('chat','research','voice_notice','scout','voice_asr','voice_runner','docread') AND created_at<?",
     )
       .bind(Date.now() - 7 * 86400000)
       .run();
@@ -1566,6 +1567,8 @@ async function api(r: Request, e: Env) {
 
     if (path.startsWith("/api/runner/fetch/") && method === "POST")
       return fetchRoute(e, path, await r.json());
+    if (path.startsWith("/api/runner/doc/") && method === "POST")
+      return docRoute(e, path, await r.json());
     if (path.startsWith("/api/runner/voice/") && method === "POST")
       return voiceRoute(e, path, await r.json());
 
