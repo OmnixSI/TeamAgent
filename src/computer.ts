@@ -126,6 +126,12 @@ export class Computer extends DurableObject<Env> {
     } finally { this.busy--; await this.touch(); }
   }
 
+  /** Passes an HTTP request to a server listening inside the machine (a dev server being previewed). */
+  async proxy(port: number, req: Request): Promise<Response> {
+    await this.touch();
+    return this.box.getTcpPort(port).fetch(req);
+  }
+
   /** CPU seconds the machine has used since it started. */
   async cpu() {
     const p = await this.box.exec(["head", "-1", "/proc/stat"]);

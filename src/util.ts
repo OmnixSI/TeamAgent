@@ -15,6 +15,7 @@ export type Env = {
   CHAT_MODEL?: string;
   RELAY_URL?: string;
   RELAY_KEY?: string;
+  PUBLIC_URL?: string;
   CODE_MODEL?: string;
   OWNERS?: string;
   BROWSER?: any;

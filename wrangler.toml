@@ -38,6 +38,8 @@ CHAT_MODEL = "deepseek-flash"
 # QQ member ids allowed to change the bot's own settings directly (comma separated).
 OWNERS = "0FC1E8A8BD28981E86866125AC3FCEFF"
 RELAY_URL = "https://relay-dusky-five.vercel.app"
+# Where published pages and transfers are reachable from outside.
+PUBLIC_URL = "https://teamagent.inkboard-server.workers.dev"
 
 # Headless browser for rendering documents, mind maps and pages to pictures (included in Workers Paid).
 [browser]
