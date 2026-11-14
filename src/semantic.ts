@@ -5,7 +5,8 @@ import { stage } from "./timing";
 import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
-import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure } from "./schedules";
+import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure, describeSchedule, slug, nextRun } from "./schedules";
+import { finalizeSpoken } from "./reply-finalize";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self"]);
 import { fetchPageCore } from "./tools/fetch-page";
@@ -672,6 +673,46 @@ async function authorizeWrite(e: any, tool: WriteTool, quote: unknown, source: a
   return result;
 }
 
+/** L2：本群同 kind、下一次执行相差 ≤10 分钟的 active 日程（promiseGuard 去重用）。 */
+async function scheduleNear(e: any, groupId: string | undefined, kind: string, nextRunAt: number) {
+  if (!groupId) return null;
+  const rows = (
+    await e.DB.prepare(
+      "SELECT * FROM schedules WHERE group_id=? AND kind=? AND status='active'",
+    )
+      .bind(groupId, kind)
+      .all()
+  ).results as any[];
+  for (const row of rows) {
+    let spec: any = {};
+    try {
+      spec = JSON.parse(row.spec || "{}");
+    } catch {}
+    const due =
+      row.kind === "reminder" || row.kind === "mute"
+        ? Number(row.next_run_at)
+        : nextRun(spec, Date.now(), row.tz);
+    if (due && Math.abs(due - nextRunAt) <= 10 * 60000) return row;
+  }
+  return null;
+}
+
+/** L2：两处 recovery.voice 之前统一注入 finalizeSpoken 的回调；纯函数不直接碰 D1。 */
+function finalizeOptions(e: any, context: any, acceptedActions: any[]) {
+  const latest = context.latest;
+  return {
+    acceptedActions,
+    avoid: context.groupRules?.avoid ?? [],
+    userText: latest?.body,
+    owner: latest?.sender,
+    groupId: latest?.group_id,
+    sourceMsgId: latest?.id,
+    createSchedule: (input: any) => createSchedule(e, input),
+    findDuplicate: (kind: string, nextRunAt: number) =>
+      scheduleNear(e, latest?.group_id, kind, nextRunAt),
+  };
+}
+
 export async function agentAnswer(e: any, context: any) {
   return withMentionReceipt(e, context, async () => {
     const answer = await answerWithTools(e, context), text = decodeVoice(answer).text;
@@ -864,7 +905,7 @@ async function answerWithTools(e: any, context: any) {
       function: {
         name: "schedule_create",
         description:
-          "成员明确要求定时推送日报/周报、几分钟后提醒、或让你闭嘴一段时间时调用。只建本群日程；时间按悉尼时间 HH:MM；不猜成员没说的时刻。",
+          "群友要求每天/每周 X 点发 XX（日报/早报/晨报/提醒）时调用，当场登记，不要只口头答应。用现有消息就能写出来的定时推送直接登记，不要提功能需求。时间按悉尼时间 HH:MM；没说时间就问，不要猜。没调用成功前，不要说『明早 X 点会发』。",
         parameters: {
           type: "object",
           properties: {
@@ -874,6 +915,10 @@ async function answerWithTools(e: any, context: any) {
             minutes: { type: "integer", description: "几分钟后提醒，或闭嘴多少分钟" },
             run_at: { type: "string", description: "一次性提醒/闭嘴结束的绝对时间，ISO 8601 带时区" },
             text: { type: "string", description: "提醒内容" },
+            topic: {
+              type: "string",
+              description: "推送的主题/内容，例如「礼物日早报」「昨天的 PR 进展」；只是总结昨天聊天就不填",
+            },
             source_id: { type: "string", description: "本条交办的消息ID，默认最新消息" },
           },
           required: ["kind"],
@@ -895,15 +940,17 @@ async function answerWithTools(e: any, context: any) {
       type: "function",
       function: {
         name: "schedule_cancel",
-        description: "取消本群一个定时任务。先用 schedule_list 拿到任务ID。",
+        description:
+          "取消本群一个定时任务。先用 schedule_list 拿到任务ID；群友只说了主题、没给ID时，可以只传 topic 按主题匹配。",
         parameters: {
           type: "object",
-          properties: { id: { type: "string", description: "schedule_list 返回的任务ID" } },
-          required: ["id"],
+          properties: {
+            id: { type: "string", description: "schedule_list 返回的任务ID" },
+            topic: { type: "string", description: "群友说的主题，例如「礼物日早报」「周报」；没给ID时用" },
+          },
         },
       },
     },
-    ...(await extraToolDefs(e, context)),
   ];
   // Keep switched-off tools in the capability card as 「当前已关闭」.
   const allTools = [...baseTools, ...repoTools];
@@ -1076,7 +1123,7 @@ async function answerWithTools(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return recovery.voice(spoken);
+      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
@@ -1384,6 +1431,8 @@ async function answerWithTools(e: any, context: any) {
             if (!source?.group_id || source.group_id !== context.latest?.group_id)
               throw Error("只能在本群建日程");
             try {
+              const topic = typeof a.topic === "string" ? a.topic.trim() : "";
+              const quote = String(source.body || "").trim().slice(0, 200);
               const schedule = await createSchedule(e, {
                 group_id: source.group_id,
                 owner: source.sender || "群友",
@@ -1394,16 +1443,22 @@ async function answerWithTools(e: any, context: any) {
                   minutes: a.minutes,
                   run_at: a.run_at,
                   text: a.text,
+                  ...(topic ? { topic } : {}),
+                  origin: "chat",
+                  ...(quote ? { request_quote: quote } : {}),
+                  ...(topic ? { dedup: slug(topic, source.id) } : {}),
                 },
                 source_msg_id: source.id,
               });
+              const first = sydneyText(schedule.next_run_at, schedule.tz);
               result = {
                 accepted: true,
                 ok: true,
                 id: schedule.id,
                 kind: schedule.kind,
                 next_run_at: schedule.next_run_at,
-                next_run_text: sydneyText(schedule.next_run_at, schedule.tz),
+                next_run_text: first,
+                say: `记下了，${describeSchedule(schedule)}，第一次是 ${first}。不想要了回那条推送说「不用再发了」。`,
               };
             } catch (error: any) {
               result = scheduleFailure(error?.message);
@@ -1424,15 +1479,74 @@ async function answerWithTools(e: any, context: any) {
           case "schedule_cancel": {
             const group = context.latest?.group_id;
             if (!group) throw Error("缺少群信息");
-            const schedule = await cancelSchedule(e, group, String(a.id || ""));
-            result = schedule
-              ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
-              : {
-                  ok: false,
-                  error_kind: "not_found",
-                  retryable: false,
-                  next_action: "先用 schedule_list 看本群任务，再拿ID取消",
-                };
+            const id = String(a.id || "").trim();
+            const topic = String(a.topic || "").trim();
+            if (id) {
+              const schedule = await cancelSchedule(e, group, id);
+              result = schedule
+                ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
+                : {
+                    ok: false,
+                    error_kind: "not_found",
+                    retryable: false,
+                    next_action: "先用 schedule_list 看本群任务，再拿ID取消",
+                  };
+              break;
+            }
+            if (!topic) {
+              result = {
+                ok: false,
+                error_kind: "invalid_args",
+                retryable: false,
+                next_action: "给任务ID或主题；先用 schedule_list 看本群任务",
+              };
+              break;
+            }
+            // 没给ID：按主题模糊匹配本群 active 日程，唯一命中才取消。
+            const active = (
+              await e.DB.prepare(
+                "SELECT * FROM schedules WHERE group_id=? AND status='active' ORDER BY next_run_at",
+              )
+                .bind(group)
+                .all()
+            ).results as any[];
+            const needle = topic.toLowerCase();
+            const hits = active.filter((row) => {
+              let spec: any = {};
+              try {
+                spec = JSON.parse(row.spec || "{}");
+              } catch {}
+              return (
+                String(spec.topic || "").toLowerCase().includes(needle) ||
+                describeSchedule(row).toLowerCase().includes(needle)
+              );
+            });
+            if (hits.length === 1) {
+              const schedule = await cancelSchedule(e, group, hits[0].id);
+              result = schedule
+                ? { accepted: true, ok: true, id: schedule.id, status: "cancelled" }
+                : {
+                    ok: false,
+                    error_kind: "not_found",
+                    retryable: false,
+                    next_action: "先用 schedule_list 看本群任务",
+                  };
+            } else if (hits.length > 1) {
+              result = {
+                ok: false,
+                error_kind: "ambiguous",
+                retryable: false,
+                candidates: hits.map((row) => ({ id: row.id, description: describeSchedule(row) })),
+                next_action: "把匹配到的任务列给群友，问清是哪一个再取消",
+              };
+            } else {
+              result = {
+                ok: false,
+                error_kind: "not_found",
+                retryable: false,
+                next_action: "schedule_list 里没有这个主题，先让群友确认主题",
+              };
+            }
             break;
           }
           case "repo_changes": case "repo_commit": case "repo_file": case "list_repos":
@@ -1461,5 +1575,6 @@ async function answerWithTools(e: any, context: any) {
     }
     recovery.retry(messages);
   }
-  return recovery.voice(await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context));
+  const spoken = await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
+  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions)));
 }
