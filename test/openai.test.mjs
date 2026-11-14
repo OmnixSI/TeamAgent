@@ -137,7 +137,9 @@ test("O1 only api.openai.com is reachable; host-bearing paths are denied before 
     assert.equal(f.calls[0].url, "https://api.openai.com/v1/images/generations");
     assert.equal(f.calls[0].init.method, "POST");
     assert.equal(f.calls[0].init.headers.Authorization, "Bearer " + KEY);
-    assert.equal(f.calls[0].init.redirect, "error");
+    // workerd rejects redirect:"error"; manual keeps the no-follow intent.
+    assert.equal(f.calls[0].init.redirect, "manual");
+    assert.notEqual(f.calls[0].init.redirect, "error");
     assert.equal(JSON.parse(f.calls[0].init.body).prompt, PROMPT);
 
     for (const path of [
@@ -153,6 +155,41 @@ test("O1 only api.openai.com is reachable; host-bearing paths are denied before 
     assert.equal(f.calls.length, 1, "denied paths must not send");
   } finally {
     f.restore();
+  }
+});
+
+test("O1b redirects are never followed: manual fetch, every 3xx fails, 200 still works", async () => {
+  const { e } = env({ OPENAI_API_KEY: KEY });
+  for (const status of [301, 302, 303, 307, 308]) {
+    const f = spyFetch(
+      () =>
+        new Response(null, {
+          status,
+          headers: { location: "https://evil.test/redirected" },
+        }),
+    );
+    try {
+      const r = await api.callOpenAi(e, request());
+      assert.equal(r.ok, false, status + " must be a failure");
+      assert.equal(r.error_kind, "upstream", status + " kind");
+      assert.equal(r.status, status);
+      assert.equal(f.calls.length, 1, status + " is not followed");
+      assert.equal(f.calls[0].url, "https://api.openai.com/v1/images/generations");
+      assert.equal(f.calls[0].init.redirect, "manual");
+      assert.notEqual(f.calls[0].init.redirect, "error");
+    } finally {
+      f.restore();
+    }
+  }
+  const ok = spyFetch(() => jsonResponse({ data: [{ b64_json: "AAA" }] }));
+  try {
+    const r = await api.callOpenAi(e, request());
+    assert.equal(r.ok, true);
+    assert.equal(r.status, 200);
+    assert.equal(ok.calls[0].init.redirect, "manual");
+    assert.notEqual(ok.calls[0].init.redirect, "error");
+  } finally {
+    ok.restore();
   }
 });
 

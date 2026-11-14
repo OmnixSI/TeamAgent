@@ -340,7 +340,9 @@ export async function callOpenAi<T = any>(
       "Content-Type": "application/json",
     },
     body: payload,
-    redirect: "error",
+    // workerd rejects "error" (TypeError before any request), so keep the
+    // no-follow intent with "manual" and fail on a 3xx answer below.
+    redirect: "manual",
     signal: controller.signal,
   });
   // The loser of the race may reject later; never leave it unhandled.
@@ -361,6 +363,14 @@ export async function callOpenAi<T = any>(
   }
 
   const latency = Date.now() - started;
+  // Redirects are never followed: a 3xx answer is a failed call, not a new target.
+  if (response.status >= 300 && response.status < 400)
+    return finish(
+      failure("upstream", response.status, {
+        reason_text: "OpenAI 返回了重定向，已按不跟随处理",
+        next_action: "稍后重试；若持续出现，让管理员检查 OpenAI 接入地址",
+      }),
+    );
   let data: any = null;
   try {
     data = await response.json();
