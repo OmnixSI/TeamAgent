@@ -113,7 +113,7 @@ test('migrate.mjs applies 0080 after the main-era migrations', () => {
 
 test('team config freezes the schedule limits and rejects unsafe values', () => {
   assert.deepEqual(settings.schedules, {
-    max_active_per_group: 5,
+    max_active_per_group: 10,
     max_sends_per_group_day: 6,
     max_sends_day: 20,
     report_window: ['08:40', '10:00'],

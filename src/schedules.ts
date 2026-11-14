@@ -1,17 +1,35 @@
 // F6-6 用户日程：每日/每周摘要、一次性提醒、定时闭嘴。
 // 纯时间计算放在文件顶部，便于按悉尼夏令时做红绿测试；所有出站都走现有 outbox。
+import { composeWithNote, joinResults, runSteps, validateSteps } from "./actions";
 import { left } from "./d1";
 import { model, redact } from "./runtime";
 import { namesFor } from "./context";
 import { TEAM } from "./config";
 
-export type ScheduleKind = "digest_daily" | "digest_weekly" | "reminder" | "mute";
+export type ScheduleKind = "digest_daily" | "digest_weekly" | "reminder" | "mute" | "agent_task";
+/** D 版：日程节奏；旧行没有这个字段，按 kind/spec 推断（见 cadenceOf）。 */
+export type Cadence = "daily" | "weekly" | "monthly" | "once" | "every";
 export type ScheduleSpec = {
   time?: string;
   weekdays?: number[];
   run_at?: number | string;
   text?: string;
   minutes?: number;
+  cadence?: Cadence;
+  /** 1..31，-1 = 当月最后一天。 */
+  month_days?: number[];
+  /** 5..1440 分钟。 */
+  every_minutes?: number;
+  /** every 的时段，墙上时间 "HH:MM"。 */
+  window?: [string, string];
+  /** 截止毫秒；every/once 用。 */
+  until?: number;
+  /** agent_task 的动作步骤（Step[]，§5.4）。 */
+  steps?: unknown[];
+  /** agent_task 的成文说明（≤600 字）。 */
+  note?: string;
+  /** 回执与推送标题（≤40 字）。 */
+  title?: string;
   /** L1：自定义主题推送（1–40 字）。有它就不是「昨日总结」，而是写这个话题。 */
   topic?: string;
   /** L1：跨群唯一的去重键，出站 id 变成 `<dedup>:<悉尼日期>`。 */
@@ -44,6 +62,12 @@ const SCHEDULE_LIMITS = ((TEAM as any)?.schedules || {}) as Record<string, unkno
 const MAX_ACTIVE_PER_GROUP = Number(SCHEDULE_LIMITS.max_active_per_group) || 5;
 const MAX_SENDS_PER_GROUP_DAY = Number(SCHEDULE_LIMITS.max_sends_per_group_day) || 6;
 const MAX_SENDS_DAY = Number(SCHEDULE_LIMITS.max_sends_day) || 20;
+/** D 版：每 tick 最多几个真正要调模型的任务（其余顺延到下一分钟）。 */
+const MAX_AGENT_MODEL_PER_TICK = Number(SCHEDULE_LIMITS.agent_model_calls_per_tick) || 2;
+/** D 版：每群每天 agent_task 运行次数（数 schedule_runs）。 */
+const MAX_AGENT_RUNS_PER_GROUP_DAY = Number(SCHEDULE_LIMITS.agent_runs_per_group_day) || 24;
+/** D 版：连续失败到这个次数就暂停并发一条通知。 */
+const FAIL_PAUSE_AFTER = Number(SCHEDULE_LIMITS.fail_pause_after) || 9;
 const DIGEST_PROMPT =
   "你在为群聊写日报。只写群里发布的日报正文：最多8行，先一句总览，再列3–6条真正有信息量的进展、决定或待办（点到相关的人或项目），最后一行只写一条最该推进的事。" +
   "只用消息里出现的事实，不编造，不猜没提到的计划；没有内容就直说没有新消息。不要客套、标题、表格或链接。";
@@ -95,7 +119,7 @@ function addDays(y: number, m: number, d: number, n: number) {
 }
 
 /** run_at 接受毫秒、带时区的 ISO，也接受成员口中的「明天 9:00」无时区写法（按悉尼墙上时间）。 */
-function parseRunAt(value: unknown, tz: string) {
+export function parseRunAt(value: unknown, tz: string) {
   if (typeof value === "number") return value;
   const text = String(value ?? "").trim();
   if (!text) return 0;
@@ -283,18 +307,105 @@ export function sydneyText(ts: number | null | undefined, tz = DEFAULT_TZ) {
   return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}（悉尼）`;
 }
 
+/**
+ * 旧行没有 cadence 字段，按 spec 形状推断；顺序有意为之：
+ * month_days → monthly，every_minutes → every，只有 run_at → once，weekdays → weekly，其余 daily。
+ */
+export function cadenceOf(spec: ScheduleSpec): Cadence {
+  const c = spec?.cadence;
+  if (c === "daily" || c === "weekly" || c === "monthly" || c === "once" || c === "every") return c;
+  if (Array.isArray(spec?.month_days) && spec.month_days.length) return "monthly";
+  if (Number(spec?.every_minutes) > 0) return "every";
+  if (spec?.run_at !== undefined && spec?.run_at !== null && !spec?.time) return "once";
+  if (Array.isArray(spec?.weekdays) && spec.weekdays.length) return "weekly";
+  return "daily";
+}
+
+/** 时区的中文短名；未知时区原样显示。 */
+function tzLabel(tz: string) {
+  if (tz === "Asia/Shanghai") return "北京";
+  if (tz === "Australia/Sydney") return "悉尼";
+  if (tz === "UTC") return "UTC";
+  return tz;
+}
+
+/** 双时区文本：非悉尼时区同时给悉尼墙上时间（§4.1）。悉尼行沿用旧格式，避免回归。 */
+export function dualText(ts: number | null | undefined, tz = DEFAULT_TZ) {
+  if (!ts) return "无";
+  const zone = tz || DEFAULT_TZ;
+  if (zone === DEFAULT_TZ) return sydneyText(ts, zone);
+  const p = partsAt(Number(ts), zone);
+  const s = partsAt(Number(ts), DEFAULT_TZ);
+  return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}（${tzLabel(zone)}），悉尼 ${pad(s.h)}:${pad(s.mi)}`;
+}
+
+function nextMonthly(spec: ScheduleSpec, now: number, tz: string, time: [number, number]) {
+  const p = partsAt(now, tz);
+  const days = (Array.isArray(spec?.month_days) && spec.month_days.length ? spec.month_days : [1])
+    .map(Number)
+    .filter((d) => Number.isInteger(d) && (d === -1 || (d >= 1 && d <= 31)));
+  if (!days.length) return null;
+  // 最多往后找 13 个月；2 月 30 日这种不存在的日期当月跳过，不向 3 月顺延。
+  for (let k = 0; k <= 12; k++) {
+    const index = p.m - 1 + k;
+    const y = p.y + Math.floor(index / 12);
+    const m = (index % 12) + 1;
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const targets = [...new Set(days.map((d) => (d === -1 ? lastDay : d)))]
+      .filter((d) => d <= lastDay)
+      .sort((a, b) => a - b);
+    for (const d of targets) {
+      const ts = zonedToUtc(y, m, d, time[0], time[1], tz);
+      if (ts > now) return ts;
+    }
+  }
+  return null;
+}
+
+function nextEvery(spec: ScheduleSpec, now: number, tz: string) {
+  const every = Math.min(1440, Math.max(5, Math.floor(Number(spec?.every_minutes) || 0) || 5));
+  const until = Number(spec?.until) > 0 ? Number(spec.until) : null;
+  const capped = (ts: number) => (until !== null && ts > until ? null : ts);
+  const window = Array.isArray(spec?.window) && spec.window.length === 2 ? spec.window : null;
+  const start = window ? parseTime(window[0]) : null;
+  const end = window ? parseTime(window[1]) : null;
+  if (!window || !start || !end) return capped(now + every * MINUTE);
+  const p = partsAt(now, tz);
+  for (let i = 0; i <= 8; i++) {
+    const day = addDays(p.y, p.m, p.d, i);
+    const from = zonedToUtc(day.y, day.m, day.d, start[0], start[1], tz);
+    let to = zonedToUtc(day.y, day.m, day.d, end[0], end[1], tz);
+    if (to <= from) {
+      // 跨午夜的时段（22:00–02:00）
+      const nextDay = addDays(day.y, day.m, day.d, 1);
+      to = zonedToUtc(nextDay.y, nextDay.m, nextDay.d, end[0], end[1], tz);
+    }
+    for (let ts = from; ts < to; ts += every * MINUTE) {
+      if (ts <= now) continue;
+      return capped(ts);
+    }
+  }
+  return null;
+}
+
 export function nextRun(spec: ScheduleSpec, now: number, tz = DEFAULT_TZ): number | null {
-  const runAt = Number(spec?.run_at);
-  if (Number.isFinite(runAt) && runAt > 0) return runAt > now ? runAt : null;
+  const zone = tz || DEFAULT_TZ;
+  const cadence = cadenceOf(spec);
+  if (cadence === "once") {
+    const runAt = parseRunAt(spec?.run_at, zone);
+    return runAt > now ? runAt : null;
+  }
+  if (cadence === "every") return nextEvery(spec, now, zone);
   const time = parseTime(spec?.time) || [8, 0];
-  const p = partsAt(now, tz || DEFAULT_TZ);
-  const weekdays = Array.isArray(spec?.weekdays) && spec.weekdays.length
+  if (cadence === "monthly") return nextMonthly(spec, now, zone, time);
+  const p = partsAt(now, zone);
+  const weekdays = cadence === "weekly" && Array.isArray(spec?.weekdays) && spec.weekdays.length
     ? new Set(spec.weekdays.map(Number))
     : null;
   for (let i = 0; i <= 8; i++) {
     const day = addDays(p.y, p.m, p.d, i);
     if (weekdays && !weekdays.has(new Date(Date.UTC(day.y, day.m - 1, day.d)).getUTCDay())) continue;
-    const ts = zonedToUtc(day.y, day.m, day.d, time[0], time[1], tz || DEFAULT_TZ);
+    const ts = zonedToUtc(day.y, day.m, day.d, time[0], time[1], zone);
     if (ts > now) return ts;
   }
   return null;
@@ -312,26 +423,56 @@ export function describeSchedule(schedule: any) {
   const spec = specOf(schedule);
   const topic = String(spec.topic || "").trim();
   const time = spec.time || "08:00";
+  const zone = schedule?.tz || DEFAULT_TZ;
+  const label = tzLabel(zone);
   if (schedule?.kind === "digest_daily")
-    return topic ? `每天 ${time}（悉尼）发${topic}` : `每天 ${time}（悉尼）昨日总结`;
+    return topic ? `每天 ${time}（${label}）发${topic}` : `每天 ${time}（${label}）昨日总结`;
   if (schedule?.kind === "digest_weekly") {
     const days = (spec.weekdays || [0])
       .map((d: number) => String(WEEKDAY_NAMES[d] ?? d).replace(/^周/, ""))
       .join("、");
-    return topic ? `每周${days} ${time}（悉尼）发${topic}` : `每周${days} ${time}（悉尼）周报`;
+    return topic ? `每周${days} ${time}（${label}）发${topic}` : `每周${days} ${time}（${label}）周报`;
   }
   if (schedule?.kind === "reminder") return `提醒：${spec.text || "未写内容"}`;
-  if (schedule?.kind === "mute") return `闭嘴到 ${sydneyText(Number(spec.run_at) || null)}`;
+  if (schedule?.kind === "mute") return `闭嘴到 ${dualText(Number(spec.run_at) || null, zone)}`;
+  if (schedule?.kind === "agent_task") {
+    const title = String(spec.title || spec.topic || "定时任务");
+    const cadence = cadenceOf(spec);
+    if (cadence === "every")
+      return `每 ${Number(spec.every_minutes) || 5} 分钟${spec.window ? `（${spec.window[0]}–${spec.window[1]}）` : ""}（${label}）发${title}`;
+    if (cadence === "once") return `一次：${dualText(Number(spec.run_at) || null, zone)} 发${title}`;
+    if (cadence === "monthly") {
+      const days = (spec.month_days || [1]).map((d: number) => (d === -1 ? "最后一天" : `${d}日`)).join("、");
+      return `每月${days} ${time}（${label}）发${title}`;
+    }
+    if (cadence === "weekly") {
+      const days = (spec.weekdays || [])
+        .map((d: number) => String(WEEKDAY_NAMES[d] ?? d).replace(/^周/, ""))
+        .join("、");
+      return `每周${days} ${time}（${label}）发${title}`;
+    }
+    return `每天 ${time}（${label}）发${title}`;
+  }
   return String(schedule?.kind || "日程");
+}
+
+/** schedule_runs.status → 对外三元组：sent / failed / none。 */
+function listRunStatus(raw: unknown) {
+  const s = String(raw || "");
+  if (s === "ok" || s === "late") return "sent";
+  if (s === "failed") return "failed";
+  return "none";
 }
 
 export function publicSchedule(schedule: any) {
   const spec = specOf(schedule);
+  const title = String(spec.title || spec.topic || "").trim();
   return {
     id: schedule.id,
     kind: schedule.kind,
     status: schedule.status,
     owner: schedule.owner,
+    title: title || null,
     description: describeSchedule(schedule),
     time: spec.time || null,
     weekdays: spec.weekdays || null,
@@ -343,6 +484,7 @@ export function publicSchedule(schedule: any) {
     last_run_text: schedule.last_run_at ? sydneyText(schedule.last_run_at, schedule.tz) : "从未",
     fail_count: Number(schedule.fail_count || 0),
     last_error: schedule.last_error || null,
+    last_run_status: listRunStatus(schedule.last_run_status),
   };
 }
 
@@ -368,10 +510,56 @@ export type PlannedSchedule = {
   source_msg_id: string | null;
 };
 
+/** agent_task 的时间字段：校验 + 归一（monthly/every/once 是 D 版新增）。 */
+function normalizeTiming(spec: ScheduleSpec, tz: string, now: number) {
+  const cadence = cadenceOf(spec);
+  spec.cadence = cadence;
+  if (cadence === "once") {
+    const runAt = parseRunAt(spec.run_at, tz);
+    if (!runAt || runAt <= now) throw Error("这个时间已经过去，请说下一次的时间");
+    spec.run_at = runAt;
+    return;
+  }
+  if (cadence === "every") {
+    const every = Math.floor(Number(spec.every_minutes) || 0);
+    if (!(every >= 5 && every <= 1440)) throw Error("间隔要 5–1440 分钟");
+    spec.every_minutes = every;
+    if (spec.window !== undefined) {
+      const w = Array.isArray(spec.window) ? spec.window : null;
+      if (!w || w.length !== 2 || !parseTime(w[0]) || !parseTime(w[1]))
+        throw Error("时段要写成 HH:MM–HH:MM");
+      spec.window = [String(w[0]), String(w[1])] as [string, string];
+    }
+    if (spec.until !== undefined && spec.until !== null) {
+      const until = parseRunAt(spec.until, tz);
+      if (!until) throw Error("截止时间认不出来");
+      spec.until = until;
+    }
+    return;
+  }
+  const time = parseTime(spec.time);
+  if (!time) {
+    if (spec.time) throw Error("时间要写成 HH:MM，比如 09:00");
+    spec.time = "08:00";
+  } else spec.time = `${pad(time[0])}:${pad(time[1])}`;
+  if (cadence === "weekly") {
+    const days = [...new Set((spec.weekdays || []).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
+    if (!days.length) throw Error("每周要说是周几（0=周日，1=周一…）");
+    spec.weekdays = days;
+  }
+  if (cadence === "monthly") {
+    const days = [...new Set((spec.month_days || [1]).map(Number))].filter(
+      (d) => Number.isInteger(d) && (d === -1 || (d >= 1 && d <= 31)),
+    ).sort((a, b) => a - b);
+    if (!days.length) throw Error("每月要说是几号（1–31，-1=月末）");
+    spec.month_days = days;
+  }
+}
+
 /** 校验并算出将要写入 schedules 的那一行；dry-run 和真实创建共用同一套规则。 */
 export function planSchedule(input: NewSchedule, now = Date.now()): PlannedSchedule {
   const kind = input.kind;
-  if (!["digest_daily", "digest_weekly", "reminder", "mute"].includes(kind))
+  if (!["digest_daily", "digest_weekly", "reminder", "mute", "agent_task"].includes(kind))
     throw Error("不支持的日程类型");
   const tz = input.tz || DEFAULT_TZ;
   const spec: ScheduleSpec = { ...(input.spec || {}) };
@@ -385,6 +573,20 @@ export function planSchedule(input: NewSchedule, now = Date.now()): PlannedSched
     const days = [...new Set((spec.weekdays || [0]).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
     if (!days.length) throw Error("周报要选星期（0=周日，1=周一…）");
     spec.weekdays = days;
+  }
+  if (kind === "agent_task") {
+    const checked = validateSteps(spec.steps);
+    if (!checked.ok) throw Error(checked.reason);
+    spec.steps = checked.steps;
+    normalizeTiming(spec, tz, now);
+    const note = String(spec.note ?? "").trim();
+    if (note.length > 600) throw Error("成文说明最多 600 字");
+    if (note) spec.note = note;
+    else delete spec.note;
+    const title = String(spec.title ?? "").trim();
+    if (title.length > 40) throw Error("标题最多 40 字");
+    if (title) spec.title = title;
+    else delete spec.title;
   }
   if (kind === "reminder" || kind === "mute") {
     const explicit = parseRunAt(spec.run_at, tz);
@@ -542,10 +744,10 @@ export async function backfillSchedule(
 }
 
 export async function listSchedules(e: any, groupId: string, opts: { includeDone?: boolean } = {}) {
-  const where = opts.includeDone ? "" : "AND status='active'";
+  const where = opts.includeDone ? "" : "AND s.status='active'";
   const rows = (
     await e.DB.prepare(
-      `SELECT * FROM schedules WHERE group_id=? ${where} ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END,next_run_at`,
+      `SELECT s.*, (SELECT r.status FROM schedule_runs r WHERE r.schedule_id=s.id ORDER BY r.due_at DESC LIMIT 1) AS last_run_status FROM schedules s WHERE s.group_id=? ${where} ORDER BY CASE WHEN s.status='active' THEN 0 ELSE 1 END,s.next_run_at`,
     )
       .bind(groupId)
       .all()
@@ -646,6 +848,17 @@ async function failSchedule(e: any, schedule: any, runId: string, now: number, e
   await e.DB.prepare("UPDATE schedule_runs SET finished_at=?,status='failed',error=? WHERE id=?")
     .bind(now, detail, runId)
     .run();
+  // §4.6：连续失败到上限就暂停，不再每天刷屏；只发一条暂停通知，id 固定所以重试不会重复发。
+  if (fails >= FAIL_PAUSE_AFTER) {
+    const body = `⏰ 定时任务「${describeSchedule(schedule)}」已经连续失败 ${fails} 次，我先把它暂停了，不再继续重试。修好后让我恢复就行。最后一次错误：${detail}`;
+    await e.DB.batch([
+      e.DB.prepare("UPDATE schedules SET fail_count=?,last_error=?,next_run_at=NULL,status='paused' WHERE id=?")
+        .bind(fails, detail, schedule.id),
+      e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
+        .bind(`sched-paused:${schedule.id}`, schedule.group_id, schedule.source_msg_id || null, body, "pending", now),
+    ]);
+    return;
+  }
   const retryAt = fails >= 3 ? nextRun(specOf(schedule), now, schedule.tz || DEFAULT_TZ) : now + RETRY_AFTER;
   await e.DB.prepare("UPDATE schedules SET fail_count=?,last_error=?,next_run_at=?,status='active' WHERE id=?")
     .bind(fails, detail, retryAt, schedule.id)
@@ -656,6 +869,39 @@ async function failSchedule(e: any, schedule: any, runId: string, now: number, e
       .bind(`sched-fail-${schedule.id}-${fails}`, schedule.group_id, schedule.source_msg_id || null, body, "pending", now)
       .run();
   }
+}
+
+/** settings 的 `off:<name>`：非空、非 0/false 即关。 */
+async function switchedOff(e: any, name: string) {
+  const row = await e.DB.prepare("SELECT value FROM settings WHERE key=?").bind(`off:${name}`).first();
+  const value = String(row?.value ?? "").trim();
+  return value !== "" && value !== "0" && value !== "false";
+}
+
+/** D 版：agent_task（或带 steps 的旧 kind 行，对应 §10 备选 A）。 */
+function isAgentTask(schedule: any, spec: ScheduleSpec) {
+  return schedule?.kind === "agent_task" || (Array.isArray(spec?.steps) && spec.steps.length > 0);
+}
+
+/** 真正要调模型的任务：有 note（成文）或 chat_digest（内部用模型）。确定性动作不算。 */
+function needsModel(spec: ScheduleSpec) {
+  if (String(spec?.note || "").trim()) return true;
+  return (Array.isArray(spec?.steps) ? spec.steps : []).some((s: any) => s?.action === "chat_digest");
+}
+
+/** 本群今天（日程 tz 的自然日）已经跑过多少次 agent_task。 */
+async function agentRunsToday(e: any, schedule: any, now: number) {
+  const tz = schedule.tz || DEFAULT_TZ;
+  const p = partsAt(now, tz);
+  const start = zonedToUtc(p.y, p.m, p.d, 0, 0, tz);
+  const tomorrow = addDays(p.y, p.m, p.d, 1);
+  const end = zonedToUtc(tomorrow.y, tomorrow.m, tomorrow.d, 0, 0, tz);
+  const row = await e.DB.prepare(
+    "SELECT COUNT(*) AS n FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE s.group_id=? AND s.kind='agent_task' AND r.started_at>=? AND r.started_at<? AND r.status IN ('ok','late','failed','running')",
+  )
+    .bind(schedule.group_id, start, end)
+    .first();
+  return Number(row?.n || 0);
 }
 
 /** L1：有 dedup 时出站 id 是 `<dedup>:<悉尼日期>`，没有就沿用 sched-<id>-<due>。 */
@@ -705,6 +951,12 @@ export async function runSchedules(e: any, now = Date.now()) {
       .bind(now)
       .all()
   ).results;
+  // 没有到期的就到此为止：cron 的 D1 预算是给维护工作留的，别为一个开关多花一次查询。
+  if (!due.length) return;
+  // §10：迁移 schedules 表期间的保险丝，交付前置 1、迁移后置 0。
+  if (await switchedOff(e, "schedules_cron")) return;
+  // 每 tick 最多 MAX_AGENT_MODEL_PER_TICK 个要调模型的任务，其余顺延到下一分钟。
+  let modelTasks = 0;
   for (const schedule of due) {
     if (left(e) < 24) break;
     const dueAt = Number(schedule.next_run_at);
@@ -735,6 +987,24 @@ export async function runSchedules(e: any, now = Date.now()) {
       ]);
       continue;
     }
+    const agent = isAgentTask(schedule, spec);
+    if (agent && needsModel(spec) && modelTasks >= MAX_AGENT_MODEL_PER_TICK) {
+      // 把抢占还回去：下一分钟同一 due 还能再抢，出站 id 不变，不会重复发。
+      await e.DB.prepare("UPDATE schedule_runs SET started_at=NULL,status='pending' WHERE id=?").bind(runId).run();
+      continue;
+    }
+    if (agent && (await agentRunsToday(e, schedule, now)) >= MAX_AGENT_RUNS_PER_GROUP_DAY) {
+      const next = nextRun(spec, Math.max(now, dueAt), schedule.tz || DEFAULT_TZ);
+      await e.DB.batch([
+        e.DB.prepare("UPDATE schedule_runs SET finished_at=?,status='skipped',error='agent_daily_cap' WHERE id=?").bind(now, runId),
+        e.DB.prepare("UPDATE schedules SET next_run_at=?,status=?,last_error='agent_daily_cap' WHERE id=?").bind(
+          next,
+          next === null ? "done" : "active",
+          schedule.id,
+        ),
+      ]);
+      continue;
+    }
     if (schedule.kind !== "mute" && (await overSendCap(e, schedule, now))) {
       // 当天发送量到顶：这次不写 outbox，进度照常推进，明天配额重新算。
       const next = nextRun(spec, now, schedule.tz || DEFAULT_TZ);
@@ -749,11 +1019,30 @@ export async function runSchedules(e: any, now = Date.now()) {
       continue;
     }
     try {
-      const body = schedule.kind === "mute"
-        ? null
-        : schedule.kind === "reminder"
-          ? String(spec.text || "").trim()
-          : await digestText(e, schedule, spec, now);
+      let body: string | null;
+      if (schedule.kind === "mute") body = null;
+      else if (agent) {
+        // S-15：被注入的非只读动作在这里被拒，run 记 denied，绝不执行。
+        const checked = validateSteps(spec.steps);
+        if (!checked.ok) throw Error(`denied：${checked.reason}`);
+        if (needsModel(spec)) modelTasks++;
+        const ctx = {
+          e,
+          groupId: schedule.group_id,
+          viewer: { sender: schedule.owner },
+          tz: schedule.tz || DEFAULT_TZ,
+          now,
+          purpose: "schedule" as const,
+        };
+        const results = await runSteps(ctx, checked.steps);
+        if (!results.length) throw Error("动作层没有返回结果");
+        if (results.every((r: any) => !r.ok)) throw Error(`全部步骤失败（${results[0]?.error_kind || "unknown"}）`);
+        const note = String(spec.note || "").trim();
+        body = note
+          ? await composeWithNote(ctx, results, note)
+          : joinResults(results, String(spec.title || "").trim() || undefined);
+      } else if (schedule.kind === "reminder") body = String(spec.text || "").trim();
+      else body = await digestText(e, schedule, spec, now);
       if (body === "") throw Error("日程内容为空");
       const late = body === null ? false : now - dueAt > LATE_AFTER;
       if (body !== null) {

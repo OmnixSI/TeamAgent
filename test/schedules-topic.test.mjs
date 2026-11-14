@@ -217,19 +217,20 @@ test("T7 createSchedule caps active schedules per group and ignores mute", async
       { group_id: GROUP, owner: "U1", kind: "digest_daily", spec: { time: "08:00" }, source_msg_id: name, ...extra },
       NOW,
     );
-  for (const name of ["c-1", "c-2", "c-3", "c-4"]) await make(name);
+  // 上限 10（D 版从 5 提到 10）；mute 不占名额。
+  for (let i = 1; i <= 9; i++) await make("c-" + i);
   await api.createSchedule(
     e,
     { group_id: GROUP, owner: "U1", kind: "mute", spec: { minutes: 10 }, source_msg_id: "c-mute" },
     NOW,
   );
-  // 5 行 active 里有 1 行 mute：非 mute 只有 4，第 5 个仍然能建
-  const fifth = await make("c-5");
-  assert.ok(fifth.id);
-  await assert.rejects(make("c-6"), /本群定时已满 5 个，先取消一个/);
+  // 10 行 active 里有 1 行 mute：非 mute 只有 9，第 10 个仍然能建
+  const tenth = await make("c-10");
+  assert.ok(tenth.id);
+  await assert.rejects(make("c-11"), /本群定时已满 10 个，先取消一个/);
   // 取消一个后又能建
-  await api.cancelSchedule(e, GROUP, fifth.id);
-  assert.ok((await make("c-7")).id);
+  await api.cancelSchedule(e, GROUP, tenth.id);
+  assert.ok((await make("c-12")).id);
 });
 
 test("T8 dedup outbox id is <dedup>:<Sydney date>; without dedup the old id is kept", async () => {
