@@ -27,8 +27,11 @@ const HAS_FITZ = probe("import fitz") || probe("import pymupdf");
 const HAS_PIL = probe("import PIL");
 const HAS_DOCX = probe("import docx");
 const has = cmd => spawnSync("sh", ["-c", "command -v " + cmd], { stdio: "ignore" }).status === 0;
-const HAS_SOFFICE = has("soffice") || has("libreoffice");
-const HAS_PANDOC = has("pandoc");
+// Starting LibreOffice takes many seconds and is unreliable next to the other test files, so the runs that
+// need it only happen when asked for: SKILLS_REAL=1 node --test test/skills-docs.test.mjs
+const REAL = process.env.SKILLS_REAL === "1";
+const HAS_SOFFICE = REAL && (has("soffice") || has("libreoffice"));
+const HAS_PANDOC = REAL && has("pandoc");
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "skills-docs-"));
 const here = path.dirname(new URL(import.meta.url).pathname);
