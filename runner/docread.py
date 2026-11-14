@@ -30,6 +30,11 @@ MAX_ARCHIVE_MEMBERS = 500
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 MAX_XML_BYTES = 32 * 1024 * 1024
 MAX_XML_TOTAL_BYTES = 48 * 1024 * 1024
+MAX_XML_ELEMENTS = 2_000_000
+MAX_WORKSHEET_COLUMNS = 16_384
+MAX_WORKSHEET_OUT_OF_ROW = 100_000
+MAX_SHEET_ROWS = 5000
+MAX_OUTPUT_COLUMNS = 200
 MAX_COMPRESSION_RATIO = 100
 MIN_RATIO_CHECK_BYTES = 1024 * 1024
 MAX_MERGED_RANGES = 1000
@@ -88,55 +93,144 @@ def resolve_input(path, root=None):
     return resolved
 
 
+def _is_worksheet_xml(name):
+    lowered = name.lower()
+    return lowered.startswith("xl/worksheets/") and lowered.endswith(".xml")
+
+
+def _scan_xml(archive, name, worksheet=False, prior=0):
+    """Count XML elements with Expat, without building a tree.
+
+    python-docx/openpyxl keep ~260-300 bytes per element, so a byte cap alone misses
+    small tags. `prior` is the element count already spent by earlier XML members, so
+    the 2M budget is global. Worksheets also check the first 5000 rows for Excel's
+    16,384-column limit and cap out-of-row elements.
+    """
+    import xml.parsers.expat as expat
+
+    parser = expat.ParserCreate()
+    elements = rows = cells = outside = 0
+    in_row = False
+
+    def start(tag, _attrs):
+        nonlocal elements, rows, cells, outside, in_row
+        elements += 1
+        if prior + elements > MAX_XML_ELEMENTS:
+            raise DocReadError(
+                "too_large",
+                f"XML 元素总数超过 {MAX_XML_ELEMENTS} 个，不解压",
+            )
+        if not worksheet:
+            return
+        local = tag.rsplit(":", 1)[-1]
+        if local == "row":
+            if not in_row:
+                in_row = True
+                rows += 1
+                cells = 0
+        elif in_row:
+            if local == "c":
+                cells += 1
+                if rows <= MAX_SHEET_ROWS and cells > MAX_WORKSHEET_COLUMNS:
+                    raise DocReadError(
+                        "too_large",
+                        f"{name} 第 {rows} 行超过 {MAX_WORKSHEET_COLUMNS} 格，不解压",
+                    )
+        else:
+            outside += 1
+            if outside > MAX_WORKSHEET_OUT_OF_ROW:
+                raise DocReadError(
+                    "too_large",
+                    f"{name} 行外元素超过 {MAX_WORKSHEET_OUT_OF_ROW} 个，不解压",
+                )
+
+    def end(tag):
+        nonlocal in_row
+        if worksheet and tag.rsplit(":", 1)[-1] == "row":
+            in_row = False
+
+    def doctype(*_args):
+        raise DocReadError("corrupted", f"{name} 含 DTD，不解压")
+
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.StartDoctypeDeclHandler = doctype
+    try:
+        with archive.open(name) as source:
+            while True:
+                chunk = source.read(65536)
+                if not chunk:
+                    break
+                parser.Parse(chunk, False)
+            parser.Parse(b"", True)
+    except DocReadError:
+        raise
+    except expat.ExpatError:
+        raise DocReadError("corrupted", f"{name} XML 解析失败")
+    return elements
+
+
 def _guard_ooxml(path):
     """Refuse an OOXML package before python-docx/openpyxl/python-pptx inflate it.
 
-    Those parsers walk the whole archive, so a 1 MiB zip bomb can cost gigabytes of RAM.
-    Inspect the central directory only (no entry is decompressed) and fail honestly.
+    Size caps catch large parts; an Expat pre-scan counts elements for small-tag floods.
+    Worksheet XML is exempt from the 32/48 MiB caps (a real 60k x 10 sheet is 28.6 MiB)
+    and is read with a 5000-row / 200-column output limit instead.
     """
     try:
-        with zipfile.ZipFile(path) as archive:
-            infos = archive.infolist()
+        archive = zipfile.ZipFile(path)
     except zipfile.BadZipFile:
         raise DocReadError("corrupted", f"{path.suffix.upper()} 不是有效的压缩包")
-    total = sum(info.file_size for info in infos)
-    if total > MAX_ARCHIVE_BYTES:
-        raise DocReadError(
-            "too_large",
-            f"压缩包解压后 {total} 字节，超过上限 {MAX_ARCHIVE_BYTES} 字节（200 MiB），不解压",
-        )
-    xml_total = 0
-    for info in infos:
-        is_xml = info.filename.lower().endswith((".xml", ".rels"))
-        if is_xml:
-            xml_total += info.file_size
-            # python-docx/openpyxl build an ElementTree from XML parts; an 80 MiB
-            # document.xml was measured at 1.65 GB RSS, so XML gets a much tighter cap.
-            if info.file_size > MAX_XML_BYTES:
+    with archive:
+        infos = archive.infolist()
+        total = sum(info.file_size for info in infos)
+        if total > MAX_ARCHIVE_BYTES:
+            raise DocReadError(
+                "too_large",
+                f"压缩包解压后 {total} 字节，超过上限 {MAX_ARCHIVE_BYTES} 字节（200 MiB），不解压",
+            )
+        xml_total = 0
+        for info in infos:
+            name = info.filename
+            is_worksheet = _is_worksheet_xml(name)
+            is_xml = name.lower().endswith(".xml")
+            is_rels = name.lower().endswith(".rels")
+            if (is_xml and not is_worksheet) or is_rels:
+                xml_total += info.file_size
+                # Non-worksheet XML is built into a tree by the document libraries.
+                if info.file_size > MAX_XML_BYTES:
+                    raise DocReadError(
+                        "too_large",
+                        f"{name} 解压后 {info.file_size} 字节，超过 XML 单文件上限 {MAX_XML_BYTES} 字节（32 MiB），不解压",
+                    )
+            if info.file_size > MAX_ARCHIVE_BYTES:
                 raise DocReadError(
                     "too_large",
-                    f"{info.filename} 解压后 {info.file_size} 字节，超过 XML 单文件上限 {MAX_XML_BYTES} 字节（32 MiB），不解压",
+                    f"{name} 解压后 {info.file_size} 字节，超过 200 MiB，不解压",
                 )
-        if info.file_size > MAX_ARCHIVE_BYTES:
+            # Tiny highly-compressed members are normal OOXML; only guard members that could
+            # actually cost memory, so a repetitive 10 KB XML does not trip the ratio check.
+            if info.file_size < MIN_RATIO_CHECK_BYTES or not info.compress_size:
+                continue
+            ratio = info.file_size / info.compress_size
+            if ratio > MAX_COMPRESSION_RATIO:
+                raise DocReadError(
+                    "too_large",
+                    f"{name} 压缩比 {ratio:.0f} 超过 {MAX_COMPRESSION_RATIO}，疑似压缩炸弹，不解压",
+                )
+        if xml_total > MAX_XML_TOTAL_BYTES:
             raise DocReadError(
                 "too_large",
-                f"{info.filename} 解压后 {info.file_size} 字节，超过 200 MiB，不解压",
+                f"XML/rels 解压后合计 {xml_total} 字节，超过上限 {MAX_XML_TOTAL_BYTES} 字节（48 MiB），不解压",
             )
-        # Tiny highly-compressed members are normal OOXML; only guard members that could
-        # actually cost memory, so a repetitive 10 KB XML does not trip the ratio check.
-        if info.file_size < MIN_RATIO_CHECK_BYTES or not info.compress_size:
-            continue
-        ratio = info.file_size / info.compress_size
-        if ratio > MAX_COMPRESSION_RATIO:
-            raise DocReadError(
-                "too_large",
-                f"{info.filename} 压缩比 {ratio:.0f} 超过 {MAX_COMPRESSION_RATIO}，疑似压缩炸弹，不解压",
-            )
-    if xml_total > MAX_XML_TOTAL_BYTES:
-        raise DocReadError(
-            "too_large",
-            f"XML/rels 解压后合计 {xml_total} 字节，超过上限 {MAX_XML_TOTAL_BYTES} 字节（48 MiB），不解压",
-        )
+        elements_total = 0
+        for info in infos:
+            if info.file_size and info.filename.lower().endswith((".xml", ".rels")):
+                elements_total += _scan_xml(
+                    archive, info.filename,
+                    worksheet=_is_worksheet_xml(info.filename),
+                    prior=elements_total,
+                )
     return total
 
 
@@ -391,16 +485,20 @@ def _xlsx_openpyxl(path):
             rows = 0
             processed = 0
             raw_max_row = worksheet.max_row
-            max_row = min(raw_max_row, 5000) if raw_max_row else None
-            max_column = min(worksheet.max_column or 0, 200)
-            truncated = bool(raw_max_row and raw_max_row > 5000)
+            max_row = min(raw_max_row, MAX_SHEET_ROWS) if raw_max_row else None
+            raw_max_column = worksheet.max_column or 0
+            max_column = min(raw_max_column, MAX_OUTPUT_COLUMNS)
+            truncated = bool(raw_max_row and raw_max_row > MAX_SHEET_ROWS)
+            columns_truncated = raw_max_column > MAX_OUTPUT_COLUMNS
             for row in worksheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column):
-                if processed >= 5000:
+                if processed >= MAX_SHEET_ROWS:
                     truncated = True
                     break
                 processed += 1
                 cells = []
-                for cell in row[:200]:
+                if len(row) > MAX_OUTPUT_COLUMNS:
+                    columns_truncated = True
+                for cell in row[:MAX_OUTPUT_COLUMNS]:
                     if cell.value is None:
                         continue
                     value = cell.value
@@ -426,6 +524,8 @@ def _xlsx_openpyxl(path):
             }
             if truncated:
                 sheet["truncated"] = True
+            if columns_truncated:
+                sheet["columns_truncated"] = True
             sheets.append(sheet)
     finally:
         workbook.close()
@@ -458,16 +558,18 @@ def _shared_strings(archive, name, namespace):
     with archive.open(name) as source:
         context = ElementTree.iterparse(source, events=("end",))
         for _event, element in context:
-            if _local_name(element.tag) == "si":
+            tag = _local_name(element.tag)
+            if tag == "si":
                 shared.append(_xml_text(element, namespace))
                 element.clear()
-                if len(shared) % 500 == 0 and context.root is not None:
-                    context.root.clear()
+            elif tag == "sst":
+                element.clear()
     return shared
 
 
-def _stream_sheet(archive, entry, sheet_name, shared, namespace, row_limit=5000):
-    """Stream one worksheet, keeping at most `row_limit` rows in the output."""
+def _stream_sheet(archive, entry, sheet_name, shared, namespace,
+                  row_limit=MAX_SHEET_ROWS, column_limit=MAX_OUTPUT_COLUMNS):
+    """Stream one worksheet, keeping at most `row_limit` rows and `column_limit` columns."""
     import xml.etree.ElementTree as ElementTree
 
     formulas, lines, merged = [], [], []
@@ -475,23 +577,31 @@ def _stream_sheet(archive, entry, sheet_name, shared, namespace, row_limit=5000)
     columns = 0
     processed = 0
     truncated = False
+    columns_truncated = False
+    in_row = False
+    row_cells = 0
+    cells = []
     with archive.open(entry) as source:
-        context = ElementTree.iterparse(source, events=("end",))
-        for _event, element in context:
+        context = ElementTree.iterparse(source, events=("start", "end"))
+        for event, element in context:
             tag = _local_name(element.tag)
-            if tag == "row":
-                if processed >= row_limit:
-                    truncated = True
-                    break
-                processed += 1
-                cells = []
-                for cell in list(element):
-                    if _local_name(cell.tag) != "c":
-                        continue
-                    reference = cell.get("r") or ""
-                    columns = max(columns, _column_number(reference))
+            if event == "start":
+                if tag == "row":
+                    if processed >= row_limit:
+                        truncated = True
+                        break
+                    processed += 1
+                    in_row = True
+                    row_cells = 0
+                    cells = []
+                continue
+            if tag == "c" and in_row:
+                row_cells += 1
+                if row_cells <= column_limit:
+                    reference = element.get("r") or ""
+                    columns = max(columns, min(_column_number(reference), column_limit))
                     formula = value_node = None
-                    for child in cell:
+                    for child in element:
                         child_name = _local_name(child.tag)
                         if child_name == "f":
                             formula = child
@@ -502,10 +612,10 @@ def _stream_sheet(archive, entry, sheet_name, shared, namespace, row_limit=5000)
                         formulas.append({"cell": reference, "formula": equation})
                         cells.append(f"{sheet_name}!{reference} 公式 {equation}")
                     else:
-                        kind = cell.get("t")
+                        kind = element.get("t")
                         value = None
                         if kind == "inlineStr":
-                            value = _xml_text(cell, namespace)
+                            value = _xml_text(element, namespace)
                         elif kind == "s" and value_node is not None:
                             try:
                                 index = int(value_node.text or "0")
@@ -520,19 +630,26 @@ def _stream_sheet(archive, entry, sheet_name, shared, namespace, row_limit=5000)
                             value = value_node.text or ""
                         if value not in (None, ""):
                             cells.append(f"{reference} {value}")
-                    cell.clear()
+                else:
+                    columns_truncated = True
+                element.clear()
+            elif tag == "row" and in_row:
                 if cells:
                     rows += 1
                     lines.append(" | ".join(cells))
+                columns = max(columns, min(row_cells, column_limit))
+                in_row = False
+                row_cells = 0
+                cells = []
                 element.clear()
-                if processed % 100 == 0 and context.root is not None:
-                    context.root.clear()
             elif tag == "mergeCell":
                 reference = element.get("ref")
                 if reference and len(merged) < MAX_MERGED_RANGES:
                     merged.append(reference)
                 element.clear()
-    return formulas, lines, merged, rows, columns, truncated
+            elif tag in ("sheetData", "mergeCells", "worksheet"):
+                element.clear()
+    return formulas, lines, merged, rows, columns, truncated, columns_truncated
 
 
 def _xlsx_stdlib(path):
@@ -570,7 +687,7 @@ def _xlsx_stdlib(path):
                 sections.append({"label": name, "text": ""})
                 sheets.append({"name": name, "rows": 0, "cols": 0, "formulas": [], "merged": []})
                 continue
-            formulas, lines, merged, rows, columns, truncated = _stream_sheet(
+            formulas, lines, merged, rows, columns, truncated, columns_truncated = _stream_sheet(
                 archive, entry, name, shared, namespace,
             )
             if merged:
@@ -579,6 +696,8 @@ def _xlsx_stdlib(path):
             result = {"name": name, "rows": rows, "cols": columns, "formulas": formulas, "merged": merged}
             if truncated:
                 result["truncated"] = True
+            if columns_truncated:
+                result["columns_truncated"] = True
             sheets.append(result)
         return sections, sheets
 
@@ -595,7 +714,10 @@ def _xlsx(path, _question):
     warnings = []
     truncated = [item.get("name") or "sheet" for item in sheets if item.get("truncated")]
     if truncated:
-        warnings.append(f"工作表 {', '.join(truncated)} 超过 5000 行，已截断")
+        warnings.append(f"工作表 {', '.join(truncated)} 超过 {MAX_SHEET_ROWS} 行，已截断")
+    columns_truncated = [item.get("name") or "sheet" for item in sheets if item.get("columns_truncated")]
+    if columns_truncated:
+        warnings.append(f"工作表 {', '.join(columns_truncated)} 超过 {MAX_OUTPUT_COLUMNS} 列，已截断")
     if not any(item["rows"] for item in sheets):
         warnings.append("工作簿没有可读的单元格")
     return {
