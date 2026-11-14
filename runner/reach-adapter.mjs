@@ -2,12 +2,19 @@
 import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,rmSync} from 'node:fs';
 import {join,isAbsolute} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {homedir} from 'node:os';
 import {validTarget,scopeFor} from '../src/reach-contract.mjs';
 import {normalizeReachResult} from './reach-result.mjs';
 
 // F9 platform packages add read-only descriptors here; missing components fail closed, never setup.
-export const REACH_COMMANDS={};
+const PUBLIC_READER=fileURLToPath(new URL('./reach-public.mjs',import.meta.url));
+const publicReader=(channel,action)=>target=>[process.execPath,PUBLIC_READER,channel,action,target];
+export const REACH_COMMANDS={
+ 'weibo:hot:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('hot'),argv:publicReader('weibo','hot')},
+ 'weibo:search:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('search'),argv:publicReader('weibo','search')},
+ 'weibo:profile:local':{access:'read',resource:'api',requires_login:false,content_scope:scopeFor('profile'),argv:publicReader('weibo','profile')},
+};
 const MAX_BYTES=1024*1024;
 const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);
 function readState(path){try{return JSON.parse(readFileSync(path,'utf8'));}catch{return {};}}
