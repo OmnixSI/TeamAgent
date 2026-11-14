@@ -121,6 +121,16 @@ export function validateTeamConfig(c) {
   // send is deliberately fail-closed at runtime: only literal true enables it.
   for (const [key,max] of Object.entries({min_senders:5,max_bytes:400000,max_rows:1000})) check(integer(c?.stickers?.[key],key==='min_senders'?2:1,max),'stickers.'+key);
   for (const [key,max] of Object.entries({tag:40,send:20})) check(integer(c?.stickers?.caps?.[key],1,max),'stickers.caps.'+key);
+  // schedules：定时推送上限与晨报窗口（L1/L5 读；缺省即拒绝启动，避免无上限）
+  const s = c?.schedules;
+  check(s && typeof s === 'object' && !Array.isArray(s), 'schedules');
+  check(integer(s?.max_active_per_group, 1, 10), 'schedules.max_active_per_group');
+  check(integer(s?.max_sends_per_group_day, 1, 50), 'schedules.max_sends_per_group_day');
+  const dayCap = integer(s?.max_sends_day, 1, 100);
+  check(dayCap, 'schedules.max_sends_day');
+  check(dayCap && integer(s?.max_sends_per_group_day, 1, 50) && s.max_sends_day >= s.max_sends_per_group_day, 'schedules.max_sends_day');
+  const clock = (x) => typeof x === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(x);
+  check(Array.isArray(s?.report_window) && s.report_window.length === 2 && s.report_window.every(clock) && s.report_window[0] < s.report_window[1], 'schedules.report_window');
   errors.push(...validateMcpServers(c?.mcp_servers));
   return errors;
 }

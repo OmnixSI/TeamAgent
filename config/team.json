@@ -47,6 +47,15 @@
     "quick_file_timeout_seconds": 120,
     "heavy_file_timeout_seconds": 480
   },
+  "schedules": {
+    "max_active_per_group": 5,
+    "max_sends_per_group_day": 6,
+    "max_sends_day": 20,
+    "report_window": [
+      "08:40",
+      "10:00"
+    ]
+  },
   "repositories": [
     "OmnixSI/NextThought",
     "OmnixSI/NextThought-Website",
