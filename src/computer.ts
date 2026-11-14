@@ -36,10 +36,14 @@ curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static
 curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null 2>&1
 uv venv -q --seed --python 3.12 /opt/py
 VIRTUAL_ENV=/opt/py uv pip install -q pandas matplotlib openpyxl python-pptx python-docx
+# Node 26 ahead of the image's Node 24: the team's repositories are developed on 26 and their scripts
+# rely on it (for one, the test runner taking a directory). Without it the image's Node stays in use.
+(N=$(curl -fsSL https://nodejs.org/dist/latest-v26.x/SHASUMS256.txt | grep -o 'node-v26[0-9.]*-linux-x64.tar.xz' | head -1) && [ -n "$N" ] \
+  && mkdir -p /opt/node && curl -fsSL "https://nodejs.org/dist/latest-v26.x/$N" | tar -xJ -C /opt/node --strip-components=1) || rm -rf /opt/node
 printf 'font.sans-serif: Noto Sans CJK SC, DejaVu Sans\naxes.unicode_minus: False\n' > /etc/matplotlibrc
 # Builds matplotlib's font list now, so it lands in the cache and the first chart after a wake-up is quick.
 MPLBACKEND=Agg MATPLOTLIBRC=/etc/matplotlibrc /opt/py/bin/python -c 'import matplotlib.pyplot'
-echo 'export PATH=/opt/py/bin:$PATH HOME=/root LANG=C.UTF-8 MPLBACKEND=Agg MATPLOTLIBRC=/etc/matplotlibrc' > /etc/profile.d/computer.sh
+echo 'export PATH=/opt/node/bin:/opt/py/bin:$PATH HOME=/root LANG=C.UTF-8 MPLBACKEND=Agg MATPLOTLIBRC=/etc/matplotlibrc' > /etc/profile.d/computer.sh
 # LibreOffice adds most of a minute, so it is installed the first time something calls it.
 for n in soffice libreoffice; do printf '#!/bin/sh\nL="libreoffice-core-nogui libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui"; export DEBIAN_FRONTEND=noninteractive\n[ -x /usr/bin/soffice ] || apt-get install -y -qq --no-install-recommends $L >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq --no-install-recommends $L >/dev/null; }\nexec /usr/bin/%s "$@"\n' $n > /usr/local/bin/$n; chmod +x /usr/local/bin/$n; done
 touch ${MARK}`;

@@ -622,7 +622,7 @@ export function buildTools(host: Host): Tool[] {
     },
     {
       name: "computer", work: true, slow: true,
-      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 24、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置一分半钟就关机并清空，隔了一阵再用要重新放文件，开机多等约 10 秒。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
+      description: "一台云端 Linux 电脑（Debian，1 核 1 GB 内存 4 GB 硬盘，能上网），按顺序跑 shell 命令，工作目录 /work。装好了：ffmpeg/ffprobe（抽音轨、截帧、转码、剪视频）、git（clone 仓库、grep、跑测试）、curl、Python 3.12（pandas、matplotlib、openpyxl、python-pptx、python-docx，要别的就 uv pip install）、Node 26、中文字体；soffice 第一次调用时自动安装（多等约 1 分钟），能把 docx/xlsx/pptx/html 转成 PDF。适合 run_python 做不了的事：处理视频和音频、克隆仓库整体看代码或跑它的测试、做真正的 PPT 和 Word、需要装软件或联网下载的活。群友发的文件、图片的编号或链接填进 files，会放进 /work（文件名不变）；要拿回来的文件写进 collect（相对 /work 的路径，可用通配符，一次最多 6 个、每个 25 MB）。电脑闲置一分半钟就关机并清空，隔了一阵再用要重新放文件，开机多等约 10 秒。一条命令失败就停在那里。它按运行时间占每月的固定额度，只算数或画图表用 run_python，别拿它做能直接回答的事。",
       parameters: obj({
         commands: { type: "array", items: { type: "string" }, description: "按顺序执行的 bash 命令。例：[\"git clone --depth 1 https://github.com/OmnixSI/WhalePartner repo\", \"cd repo && grep -rn 'TODO' src | head -50\"]" },
         files: { type: "array", items: { type: "string" }, description: "放进 /work 的输入：[文件 名字 链接] 里的链接、图片编号（123-0、g12），或之前存下的文件编号（f12）" },

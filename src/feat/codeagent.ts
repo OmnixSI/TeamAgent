@@ -140,7 +140,7 @@ export function opencodeConfig(mode: Mode) {
 export function brief(mode: Mode, task: string) {
   const common = [
     "你是在云端一台临时 Linux 电脑里工作的编码代理，当前目录是一个 Git 仓库的新克隆（浅克隆）。",
-    "电脑 1 核 1 GB 内存，有 git、Node 24、Python 3.12，能上网。时间有限，抓紧做最重要的部分。",
+    "电脑 1 核 1 GB 内存，有 git、Node 26、Python 3.12，能上网。时间有限，抓紧做最重要的部分。",
     "不要读取、打印或写入环境变量里的任何密钥。",
   ];
   const rules = mode === "pr" ? [
