@@ -340,7 +340,7 @@ export async function main(
       source_msg_id: candidate.source_msg_id,
       time: candidate.suggestion.params.time,
       dry_run: !args.confirm,
-      request_quote: String(candidate.quote).slice(0, 200),
+      request_quote: String(candidate.quote).replace(/<@!?[^>]+>/g, "").trim().slice(0, 200),
       ...(args.dedup ? { dedup: args.dedup } : {}),
       ...(args.ack ? { ack: args.ack } : {}),
     };
