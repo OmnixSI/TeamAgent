@@ -21,7 +21,7 @@ crons = ["*/2 * * * *"]
 GITHUB_ORG = "OmnixSI"
 IMAGE_MODEL = "gpt-image-2.5-flare"
 CHAT_MODEL = "deepseek-flash"
-EXPERT_MODEL = "deepseek-v4-pro"
+RELAY_URL = "https://relay-dusky-five.vercel.app"
 
 [observability]
 enabled = true

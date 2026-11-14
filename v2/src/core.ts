@@ -50,7 +50,7 @@ export function renderLine(r: Row, captions = true) {
   });
   for (const f of meta.files || []) body += " [文件 " + (f.name || "未命名") + " " + f.url + "]";
   if (meta.video) body += " [视频]";
-  return "[" + fmtTime(r.ts) + "] " + displayName(r) + (r.mentioned ? "（@你）" : "") + "：" + body.trim();
+  return "[" + fmtTime(r.ts) + "] " + displayName(r) + (r.mentioned ? "（@你）" : "") + "：" + clip(body.trim(), 1500);
 }
 
 export function systemPrompt(memory: string, notes: string[]) {
@@ -71,8 +71,10 @@ export function buildMessages(input: TurnInput) {
     if (r.role === "bot") {
       flush();
       const last = messages[messages.length - 1];
-      if (last.role === "assistant") last.content += "\n" + r.text;
-      else messages.push({ role: "assistant", content: r.text });
+      // Your own long answers from earlier are kept short in history; the gist is enough to stay consistent.
+      const said = r.seq > input.cursor - 30 ? r.text : clip(r.text, 500);
+      if (last.role === "assistant") last.content += "\n" + said;
+      else messages.push({ role: "assistant", content: said });
       continue;
     }
     if (!markerDone && r.seq > input.cursor && pending.length) { pending.push("———— 以下是新消息 ————"); markerDone = true; }

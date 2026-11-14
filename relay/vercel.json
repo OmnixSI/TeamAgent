@@ -1,0 +1,1 @@
+{ "regions": ["hkg1"], "functions": { "api/fetch.js": { "maxDuration": 30 }, "api/silk.js": { "maxDuration": 30, "includeFiles": "node_modules/silk-wasm/lib/**" } } }

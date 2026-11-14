@@ -183,15 +183,17 @@ export class Hub extends DurableObject<Env> {
       await this.say(conv, String(p.body), { queue: false });
     }
   }
-  async sendImage(conv: string, jpegB64: string) {
-    if (conv.startsWith("t:")) { this.insert(conv, { id: "bot:" + crypto.randomUUID(), role: "bot", name: "Bot", text: "[你发了一张图]", ts: Date.now() }); return { ok: true }; }
+  /** fileType 1 = image (JPEG), 3 = voice (SILK). */
+  async sendMediaMessage(conv: string, fileType: number, dataB64: string, label: string) {
+    if (conv.startsWith("t:")) { this.insert(conv, { id: "bot:" + crypto.randomUUID(), role: "bot", name: "Bot", text: label, ts: Date.now() }); return { ok: true }; }
     const id = this.anchor(conv);
-    const r = await this.qq.sendMedia(conv, 1, jpegB64, id).catch((e: any) => ({ ok: false, status: 0, data: { message: e?.message }, stage: "network" }));
+    const r = await this.qq.sendMedia(conv, fileType, dataB64, id).catch((e: any) => ({ ok: false, status: 0, data: { message: e?.message }, stage: "network" }));
     if (!r.ok) return { ok: false, error: (r.stage === "upload" ? "上传被拒" : "发送被拒") + "（" + r.status + " " + clip(r.data?.message || r.data?.code || "", 80) + "）" };
     this.used(id);
-    this.insert(conv, { id: "bot:" + String(r.data?.id || crypto.randomUUID()), role: "bot", name: "Bot", text: "[你发了一张图]", ts: Date.now() });
+    this.insert(conv, { id: "bot:" + String(r.data?.id || crypto.randomUUID()), role: "bot", name: "Bot", text: label, ts: Date.now() });
     return { ok: true };
   }
+  sendImage(conv: string, jpegB64: string) { return this.sendMediaMessage(conv, 1, jpegB64, "[你发了一张图]"); }
 
   // ---------- turns ----------
   host(conv: string): Host {
@@ -226,6 +228,8 @@ export class Hub extends DurableObject<Env> {
       scheduleList: async () => hub.sql.exec("SELECT id,spec,task,next FROM sched WHERE conv=? AND active=1 ORDER BY next", conv).toArray()
         .map((s: any) => ({ id: s.id, spec: JSON.parse(s.spec), task: s.task, next: Number(s.next) })),
       scheduleCancel: async id => { hub.sql.exec("UPDATE sched SET active=0 WHERE id=? AND conv=?", id, conv); return true; },
+      cookie: site => hub.get("cookie:" + site) || "",
+      sendVoice: silk => hub.sendMediaMessage(conv, 3, silk, "[你发了一条语音]"),
       ledger: async (op, name, amount, note) => {
         if (op !== "list" && name) {
           const old = hub.sql.exec("SELECT balance FROM ledger WHERE conv=? AND name=?", conv, name).toArray()[0];
@@ -244,12 +248,17 @@ export class Hub extends DurableObject<Env> {
     const row = this.sql.exec("INSERT INTO sched(conv,spec,task,next) VALUES(?,?,?,?) RETURNING id", conv, JSON.stringify(spec), task, next).toArray()[0];
     return { id: Number(row.id), next };
   }
-  /** History window whose start only moves every 20 messages, so the model's prompt cache keeps hitting. */
+  /**
+   * What the model reads each turn: everything since last night's consolidation plus a carry-over tail,
+   * so a whole day of chat stays in view. The start only moves in steps of 100, which keeps the
+   * model's prompt cache hitting; older days live on in the memory document.
+   */
   window(conv: string) {
-    const rows = this.recent(conv, 90);
-    if (rows.length <= 70) return rows;
-    const cut = rows.findIndex(r => r.seq % 20 === 0);
-    return cut > 0 && cut <= 20 ? rows.slice(cut) : rows.slice(-70);
+    const since = Number(this.get("reflect:seq:" + conv) || 0);
+    const rows: Row[] = this.sql.exec("SELECT * FROM (SELECT * FROM msg WHERE conv=? AND seq>? ORDER BY seq DESC LIMIT 900) ORDER BY seq", conv, since - 150).toArray().map(this.rowOf);
+    if (rows.length <= 200) return rows;
+    const cut = rows.findIndex(r => r.seq % 100 === 0);
+    return cut > 0 && cut <= 100 ? rows.slice(cut) : rows;
   }
   async loadImages(rows: Row[]) {
     const out: { seq: number; index: number; dataUrl: string }[] = [];
@@ -491,6 +500,25 @@ export class Hub extends DurableObject<Env> {
       const h = this.host(conv);
       for (const [name, amount] of Object.entries(body.set || {})) await h.ledger("set", name, Number(amount), "初始化");
       return json(await h.ledger("list"));
+    }
+    if (path === "/admin/cookie") {
+      if (typeof body.cookie === "string" && body.site) this.set("cookie:" + body.site, body.cookie);
+      return json(this.sql.exec("SELECT k, length(v) n FROM kv WHERE k LIKE 'cookie:%'").toArray());
+    }
+    if (path === "/admin/tool") {
+      // Run one tool by hand, as the given conversation would.
+      const tool = buildTools(this.host(conv)).find(t => t.name === body.name);
+      if (!tool) return json({ error: "no such tool" }, 404);
+      const started = Date.now();
+      try { return json({ ms: Date.now() - started, result: await tool.run(body.args || {}) }); }
+      catch (e: any) { return json({ ms: Date.now() - started, error: clip(e?.message || String(e), 400) }); }
+    }
+    if (path === "/admin/probe") {
+      // Debug aid: what a URL looks like when fetched from Cloudflare.
+      const r = await fetch(String(body.url), { method: body.method || "GET", headers: body.headers || {}, body: body.body, redirect: body.redirect || "follow", signal: AbortSignal.timeout(25000) });
+      const buf = new Uint8Array(await r.arrayBuffer());
+      const text = new TextDecoder(body.charset || "utf-8").decode(buf.slice(0, Number(body.max) || 1500));
+      return json({ status: r.status, url: r.url, type: r.headers.get("content-type"), location: r.headers.get("location"), bytes: buf.length, text });
     }
     if (path === "/admin/task") return json({ ran: await this.runTask(conv, String(body.task)) });
     if (path === "/admin/set") { this.set(String(body.k), String(body.v)); return json({ ok: true }); }

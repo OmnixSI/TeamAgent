@@ -99,12 +99,16 @@ export function parseEvent(type: string, d: any): Inbound | null {
     if (quoted || qImages.length) meta.quote = { name: elements[0]?.author?.username || "", text: quoted || "[图片]", bot: !!elements[0]?.author?.bot };
     if (qImages.length && !images.length) meta.images = qImages.slice(0, 3).map((a: any) => ({ url: a.url }));
   }
+  // Share cards (Bilibili, Xiaohongshu, articles…): keep the source, title and the link behind the card.
   if (d.ark_data || d.ark) {
     try {
       const ark = typeof d.ark_data === "string" ? JSON.parse(d.ark_data) : d.ark_data || d.ark;
-      const raw = JSON.stringify(ark);
-      const url = raw.match(/https?:\/\/[^"\\\s]+/)?.[0];
-      text += (text ? " " : "") + "[卡片" + (url ? " " + url : "") + "]";
+      const fields: Record<string, any> = Array.isArray(ark.fields) ? Object.fromEntries(ark.fields.map((f: any) => [f.key, f.value])) : ark.fields || {};
+      const decode = (v: any) => { let t = String(v || ""); for (let i = 0; i < 2 && /%[0-9A-Fa-f]{2}/.test(t); i++) { try { t = decodeURIComponent(t); } catch { break; } } return t; };
+      const raw = decode(JSON.stringify(ark));
+      const link = [fields.qqdocurl, fields.jumpUrl, fields.jump_url, fields.pcJumpUrl, fields.url].map(decode).find(u => /^https?:\/\//.test(u)) || raw.match(/https?:\/\/[^"\\\s]+/)?.[0] || "";
+      const title = [ark.prompt, fields.title, fields.desc].map(v => String(v || "").trim()).filter(Boolean);
+      text += (text ? " " : "") + "[分享卡片 " + [...new Set(title)].join(" / ").slice(0, 200) + (link ? " " + link : "") + "]";
     } catch {}
   }
   const mentioned = c2c || type === "GROUP_AT_MESSAGE_CREATE" || mentions.some(m => m.is_you) || CALLED.test(text) || !!meta.quote?.bot;

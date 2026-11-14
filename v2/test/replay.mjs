@@ -24,7 +24,7 @@ function host(now, upto) {
     getHistory: async (from, to, limit) => rows.filter(r => r.seq <= upto && r.ts >= from && r.ts < to).slice(-limit),
     summaries: async () => [],
     scheduleCreate: async (spec, task) => { console.log("     [schedule]", JSON.stringify(spec), task); return { id: 1, next: now + 3600000 }; },
-    scheduleList: async () => [], scheduleCancel: async () => true, ledger: async () => [],
+    scheduleList: async () => [], scheduleCancel: async () => true, ledger: async () => [], cookie: () => '', sendVoice: async () => ({ ok: true }),
   };
 }
 
