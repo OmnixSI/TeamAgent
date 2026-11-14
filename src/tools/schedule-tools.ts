@@ -501,9 +501,10 @@ export const scheduleUpdateTool: BotTool = {
       for (const key of ["time", "weekdays", "month_days", "run_at", "every_minutes", "window", "until"] as const) delete (spec as any)[key];
       Object.assign(spec, specTimingOf(when));
     }
+    // 改日程时只认显式的 content_text：整句原话里往往只有时间，parseContent 的兜底
+    // text 步骤会把「每天 9 点的日报」误改成 agent_task。
     const contentParts: string[] = [];
     if (args?.content_text) contentParts.push(String(args.content_text));
-    if (!args?.content_text && args?.when_text !== body && body) contentParts.push(body);
     let parsedSteps: any[] = [];
     for (const text of contentParts) parsedSteps = mergeSteps(parsedSteps, parseContent(text));
     const askedSteps = mergeSteps(existing.steps, args?.steps);

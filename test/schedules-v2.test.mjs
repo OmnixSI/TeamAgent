@@ -984,3 +984,27 @@ test("D16 S-03 weekly Beijing 9am stays digest_weekly with weekdays and tz", asy
   assert.equal(spec.time, "09:00");
   assert.equal(spec.steps, undefined);
 });
+
+test("D17 updating only the time never turns a digest into an agent_task", async () => {
+  const e = env();
+  owner(e, "U1");
+  parseStub({
+    when: { "每天9点": { ok: true, when: { cadence: "daily", time: "09:00", tz: "Australia/Sydney" }, tzSaid: false, matched: "9点" } },
+    // D2 的兜底：整句没认出内容时给一个 text 步骤
+    content: { "把日报改到9点": [{ action: "text", text: "把日报改到9点" }] },
+  });
+  const id = seedSchedule(e, {
+    id: "sched-upd-3",
+    owner: "U1",
+    kind: "digest_daily",
+    spec: { time: "08:00" },
+    next_run_at: at("2026-11-16T08:00:00+11:00"),
+  });
+  const result = await tools.scheduleUpdateTool.run(e, { id, when_text: "每天9点" }, toolCtx("把日报改到9点", "U1"));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const rowdb = await row(e, "SELECT * FROM schedules WHERE id=?", id);
+  const spec = JSON.parse(rowdb.spec);
+  assert.equal(rowdb.kind, "digest_daily");
+  assert.equal(spec.time, "09:00");
+  assert.equal(spec.steps, undefined);
+});
