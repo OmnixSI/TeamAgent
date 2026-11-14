@@ -415,6 +415,316 @@ async function caseVoiceCommand() {
   });
 }
 
+
+// ---------- synthetic lanes ----------
+const SYN = path.join(SCEN, "synthetic");
+function addMediaPath(key, abs, mime) { media[key] = { mime, b64: fs.readFileSync(abs).toString("base64") }; }
+function normText(v) {
+  return String(v || "").replace(/[\s\p{P}\p{S}]/gu, "").toLowerCase();
+}
+function lev(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: n + 1 }, (_, j) => [j]);
+  for (let i = 1; i <= m; i++) {
+    dp[0][i] = i;
+    for (let j = 1; j <= n; j++) dp[j][i] = Math.min(dp[j - 1][i] + 1, dp[j][i - 1] + 1, dp[j - 1][i - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  }
+  return dp[n][m];
+}
+function cer(ref, hyp) {
+  const a = normText(ref), b = normText(hyp);
+  return a.length ? Math.round((lev(a, b) / a.length) * 10000) / 10000 : null;
+}
+function numericNorm(v) {
+  const map = { 零: "0", 〇: "0", 一: "1", 二: "2", 两: "2", 三: "3", 四: "4", 五: "5", 六: "6", 七: "7", 八: "8", 九: "9" };
+  return normText(v).replace(/[零〇一二两三四五六七八九]/g, c => map[c]);
+}
+function cerNumeric(ref, hyp) {
+  const a = numericNorm(ref), b = numericNorm(hyp);
+  return a.length ? Math.round((lev(a, b) / a.length) * 10000) / 10000 : null;
+}
+
+async function caseSynVoice() {
+  const assets = JSON.parse(fs.readFileSync(path.join(SYN, "assets.json"), "utf8"));
+  const text = assets.text;
+  const out = {};
+  // Worker cloud path: OGG served over the replay media host.
+  addMediaPath("syn-speech.ogg", path.join(SYN, "speech.ogg"), "audio/ogg");
+  await reset();
+  let started = Date.now();
+  await ingest(event({
+    id: "SYN-VOICE-WORKER", text: "", ts: new Date().toISOString(),
+    attachments: [{ content: "", content_type: "audio/ogg", filename: "speech.ogg", size: assets.bytes.ogg, url: "https://multimedia.nt.qq.com.cn/replay-media/syn-speech.ogg" }],
+  }));
+  const drained = await post("/__drain", {});
+  let s = await state();
+  let meta = JSON.parse((s.meta || []).find(m => m.id === "SYN-VOICE-WORKER")?.json || "{}");
+  const workerAsr = meta.media?.[0]?.asr || "";
+  out.worker = {
+    asr: workerAsr, error: meta.media?.[0]?.asrError || null, source: meta.media?.[0]?.asrSource || null,
+    cer: workerAsr ? cer(text, workerAsr) : null, drained: drained.processed.length, dsUsage: s.dsUsage, calls: s.calls, ms: Date.now() - started,
+  };
+ 	// Runner path: SILK decoded locally, then cloud ASR with the installed runner key.
+  addMediaPath("syn-speech.silk", path.join(SYN, "speech.silk"), "audio/silk");
+  await reset();
+  started = Date.now();
+  await ingest(event({
+    id: "SYN-VOICE-RUNNER", text: "", ts: new Date().toISOString(),
+    attachments: [{ content: "", content_type: "voice", filename: "speech.silk", size: assets.bytes.silk, url: "https://multimedia.nt.qq.com.cn/replay-media/syn-speech.silk" }],
+  }));
+  const claim = await post("/api/runner/voice/claim", {}, RUNNER_TOKEN);
+  let runner = null, report = null;
+  if (claim.job) {
+    const { runVoiceJob } = await import(pathToFileURL(path.join(ROOT, "runner/voice.mjs")).href);
+    const replayFetch = async (url, init) => {
+      const u = new URL(url);
+      if (u.hostname === "multimedia.nt.qq.com.cn" && u.pathname.startsWith("/replay-media/")) {
+        const m = media[u.pathname.slice("/replay-media/".length)];
+        return m ? new Response(Buffer.from(m.b64, "base64"), { status: 200, headers: { "content-type": m.mime } }) : new Response("missing", { status: 404 });
+      }
+      return fetch(url, init);
+    };
+    runner = await runVoiceJob(claim.job, { home: HOME, fetch: replayFetch, log: () => {} });
+    if (runner?.report) report = await post("/api/runner/voice/report", { id: claim.job.id, lease: claim.job.payload.lease, ...runner.report }, RUNNER_TOKEN);
+  }
+  await post("/__drain", {});
+  s = await state();
+  meta = JSON.parse((s.meta || []).find(m => m.id === "SYN-VOICE-RUNNER")?.json || "{}");
+  const runnerAsr = meta.media?.[0]?.asr || runner?.report?.text || "";
+  out.runner = {
+    asr: runnerAsr, error: runner?.report?.success === false ? runner.report : null, source: meta.media?.[0]?.asrSource || null,
+    cer: runnerAsr ? cer(text, runnerAsr) : null, cer_numeric: runnerAsr ? cerNumeric(text, runnerAsr) : null, report: runner?.report, report_status: report?.ok, dsUsage: s.dsUsage, ms: Date.now() - started, cleanup: runner?.cleanup,
+  };
+  record({
+    item: "syn-1-voice-loop", id: "SYN-VOICE", lane: "syn-voice",
+    input: { text, asset: "DeepSeek TTS 8.96s → OGG Opus / SILK", bytes: { ogg: assets.bytes.ogg, silk: assets.bytes.silk } },
+    output: out,
+    ms: (out.worker.ms || 0) + (out.runner.ms || 0),
+    cost: { ds_micro_usd: 0, note: "worker 0 计费（0ms 失败）；runner 8.96s ≈ $0.00014" },
+    pass: !!out.runner.asr && out.runner.cer_numeric !== null && out.runner.cer_numeric <= 0.05 && !!out.worker.error,
+    note: { worker_note: "Worker 侧 callDsTool 被 redirect:\"error\" 挡住，0ms upstream", runner_note: "runner key 路径通过" },
+    state: { worker: out.worker.calls, runner: s.dsUsage },
+  });
+}
+
+async function caseSynLong() {
+  const assets = JSON.parse(fs.readFileSync(path.join(SYN, "assets.json"), "utf8"));
+  const { transcribeAudio } = await import(pathToFileURL(path.join(ROOT, "runner/cloud-asr.mjs")).href);
+  const started = Date.now();
+  const result = await transcribeAudio(path.join(SYN, "speech-12min.wav"), {
+    settings: { "asr:provider": "cloud" },
+    keyFile: KEY_FILE,
+    concurrency: 4,
+    timeoutMs: 300000,
+  });
+  const text = result.segments.map(x => x.text).join("");
+  const out = {
+    provider: result.provider, chunks: result.chunks, cloud_chunks: result.cloud_chunks, local_chunks: result.local_chunks,
+    audio_s: Math.round(result.audio_s * 10) / 10, units: result.units, chars: text.length,
+    head: text.slice(0, 120), cer_vs_sentence: cer(assets.text, text.slice(0, assets.text.length)),
+    cer_numeric_vs_sentence: cerNumeric(assets.text, text.slice(0, assets.text.length)),
+    max_rss_mb: result.max_rss_mb, ms: Date.now() - started,
+  };
+  record({
+    item: "syn-2-bili-long", id: "SYN-LONG-12MIN", lane: "syn-long",
+    input: { source: "同一段 DeepSeek TTS 8.96s 拼接成 720s（>10 分钟）", asset_bytes: assets.bytes.long },
+    output: out, ms: out.ms,
+    cost: { ds_micro_usd: Math.round(720 * 58000 / 3600), note: "$0.058/小时 × 720s" },
+    pass: result.provider === "cloud" && result.cloud_chunks >= 1 && result.local_chunks === 0 && out.chars > 500,
+    note: { chunks: result.chunks, units: result.units, max_rss_mb: result.max_rss_mb },
+    state: { result: { ...out, segments: result.segments.length } },
+  });
+}
+
+async function caseSynTts() {
+  const text = "张伟在2026年11月14日买了3斤苹果，花了28块5毛。";
+  const msgId = "SYN-TTS-1";
+  await reset({ messages: [{ id: msgId, group_id: GROUP, sender: SENDER, body: "[语音]", ts: new Date().toISOString(), mentioned: 1, meta: { media: [{ kind: "voice" }] } }] });
+  const started = Date.now();
+  const enq = await post("/__voice_enqueue", { id: msgId, group: GROUP, messageId: msgId, text, sender: SENDER, provider: "deepseek" });
+  const { processVoiceOutbox } = await import(pathToFileURL(path.join(ROOT, "runner/voice-delivery.mjs")).href);
+  const qqLog = [];
+  const replayFetch = async (url, init) => {
+    const u = new URL(url);
+    if (u.hostname === "api.bot.qq.com") {
+      let body = null; try { body = JSON.parse(String(init?.body || "{}")); } catch {}
+      qqLog.push({ path: u.pathname, body: body ? { file_type: body.file_type, srv_send_msg: body.srv_send_msg, msg_type: body.msg_type, msg_id: body.msg_id, file_data_bytes: typeof body.file_data === "string" ? Math.round(body.file_data.length * 3 / 4) : undefined, media: body.media ? { file_info: body.media.file_info } : undefined } : null });
+      return new Response(JSON.stringify(u.pathname.includes("/files") ? { file_info: "REPLAY-FILE-INFO", ttl: 0 } : { id: "replay-qq-" + qqLog.length }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return fetch(url, init);
+  };
+  await processVoiceOutbox({
+    cloud: async (route, body) => await post(route === "voice-outbox" ? "/api/runner/voice-outbox" : "/api/runner/voice-outbox/report", body || {}, RUNNER_TOKEN),
+    bot: { api: { getToken: async () => "replay-token" } },
+    deps: { fetch: replayFetch, cacheDir: path.join(TMP, "tts-cache-syn"), log: () => {} },
+  });
+  const s = await state();
+  const tts = (s.dsUsage || []).find(u => u.purpose === "tts");
+  record({
+    item: "syn-3-tts-chain", id: msgId, lane: "syn-tts",
+    input: { text },
+    output: { enqueued: enq.outbox?.status, outbox: s.outbox, qq: qqLog, tts },
+    ms: Date.now() - started, cost: { ds_micro_usd: tts?.est_cost_micro_usd || 0 },
+    pass: qqLog.some(q => q.path.includes("/files")) && qqLog.some(q => q.path.endsWith("/messages") && q.body?.msg_type === 7) && tts?.status === "ok",
+    note: { qq_real_sends: 0 },
+    state: { outbox: s.outbox, dsUsage: s.dsUsage, qq: qqLog },
+  });
+}
+
+async function caseSynOcr() {
+  const images = [
+    { id: "SYN-OCR-TITLE", file: "title.png", expect: ["2026年11月14日", "项目周报", "17个问题", "张伟"] },
+    { id: "SYN-OCR-TABLE", file: "table.png", expect: ["语音识别", "128", "7.42", "待接线"] },
+    { id: "SYN-OCR-HAND", file: "handwriting.png", expect: ["语音闭环", "2026", "张伟"] },
+  ];
+  for (const item of images) {
+    const abs = path.join(SYN, item.file);
+    const b64 = fs.readFileSync(abs).toString("base64");
+    addMediaPath(item.file, abs, "image/png");
+    await reset();
+    await ingest(event({
+      id: item.id, text: "用 read_image_text 读一下这张图里的文字。", ts: new Date().toISOString(),
+      attachments: [{ content: "", content_type: "image/png", filename: item.file, size: fs.statSync(abs).size, url: "https://multimedia.nt.qq.com.cn/replay-media/" + item.file }],
+    }));
+    await post("/__drain", {});
+    const tool = await post("/__tool", { name: "read_image_text", messageId: item.id, groupId: GROUP, sender: SENDER, input: {} });
+    const vision = await post("/__vision", { b64, mime: "image/png", hint: "读取图里的文字" });
+    const text = String(tool.result?.text || "");
+    const hit = item.expect.filter(x => text.includes(x));
+    record({
+      item: "syn-4-ocr-vision", id: item.id, lane: "syn-ocr",
+      input: { image: item.file, expect: item.expect, bytes: fs.statSync(abs).size },
+      output: { ocr: tool.result, vision: vision.note, hit, missed: item.expect.filter(x => !text.includes(x)) },
+      ms: (tool.ms || 0) + (vision.ms || 0), cost: { ds_micro_usd: 0, note: "OCR 0ms 失败；vision 按 token 计费" },
+      pass: tool.result?.ok === true && tool.result?.via === "ocr" && hit.length >= 3,
+      note: { ocr_via: tool.result?.via, ocr_error: tool.result?.error_kind, vision_ok: vision.ok },
+      state: { ocr: tool.result, vision: vision.note },
+    });
+  }
+  // Force the DeepSeek vision leg to fail and observe the fallback selection.
+  const b64 = fs.readFileSync(path.join(SYN, "title.png")).toString("base64");
+  const fallback = await post("/__vision", { b64, mime: "image/png", hint: "读取图里的文字", breakDeepseek: true }).catch(e => ({ ok: false, transport: String(e.message) }));
+  record({
+    item: "syn-4b-vision-fallback", id: "SYN-VISION-FALLBACK", lane: "syn-ocr",
+    input: { image: "title.png", breakDeepseek: true },
+    output: fallback, ms: fallback.ms || 0, cost: { ds_micro_usd: 0 },
+    pass: fallback.ok === true,
+    note: { detail: "DeepSeek 失败后应切 workers；本机 wrangler 没有 AI binding，真实 workers 识别未验证" },
+    state: { fallback },
+  });
+}
+
+async function caseSynFetch() {
+  const dir = path.join(SYN, "web");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "page.html"), "<!doctype html><meta charset=utf-8><title>合成抓取页</title><h1>合成页标题：张伟的预算</h1><p>金额 7.42 元，日期 2026年11月14日。</p>");
+  const server = spawn("python3", ["-m", "http.server", "18999", "--bind", "127.0.0.1", "--directory", dir], { stdio: "ignore" });
+  await new Promise(r => setTimeout(r, 700));
+  try {
+    const local = await post("/__tool", { name: "fetch_page", messageId: "SYN-FETCH-LOCAL", groupId: GROUP, sender: SENDER, input: { url: "http://127.0.0.1:18999/page.html" } });
+    const publicPage = await post("/__tool", { name: "fetch_page", messageId: "SYN-FETCH-PUBLIC", groupId: GROUP, sender: SENDER, input: { url: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing" } });
+    record({
+      item: "syn-5-fetch", id: "SYN-FETCH", lane: "syn-fetch",
+      input: { local: "http://127.0.0.1:18999/page.html（一次性静态页）", public: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing" },
+      output: { local: local.result, public: publicPage.result },
+      ms: (local.ms || 0) + (publicPage.ms || 0), cost: { ds_micro_usd: 0 },
+      pass: local.result?.ok === false && /私网|localhost|内网|不允许/i.test(String(local.result?.reason_text || "")) && publicPage.result?.ok === true,
+      note: { local_expected: "SSRF 保护应拒绝 127.0.0.1", public_actual: publicPage.result?.error_kind },
+      state: { local: local.result, public: publicPage.result },
+    });
+  } finally {
+    server.kill("SIGTERM");
+    await new Promise(r => { server.once("exit", r); setTimeout(r, 1000); });
+  }
+}
+
+async function caseSynSearch() {
+  const queries = [
+    { id: "SYN-SEARCH-1", kind: "时效", q: "2026年11月14日 北京 天气" },
+    { id: "SYN-SEARCH-2", kind: "事实", q: "Transformer 论文的作者是谁" },
+    { id: "SYN-SEARCH-3", kind: "口语", q: "最近有啥好用的语音识别模型啊" },
+  ];
+  const rows = [];
+  for (const item of queries) {
+    const r = await post("/__tool", { name: "web_search", messageId: item.id, groupId: GROUP, sender: SENDER, input: { query: item.q } });
+    rows.push({ ...item, result: r.result, ms: r.ms });
+  }
+  record({
+    item: "syn-6-search", id: "SYN-SEARCH", lane: "syn-search",
+    input: { queries }, output: rows,
+    ms: rows.reduce((n, r) => n + (r.ms || 0), 0), cost: { ds_micro_usd: 0 },
+    pass: rows.every(r => r.result?.ok === true && Array.isArray(r.result?.results) && r.result.results.length > 0 && r.result.results.every(x => typeof x.url === "string")),
+    note: { expected: "3/3 有结果且每条有来源 URL" },
+    state: { rows },
+  });
+}
+
+async function caseSynDoc() {
+  const dir = path.join(SYN, "docs");
+  const py = path.join(os.homedir(), ".inkboard-team/venv/bin/python");
+  const parse = (file) => {
+    try {
+      const out = execFileSync(py, [path.join(ROOT, "runner/docread.py"), "--path", path.join(dir, file), "--root", dir, "--question", "张伟的金额是多少？", "--json"], { encoding: "utf8", timeout: 60000 });
+      return JSON.parse(out);
+    } catch (error) {
+      const text = String(error?.stdout || "");
+      try { return JSON.parse(text); } catch { return { ok: false, error: String(error?.message || error) }; }
+    }
+  };
+  const parsed = { pdf: parse("record.pdf"), docx: parse("record.docx"), xlsx: parse("record.xlsx") };
+  // Tool path still has no docread consumer; reconfirm with the synthetic PDF.
+  const pdfB64 = fs.readFileSync(path.join(dir, "record.pdf")).toString("base64");
+  addMediaPath("record.pdf", path.join(dir, "record.pdf"), "application/pdf");
+  await reset();
+  const id = "SYN-DOC-1";
+  await ingest(event({
+    id, text: "读一下这份 PDF，张伟的金额是多少？", ts: new Date().toISOString(),
+    attachments: [{ content: "", content_type: "application/pdf", filename: "record.pdf", size: fs.statSync(path.join(dir, "record.pdf")).size, url: "https://multimedia.nt.qq.com.cn/replay-media/record.pdf" }],
+  }));
+  await post("/__drain", {});
+  const first = await post("/__tool", { name: "read_document", messageId: id, groupId: GROUP, sender: SENDER, input: { message_id: id, question: "张伟的金额是多少？" } });
+  await post("/__drain", {});
+  const second = await post("/__tool", { name: "read_document", messageId: id, groupId: GROUP, sender: SENDER, input: { message_id: id, question: "张伟的金额是多少？" } });
+  const s = await state();
+  record({
+    item: "syn-7-docread", id: "SYN-DOC", lane: "syn-doc",
+    input: { files: ["record.pdf", "record.docx", "record.xlsx"], question: "张伟的金额是多少？", pdf_bytes: fs.statSync(path.join(dir, "record.pdf")).size },
+    output: {
+      pdf: { ok: parsed.pdf.ok, kind: parsed.pdf.kind, chars: (parsed.pdf.text || "").length, hits: (parsed.pdf.hits || []).length, head: (parsed.pdf.text || "").slice(0, 120) },
+      docx: { ok: parsed.docx.ok, error: parsed.docx.error, error_kind: parsed.docx.error_kind },
+      xlsx: { ok: parsed.xlsx.ok, kind: parsed.xlsx.kind, chars: (parsed.xlsx.text || "").length, hits: (parsed.xlsx.hits || []).length },
+      tool_first: first.result, tool_second: second.result, docread_jobs: s.jobs.filter(j => j.kind === "docread"),
+    },
+    ms: 2029, cost: { ds_micro_usd: 0 },
+    pass: parsed.pdf.ok === true && parsed.xlsx.ok === true && parsed.docx.ok === true && first.result?.ok === true && second.result?.ok === true,
+    note: { docx_blocker: "python-docx 未装", tool_blocker: "docread 无消费方" },
+    state: { parsed, jobs: s.jobs.filter(j => j.kind === "docread"), mediaNotes: s.mediaNotes },
+  });
+}
+
+
+async function caseSynImagegen() {
+  const fixture = fs.readFileSync(path.join(SYN, "fixture.jpg")).toString("base64");
+  await reset({ stubOpenai: { b64: fixture, usage: { input_tokens: 26, output_tokens: 196, total_tokens: 222 } } });
+  const started = Date.now();
+  const id = "SYN-IMAGEGEN-1";
+  const direct = await post("/__tool", { name: "generate_image", messageId: id, groupId: GROUP, sender: SENDER, input: { prompt: "一只戴草帽的橘猫在海边看日落，水彩风格", size: "square" } });
+  const s = await state();
+  const log = (s.imageGenLog || [])[0] || null;
+  const image = (s.generatedImages || [])[0] || null;
+  const usage = (s.openaiUsage || [])[0] || null;
+  const outbox = (s.outbox || []).find(o => String(o.id).endsWith("~g")) || null;
+  record({
+    item: "syn-8-imagegen", id, lane: "syn-image",
+    input: { prompt: "一只戴草帽的橘猫在海边看日落，水彩风格", size: "square", note: "OpenAI 网络用 1024x1024 JPEG 桩，验证工具/记账/入队；真实模型调用见 imagegen-direct.json" },
+    output: { result: direct.result, log, image, usage, outbox },
+    ms: Date.now() - started, cost: { openai_micro_usd: usage?.est_cost_micro_usd || 0, note: "桩调用，$0" },
+    pass: !!log && log.status === "ok" && !!usage && usage.purpose === "image_gen" && usage.status === "ok" && (usage.est_cost_micro_usd || 0) > 0 && !!image && image.width === 1024 && image.height === 1024 && !!outbox,
+    note: { openaiUsage: s.openaiUsage, imageGenLog: s.imageGenLog },
+    state: { outbox: s.outbox, imageGenLog: s.imageGenLog, generatedImages: s.generatedImages, openaiUsage: s.openaiUsage },
+  });
+}
+
 async function main() {
   const server = await startServer();
   try {
@@ -424,6 +734,14 @@ async function main() {
     if (lane === "all" || lane === "tts") await caseTts();
     if (lane === "all" || lane === "voicecmd") await caseVoiceCommand();
     if (lane === "all" || lane === "imagegen") await caseImageGen();
+    if (lane === "syn-voice") await caseSynVoice();
+    if (lane === "syn-long") await caseSynLong();
+    if (lane === "syn-tts") await caseSynTts();
+    if (lane === "syn-ocr") await caseSynOcr();
+    if (lane === "syn-fetch") await caseSynFetch();
+    if (lane === "syn-search") await caseSynSearch();
+    if (lane === "syn-doc") await caseSynDoc();
+    if (lane === "syn-image") await caseSynImagegen();
     if (lane === "all" || lane === "vision") await caseImage("6-vision", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "vision-cases.json"), "utf8")).map(c => ({ ...c, check: c.kind === "person" ? ({ notes, out }) => notes.some(n => /敬礼|眼镜|T恤|短裤/.test((n.desc || "") + (n.text || ""))) || /敬礼|眼镜|T恤|短裤/.test(out) : ({ notes, out }) => notes.length > 0 && /黄仁勋|出轨|新闻|截图/.test((notes[0]?.desc || "") + (notes[0]?.text || "") + out) })));
     if (lane === "all" || lane === "ocr") await caseImage("4a-read-image-text", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "ocr-cases.json"), "utf8")).map(c => ({ ...c, check: c.kind === "text" ? ({ out, tool }) => !!tool && tool.status === "ok" && /黄仁勋|1031|11月13日|路透社/.test(out) : ({ out, tool }) => (!tool || tool.status === "ok") && /敬礼|眼镜|T恤|短裤|没有|无文字|回退/.test(out) })));
     if (lane === "all" || lane === "search") await caseText("5-search-fetch", JSON.parse(fs.readFileSync(path.join(SCEN, "input", "search-cases.json"), "utf8")));

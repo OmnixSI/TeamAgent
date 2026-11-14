@@ -8,6 +8,7 @@
 import worker, { signature } from "../../src/worker";
 import { enqueueVoice } from "../../src/voice";
 import { EXTRA_TOOLS } from "../../src/tools";
+import { describeBytes } from "../../src/vision";
 
 type Media = { mime: string; b64: string };
 const realFetch = globalThis.fetch.bind(globalThis);
@@ -42,6 +43,10 @@ globalThis.fetch = async (input: any, init: any = {}): Promise<Response> => {
     const item: Media | undefined = active.media[url.pathname.slice("/replay-media/".length)];
     if (!item) return new Response("replay media missing", { status: 404 });
     return new Response(bytesOf(item.b64), { status: 200, headers: { "content-type": item.mime } });
+  }
+  if (host === "api.openai.com" && active.stubOpenai) {
+    active.calls.push({ path: url.pathname, status: 200, ms: 1, stubbed: true, model: "gpt-image-2.5-flare", usage: active.stubOpenai.usage });
+    return new Response(JSON.stringify({ created: Math.floor(Date.now() / 1000), data: [{ b64_json: active.stubOpenai.b64 }], usage: active.stubOpenai.usage, model: "gpt-image-2.5-flare" }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (host === "api.openai.com") {
     const started = Date.now();
@@ -136,7 +141,7 @@ export default {
     if (u.pathname === "/__reset") {
       const tables = await rows(e, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' AND name NOT LIKE '%_fts_%'");
       for (const { name } of tables) await e.DB.prepare('DELETE FROM "' + name + '"').run();
-      active = { media: b.media || {}, calls: [], qq: [] };
+      active = { media: b.media || {}, calls: [], qq: [], stubOpenai: b.stubOpenai || null };
       for (const row of b.messages || []) {
         await e.DB.prepare("INSERT INTO messages(id,group_id,sender,body,ts,mentioned,processed) VALUES(?,?,?,?,?,?,0)")
           .bind(row.id, row.group_id, row.sender, row.body || "", row.ts, row.mentioned ? 1 : 0).run();
@@ -206,6 +211,18 @@ export default {
       const row = await e.DB.prepare("SELECT id,status,body FROM outbox WHERE id=?").bind(b.id).first();
       return json({ ok: true, outbox: row });
     }
+    if (u.pathname === "/__vision") {
+      const env2: any = { ...env };
+      if (b.breakDeepseek) env2.DEEPSEEK_API_KEY = "invalid-replay-key";
+      if (b.provider) await e.DB.prepare("INSERT INTO settings VALUES('vision:provider',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(b.provider)).run();
+      const started = Date.now();
+      try {
+        const note = await describeBytes(env2, bytesOf(String(b.b64 || "")), String(b.mime || "image/png"), String(b.hint || "验证图像"), AbortSignal.timeout(30000));
+        return json({ ok: !!note, note, ms: Date.now() - started });
+      } catch (error: any) {
+        return json({ ok: false, error: String(error?.message || error), ms: Date.now() - started }, 500);
+      }
+    }
     if (u.pathname === "/__tool") {
       const tool = EXTRA_TOOLS.find((t: any) => t.name === b.name);
       if (!tool) return json({ error: "unknown tool" }, 404);
@@ -237,6 +254,7 @@ export default {
         decisions: await rows(e, "SELECT latest_id,gate,action,outbox_id,model_ms FROM chat_decisions ORDER BY created_at"),
         mediaNotes: await rows(e, "SELECT id,substr(body,1,200) AS body,created_at FROM media_notes ORDER BY created_at"),
         settings: await rows(e, "SELECT key,value FROM settings ORDER BY key"),
+        quotaReservations: await rows(e, "SELECT kind,key FROM quota_reservations"),
         imageGenLog: await rows(e, "SELECT group_id,sender_id,turn_id,prompt,size,quality,model,status,error_kind,bytes,latency_ms,est_cost_micro_usd,outbox_id FROM image_gen_log ORDER BY id"),
         generatedImages: await rows(e, "SELECT id,group_id,mime,bytes,width,height,length(data) AS stored_bytes,expires_at FROM generated_images"),
         openaiUsage: await rows(e, "SELECT purpose,model,status,error_kind,latency_ms,est_cost_micro_usd FROM openai_usage ORDER BY created_at"),
