@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {runDocJob,runDocCycle,downloadDoc,docUrl,safeDocName} from '../runner/docread-job.mjs';
+import {runDocJob,runDocCycle,downloadDoc,docUrl,safeDocName,pickPython} from '../runner/docread-job.mjs';
 
 const home=()=>fs.mkdtempSync(path.join(os.tmpdir(),'docread-job-'));
 const job=()=>({id:'docread-m1-0-abc123',kind:'docread',payload:{message_id:'m1',group_id:'GROUP1',filename:'report.pdf',question:'第3页的金额',key:'doc:m1:0:abc123',url:'https://multimedia.nt.qq.com.cn/download?fileid=1',bytes:4,lease:'lease-1'}});
@@ -20,6 +20,24 @@ test('URL and filename guards keep jobs on https and inside the temp directory',
  assert.equal(safeDocName('a\u0000b.pdf'),'ab.pdf');
  await assert.rejects(downloadDoc('http://example.com/a.pdf','/tmp/docread-never.pdf'),/invalid_url/);
  assert.equal(fs.existsSync('/tmp/docread-never.pdf'),false);
+});
+
+test('pickPython puts the runner venv before a configured or system interpreter',()=>{
+ const dir=home();
+ try{
+  const venv=path.join(dir,'venv','bin');fs.mkdirSync(venv,{recursive:true});
+  const python=path.join(venv,'python');fs.writeFileSync(python,'');
+  const configured=path.join(dir,'configured-python');fs.writeFileSync(configured,'');
+  assert.equal(pickPython(dir,configured),python);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('pickPython falls back to an existing configured interpreter without a venv',()=>{
+ const dir=home();
+ try{
+  const configured=path.join(dir,'configured-python');fs.writeFileSync(configured,'');
+  assert.equal(pickPython(dir,configured),configured);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 test('one job downloads into a private temp dir, calls docread.py and cleans up',async()=>{

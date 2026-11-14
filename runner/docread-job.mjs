@@ -26,8 +26,8 @@ export function safeDocName(raw){
  return !name||name==='.'||name==='..'?'document.bin':name.slice(0,150);
 }
 export function pickPython(home=homes(),configured=''){
- const candidates=[configured,process.env.DOCREAD_PYTHON,
-  '/usr/local/bin/python3.12','/opt/homebrew/bin/python3.12',join(home,'venv/bin/python')];
+ const candidates=[join(home,'venv/bin/python'),configured,process.env.DOCREAD_PYTHON,
+  '/usr/local/bin/python3.12','/opt/homebrew/bin/python3.12'];
  for(const candidate of candidates){if(!candidate)continue;if(!candidate.includes('/')||exists(candidate))return candidate;}
  return 'python3';
 }
