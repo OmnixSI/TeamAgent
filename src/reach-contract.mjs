@@ -25,7 +25,13 @@ export function validTarget(channel,action,target){
  let decoded=target;try{for(let n=0;n<3;n++){const next=decodeURIComponent(decoded);if(next===decoded)break;decoded=next;}}catch{return false;}
  if(/[;|`$<>\\\u0000-\u001f\u007f]/.test(decoded))return false;
  if(/^https:\/\//.test(target)){
-  try{const u=new URL(target);return !u.username&&!u.password&&(!u.port||u.port==='443')&&CHANNELS[channel].hosts.includes(u.hostname);}catch{return false;}
+  try{
+   const u=new URL(target);
+   if(u.username||u.password||(u.port&&u.port!=='443')||!CHANNELS[channel].hosts.includes(u.hostname))return false;
+   // Xiaohongshu detail pages only resolve with the signature returned by search or the original link.
+   if(channel==='xiaohongshu'&&['read','comments'].includes(action)&&!u.searchParams.get('xsec_token')?.trim())return false;
+   return true;
+  }catch{return false;}
  }
  if(['read','thread','comments'].includes(action))return false;
  if(action==='quote')return /^(?:SH|SZ|HK|US)?[A-Z0-9.]{1,12}$/i.test(target);

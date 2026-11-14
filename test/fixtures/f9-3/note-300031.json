@@ -1,0 +1,18 @@
+{
+  "_provenance": {
+    "source": "real headless Edge probe, 2026-11-14 Sydney",
+    "request": "https://www.xiaohongshu.com/explore/6371c72a000000001501476b",
+    "note": "server redirected to rednote.com/404 with error_code=300031; used as the real error-shell fixture"
+  },
+  "pageUrl": "https://www.rednote.com/404?source=/404/sec_pfbnuUeV?redirectPath=http%3A%2F%2Fwww.rednote.com%2Fexplore%2F6371c72a000000001501476b&error_code=300031&error_msg=%E5%BD%93%E5%89%8D%E7%AC%94%E8%AE%B0%E6%9A%82%E6%97%B6%E6%97%A0%E6%B3%95%E6%B5%8F%E8%A7%88&uuid=sg__b979b122-58ba-469c-b254-560671e9a1a0&verifyMsg=",
+  "securityBlock": true,
+  "loginWall": false,
+  "notFound": true,
+  "title": "",
+  "desc": "",
+  "author": "",
+  "likes": "",
+  "collects": "",
+  "comments": "",
+  "tags": []
+}
