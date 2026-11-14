@@ -3,11 +3,20 @@ import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,rmSync} from 'node:fs';
 import {join,isAbsolute} from 'node:path';
 import {homedir} from 'node:os';
+import {fileURLToPath} from 'node:url';
 import {validTarget,scopeFor} from '../src/reach-contract.mjs';
 import {normalizeReachResult} from './reach-result.mjs';
 
 // F9 platform packages add read-only descriptors here; missing components fail closed, never setup.
-export const REACH_COMMANDS={};
+const xReader=fileURLToPath(new URL('./x-reader.mjs',import.meta.url));
+const xCommand=action=>target=>[process.execPath,xReader,action,target];
+export const REACH_COMMANDS={
+ // X needs the writer's own logged-in Edge profile; queries never install or open a login window.
+ 'x:thread:local':{access:'read',resource:'browser',requires_login:true,content_scope:'post_text',argv:xCommand('thread')},
+ 'x:profile:local':{access:'read',resource:'browser',requires_login:true,content_scope:'post_text',argv:xCommand('profile')},
+ 'x:tweets:local':{access:'read',resource:'browser',requires_login:true,content_scope:'post_text',argv:xCommand('tweets')},
+ 'x:search:local':{access:'read',resource:'browser',requires_login:true,content_scope:'search_results',argv:xCommand('search')},
+};
 const MAX_BYTES=1024*1024;
 const keys=new Set(['id','lease','version','channel','action','target','backend','deadline_ms','cooldown_ms']);
 function readState(path){try{return JSON.parse(readFileSync(path,'utf8'));}catch{return {};}}

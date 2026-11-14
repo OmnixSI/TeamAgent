@@ -37,3 +37,31 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+OpenCLI — https://github.com/jackwener/opencli
+--------------------------------------------------------
+Copyright (c) jackwener
+License: Apache-2.0
+Version used: 1.7.22 (npm @jackwener/opencli, already installed on this machine;
+             the audited source is commit 9bc5f5ca132ec4d4e48d7ee517d4303bf159e8e8).
+Used in: runner/x-graphql.mjs
+Source: clis/twitter/thread.js — extractTweet / parseTweetDetail and the
+        TweetDetail query constants;
+        clis/twitter/tweets.js — UserTweets / UserByScreenName query constants
+        and parseUserTweets;
+        clis/twitter/search.js — SearchTimeline query constants and
+        parseSearchTimeline;
+        clis/twitter/profile.js — UserByScreenName profile fields;
+        clis/twitter/shared.js — extractMedia;
+        clis/twitter/utils.js — the public X web bearer constant.
+Borrowed: the X GraphQL query-id / feature-switch table, request shapes, tweet
+          unwrapping (TweetWithVisibilityResults), note_tweet long text, quoted
+          and retweeted tweets, media extraction and cursor pagination.
+Changed: rewritten as pure functions with no OpenCLI runtime or extension;
+          constants isolated in X_OPERATIONS; added the 25k long-post bound,
+          quote/media text markers, login-vs-challenge classification and
+          fixture tests.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. A copy of the License is at
+https://www.apache.org/licenses/LICENSE-2.0

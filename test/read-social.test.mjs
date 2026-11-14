@@ -25,6 +25,10 @@ test('registered untrusted read_social is off by default, global and channel swi
 });
 test('trial §4 dedicated URL actions precede generic read and signed short links are preserved only for execution',async()=>{
  assert.deepEqual(await resolveSocialTarget({url:'https://x.com/alice/status/123'}),{channel:'x',action:'thread',target:'https://x.com/alice/status/123'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://x.com/CBSNews/status/2054921950263116053/photo/1'}),{channel:'x',action:'thread',target:'https://x.com/CBSNews/status/2054921950263116053'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://x.com/i/web/status/2103288108360069344'}),{channel:'x',action:'thread',target:'https://x.com/i/web/status/2103288108360069344'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://x.com/elonmusk'}),{channel:'x',action:'profile',target:'elonmusk'});
+ await assert.rejects(resolveSocialTarget({url:'https://x.com/home'}));
  assert.equal((await resolveSocialTarget({url:'https://xueqiu.com/S/SH600519'})).action,'quote');
  const original=globalThis.fetch;let count=0;globalThis.fetch=async(u,o)=>{count++;assert.equal(o.redirect,'manual');return new Response('',{status:302,headers:{location:url}});};
  try{const r=await resolveSocialTarget({url:'https://xhslink.com/a/abc'});assert.equal(r.target,url);assert.equal(count,1);}finally{globalThis.fetch=original;}
@@ -96,4 +100,18 @@ test('query article identities stay separate while signature changes reuse the s
  const first=await jobs.reachKey('g1',base);
  assert.notEqual(await jobs.reachKey('g1',{...base,target:base.target.replace('mid=123','mid=456')}),first);
  assert.equal(await jobs.reachKey('g1',{...base,target:base.target.replace('SIGNATURE','OTHER')}),first);
+});
+
+test('x profile/tweets use the same lease-report path and report the honest loaded count',async()=>{
+ const e=await ready();
+ const xctx={...ctx,context:{latest:{id:'m1',group_id:'g1',body:'看下 @elonmusk 的最近推文'}}};
+ const queued=await readSocialTool.run(e,{channel:'x',action:'tweets',target:'elonmusk'},xctx);
+ assert.equal(queued.status,'queued');
+ const {job}=await(await runner(e,'claim')).json();
+ assert.equal(job.payload.channel,'x');assert.equal(job.payload.action,'tweets');assert.equal(job.payload.backend,'local');assert.equal(job.payload.source_url,'https://x.com/elonmusk');
+ const result={ok:true,items:[{title:'Elon Musk',text:'最近一条推文',author:'elonmusk',source_url:'https://x.com/elonmusk/status/1',published_at:'2025-11-12T10:00:00.000Z'}]};
+ assert.equal((await runner(e,'report',{source:'reach',id:job.id,lease:job.payload.lease,result})).status,200);
+ const cached=await readSocialTool.run(e,{channel:'x',action:'tweets',target:'elonmusk'},xctx);
+ assert.equal(cached.ok,true);assert.equal(cached.content_scope,'post_text');assert.equal(cached.meta.loaded,1);assert.equal(cached.source_url,'https://x.com/elonmusk');
+ assert.equal(cached.items[0].author,'elonmusk');
 });
