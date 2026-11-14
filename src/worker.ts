@@ -39,6 +39,7 @@ import { claimTask, listTasks, reportTask, publicTask } from "./claims";
 import { featureRequestRoute, sweepFeatureRequests } from "./feature-request-api";
 import { queueFor } from "./lanes";
 import { runSchedules, planSchedule, createSchedule, backfillSchedule, publicSchedule, sydneyText } from "./schedules";
+import { exportCsv, normalizeSchema as normalizeRecordSchema } from "./records";
 import { proposeLearning } from "./learning-backfill";
 import { observeChecks, triageCI } from "./ci";
 import { requestPlan, updateTask, createBoardTask } from "./tasks";
@@ -1561,6 +1562,281 @@ function requestBodyLimit(r: Request) {
   if (r.method === 'POST' && path === '/api/runner/repo_index') return 1048576;
   return 262144;
 }
+/* D8 · 工作台只读接口：账本/清单/日志、技能、日程。
+ * 工作台账号（members）与 QQ sender 没有对应关系：visibility='private' 的行
+ * 一律不下发明细，只计入 hiddenPrivate（主程决定，2026-11-14）。
+ */
+const DESK_PAGE_ROWS = 50;
+const DESK_BASE_KEYS: Record<string, string[]> = {
+  ledger: ["person", "amount", "title", "occurred_at"],
+  list: ["title", "status", "person"],
+  log: ["title", "occurred_at", "amount"],
+};
+function deskParse(value: unknown, fallback: any = null): any {
+  if (value && typeof value === "object") return value;
+  try { return JSON.parse(String(value ?? "")); } catch { return fallback; }
+}
+function deskMoney(cents: number): string {
+  const n = Math.round(Number(cents) || 0);
+  return (n < 0 ? "-¥" : "¥") + (Math.abs(n) / 100).toFixed(2);
+}
+function deskName(names: Map<string, string>, id: unknown): string {
+  const key = String(id || "");
+  return names.get(key) || "成员" + key.slice(-4);
+}
+async function deskNames(e: Env, ids: unknown[]): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.map((id) => String(id || "")).filter(Boolean))];
+  const out = new Map<string, string>();
+  try {
+    for (let i = 0; i < unique.length; i += 80) {
+      const part = unique.slice(i, i + 80);
+      const rows = (await e.DB.prepare(
+        "SELECT member_id,name FROM member_names WHERE member_id IN (" + part.map(() => "?").join(",") + ")",
+      ).bind(...part).all()).results as any[];
+      for (const row of rows) out.set(String(row.member_id), String(row.name));
+    }
+  } catch { /* 老库可能还没有 member_names */ }
+  return out;
+}
+function deskSchema(kind: string, raw: unknown): any {
+  const safeKind = ["ledger", "list", "log"].includes(kind) ? kind as "ledger" | "list" | "log" : "ledger";
+  const parsed = deskParse(raw, {});
+  if (Array.isArray(parsed?.fields) && parsed.fields.length) return parsed;
+  return normalizeRecordSchema(safeKind);
+}
+function deskExtra(schema: any, kind: string, data: any): Record<string, string> {
+  const base = new Set(DESK_BASE_KEYS[kind] || DESK_BASE_KEYS.ledger);
+  const out: Record<string, string> = {};
+  for (const field of schema?.fields || []) {
+    if (!field?.key || base.has(field.key)) continue;
+    const value = data?.[field.key];
+    if (value === undefined || value === null || value === "") { out[String(field.label || field.key)] = ""; continue; }
+    if (field.type === "money") out[String(field.label || field.key)] = deskMoney(Number(value));
+    else if (field.type === "bool") out[String(field.label || field.key)] = value === true || value === 1 || value === "1" ? "是" : "否";
+    else if (field.type === "date" && Number.isFinite(Number(value))) {
+      out[String(field.label || field.key)] = new Date(Number(value)).toLocaleDateString("en-CA", { timeZone: "Australia/Sydney" });
+    } else out[String(field.label || field.key)] = String(value);
+  }
+  return out;
+}
+function deskRow(row: any, kind: string, schema: any, names: Map<string, string>) {
+  const data = deskParse(row.data, {});
+  const out: any = {
+    id: row.id,
+    short: "#" + String(row.id || "").slice(-6),
+    created_at: Number(row.created_at) || 0,
+    creator_name: deskName(names, row.creator),
+    visibility: row.visibility === "private" ? "private" : "group",
+  };
+  if (data.person !== undefined && data.person !== null && data.person !== "") out.person = String(data.person);
+  if (data.title !== undefined && data.title !== null && data.title !== "") out.title = String(data.title);
+  if (kind === "ledger") {
+    if (Number.isFinite(Number(data.amount_cents))) {
+      out.amount_cents = Number(data.amount_cents);
+      out.amount = deskMoney(Number(data.amount_cents));
+    }
+  } else if (kind === "log" && data.amount !== undefined && data.amount !== null) {
+    out.amount = String(data.amount);
+  }
+  if (data.status !== undefined && data.status !== null && data.status !== "") out.status = String(data.status);
+  out.occurred_at = data.occurred_at !== undefined && data.occurred_at !== null ? Number(data.occurred_at) : null;
+  const extra = deskExtra(schema, kind, data);
+  if (Object.keys(extra).length) out.extra = extra;
+  return out;
+}
+async function deskApi(e: Env, who: any, u: URL): Promise<Response | null> {
+  const path = u.pathname;
+  if (!["/api/records/types", "/api/records", "/api/records/export", "/api/skills", "/api/schedules"].includes(path)) return null;
+  const groupId = await setting(e, "group_id");
+  if (path === "/api/records/types") {
+    if (!groupId) return json({ types: [] });
+    let types: any[] = [];
+    try {
+      types = (await e.DB.prepare("SELECT * FROM record_types WHERE group_id=? ORDER BY updated_at DESC").bind(groupId).all()).results as any[];
+    } catch { return json({ types: [] }); }
+    let counts = new Map<string, number>();
+    try {
+      const rows = (await e.DB.prepare(
+        "SELECT type_id,COUNT(*) AS n FROM records WHERE group_id=? AND deleted_at IS NULL AND visibility='group' GROUP BY type_id",
+      ).bind(groupId).all()).results as any[];
+      counts = new Map(rows.map((row) => [String(row.type_id), Number(row.n) || 0]));
+    } catch { /* 缺 records 表时按 0 条 */ }
+    const names = await deskNames(e, types.map((type) => type.owner));
+    return json({
+      types: types.map((type) => ({
+        id: type.id, name: type.name, kind: type.kind,
+        visibility_default: type.visibility_default, status: type.status,
+        owner_name: deskName(names, type.owner),
+        count: counts.get(String(type.id)) || 0,
+        created_at: Number(type.created_at) || 0, updated_at: Number(type.updated_at) || 0,
+      })),
+    });
+  }
+  if (path === "/api/records/export") {
+    if (!groupId) return json({ error: "还没绑定群" }, 400);
+    const typeId = String(u.searchParams.get("type") || "");
+    if (!typeId) return json({ error: "缺少 type" }, 400);
+    try {
+      return json(await exportCsv(e, {
+        groupId, typeId,
+        viewer: { sender: "__workbench__", name: String(who?.name || "成员"), isAdmin: false },
+      }));
+    } catch (err: any) {
+      return json({ error: err?.message || "导出失败" }, 404);
+    }
+  }
+  if (path === "/api/records") {
+    if (!groupId) return json({ error: "还没绑定群" }, 400);
+    const typeId = String(u.searchParams.get("type") || "");
+    if (!typeId) return json({ error: "缺少 type" }, 400);
+    let type: any = null;
+    try {
+      type = await e.DB.prepare("SELECT * FROM record_types WHERE id=? AND group_id=?").bind(typeId, groupId).first();
+    } catch { return json({ error: "记录表还没就绪" }, 503); }
+    if (!type) return json({ error: "没找到这个账本，可能已归档或被删除" }, 404);
+    const kind = ["ledger", "list", "log"].includes(type.kind) ? type.kind : "ledger";
+    const schema = deskSchema(kind, type.schema);
+    const where = ["type_id=?", "group_id=?", "deleted_at IS NULL", "visibility='group'"];
+    const args: unknown[] = [typeId, groupId];
+    const person = String(u.searchParams.get("person") || "").trim();
+    const text = String(u.searchParams.get("text") || "").trim();
+    const status = String(u.searchParams.get("status") || "").trim();
+    const privateOnly = u.searchParams.get("private") === "1";
+    if (person) { where.push("person=?"); args.push(person); }
+    if (text) { where.push("(title LIKE ? OR person LIKE ?)"); args.push("%" + text + "%", "%" + text + "%"); }
+    if (status) { where.push("status=?"); args.push(status); }
+    if (privateOnly) where.push("0");
+    const hiddenWhere = ["type_id=?", "group_id=?", "deleted_at IS NULL", "visibility='private'"];
+    const hiddenArgs: unknown[] = [typeId, groupId];
+    if (person) { hiddenWhere.push("person=?"); hiddenArgs.push(person); }
+    if (text) { hiddenWhere.push("(title LIKE ? OR person LIKE ?)"); hiddenArgs.push("%" + text + "%", "%" + text + "%"); }
+    if (status) { hiddenWhere.push("status=?"); hiddenArgs.push(status); }
+    const order = kind === "list"
+      ? "CASE WHEN status='todo' THEN 0 ELSE 1 END,created_at DESC,id DESC"
+      : "occurred_at DESC,created_at DESC,id DESC";
+    const offset = Math.max(0, Number.parseInt(String(u.searchParams.get("cursor") || "0"), 10) || 0);
+    let rows: any[] = [];
+    let hiddenPrivate = 0;
+    try {
+      rows = (await e.DB.prepare(
+        `SELECT * FROM records WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      ).bind(...args, DESK_PAGE_ROWS + 1, offset).all()).results as any[];
+      hiddenPrivate = Number((await e.DB.prepare(
+        `SELECT COUNT(*) AS n FROM records WHERE ${hiddenWhere.join(" AND ")}`,
+      ).bind(...hiddenArgs).first())?.n || 0);
+    } catch { return json({ error: "记录表还没就绪" }, 503); }
+    const more = rows.length > DESK_PAGE_ROWS;
+    const page = more ? rows.slice(0, DESK_PAGE_ROWS) : rows;
+    const names = await deskNames(e, [...page.map((row) => row.creator), type.owner]);
+    const out: any = {
+      type: {
+        id: type.id, name: type.name, kind, visibility_default: type.visibility_default,
+        status: type.status, owner_name: deskName(names, type.owner),
+        count: 0, created_at: Number(type.created_at) || 0, updated_at: Number(type.updated_at) || 0,
+      },
+      schema,
+      rows: page.map((row) => deskRow(row, kind, schema, names)),
+      hiddenPrivate,
+      mine_private: 0,
+    };
+    if (more) out.next = String(offset + DESK_PAGE_ROWS);
+    try {
+      out.type.count = Number((await e.DB.prepare(
+        "SELECT COUNT(*) AS n FROM records WHERE type_id=? AND group_id=? AND deleted_at IS NULL AND visibility='group'",
+      ).bind(typeId, groupId).first())?.n || 0);
+    } catch {}
+    if (kind === "ledger" && offset === 0) {
+      try {
+        const groups = (await e.DB.prepare(
+          `SELECT COALESCE(person,'') AS key,COALESCE(SUM(amount_cents),0) AS sum_cents,COUNT(*) AS count FROM records WHERE ${where.join(" AND ")} GROUP BY COALESCE(person,'') ORDER BY ABS(SUM(amount_cents)) DESC,key ASC`,
+        ).bind(...args).all()).results as any[];
+        const total = await e.DB.prepare(
+          `SELECT COALESCE(SUM(amount_cents),0) AS total_cents,COUNT(*) AS count FROM records WHERE ${where.join(" AND ")}`,
+        ).bind(...args).first();
+        out.summary = {
+          groups: groups.map((row) => ({ key: String(row.key ?? ""), sum_cents: Number(row.sum_cents) || 0, count: Number(row.count) || 0 })),
+          total_cents: Number(total?.total_cents) || 0,
+          count: Number(total?.count) || 0,
+        };
+      } catch { out.summary = { groups: [], total_cents: 0, count: 0 }; }
+    }
+    if (kind === "list") {
+      try {
+        const countWhere = ["type_id=?", "group_id=?", "deleted_at IS NULL", "visibility='group'"];
+        const countArgs: unknown[] = [typeId, groupId];
+        if (person) { countWhere.push("person=?"); countArgs.push(person); }
+        if (text) { countWhere.push("(title LIKE ? OR person LIKE ?)"); countArgs.push("%" + text + "%", "%" + text + "%"); }
+        const counts = (await e.DB.prepare(
+          `SELECT status,COUNT(*) AS n FROM records WHERE ${countWhere.join(" AND ")} GROUP BY status`,
+        ).bind(...countArgs).all()).results as any[];
+        const map = new Map(counts.map((row) => [String(row.status || ""), Number(row.n) || 0]));
+        out.status_counts = { todo: map.get("todo") || 0, done: map.get("done") || 0 };
+      } catch { out.status_counts = { todo: 0, done: 0 }; }
+    }
+    return json(out);
+  }
+  if (path === "/api/skills") {
+    if (!groupId) return json({ skills: [] });
+    let rows: any[] = [];
+    try {
+      rows = (await e.DB.prepare(
+        "SELECT * FROM skills WHERE group_id=? ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'proposed' THEN 1 ELSE 2 END,uses DESC,name ASC LIMIT 100",
+      ).bind(groupId).all()).results as any[];
+    } catch { return json({ skills: [] }); }
+    const names = await deskNames(e, rows.map((row) => row.owner));
+    return json({
+      skills: rows.map((row) => ({
+        id: row.id, name: row.name,
+        triggers: Array.isArray(deskParse(row.triggers, [])) ? deskParse(row.triggers, []) : [],
+        steps: Array.isArray(deskParse(row.steps, [])) ? deskParse(row.steps, []) : [],
+        note: String(row.note || ""), owner_name: deskName(names, row.owner),
+        status: row.status, uses: Number(row.uses) || 0,
+        last_used_at: row.last_used_at === null || row.last_used_at === undefined ? null : Number(row.last_used_at),
+      })),
+    });
+  }
+  if (path === "/api/schedules") {
+    if (!groupId) return json({ schedules: [], limit: 10 });
+    let rows: any[] = [];
+    try {
+      rows = (await e.DB.prepare(
+        "SELECT * FROM schedules WHERE group_id=? ORDER BY created_at DESC LIMIT 200",
+      ).bind(groupId).all()).results as any[];
+    } catch { return json({ schedules: [], limit: 10 }); }
+    let runs = new Map<string, any>();
+    try {
+      const result = (await e.DB.prepare(
+        `SELECT r.* FROM schedule_runs r JOIN (SELECT schedule_id,MAX(due_at) AS due_at FROM schedule_runs GROUP BY schedule_id) m ON m.schedule_id=r.schedule_id AND m.due_at=r.due_at`,
+      ).all()).results as any[];
+      for (const row of result) if (!runs.has(String(row.schedule_id))) runs.set(String(row.schedule_id), row);
+    } catch {}
+    const names = await deskNames(e, rows.map((row) => row.owner));
+    const runStatus = (raw: unknown): string | null => {
+      const value = String(raw || "");
+      if (value === "ok" || value === "late" || value === "sent") return "sent";
+      if (value === "failed") return "failed";
+      if (value === "pending" || value === "running") return value;
+      return null;
+    };
+    return json({
+      limit: 10,
+      schedules: rows.map((row) => {
+        const spec = deskParse(row.spec, {});
+        const run = runs.get(String(row.id));
+        const status = run ? runStatus(run.status) : null;
+        const at = run ? Number(run.finished_at || run.started_at || run.due_at) || 0 : 0;
+        return {
+          id: row.id, kind: row.kind, tz: row.tz || "Australia/Sydney", spec,
+          status: row.status, next_run_at: row.next_run_at === null || row.next_run_at === undefined ? null : Number(row.next_run_at),
+          fail_count: Number(row.fail_count) || 0, last_error: row.last_error || null,
+          owner_name: deskName(names, row.owner), created_at: Number(row.created_at) || 0,
+          last_run: status ? { status, at, ...(status === "failed" && run?.error ? { error: String(run.error) } : {}) } : null,
+        };
+      }),
+    });
+  }
+  return null;
+}
 async function api(r: Request, e: Env) {
   const u = new URL(r.url),
     path = u.pathname;
@@ -2244,6 +2520,10 @@ async function api(r: Request, e: Env) {
       { error: "本机AI仅可查询项目、创建与领取任务、回填自己的进展" },
       403,
     );
+  if (method === "GET") {
+    const desk = await deskApi(e, who, u);
+    if (desk) return desk;
+  }
   if (path === "/api/team/ai-tokens") return tokenRoute(r, e, who);
   const fr = await featureRequestRoute(r, e, who, path, method);
   if (fr) return fr;
