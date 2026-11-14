@@ -154,7 +154,33 @@ class MediaInstallTests(unittest.TestCase):
         self.assertEqual(r.exception.code,0)
         stage=self.runtime/'runtime-staging/fake-release/runner'
         self.assertTrue((stage.parent/'shared/deny_globs.json').exists(), 'staging must include shared deny policy')
-        for name in ['media.mjs','asr.mjs','xasr_transcribe.py','requirements-xasr.txt']:self.assertTrue((stage/name).exists(),name)
+        for name in ['media.mjs','asr.mjs','xasr_transcribe.py','requirements-xasr.txt','package.json','package-lock.json']:self.assertTrue((stage/name).exists(),name)
+    def test_S1_apply_installs_runner_dependencies_and_self_checks(self):
+        self.apply()
+        for name in ['package.json','package-lock.json']:
+            self.assertEqual((self.runtime/name).read_bytes(),(ROOT/'runner'/name).read_bytes(),name)
+        installed=[c for c in self.commands if c[:2]==['npm','ci'] and str(self.runtime) in c]
+        self.assertTrue(installed,self.commands)
+        checks=[c for c in self.commands if c[0].endswith('/node') and '--input-type=module' in c]
+        self.assertTrue(checks,self.commands)
+        self.assertTrue(any('silk-wasm' in c[-1] for c in checks),checks)
+    def test_S2_self_check_reports_tts_silk_missing_when_import_fails(self):
+        m=self.module()
+        def run(args,**kw):
+            return subprocess.CompletedProcess(args,1,stdout='',stderr="Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'silk-wasm'")
+        with patch('subprocess.run',side_effect=run):
+            result=m.check_runner_deps(self.runtime,'/opt/homebrew/bin/node')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_kind'],'tts_silk_missing')
+        self.assertIn('ERR_MODULE_NOT_FOUND',result['error'])
+    def test_S3_unchanged_runner_manifest_skips_npm_ci(self):
+        self.apply()
+        dependency=self.runtime/'node_modules/silk-wasm'
+        dependency.mkdir(parents=True)
+        (dependency/'package.json').write_text('{}')
+        self.commands.clear()
+        self.apply()
+        self.assertEqual([c for c in self.commands if c[:2]==['npm','ci'] and str(self.runtime) in c],[])
     def test_I2_apply_flattens_files_and_writes_absolute_asr_paths(self):
         self.apply()
         import json
