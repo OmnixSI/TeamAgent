@@ -6,7 +6,7 @@ import type { Ref } from "./draw.ts";
 import type { Row, Tool } from "./core.ts";
 import { BJ, SYD, clip, fmtDate, fmtFull, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
-import { biliSearch, biliVideo, hot, readRelayed, stock, transcribe, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
+import { biliSearch, biliVideo, hot, readRelayed, stock, ttsSilk, tweet, xSearch, xhsNote, zhihu } from "./sites.ts";
 import type { Net } from "./sites.ts";
 import { selfCard } from "./self.ts";
 import { PLAYBOOKS, TUNABLES } from "./config.ts";
@@ -47,6 +47,8 @@ export interface Host {
   browse(url: string, shot: boolean): Promise<{ title: string; text: string; shot: Uint8Array | null }>;
   /** Runs shell commands in the cloud computer (Linux, 1 vCPU, 1 GiB) and returns their output and the files asked for. */
   computer(req: ComputerRequest): Promise<ComputerResult>;
+  /** Speech to text, free allowance first. */
+  transcribe(audio: Uint8Array, seconds: number, type: string, name: string): Promise<string>;
   /** Link of a video someone posted, by the message number shown as [视频 123]; "" when unknown. */
   videoUrl(seq: number): string;
   /** The added abilities (src/feat) and what each says about itself. */
@@ -267,7 +269,7 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
 export function buildTools(host: Host): Tool[] {
   const env = host.env;
-  const net: Net = { env: env as any, cookie: site => host.cookie(site) };
+  const net: Net = { env: env as any, cookie: site => host.cookie(site), transcribe: (a, s, t, n) => host.transcribe(a, s, t, n) };
   let sawSelf = false;
   const tools: Tool[] = [
     {
@@ -664,7 +666,7 @@ export function buildTools(host: Host): Tool[] {
         const info = new TextDecoder().decode(file("info.txt")?.bytes || new Uint8Array()), seconds = Number(info.match(/seconds: (\d+)/)?.[1] || 0);
         const audio = file("audio.mp3");
         let said = "", heard = "";
-        if (audio && audio.bytes.length > 2000) { try { said = await transcribe(host.env, audio.bytes, Math.min(seconds, minutes * 60), "audio/mpeg", "audio.mp3"); } catch (e: any) { heard = "声音没转出来：" + clip(e?.message || "", 80); } }
+        if (audio && audio.bytes.length > 2000) { try { said = await host.transcribe(audio.bytes, Math.min(seconds, minutes * 60), "audio/mpeg", "audio.mp3"); } catch (e: any) { heard = "声音没转出来：" + clip(e?.message || "", 80); } }
         else heard = "这个视频没有声音";
         const shots = out.files.filter(f => /f\d+\.jpg$/.test(f.name)).slice(0, 4);
         return {

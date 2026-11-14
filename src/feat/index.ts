@@ -9,10 +9,12 @@ import codeagent from "./codeagent.ts";
 import publish from "./publish.ts";
 import preview from "./preview.ts";
 import repocheck from "./repocheck.ts";
-import search from "./search.ts";
-import library from "./library.ts";
+import search, { indexText, searchText } from "./search.ts";
+import library, { setSemantic } from "./library.ts";
 import watch from "./watch.ts";
 import data from "./data.ts";
 
 export const FEATURES: Feature[] = [backup, transfer, meme, voice, codeagent, publish, preview, repocheck, search, library, watch, data];
 for (const f of FEATURES) Object.assign(TUNABLES, f.tunables || {});
+// Saved links and files are also searchable by meaning, through the same index as the chat.
+setSemantic({ index: indexText, search: searchText });

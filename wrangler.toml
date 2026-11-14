@@ -50,13 +50,10 @@ binding = "BROWSER"
 binding = "FILES"
 bucket_name = "teamagent"
 
-# Workers AI (10,000 neurons a day free) and the vector index for searching by meaning.
+# Workers AI: 10,000 neurons a day are free; every call is metered and stops at 8,000 (src/budget.ts).
+# Vectors for searching by meaning are kept in the Hub's own SQLite, which costs nothing.
 [ai]
 binding = "AI"
-
-[[vectorize]]
-binding = "VEC"
-index_name = "teamagent-passages"
 
 # Lets the Hub notice that a newer version was deployed and restart itself onto it.
 [version_metadata]

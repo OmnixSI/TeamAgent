@@ -48,6 +48,7 @@ export function makeHost(hub: Hub, conv: string, askers: Asker[] = []): Host {
     renderPdf: (html, width, height) => renderPdf(hub, html, width, height),
     browse: (url, shot) => browse(hub, url, shot),
     computer: req => runComputer(hub, req),
+    transcribe: (audio, seconds, type, name) => hub.transcribe(audio, seconds, type, name),
     videoUrl: seq => {
       const row = hub.sql.exec("SELECT meta FROM msg WHERE seq=? AND conv=?", seq, conv).toArray()[0] as any;
       try { return row?.meta ? String(JSON.parse(String(row.meta)).videoUrl || "") : ""; } catch { return ""; }

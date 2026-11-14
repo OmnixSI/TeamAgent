@@ -20,7 +20,8 @@ import type { Asker } from "./selfedit.ts";
 import { Accounts } from "./accounts.ts";
 import { dailyHealth } from "./health.ts";
 import { makeHost } from "./host.ts";
-import { hearSilk } from "./sites.ts";
+import { hearSilk, transcribe } from "./sites.ts";
+import { aiTranscribe } from "./feat/search.ts";
 import { route } from "./admin.ts";
 import { FEATURES } from "./feat/index.ts";
 import { BJ, SYD, b64, buildOf, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
@@ -444,10 +445,14 @@ export class Hub extends DurableObject<Env> {
       if (Number(more) && !this.wake.has(conv)) { this.wake.set(conv, Date.now() + 600); setTimeout(() => this.poke(conv), 610); }
     }
   }
+  /** Speech to text: the free daily Workers AI allowance first, the paid service when that is used up or fails. */
+  async transcribe(audio: Uint8Array, seconds: number, type = "audio/mp4", name = "audio.m4a") {
+    return (await aiTranscribe(this, audio, seconds, type).catch(() => null)) ?? transcribe(this.env, audio, seconds, type, name);
+  }
   /** Voice messages that came without QQ's own transcript are transcribed before the model reads them. */
   async hearVoices(conv: string, cursor: number) {
     const rows = this.sql.exec("SELECT seq, text, meta FROM msg WHERE conv=? AND seq>? AND role='user' AND meta LIKE '%\"voice\"%' ORDER BY seq DESC LIMIT 3", conv, cursor).toArray() as any[];
-    const net = { env: this.env as any, cookie: () => "" };
+    const net = { env: this.env as any, cookie: () => "", transcribe: (a: Uint8Array, s: number, t: string, n: string) => this.transcribe(a, s, t, n) };
     await Promise.all(rows.map(async r => {
       const meta = JSON.parse(String(r.meta));
       if (!meta.voice?.length || meta.heard) return;
