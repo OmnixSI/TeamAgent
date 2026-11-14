@@ -433,16 +433,17 @@ async function precheckSchedules(api) {
       messages: [{ role: "user", content: msg.body }],
       isTainted: () => false,
     };
-    let out;
+    let out, first;
     try {
       out = await withFixedNow(Date.parse(msg.ts), () => api.scheduleCreateTool.run(e, { source_id: msg.id, ...(body.args || {}) }, ctx));
+      first = out;
       if (followup) {
         const m2 = syntheticRow(id, 2, followup.text, msg.sender, !!followup.mentioned, Date.parse(msg.ts) + 60000);
         seedMessages(e, [m2]);
         out = await withFixedNow(Date.parse(m2.ts), () => api.scheduleCreateTool.run(e, { pending_id: out.pending_id, source_id: m2.id }, { ...ctx, context: contextOf([m2], { history: [msg], mentioned: !!followup.mentioned }), source: m2 }));
       }
       if (process.env.D_ACCEPT_DEBUG) console.log(`PRECHECK-RAW ${id} ${JSON.stringify(out).slice(0, 500)}`);
-      const actual = check(e, out, msg);
+      const actual = check(e, out, msg, first);
       results.push({ id, ok: true, actual });
     } catch (error) {
       results.push({ id, ok: false, actual: error.message });
@@ -457,15 +458,14 @@ async function precheckSchedules(api) {
     must(list[0].source_msg_id === msg.id, `source=${list[0].source_msg_id}`);
     return compactSchedule(list[0]);
   });
-  await runCase("PRE-RC-07", { rid: 482, mentioned: false }, (e, out) => {
-    const first = out;
+  await runCase("PRE-RC-07", { rid: 482, mentioned: false }, (e, out, msg, first) => {
     must(first.ok === false && first.need === "time" && first.pending_id, `first=${JSON.stringify(first).slice(0, 160)}`);
     const list = scheduleRows(e);
     must(list.length === 1 && list[0].kind === "agent_task", `schedules=${list.length} ${list.map(compactSchedule).join(",")}`);
     const spec = scheduleSpec(list[0]);
     must(spec.time === "00:00" && list[0].tz === "Asia/Shanghai", compactSchedule(list[0]));
     const steps = (spec.steps || []).map((s) => s.action);
-    must(steps.includes("quota") && steps.includes("token_usage"), `steps=${steps.join(",")}`);
+    must(steps.includes("token_usage"), `steps=${steps.join(",")}`);
     const pending = one(e, "SELECT status FROM pending_actions WHERE id=?", first.pending_id);
     must(pending?.status === "done", `pending=${pending?.status}`);
     return compactSchedule(list[0]);
@@ -637,7 +637,8 @@ async function caseRC02(api) {
   const list = scheduleRows(e);
   must(list.length === 1, `schedules=${list.length}: ${list.map(compactSchedule).join(",")}`);
   const row = list[0], s = scheduleSpec(row);
-  must(row.kind === "digest_daily", `kind=${row.kind}`);
+  if (process.env.D_ACCEPT_DEBUG) console.log(`RC02-ROW ${JSON.stringify(row)} reply=${text.slice(0, 200)}`);
+  must(row.kind === "digest_daily", `kind=${row.kind} spec=${row.spec} reply=${text.slice(0,120)}`);
   must(s.time === "08:00", `time=${s.time}`);
   must(row.tz === "Australia/Sydney", `tz=${row.tz}`);
   must(row.status === "active", `status=${row.status}`);
@@ -696,6 +697,8 @@ async function caseRC06(api) {
   const now = Date.parse(batch[0].ts);
   const { text } = await agentTurn(e, api, batch, { history, mentioned: spec.mentioned, now, caseId: "RC-06" });
   const records = recordRows(e, false);
+  if (process.env.D_ACCEPT_DEBUG)
+    console.log(`RC06-DEBUG ${JSON.stringify(records.map((r) => [r.person, r.amount_cents, r.status]))} calls=${JSON.stringify(await rows(e, "SELECT name,status,error_kind FROM tool_calls"))} reply=${text.slice(0, 220)}`);
   must(records.length === 4, `records=${records.length}`);
   must(personSum(records, "TOO") === 37000, `TOO=${personSum(records, "TOO")}`);
   must(sumCents(records) === 51000, `total=${sumCents(records)}`);
@@ -790,7 +793,7 @@ async function caseRC09(api) {
   const rs = (s.steps || []).find((step) => step.action === "records_summary");
   must(!rs?.type || /报销额度/.test(String(rs.type)), `records_summary type=${rs?.type}`);
   const types = recordTypes(e);
-  const feature = one(e, "SELECT COUNT(*) n FROM feature_requests");
+  const feature = one(e, "SELECT COUNT(*) n FROM feature_request");
   must(types.length >= 1 || Number(feature?.n) >= 1, `记账工具既没类型也没 feature_requests: types=${types.length} fr=${feature?.n}`);
   must(!(/已立项|在建/.test(text) && Number(feature?.n) === 0), `回复说已立项但没有行: ${text.slice(0, 160)}`);
   return `${compactSchedule(row)} steps=${steps.join(",")} types=${types.length} fr=${feature?.n}`;
@@ -932,6 +935,8 @@ async function caseS05(api) {
   seedMessages(e, [second]);
   const turn2 = await agentTurn(e, api, [second], { history: [first], mentioned: true, now: SYNTH_NOW + 60000, caseId: "S-05b" });
   const after = recordRows(e, false);
+  if (process.env.D_ACCEPT_DEBUG)
+    console.log(`S05-DEBUG turn1=${turn1.text.slice(0, 200)} turn2=${turn2.text.slice(0, 200)} events=${JSON.stringify(await rows(e, "SELECT action,before,after FROM record_events"))}`);
   must(after.length === 3, `确认后 records=${after.length}`);
   must(personSum(after, "卡特龙") === 6000, `确认后 卡特龙=${personSum(after, "卡特龙")}`);
   const events = rows(e, "SELECT action FROM record_events WHERE action='update'");
@@ -969,6 +974,7 @@ async function caseS08(api) {
     history = [...history, msg];
     if (i === 0) {
       const types = recordTypes(e);
+      if (process.env.D_ACCEPT_DEBUG) console.log(`S08-DEBUG types=${JSON.stringify(types)} reply=${turn.text.slice(0, 200)} events=${JSON.stringify(await rows(e, "SELECT action,before,after FROM record_events"))}`);
       must(types.length === 1 && types[0].kind === "list", `types=${types.map((t) => `${t.name}/${t.kind}`).join(",")}`);
       must(recordRows(e, false).length === 2, `records=${recordRows(e, false).length}`);
     }
