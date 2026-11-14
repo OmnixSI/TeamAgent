@@ -172,7 +172,8 @@ export const runTaskTool: BotTool = {
       typeof args?.request_quote === "string" ? args.request_quote.trim() : "";
     const admin = sender ? await isAutoSender(e, sender) : false;
     const direct = source?.meta?.direct === true;
-    const clean = typeof ctx?.isTainted === "function" ? !ctx.isTainted() : true;
+    // No proof of a clean turn is a denial, never an implicit pass.
+    const clean = typeof ctx?.isTainted === "function" ? !ctx.isTainted() : false;
     if (
       !admin ||
       !direct ||

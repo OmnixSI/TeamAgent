@@ -154,11 +154,17 @@ test("S-12 管理员 direct 入队 exec job，回执带短号", async () => {
 });
 
 test("S-13 普通成员、非 direct、被污染、引用不在原话各拒一例且 jobs 不增", async () => {
+  const noProof = () => {
+    const c = ctx();
+    delete c.isTainted;
+    return c;
+  };
   const cases = [
     ["普通成员", async (e) => member(e, "owner1", "member"), ctx()],
     ["非 direct", async () => {}, ctx({ direct: false })],
     ["被污染", async () => {}, ctx({ tainted: true })],
     ["引用不在原话", async () => {}, ctx({ quote: "统计 Java 文件行数" })],
+    ["无法证明本轮干净", async () => {}, noProof()],
   ];
   for (const [label, setup, c] of cases) {
     const e = fresh();

@@ -1927,7 +1927,7 @@ async function api(r: Request, e: Env) {
               "开始执行 #" +
                 row.id.slice(-6) +
                 "：" +
-                String(payload.title || "本机任务").slice(0, 120),
+                String(payload.title || "本机任务").replace(/\s+/g, " ").slice(0, 120),
               "pending",
               Date.now(),
             )
