@@ -115,3 +115,10 @@ test('x profile/tweets use the same lease-report path and report the honest load
  assert.equal(cached.ok,true);assert.equal(cached.content_scope,'post_text');assert.equal(cached.meta.loaded,1);assert.equal(cached.source_url,'https://x.com/elonmusk');
  assert.equal(cached.items[0].author,'elonmusk');
 });
+
+test('F9-5 platform URLs route only to the registered read-only actions',async()=>{
+ assert.deepEqual(await resolveSocialTarget({url:'https://weibo.com/u/1642591402'}),{channel:'weibo',action:'profile',target:'1642591402'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://www.zhihu.com/question/301/answer/401'}),{channel:'zhihu',action:'read',target:'https://www.zhihu.com/question/301/answer/401'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://www.douyin.com/video/7298145681699622182'}),{channel:'douyin',action:'read',target:'https://www.douyin.com/video/7298145681699622182'});
+ assert.deepEqual(await resolveSocialTarget({url:'https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=x'}),{channel:'weixin',action:'read',target:'https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1&sn=x'});
+});

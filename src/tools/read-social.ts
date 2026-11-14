@@ -33,6 +33,7 @@ export async function resolveSocialTarget(args:any):Promise<{channel:string;acti
    throw Error('unsupported');
   }
   if(channel==='xueqiu'){if(!/^\/S\/[A-Z0-9.]+\/?$/i.test(u.pathname))throw Error('unsupported');action='quote';}
+  if(channel==='weibo'){const m=u.pathname.match(/^\/u\/(\d+)\/?$/);if(m)return {channel,action:'profile',target:m[1]};}
   if(!validTarget(channel,action,u.href))throw Error('unsupported');
   return {channel,action,target:u.href};
  }

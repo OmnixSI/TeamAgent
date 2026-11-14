@@ -5,7 +5,7 @@ export const CHANNELS=Object.freeze({
  xiaohongshu:{hosts:['www.xiaohongshu.com','xiaohongshu.com'],short:['xhslink.com'],actions:['read','search','comments','profile']},
  x:{hosts:['x.com','www.x.com','twitter.com','www.twitter.com'],short:['t.co'],actions:['thread','search','profile','tweets']},
  xueqiu:{hosts:['xueqiu.com','www.xueqiu.com'],short:[],actions:['quote','search','hot']},
- weibo:{hosts:['weibo.com','www.weibo.com','m.weibo.cn'],short:['weibo.cn'],actions:['read','search','hot','profile','comments']},
+ weibo:{hosts:['weibo.com','www.weibo.com','s.weibo.com','m.weibo.cn'],short:['weibo.cn'],actions:['read','search','hot','profile','comments']},
  zhihu:{hosts:['www.zhihu.com','zhihu.com'],short:['zhihu.com'],actions:['read','search','hot','profile']},
  douyin:{hosts:['www.douyin.com','douyin.com'],short:['v.douyin.com'],actions:['read']},
  weixin:{hosts:['mp.weixin.qq.com'],short:[],actions:['read','search']},
