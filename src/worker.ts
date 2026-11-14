@@ -1500,6 +1500,46 @@ async function scheduled(e: Env, cron = "") {
 
   if (new Date().getUTCMinutes() === 0)
     await e.DB.prepare("DELETE FROM stage_timings WHERE at<?").bind(Date.now() - 7 * 86400000).run();
+  // D6：本机执行任务的进行中/排队过久回执。三条 INSERT OR IGNORE 以 outbox 主键
+  // 去重，开始时间取 claim 时写入的 job-start 行；没有 exec 任务时不花这三条查询。
+  const receiptNow = Date.now();
+  const hasExec = await e.DB.prepare(
+    "SELECT 1 AS x FROM jobs WHERE kind='media' AND status IN ('pending','running') AND json_extract(payload,'$.mode')='exec' LIMIT 1",
+  ).first();
+  if (hasExec) {
+    await e.DB.prepare(
+      `INSERT OR IGNORE INTO outbox(id,group_id,msg_id,body,status,created_at)
+       SELECT 'job-progress:'||j.id||':5',m.group_id,json_extract(j.payload,'$.message'),
+         '还在跑，已 '||CAST((?-b.created_at)/60000 AS INTEGER)||' 分钟','pending',?
+       FROM jobs j JOIN outbox b ON b.id='job-start:'||j.id
+       JOIN messages m ON m.id=json_extract(j.payload,'$.message')
+       WHERE j.kind='media' AND j.status='running' AND json_extract(j.payload,'$.mode')='exec'
+         AND ?-b.created_at>300000 AND ?-b.created_at<900000`,
+    )
+      .bind(receiptNow, receiptNow, receiptNow, receiptNow)
+      .run();
+    await e.DB.prepare(
+      `INSERT OR IGNORE INTO outbox(id,group_id,msg_id,body,status,created_at)
+       SELECT 'job-progress:'||j.id||':15',m.group_id,json_extract(j.payload,'$.message'),
+         '还在跑，已 '||CAST((?-b.created_at)/60000 AS INTEGER)||' 分钟','pending',?
+       FROM jobs j JOIN outbox b ON b.id='job-start:'||j.id
+       JOIN messages m ON m.id=json_extract(j.payload,'$.message')
+       WHERE j.kind='media' AND j.status='running' AND json_extract(j.payload,'$.mode')='exec'
+         AND ?-b.created_at>=900000`,
+    )
+      .bind(receiptNow, receiptNow, receiptNow)
+      .run();
+    await e.DB.prepare(
+      `INSERT OR IGNORE INTO outbox(id,group_id,msg_id,body,status,created_at)
+       SELECT 'job-stale:'||j.id,m.group_id,json_extract(j.payload,'$.message'),
+         '执行端不在线，任务还在排队 #'||substr(j.id,-6),'pending',?
+       FROM jobs j JOIN messages m ON m.id=json_extract(j.payload,'$.message')
+       WHERE j.kind='media' AND j.status='pending' AND json_extract(j.payload,'$.mode')='exec'
+         AND j.created_at<?-600000`,
+    )
+      .bind(receiptNow, receiptNow)
+      .run();
+  }
   // Guarantee cheap discovery before the sender and optional extras spend the
   // remaining budget. Schedules and daily repo pruning have already run.
   const stuckDeliveries = await readStuckDeliveries(e, Date.now(), 1);
@@ -1867,9 +1907,33 @@ async function api(r: Request, e: Env) {
       )
         .bind(Date.now() + 900000, lease, Date.now())
         .first();
-      return json({
-        job: row ? { ...row, payload: JSON.parse(row.payload) } : null,
-      });
+      if (!row) return json({ job: null });
+      const payload = JSON.parse(row.payload);
+      // D6：本机执行任务的开始回执。同一 job 重复 claim 也只留一行（outbox 主键去重）。
+      if (payload?.mode === "exec" && payload.message) {
+        const source = await e.DB.prepare(
+          "SELECT group_id FROM messages WHERE id=?",
+        )
+          .bind(payload.message)
+          .first();
+        if (source?.group_id)
+          await e.DB.prepare(
+            "INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)",
+          )
+            .bind(
+              "job-start:" + row.id,
+              source.group_id,
+              payload.message ?? null,
+              "开始执行 #" +
+                row.id.slice(-6) +
+                "：" +
+                String(payload.title || "本机任务").replace(/\s+/g, " ").slice(0, 120),
+              "pending",
+              Date.now(),
+            )
+            .run();
+      }
+      return json({ job: { ...row, payload } });
     }
     if (path.endsWith("/media/heartbeat") && method === "POST") {
       const b: any = await r.json();

@@ -22,6 +22,7 @@ import { readDocumentTool } from "./read-document";
 import { readImageTextTool } from "./read-image-text";
 import { recordsReadTool, recordsWriteTool } from "./records";
 import { repoSearchTools } from "./repo-search";
+import { runStepsTool, runTaskTool } from "./run";
 import { searchHistoryTool } from "./search-history";
 import { stockQuoteTool } from "./stock-quote";
 import { summarizeChatTool } from "./summarize-chat";
@@ -43,6 +44,8 @@ export const EXTRA_TOOLS: BotTool[] = [
   recordsReadTool,
   recordsWriteTool,
   ...repoSearchTools,
+  runStepsTool,
+  runTaskTool,
   searchHistoryTool,
   searchKbTool,
   stockQuoteTool,

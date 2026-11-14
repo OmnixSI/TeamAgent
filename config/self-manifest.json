@@ -1060,6 +1060,62 @@
       "default_state": "on"
     },
     {
+      "id": "execution",
+      "title": "执行入口",
+      "aliases": [
+        "执行",
+        "跑一下",
+        "本机执行",
+        "run_task",
+        "run_steps",
+        "导出",
+        "统计"
+      ],
+      "tools": [
+        "run_steps",
+        "run_task"
+      ],
+      "how": "run_steps 当场执行只读动作（查账本/清单、额度余额、token 用量、聊天摘要、工作状态），不建任务、不改数据。run_task 只接受管理员直接对本机交办，且本轮没有网页/转发/文件等外部材料：把任务排给本机执行端，开始、超过 5/15 分钟和排队过久都会在群里说，完成沿用现有本机任务回执；两个工具分别可用 off:run_steps、off:run_task 关闭。",
+      "files": [
+        {
+          "path": "src/tools/run.ts",
+          "anchor": "export const runStepsTool",
+          "role": "即时动作与本机长任务的入口、权限与入队"
+        },
+        {
+          "path": "src/tools/run.ts",
+          "anchor": "export async function enqueueExportFile",
+          "role": "S-07 导出投递：runner 在线时交本机直发文件"
+        },
+        {
+          "path": "src/worker.ts",
+          "anchor": "D6：本机执行任务的开始回执",
+          "role": "claim 后的开始回执，以及 cron 的进行中/排队过久回执"
+        },
+        {
+          "path": "runner/utility.py",
+          "anchor": "def deliver_file",
+          "role": "mode=file 写文件直发，不调用模型"
+        }
+      ],
+      "providers": [
+        {
+          "role": "本机执行端（管理员交办的长任务）",
+          "vendor": "本机",
+          "file": "src/tools/run.ts",
+          "evidence_pattern": "mode: \"exec\""
+        }
+      ],
+      "switches": [
+        "run_steps",
+        "run_task"
+      ],
+      "requires_env": [],
+      "runs_on": "both",
+      "local_component": "runner/utility.py",
+      "default_state": "on"
+    },
+    {
       "id": "feature_request",
       "title": "功能需求登记与开发接力",
       "aliases": [
