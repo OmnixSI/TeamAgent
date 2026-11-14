@@ -4,7 +4,7 @@ except ModuleNotFoundError:
     from settings import settings, api_key, dsh_program
 #!/usr/bin/env python3
 """Local file/media agent. Separate workspaces, no repository writes or cloud-account credentials."""
-import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client, shutil, fcntl
+import pathlib, json, urllib.request, urllib.error, urllib.parse, ssl, socket, ipaddress, tempfile, subprocess, os, time, re, hashlib, signal, threading, http.client, shutil, fcntl, base64
 from contextlib import contextmanager
 
 ACTIVE = None
@@ -615,6 +615,49 @@ def utility_task_prompt(payload, transcript=None):
     )
 
 
+def output_filename(name):
+    """S-07: one safe basename for a queued file, never a path the cloud chose."""
+    raw = str(name or "")
+    if not raw or "\x00" in raw:
+        raise ValueError("invalid output name")
+    if raw.startswith("/") or raw.startswith("\\\\") or re.match(r"^[A-Za-z]:", raw):
+        raise ValueError("absolute output path denied")
+    parts = raw.replace("\\", "/").split("/")
+    if ".." in parts:
+        raise ValueError("output path traversal denied")
+    base = re.sub(r"[^\w.\-]", "_", parts[-1])[:100]
+    if not base or base in (".", ".."):
+        raise ValueError("invalid output name")
+    return base
+
+
+def deliver_file(job, p, outputs, completion):
+    """mode=file: write the queued bytes into outputs/ and report; never call the model."""
+    spec = p.get("file") if isinstance(p.get("file"), dict) else {}
+    raw = spec.get("content_b64")
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("missing file content")
+    data = base64.b64decode(raw, validate=True)
+    if len(data) > FILE_BYTES:
+        raise InputTooLarge("output file too large")
+    name = output_filename(spec.get("name"))
+    outputs.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = outputs / name
+    if not target.resolve().is_relative_to(outputs.resolve()):
+        raise ValueError("output path denied")
+    target.write_bytes(data)
+    report = {
+        "id": job["id"],
+        "lease": p.get("lease"),
+        "message": p.get("message"),
+        "result": "文件已生成：" + name,
+        "files": [{"name": name, "bytes": len(data)}],
+        "local_files": [str(target)],
+    }
+    save_json(completion, report)
+    finish(completion, report)
+
+
 def once():
     global ACTIVE
     flush_reports()
@@ -656,6 +699,22 @@ def execute(job, work, inputs, outputs, completion):
     global ACTIVE
     parameters = settings()
     p = job["payload"]
+    if p.get("mode") == "file":
+        # S-07: a queued export is bytes, not a task. Write it and report without a model.
+        try:
+            deliver_file(job, p, outputs, completion)
+        except Exception as e:
+            (work / "error.txt").write_text(type(e).__name__ + ": " + str(e)[:2000])
+            report = {
+                "id": job["id"],
+                "lease": p.get("lease"),
+                "message": p.get("message"),
+                "success": False,
+                "result": "文件投递未完成（" + type(e).__name__ + "）；任务未执行，可按原消息重新交办。",
+            }
+            save_json(completion, report)
+            finish(completion, report)
+        return
     try:
         original = cloud(
             "inputs", {"ids": p.get("input_message_ids", [p["message"]])}
