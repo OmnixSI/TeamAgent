@@ -222,6 +222,11 @@ test("F6b promiseGuard still catches promises whose question words sit in a late
     "以后每天早上 9 点给你推一份汇总，列出当天是否有新 PR。",
     "我会每天 8 点发日报，看看进展如何。",
     "记下了：每天 8 点发日报…可以吗？",
+    "好的，以后每天 8 点推日报，不管怎么样都推。",
+    "好，每天 9 点给你推汇总，顺便看看是不是有新 PR。",
+    "收到，每天早上 8 点发你日报，内容怎么排我来定。",
+    "行，每天 8 点发日报，看看进展如何。",
+    "没问题，每天 8:00 推昨日总结，顺便说说大家聊得怎么样。",
   ];
   const now = at("2026-11-14T14:30:00+11:00");
   for (const [i, text] of cases.entries()) {
@@ -256,23 +261,24 @@ test("F6b promiseGuard still catches promises whose question words sit in a late
 });
 
 test("F6c VL-6 original sentence is still treated as asking for consent", async () => {
-  let created = 0;
-  const text = "每天早 8 点推送，要吗？";
-  const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text }), {
-    acceptedActions: [],
-    avoid: [],
-    userText: TOO,
-    owner: "U1",
-    groupId: GROUP,
-    sourceMsgId: "msg-vl6",
-    createSchedule: async () => {
-      created++;
-      return null;
-    },
-    findDuplicate: async () => null,
-  });
-  assert.equal(created, 0, "a consent question must not register a schedule");
-  assert.equal(out, JSON.stringify({ mode: "work", text }));
+  for (const text of ["每天早 8 点推送，要吗？", "要我记下每天 8 点给你发日报吗？"]) {
+    let created = 0;
+    const out = await api.finalizeSpoken(JSON.stringify({ mode: "work", text }), {
+      acceptedActions: [],
+      avoid: [],
+      userText: TOO,
+      owner: "U1",
+      groupId: GROUP,
+      sourceMsgId: "msg-vl6",
+      createSchedule: async () => {
+        created++;
+        return null;
+      },
+      findDuplicate: async () => null,
+    });
+    assert.equal(created, 0, `a consent question must not register a schedule: ${text}`);
+    assert.equal(out, JSON.stringify({ mode: "work", text }));
+  }
 });
 
 test("F7 an active schedule within ten minutes is reused, not recreated", async () => {
