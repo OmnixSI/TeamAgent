@@ -22,7 +22,7 @@ export const PRICE = {
   flash: { hit: 0.003e-6, miss: 0.15e-6, out: 0.6e-6 },        // off-peak; peak is double
   dsSearch: 0.00075, dsFetch: 0.00075, dsOcrPage: 0.000225, dsTtsPer10k: 0.225,
   image: { textIn: 5e-6, imageIn: 8e-6, imageOut: 30e-6 },      // gpt-image-2.5 standard
-  code: { in: 1e-6, cached: 0.05e-6, out: 5e-6, container: 0.03 }, // gpt-6.1-terra + one sandbox session
+  code: { in: 0.1e-6, cached: 0.01e-6, out: 0.5e-6, container: 0.03 }, // gpt-6-luna; the sandbox is $0.03 per 20-minute session
   transcribePerMinute: 0.003,                                    // gpt-4o-mini-transcribe, approximate
   /** DeepSeek bills this account in CNY; its CNY list prices are the USD ones times 20/3. */
   dsCnyPerUsd: 20 / 3,

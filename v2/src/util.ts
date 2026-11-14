@@ -17,7 +17,7 @@ export type Env = {
 };
 
 /** Bumped on every behaviour change; the Hub restarts itself when the Worker reports a newer build. */
-export const BUILD = "2026-11-14.26";
+export const BUILD = "2026-11-14.30";
 
 export const BJ = "Asia/Shanghai";
 export const SYD = "Australia/Sydney";

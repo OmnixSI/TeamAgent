@@ -7,6 +7,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
                           ├─ 聊天记录、记忆、账本、定时任务（自带 SQLite）
                           ├─ DeepSeek：对话、联网搜索、读网页、深度调研、识图、读文档、余额
                           ├─ OpenAI：生图/改图、长音频转写、Python 沙箱
+                          ├─ Cloudflare 无头浏览器：文档、思维导图、网页渲染成图
                           ├─ 中转（Vercel 香港）：国内站点出口、SILK 语音编码
                           └─ GitHub：只读查看组织仓库
 ```
@@ -44,6 +45,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | `src/self.ts` | 自述：链路、接入、能力清单、运行状态 |
 | `src/config.ts` | 它被允许自己改的参数和做法说明 |
 | `src/meter.ts` | 记账：价格表、每次调用的用量和花费估算 |
+| `src/show.ts` | 文档、思维导图、流程图、网页的排版模板 |
 | `src/hub.ts` | Durable Object：QQ 连接、存储、发送、定时、夜间整理、管理接口 |
 | `src/memory.ts` | 每晚把当天聊天整理成长期记忆、教训和小结 |
 | `src/qq.ts` | QQ 接口与消息解析 |
@@ -57,7 +59,7 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 | 查资料 | `web_search` `read_url`（网页、推文、小红书笔记、知乎、公众号） `research`（多轮联网调研） `think_hard`（最高推理档） |
 | 平台 | `bilibili`（视频字幕/无字幕转写/热评/搜索） `hot`（微博、抖音、B站、知乎、百度、GitHub、HN 热榜） `x_search` `stock`（A股/港股/美股行情） |
 | 团队 | `github`（只读） `ledger`（群内账本） `balance`（DeepSeek 余额） `usage`（它自己每天花了多少、花在哪） |
-| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图） `save_reference` `view_image` `speak`（语音回复） |
+| 文件与媒体 | `read_attachment`（PDF/Word/PPT/扫描件） `generate_image`（画图、改图，可指定尺寸到 4K） `save_reference` `view_image` `speak`（语音回复） `sticker`（表情包） `show`（文档、思维导图、流程图、网页） |
 | 计算 | `run_python`（云端沙箱：算数据、画图表、生成 Excel/CSV/PDF，产物直接发群） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 | 自身 | `about_self`（链路、接入、能力、状态） `self_update`（改自己的参数和做法说明，或写代码改进提议） |
@@ -73,6 +75,12 @@ QQ 群 ⇄ QQ 官方长连接 ⇄ Hub（Durable Object，Cloudflare）
 登录态存在 Hub 里（`cookie:<站点>`），用 `scripts/login-cookies.mjs` 刷新：在一个没有自动化标记的普通浏览器窗口里手动登录，脚本从本机调试端口读出 cookie 写进 Hub。小红书在大陆以外会被它自己跳到 rednote.com，账号和内容是同一套，登录态取 rednote.com 的。
 
 中转部署：`cd relay && npx vercel deploy --prod -e RELAY_KEY=<密钥>`，同一个密钥写进 Worker 的 `RELAY_KEY`。
+
+## 表情包和可视化
+
+- **表情包**：Hub 里存着一套奶蛙表情（来自公开素材库 Orliss/nailong），`sticker` 工具按名字发；群友发的好用的表情包它也能存下来。人设里限定了频率，情绪到位才发。
+- **`show`**：把成块的内容做成图发到群里，并附上源文件。四种：`doc`（Markdown 文档排成长图）、`mindmap`（Markdown 层级渲染成思维导图）、`diagram`（Mermaid）、`html`（自写网页，可用 ECharts 等）。模板在 `src/show.ts`，渲染用 Cloudflare 的无头浏览器（`[browser]` 绑定，Workers Paid 自带额度）。
+- **画图尺寸**：群友提了 2K、4K、具体分辨率或比例就传给接口，最高 3840x2160；没提用 1024 级别。太大发不成图片时按文件发。
 
 ## 它怎么回答“你是怎么实现的”
 
@@ -103,6 +111,7 @@ OpenAI 的真实账单需要 key 带 `api.usage.read` 权限，目前没有，�
 
 ```sh
 export CLOUDFLARE_API_TOKEN=...   # 账户级 token
+(cd v2 && npm install)             # 首次：无头浏览器的库
 npx wrangler deploy -c v2/wrangler.toml
 ```
 

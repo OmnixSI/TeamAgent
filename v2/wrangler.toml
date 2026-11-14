@@ -25,5 +25,9 @@ CHAT_MODEL = "deepseek-flash"
 OWNERS = "0FC1E8A8BD28981E86866125AC3FCEFF"
 RELAY_URL = "https://relay-dusky-five.vercel.app"
 
+# Headless browser for rendering documents, mind maps and pages to pictures (included in Workers Paid).
+[browser]
+binding = "BROWSER"
+
 [observability]
 enabled = true

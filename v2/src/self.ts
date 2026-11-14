@@ -24,7 +24,8 @@ const PIPELINE = [
 
 const CONNECTED = (env: Env & { CODE_MODEL?: string }) => [
   "DeepSeek（主力）：对话和识图都用 " + (env.CHAT_MODEL || "deepseek-flash") + "；另外用它的联网搜索、网页抓取、服务端多轮联网调研、文档识别（OCR）、语音合成、余额查询。",
-  "OpenAI：画图和改图（" + (env.IMAGE_MODEL || "gpt-image-2.5-flare") + "）、长音频转文字（gpt-4o-mini-transcribe，B 站无字幕视频用）、Python 代码沙箱（" + (env.CODE_MODEL || "gpt-6.1-terra") + " 带代码解释器）。",
+  "OpenAI：画图和改图（" + (env.IMAGE_MODEL || "gpt-image-2.5-flare") + "）、长音频转文字（gpt-4o-mini-transcribe，B 站无字幕视频用）、Python 代码沙箱（" + (env.CODE_MODEL || "gpt-6-luna") + " 带代码解释器；沙箱按 20 分钟一个会话收费，期间多次运行共用一个）。",
+  "Cloudflare 的无头浏览器：把文档（Markdown）、思维导图、Mermaid 图和自定义网页渲染成图片发到群里。",
   "香港中转：部署在 Vercel 香港的一个带密钥的小函数。B 站接口、小红书、知乎、微博、抖音这些拒绝 Cloudflare 出口地址的站点走它，能带登录态；QQ 语音要的 SILK 编码也在它上面做。",
   "GitHub：只读访问 " + (env.GITHUB_ORG || "OmnixSI") + " 组织的仓库。",
   "其他数据源：腾讯行情（A 股、港股、美股）、fxtwitter（单条推文）、X 的网页接口（搜索，用保存的登录）、百度和 Hacker News 的公开接口、GitHub Trending。",
@@ -46,6 +47,7 @@ const DRAWING = [
   "第二步找参考：保存过的形象参考图，加上上网搜画面里每个具体对象的真实长相（搜到页面后从页面或 GitHub 素材库里取图）。",
   "第三步设计：用 max 推理看着全部参考图，定主体、构图、风格、图中文字、尺寸和质量，挑出真正相关的参考图，写出提示词。",
   "被拒时：图像接口拒了某一版，会带着它给的原因重新设计一版离原意最近的再画，最多三版；改过的版本会说明哪里不一样。",
+  "尺寸和清晰度：群友没要求时用 1024 级别的平常规格；提了 2K、4K、具体分辨率或比例就照着传给接口，最高 4K（3840x2160），越大越贵越慢。",
   "第四步出图：有参考图就把参考图一起交给图像模型保持长相（改图接口），没有就直接生成。成品存一份并编号（如 g12），之后可以拿编号接着改。",
 ];
 
@@ -62,6 +64,7 @@ const CODE_MAP = [
   "v2/src/self.ts 这份自述",
   "v2/src/config.ts 我能自己改的参数和做法说明的范围",
   "v2/src/meter.ts 记账：价格表和每次调用的花费估算",
+  "v2/src/show.ts 文档、思维导图、流程图、网页的排版模板（渲染在 hub.ts 的 render）",
   "relay/ 香港中转（站点转发和 SILK 编码）",
 ];
 

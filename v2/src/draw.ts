@@ -17,8 +17,8 @@ const DIRECTOR = `你是给图像模型写提示词的美术指导。群友在 Q
 4. 光线、配色、氛围。
 5. 图里要不要有字：要的话写清每一处文字的原文、位置、字体感觉；中文必须逐字给出并加引号；没必要就明确写不要文字。
 6. 有参考图时：说清楚哪些必须保持不变（角色长相、配色、比例、画风），哪些要改。要修改某张图就只改被要求的部分。
-7. 尺寸：头像、表情包用方形；人物立绘、手机壁纸、海报用竖版；风景、横幅、多人场景用横版。
-8. 质量：随手玩梗用 low；一般用 medium；字多、细节多、要拿去用的用 high。
+7. 尺寸：写成“宽x高”。群友没提要求时用平常规格：头像、表情包 1024x1024；人物立绘、手机壁纸、海报 1024x1536；风景、横幅、多人场景 1536x1024。群友提了尺寸、比例或清晰度就照他说的给：2K 方图 2048x2048，2K 横图 2048x1152，4K 横图 3840x2160，4K 竖图 2160x3840；说了具体分辨率或比例（1920x1080、16:9、21:9、手机壁纸 9:16……）就换算成具体的宽和高。规则：宽高都是 16 的倍数，最长边不超过 3840，长宽比不超过 3:1，总像素在 65 万到 829 万之间。
+8. 质量：随手玩梗用 low；一般用 medium；字多、细节多、要拿去用的，或者群友要高清、2K、4K、最好的画质，用 high。
 
 尺度：这是熟人私群里的玩笑图，不会外传。按群友的原意画，恶搞、损人、荤一点、离谱一点都照画，不要替他们把要求改温和。画的是真人（群友本人、明星、网红、公众人物）也照画：照着参考图保持本人的长相特征，不要换成认不出是谁的形象来回避，也不要在 idea 里加道德评价。只在一种情况下换个画法：照原样写图像模型一定会拒（露骨的性内容、血腥到写实），这时保留原来的梗和冲突，换成它能画的表现手法（夸张、卡通化、暗示、借位），并在 idea 里说明换了什么。
 
@@ -27,7 +27,7 @@ const DIRECTOR = `你是给图像模型写提示词的美术指导。群友在 Q
 9. 参考图里标着“网上找到的”那些，是为了让你知道要画的对象长什么样。先看清它的真实外观（颜色、体型、五官、材质），提示词里照着写；其中确实是这个对象的，把序号写进 use_refs，画的时候会一起交给图像模型保持长相；不相关的、带水印的、是别的东西的，不要选。群友给的参考图一定会用，不用写。
 
 只输出一个 JSON 对象：
-{"idea":"一句中文，说这张图画的是什么","prompt":"给图像模型的提示词","size":"square|portrait|landscape","quality":"low|medium|high","use_refs":[0]}`;
+{"idea":"一句中文，说这张图画的是什么","prompt":"给图像模型的提示词","size":"1024x1024","quality":"low|medium|high","use_refs":[0]}`;
 
 const SCOUT = `你是美术指导的前期调研。读群友的要求和聊天上下文，先弄明白他到底要什么，再列出画之前必须看到的参考。
 
@@ -61,6 +61,22 @@ export async function scout(env: Env, input: { request: string; context: string;
 }
 
 const SIZES: Record<string, string> = { square: "1024x1024", portrait: "1024x1536", landscape: "1536x1024" };
+/** Turns whatever came back ("3840x2160", "landscape", "4k") into a size the image API accepts. */
+export function fitSize(raw: unknown): string {
+  const text = String(raw || "").toLowerCase().replace(/[×*]/g, "x").trim();
+  if (SIZES[text]) return SIZES[text];
+  const m = text.match(/(\d{3,4})\s*x\s*(\d{3,4})/), ratio = text.match(/(\d{1,2})\s*[:：/]\s*(\d{1,2})/);
+  if (!m && !ratio) return /4k/.test(text) ? "3840x2160" : /2k/.test(text) ? "2048x2048" : SIZES.square;
+  // A bare ratio becomes a normal-sized picture of that shape.
+  let w = m ? Number(m[1]) : Math.sqrt(1_400_000 * Number(ratio![1]) / Number(ratio![2])), h = m ? Number(m[2]) : w * Number(ratio![2]) / Number(ratio![1]);
+  const scale = Math.min(1, 3840 / Math.max(w, h), Math.sqrt(8_294_400 / (w * h)));
+  w *= scale; h *= scale;
+  const grow = Math.sqrt(655_360 / (w * h));
+  if (grow > 1) { w *= grow; h *= grow; }
+  if (w / h > 3) h = w / 3; else if (h / w > 3) w = h / 3;
+  const snap = (n: number) => Math.max(256, Math.min(3840, Math.round(n / 16) * 16));
+  return snap(w) + "x" + snap(h);
+}
 const dataUrl = (r: Ref) => {
   let s = "";
   for (let i = 0; i < r.bytes.length; i += 0x8000) s += String.fromCharCode(...r.bytes.subarray(i, i + 0x8000));
@@ -69,6 +85,7 @@ const dataUrl = (r: Ref) => {
 
 export async function design(env: Env, input: { request: string; intent?: string; context: string; memory: string; refs: Ref[]; size?: string; quality?: string; extra?: string; defaultQuality?: string; members?: string[]; rejected?: { idea: string; prompt: string; reason: string }[] }): Promise<Design> {
   const text = "【群友的要求】\n" + input.request + (input.intent ? "\n\n【调研后对意图的理解】\n" + input.intent : "") +
+    (input.size || input.quality ? "\n\n【群友对尺寸和清晰度的要求】" + [input.size, input.quality].filter(Boolean).join("；") + "（照这个定 size 和 quality）" : "") +
     "\n\n【最近的聊天】\n" + clip(input.context, 3000) +
     "\n\n【Bot 记得的事（人物、梗、形象设定）】\n" + clip(input.memory, 2500) +
     (input.members?.length ? "\n\n【群友的昵称】" + input.members.join("、") + "。他们是群里的真人：有他们的照片或保存的形象就照着画；没有的话按记忆里对这个人的描述画一个普通人，不要凭昵称的字面意思编成别的东西（比如把“卡特龙”画成龙或机甲）。" : "") +
@@ -82,7 +99,7 @@ export async function design(env: Env, input: { request: string; intent?: string
       : "") +
     (input.refs.length ? "\n\n【参考图】共 " + input.refs.length + " 张，按顺序是：" + input.refs.map((r, i) => i + " = " + (r.found ? "网上找到的 " : "群友给的 ") + r.label).join("；") : "");
   const given = input.refs.map((r, i) => (r.found ? -1 : i)).filter(i => i >= 0);
-  const fallback: Design = { prompt: input.request, size: SIZES[input.size || "square"] || SIZES.square, quality: input.quality || "medium", idea: clip(input.request, 60), use: given };
+  const fallback: Design = { prompt: input.request, size: fitSize(input.size), quality: input.quality || input.defaultQuality || "medium", idea: clip(input.request, 60), use: given };
   try {
     const r = await dsChat(env, {
       messages: [
@@ -97,7 +114,7 @@ export async function design(env: Env, input: { request: string; intent?: string
     return {
       prompt: d.prompt.slice(0, 4000), idea: clip(d.idea || input.request, 80),
       use: [...new Set([...given, ...(Array.isArray(d.use_refs) ? d.use_refs : []).map(Number).filter((i: number) => Number.isInteger(i) && i >= 0 && i < input.refs.length)])].slice(0, 4),
-      size: SIZES[input.size || ""] || SIZES[d.size] || SIZES.square,
+      size: fitSize(d.size || input.size),
       quality: ["low", "medium", "high"].includes(input.quality || "") ? input.quality! : ["low", "medium", "high"].includes(d.quality) ? d.quality : input.defaultQuality || "medium",
     };
   } catch { return fallback; }
@@ -151,16 +168,17 @@ export async function findImages(env: Env, query: string, want = 3): Promise<Ref
 export async function draw(env: Env, d: Design, refs: Ref[]) {
   if (!env.OPENAI_API_KEY) throw new Error("没有配置 OpenAI 密钥");
   const model = env.IMAGE_MODEL || "gpt-image-2.5-flare";
+  const [pw, ph] = d.size.split("x").map(Number), big = pw * ph > 2_500_000;
   let r: Response;
   if (refs.length) {
     const form = new FormData();
     form.append("model", model); form.append("prompt", d.prompt); form.append("size", d.size); form.append("quality", d.quality); form.append("output_format", "jpeg");
     refs.slice(0, 4).forEach((ref, i) => form.append("image[]", new Blob([ref.bytes], { type: ref.mime }), "ref" + i + "." + (ref.mime.split("/")[1] || "jpg")));
-    r = await fetch("https://api.openai.com/v1/images/edits", { method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form, signal: AbortSignal.timeout(170000) });
+    r = await fetch("https://api.openai.com/v1/images/edits", { method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY }, body: form, signal: AbortSignal.timeout(big ? 290000 : 170000) });
   } else {
     r = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST", headers: { Authorization: "Bearer " + env.OPENAI_API_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt: d.prompt, size: d.size, quality: d.quality, output_format: "jpeg", n: 1 }), signal: AbortSignal.timeout(170000),
+      body: JSON.stringify({ model, prompt: d.prompt, size: d.size, quality: d.quality, output_format: "jpeg", n: 1 }), signal: AbortSignal.timeout(big ? 290000 : 170000),
     });
   }
   const data: any = await r.json().catch(() => ({}));
@@ -194,7 +212,11 @@ const SANDBOX = `你在一个 Python 沙箱里替 QQ 群里的 Bot 干活。用 
 如果给了 chat.csv，它是群聊记录，列是 time（北京时间）、name、text，一行一条消息；要统计字数、时段、关键词就老老实实按它算，不要估算。
 最后用中文说清：结果是什么、关键数字、生成了哪些文件。出错就照实说错在哪。`;
 
-export async function runPython(env: Env & { CODE_MODEL?: string }, task: string, inputs: { name: string; bytes: Uint8Array }[], extra = "") {
+/**
+ * `reuse` is a sandbox that is still inside its paid 20-minute session; runs without input files go into it
+ * instead of opening (and paying for) a new one. Returns the sandbox used so the caller can remember it.
+ */
+export async function runPython(env: Env & { CODE_MODEL?: string }, task: string, inputs: { name: string; bytes: Uint8Array }[], extra = "", reuse = "") {
   if (!env.OPENAI_API_KEY) throw new Error("没有配置 OpenAI 密钥");
   const auth = { Authorization: "Bearer " + env.OPENAI_API_KEY };
   const fileIds: string[] = [];
@@ -205,21 +227,26 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
     const up: any = await fetch("https://api.openai.com/v1/files", { method: "POST", headers: auth, body: form, signal: AbortSignal.timeout(60000) }).then(x => x.json());
     if (up.id) fileIds.push(up.id);
   }
-  const r = await fetch("https://api.openai.com/v1/responses", {
+  const ask = (container: any) => fetch("https://api.openai.com/v1/responses", {
     method: "POST", headers: { ...auth, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: env.CODE_MODEL || "gpt-6.1-terra",
-      tools: [{ type: "code_interpreter", container: { type: "auto", ...(fileIds.length ? { file_ids: fileIds } : {}) } }],
+      model: env.CODE_MODEL || "gpt-6-luna",
+      tools: [{ type: "code_interpreter", container }],
       instructions: SANDBOX + (extra ? "\n\n【群里对这类活的额外要求】\n" + extra : ""),
       input: task,
     }),
     signal: AbortSignal.timeout(280000),
   });
+  const fresh = { type: "auto", ...(fileIds.length ? { file_ids: fileIds } : {}) };
+  let opened = !(reuse && !fileIds.length);
+  let r = await ask(opened ? fresh : reuse);
+  if (!r.ok && !opened) { opened = true; r = await ask(fresh); }   // the old sandbox had expired
   const d: any = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error("代码沙箱返回错误（" + r.status + "）" + (d.error?.message ? "：" + clip(d.error.message, 160) : ""));
   const cu = d.usage || {}, cachedIn = Number(cu.input_tokens_details?.cached_tokens || 0);
   meter({ provider: "openai", item: "跑代码", inTok: Number(cu.input_tokens || 0), cachedTok: cachedIn, outTok: Number(cu.output_tokens || 0), units: 1, unit: "次",
-    usd: Math.max(0, Number(cu.input_tokens || 0) - cachedIn) * PRICE.code.in + cachedIn * PRICE.code.cached + Number(cu.output_tokens || 0) * PRICE.code.out + PRICE.code.container });
+    usd: Math.max(0, Number(cu.input_tokens || 0) - cachedIn) * PRICE.code.in + cachedIn * PRICE.code.cached + Number(cu.output_tokens || 0) * PRICE.code.out + (opened ? PRICE.code.container : 0) });
+  const container = String((d.output || []).find((o: any) => o.container_id)?.container_id || "");
   const messages = (d.output || []).filter((o: any) => o.type === "message");
   const text = messages.flatMap((m: any) => m.content.map((c: any) => c.text || "")).join("\n").replace(/\[([^\]]+)\]\(sandbox:[^)]+\)/g, "$1").trim();
   const cites = messages.flatMap((m: any) => m.content.flatMap((c: any) => c.annotations || [])).filter((a: any) => a.type === "container_file_citation");
@@ -236,5 +263,5 @@ export async function runPython(env: Env & { CODE_MODEL?: string }, task: string
   const named = files.filter(f => !/^cfile_/.test(f.name));
   if (named.length) files.splice(0, files.length, ...named);
   const code = (d.output || []).filter((o: any) => o.type === "code_interpreter_call").map((o: any) => o.code || "").join("\n# ----\n");
-  return { text, files, code: clip(code, 3000) };
+  return { text, files, code: clip(code, 3000), container, opened };
 }

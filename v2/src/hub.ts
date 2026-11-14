@@ -1,6 +1,7 @@
 // The whole bot lives in one Durable Object: it holds the QQ connection, stores the chat,
 // runs turns one conversation at a time, and wakes itself for schedules and nightly memory work.
 import { DurableObject } from "cloudflare:workers";
+import puppeteer from "@cloudflare/puppeteer";
 import { displayName, runTurn } from "./core.ts";
 import type { Row, TurnResult } from "./core.ts";
 import { dsBalance, dsChat } from "./llm.ts";
@@ -79,6 +80,38 @@ export class Hub extends DurableObject<Env> {
     return out ? Number(out.seq) : 0;
   }
   on(flag: string) { return this.get("flag:" + flag) === "1"; }
+
+  // ---------- stickers and rendered pages ----------
+  stickerNames(conv: string): string[] {
+    const of = (c: string) => this.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name LIKE 'sticker:%' ORDER BY name", c).toArray().map((r: any) => String(r.name).slice(8));
+    return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(this.get("main") || "") : [])])];
+  }
+  async render(page: { html: string; width: number; height: number; full: boolean; selector?: string; settle: number }) {
+    const browser = await puppeteer.launch((this.env as any).BROWSER);
+    try {
+      const tab = await browser.newPage();
+      const shoot = async (scale: number, quality: number) => {
+        await tab.setViewport({ width: page.width, height: page.height, deviceScaleFactor: scale });
+        await tab.setContent(page.html, { waitUntil: "networkidle0", timeout: 25000 }).catch(() => {});
+        await sleep(page.settle);
+        let clipBox: any, truncated = false;
+        if (page.selector) {
+          const box = await (await tab.$(page.selector))?.boundingBox();
+          if (box && box.width > 120 && box.height > 80) clipBox = { x: Math.max(0, box.x), y: Math.max(0, box.y), width: Math.min(Math.ceil(box.width), 3200), height: Math.min(Math.ceil(box.height), 7000) };
+        }
+        if (!clipBox && page.full) {
+          const h = Number(await tab.evaluate("document.documentElement.scrollHeight"));
+          truncated = h > 7000;
+          clipBox = { x: 0, y: 0, width: page.width, height: Math.min(h, 7000) };
+        }
+        const shot = await tab.screenshot({ type: "jpeg", quality, ...(clipBox ? { clip: clipBox } : {}) });
+        return { bytes: new Uint8Array(shot as ArrayBuffer), truncated };
+      };
+      let out = await shoot(2, 86);
+      if (out.bytes.length > 3_500_000) out = await shoot(1, 80);   // very long pages: trade sharpness for a size QQ accepts
+      return out;
+    } finally { await browser.close().catch(() => {}); }
+  }
 
   // ---------- its own books ----------
   record(u: Use) {
@@ -374,6 +407,27 @@ export class Hub extends DurableObject<Env> {
     const hub = this;
     return {
       usage: days => hub.usage(days),
+      sandbox: (id, opened) => {
+        if (id) { if (opened || hub.get("sandbox:id") !== id) { hub.set("sandbox:id", id); hub.set("sandbox:at", String(Date.now())); } return id; }
+        // A session is paid for 20 minutes; stop reusing it a little before that.
+        return Date.now() - Number(hub.get("sandbox:at") || 0) < 17 * 60000 ? hub.get("sandbox:id") || "" : "";
+      },
+      render: page => hub.render(page),
+      stickerNames: () => hub.stickerNames(conv),
+      sendSticker: async name => {
+        const lib = hub.stickerNames(conv), pick = lib.includes(name) ? name : lib.find(n => n.includes(name) || name.includes(n));
+        const owner = hub.sql.exec("SELECT COUNT(*) n FROM img WHERE conv=? AND name=?", conv, "sticker:" + pick).toArray()[0].n ? conv : hub.get("main") || conv;
+        const row = pick ? hub.sql.exec("SELECT data,mime FROM img WHERE conv=? AND name=? ORDER BY id DESC LIMIT 1", owner, "sticker:" + pick).toArray()[0] : null;
+        if (!row) return { ok: false, error: "没有叫这个名字的表情包，现有的：" + lib.join("、") };
+        return hub.sendMediaMessage(conv, 1, b64(new Uint8Array(row.data as ArrayBuffer)), "[你发了表情包：" + pick + "]");
+      },
+      saveSticker: async (ref, name) => {
+        const img = await hub.imageRef(conv, ref), clean = name.trim().slice(0, 16);
+        if (!img || !clean || img.bytes.length > 1_500_000) return false;
+        hub.sql.exec("DELETE FROM img WHERE conv=? AND name=?", conv, "sticker:" + clean);
+        hub.sql.exec("INSERT INTO img(conv,ts,mime,data,note,name) VALUES(?,?,?,?,?,?)", conv, Date.now(), img.mime, img.bytes.buffer.slice(img.bytes.byteOffset, img.bytes.byteOffset + img.bytes.byteLength), "表情包", "sticker:" + clean);
+        return true;
+      },
       cfg: key => hub.cfg(conv, key),
       play: slot => hub.play(conv, slot),
       selfUpdate: args => hub.selfUpdate(conv, askers, args),
@@ -410,7 +464,7 @@ export class Hub extends DurableObject<Env> {
           gateway_connected: !!hub.ws,
           messages: n("SELECT COUNT(*) n FROM msg WHERE conv=?", real),
           saved_images: n("SELECT COUNT(*) n FROM img WHERE conv=?", real),
-          saved_characters: hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", real).toArray().map((r: any) => String(r.name)),
+          saved_characters: hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL AND name NOT LIKE 'sticker:%'", real).toArray().map((r: any) => String(r.name)),
           schedules: hub.sql.exec("SELECT spec,task FROM sched WHERE conv=? AND active=1 ORDER BY next", real).toArray().map((r: any) => {
             const spec = JSON.parse(String(r.spec));
             return { when: spec.type === "daily" ? "每天 " + spec.time + "（" + (spec.tz === BJ ? "北京" : "悉尼") + "时间）" : "一次性 " + fmtFull(Number(spec.at), BJ) + " 北京时间", task: clip(r.task, 80) };
@@ -428,7 +482,7 @@ export class Hub extends DurableObject<Env> {
         return hub.sql.exec("SELECT name, COUNT(*) c FROM msg WHERE conv=? AND role='user' AND name IS NOT NULL AND name<>'' GROUP BY name ORDER BY c DESC LIMIT 12", real).toArray().map((r: any) => String(r.name));
       },
       savedNames: () => {
-        const of = (c: string) => hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL", c).toArray().map((r: any) => String(r.name));
+        const of = (c: string) => hub.sql.exec("SELECT DISTINCT name FROM img WHERE conv=? AND name IS NOT NULL AND name NOT LIKE 'sticker:%'", c).toArray().map((r: any) => String(r.name));
         return [...new Set([...of(conv), ...(conv.startsWith("t:") ? of(hub.get("main") || "") : [])])];
       },
       stats: days => hub.sql.exec(
