@@ -607,7 +607,7 @@
       "requires_env": [],
       "runs_on": "both",
       "local_component": "runner/docread.py",
-      "default_state": "on"
+      "default_state": "off_by_default"
     },
     {
       "id": "ocr",
@@ -1332,6 +1332,7 @@
     "src/inbound.ts": "QQ 事件解析：消息、附件、语音转写、卡片与引用",
     "src/fetchjobs.ts": "视频/链接任务识别与等待",
     "src/mediajobs.ts": "视频素材与音轨转写写回",
+    "src/docjobs.ts": "文档读取作业的云端端点：领取、租约与回写",
     "src/vision.ts": "图片下载、限流、描述与缓存",
     "src/voice.ts": "按人格生成回复文本、分条与表情",
     "src/stickers.ts": "表情收集、标签与 QQ 富媒体发送",
@@ -1343,6 +1344,7 @@
     "runner/bridge.py": "本机任务桥：租约、上下文回填、仓库索引",
     "runner/execute.py": "本机执行入口（dsh/CLI）",
     "runner/docread.py": "本机文档解析（PDF/DOCX/XLSX/PPTX/CSV）",
+    "runner/docread-job.mjs": "本机文档读取作业：下载、调用 docread.py 与回写",
     "runner/asr.mjs": "本机 X-ASR 适配器",
     "runner/tts.mjs": "出站语音合成（edge-tts / DeepSeek）",
     "runner/silk.mjs": "WAV 转 SILK",

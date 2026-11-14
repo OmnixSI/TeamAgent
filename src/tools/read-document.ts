@@ -9,6 +9,8 @@ export const DOC_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".xlsm", ".xls", ".pptx
 export const MAX_DOC_BYTES = 20 * 1024 * 1024;
 export const MAX_QUESTION = 200;
 const MAX_RESULT_TEXT = 24000;
+const FAILED_RETRY_MS = 10 * 60 * 1000;
+const MAX_FAILED_RETRIES = 3;
 
 const MIME_EXTENSION: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -94,6 +96,26 @@ function switchedOn(value: unknown): boolean {
   return raw.length > 0 && raw !== "0" && raw !== "false";
 }
 
+/** The parser reports a missing text layer only through warnings; never turn that into a fake read. */
+function noReadableText(value: any): boolean {
+  const warnings = Array.isArray(value?.warnings) ? value.warnings.map(text) : [];
+  return warnings.some((w: string) => w.includes("没有可提取的文字层") || w.includes("文档没有可读文字"));
+}
+
+function unreadable(kind: string, detail: unknown, extra: Record<string, any> = {}) {
+  const why = kind === "missing_library" ? "本机解析库不全" : kind === "no_text" ? "没有文字层" : "本机文档读取失败";
+  const help =
+    kind === "no_text"
+      ? "这可能是扫描件；当前不会自动 OCR，需要转成图片再识别，或让成员提供文字版。"
+      : kind === "missing_library"
+        ? "让维护者补上 runner 的文档解析依赖后再读；不要猜内容。"
+        : "让成员稍后再问或重新发一次文件；不要猜内容。";
+  return fail(kind || "unreadable", `${why}${text(detail) ? `：${text(detail)}` : ""}。${help}`, {
+    ...(detail ? { detail: text(detail).slice(0, 300) } : {}),
+    ...extra,
+  });
+}
+
 export const readDocumentTool: BotTool = {
   name: "read_document",
   switch: "docread",
@@ -150,6 +172,7 @@ export const readDocumentTool: BotTool = {
 
     const question = text(args.question).trim().slice(0, MAX_QUESTION);
     const key = documentNoteKey(messageId, chosen.index, question);
+    const jobId = `docread-${messageId}-${chosen.index}-${key.split(":").pop()}`;
     const note = await e.DB.prepare("SELECT body,created_at FROM media_notes WHERE id=?").bind(key).first();
     if (note) {
       let value: any;
@@ -158,8 +181,19 @@ export const readDocumentTool: BotTool = {
       } catch {
         return fail("corrupt", "本机交回的解析结果损坏，不能当作文档内容；让成员稍后重试或重新发文件。", { filename: chosen.filename });
       }
-      if (!value || value.ok === false || typeof value.text !== "string") {
+      if (!value || typeof value !== "object") {
         return fail("corrupt", "本机交回的解析结果不完整，不能当作文档内容；不要猜。", { filename: chosen.filename });
+      }
+      if (value.ok === false) {
+        const extra: Record<string, any> = { filename: chosen.filename, job_id: jobId };
+        if (value.retryable === true) extra.retryable = true;
+        return unreadable(text(value.error_kind) || "unreadable", value.error, extra);
+      }
+      if (typeof value.text !== "string") {
+        return fail("corrupt", "本机交回的解析结果不完整，不能当作文档内容；不要猜。", { filename: chosen.filename });
+      }
+      if (noReadableText(value)) {
+        return unreadable("no_text", "", { filename: chosen.filename, job_id: jobId });
       }
       return {
         ok: true,
@@ -187,7 +221,45 @@ export const readDocumentTool: BotTool = {
         filename: chosen.filename,
       });
     }
-    const jobId = `docread-${messageId}-${chosen.index}-${key.split(":").pop()}`;
+    // Failed reads are retried after a cooldown, never cached as terminal content.
+    const previous = await e.DB.prepare("SELECT status,error,payload FROM jobs WHERE id=?").bind(jobId).first();
+    if (previous?.status === "done") {
+      // The job says done but its extraction is gone; run it once more instead of pending forever.
+      await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL WHERE id=? AND status='done'")
+        .bind(jobId)
+        .run();
+    } else if (previous?.status === "failed") {
+      let saved: any = {};
+      try {
+        saved = JSON.parse(previous.payload || "{}");
+      } catch {
+        saved = {};
+      }
+      const failedAt = Number(saved?.failed_at) || 0;
+      const retries = Number(saved?.retries) || 0;
+      const kind = text(previous.error) || "unreadable";
+      const detail = text(saved?.failure_detail);
+      if (retries >= MAX_FAILED_RETRIES) {
+        return fail(kind, `本机读取已重试 ${retries} 次仍未成功${detail ? `：${detail}` : ""}；不要猜内容，让成员重新发一次文件。`, {
+          filename: chosen.filename,
+          job_id: jobId,
+          retryable: false,
+        });
+      }
+      const retryIn = failedAt ? failedAt + FAILED_RETRY_MS - Date.now() : 0;
+      if (retryIn > 0) {
+        const minutes = Math.max(1, Math.ceil(retryIn / 60000));
+        return fail(kind, `上次读取失败${detail ? `：${detail}` : ""}。为避免反复解析，至少 ${minutes} 分钟后再用同一问法重试；不要猜内容。`, {
+          filename: chosen.filename,
+          job_id: jobId,
+          retryable: true,
+          retry_after_ms: retryIn,
+        });
+      }
+      await e.DB.prepare("UPDATE jobs SET status='pending',attempts=0,lease_until=0,error=NULL,payload=json_set(json_remove(payload,'$.failed_at','$.failure_detail'),'$.retries',?) WHERE id=? AND status='failed'")
+        .bind(retries + 1, jobId)
+        .run();
+    }
     const payload = {
       message_id: messageId,
       group_id: groupId,

@@ -180,3 +180,24 @@ test('S9 系统提示含 SELF_HINT 与底层服务行',async()=>{
   assert.ok(system.includes('能力卡'),'capability card missing');
   assert.ok(system.includes('我对代码仓库只读'),'read-only boundary missing');
 });
+
+// S9: docread is a positive gate (`docread:enabled`), not an `off:*` kill switch.
+test('S9 docread 默认关，按 docread:enabled 正向开关判断', async()=>{
+  const doc={...cap('voice_asr'),id:'docread',title:'文档阅读',switches:['docread'],default_state:'off_by_default',requires_env:[],runs_on:'local'};
+  assert.equal(api.capabilityState(doc,live()).state,'off_by_default');
+  assert.match(api.capabilityState(doc,live()).reason,/docread:enabled/);
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'1'}})).state,'local_unverified');
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'0'}})).state,'off_by_default');
+  assert.equal(api.capabilityState(doc,live({switches:{'docread:enabled':'1','off:docread':'1'}})).state,'switched_off');
+
+  const themed={...card,capabilities:[...card.capabilities,doc]};
+  const off=api.renderSelf(themed,live(),'switches');
+  assert.match(off,/docread：已关闭（未设置）/);
+  const on=api.renderSelf(themed,live({switches:{'docread:enabled':'1'}}),'switches');
+  assert.match(on,/docread：开启（docread:enabled=1）/);
+
+  const e=env();
+  await e.DB.prepare("INSERT INTO settings VALUES('docread:enabled','1')").run();
+  const state=await api.readLive(e,undefined,card);
+  assert.equal(state.switches['docread:enabled'],'1');
+});

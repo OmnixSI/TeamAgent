@@ -3,6 +3,7 @@ import {createBrowserAuth,safeLogText} from './browser-auth.mjs';
 import {runLoginFlow} from './qr-login.mjs';
 import {biliByTitle} from './bili-title.mjs';
 import {createWakePort} from './fetch-wake.mjs';
+import {runDocLoop,pickPython} from './docread-job.mjs';
 import https from 'node:https';
 import dns from 'node:dns';
 import {BlockList,isIP} from 'node:net';
@@ -272,6 +273,12 @@ async function main(){
    const r=await fetch(new URL('/api/runner/fetch/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
    if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
  };
+ // Document jobs share this always-on service, but never share the fetch lease or its queue.
+ const docCloud=async(path,body)=>{
+   const r=await fetch(new URL('/api/runner/doc/'+path,base),{method:'POST',redirect:'error',headers:{'Content-Type':'application/json',Authorization:'Bearer '+config.runnerToken},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
+   if(!r.ok){const error=Error('cloud request failed');error.status=r.status;throw error;}return r.json();
+ };
+ const docStop=new AbortController();process.once('SIGTERM',()=>docStop.abort());
  const auth=createBrowserAuth({home,client,report:body=>cloud('auth-status',body),log});
  if(process.argv[2]==='login'){
    const state=await auth.login(process.argv[3]);
@@ -279,6 +286,7 @@ async function main(){
    if(state!=='ok')process.exitCode=1;
    return;
  }
+ void runDocLoop({cloud:docCloud,home,python:process.env.DOCREAD_PYTHON||config.docread?.python||pickPython(home),signal:docStop.signal,log}).catch(()=>log('docread worker stopped'));
  let loginTask=null;
  const startLogin=task=>{
    if(loginTask)return false;
