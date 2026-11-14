@@ -2,6 +2,7 @@
 // Office formats go through LibreOffice (headless), Markdown through pandoc (typst when this pandoc has it, else Word),
 // pictures through Pillow and pymupdf. Several inputs become several PDFs, or one merged PDF in the given order.
 import type { Skill, SkillArgs } from "./types.ts";
+import { sh } from "./types.ts";
 import { PY_COMMON, PY_IMG, PY_SETUP, cleanName, pyRun } from "./pdf-tools.ts";
 
 const OFFICE = ["doc", "docx", "dot", "dotx", "odt", "ott", "rtf", "xls", "xlsx", "xlsm", "ods", "ppt", "pptx", "pps", "ppsx", "odp"];
@@ -321,6 +322,17 @@ for f in failed:
 print("用时 %d 秒" % round(time.time() - T0))
 `.replace("%IMAGES%", JSON.stringify(IMAGES));
 
+// Documents written on Windows or macOS name fonts the machine does not have (宋体, 微软雅黑, PingFang…), and
+// fontconfig's own fallback picks the Hong Kong glyph set. This maps them to the Simplified Chinese Noto fonts.
+const FONT_ALIASES: [string, string[]][] = [
+  ["Noto Serif CJK SC", ["serif", "SimSun", "宋体", "NSimSun", "新宋体", "STSong", "华文宋体", "Songti SC", "FangSong", "仿宋", "KaiTi", "楷体", "STKaiti"]],
+  ["Noto Sans CJK SC", ["sans-serif", "Microsoft YaHei", "微软雅黑", "SimHei", "黑体", "PingFang SC", "苹方-简", "STHeiti", "华文黑体", "Heiti SC", "DengXian", "等线"]],
+  ["Noto Sans Mono CJK SC", ["monospace"]],
+];
+const FONT_CONF = `<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd"><fontconfig>` +
+  FONT_ALIASES.map(([to, from]) => from.map(f => `<alias><family>${f}</family><prefer><family>${to}</family></prefer></alias>`).join("")).join("") + `</fontconfig>`;
+export const FONT_SETUP = `if [ "$(id -u)" = 0 ] && [ -d /etc/fonts/conf.d ] && [ ! -f /etc/fonts/conf.d/09-cjk-sc.conf ]; then printf '%s' ${sh(FONT_CONF)} > /etc/fonts/conf.d/09-cjk-sc.conf && fc-cache -f >/dev/null 2>&1; fi; true`;
+
 const skill: Skill = {
   name: "doc-to-pdf",
   title: "文档转 PDF",
@@ -357,7 +369,7 @@ const skill: Skill = {
       page_size: size, margin_mm: margin, separate_images: bool(args.separate_images, false), fit_width: bool(args.fit_width, true),
       budget: 400,
     };
-    return [PY_SETUP, ...pyRun(".skill_doc_to_pdf.py", PY_COMMON + PY_IMG + SCRIPT, p)];
+    return [FONT_SETUP, PY_SETUP, ...pyRun(".skill_doc_to_pdf.py", PY_COMMON + PY_IMG + SCRIPT, p)];
   },
   report(stdout) {
     const lines = stdout.join("\n").split("\n").map(s => s.trim());

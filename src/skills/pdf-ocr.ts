@@ -6,7 +6,7 @@ import { parseRanges } from "./pdf-tools.ts";
 
 const IMG_EXT = ["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"];
 const TIME_LIMIT = 900;           // seconds for the whole skill run
-const SECONDS_PER_PAGE = 15;      // estimate for a dense A4 page at 200 dpi, chi_sim+eng, one vCPU; not yet measured live (report() prints the real pages per minute)
+const SECONDS_PER_PAGE = 8;       // a clean rendered page took 2 s live (chi_sim+eng, one vCPU); photographed scans are slower, so this stays cautious
 const RESERVE = 90;               // start-up, image assembly, text file
 export const MAX_PAGES = Math.floor((TIME_LIMIT - RESERVE) / SECONDS_PER_PAGE);
 
