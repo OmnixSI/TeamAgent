@@ -33,7 +33,7 @@ test("a real group question replays in an isolated local database", async () => 
     body: REAL_QUESTION,
     ts: new Date().toISOString(),
     mentioned: 1,
-    meta: { direct: true },
+    meta: { direct: true, memberRole: "owner" },
   };
   await e.DB.prepare(
     "INSERT INTO messages(id,group_id,sender,body,ts,mentioned) VALUES(?,?,?,?,?,?)",

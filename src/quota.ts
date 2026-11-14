@@ -14,6 +14,14 @@ export const DEEPSEEK_BALANCE_TTL_MS = 10 * 60 * 1000;
 export const DEEPSEEK_BALANCE_TIMEOUT_MS = 5000;
 /** One account-wide snapshot: any group's question compares with the last one. */
 export const DS_BALANCE_SCOPE = "global";
+/** A-quota's warning line and exchange rate, reused for the non-owner band. */
+export const DEEPSEEK_LOW_BALANCE_CNY = 10;
+/** Team pricing converts at 7.2 CNY/USD; the balance endpoint reports CNY. */
+export const CNY_PER_USD = 7.2;
+/** USD-only accounts get their own threshold; never compare USD to ¥10. */
+export const DEEPSEEK_LOW_BALANCE_USD = DEEPSEEK_LOW_BALANCE_CNY / CNY_PER_USD;
+
+export type QuotaBand = "ok" | "low" | "critical" | "unknown";
 
 const TIMEZONE = TEAM.memory?.timezone || "Australia/Sydney";
 
@@ -423,14 +431,44 @@ export function balanceFailureText(balance: DeepSeekBalance & { ok: false }): st
   return "这次查不到 DeepSeek 余额，服务暂时不通，过一会儿再问我。";
 }
 
+/** A-quota's non-owner wording, reused verbatim. */
+function bandText(band: QuotaBand): string {
+  if (band === "critical") return "额度：快没了。";
+  if (band === "low") return "额度：偏低。";
+  if (band === "unknown") return "额度：暂时查不到。";
+  return "额度：够用。";
+}
+
+function balanceAmountLow(balance: DeepSeekBalance): boolean | null {
+  if (!balance.ok) return null;
+  const currency = balance.currency.toUpperCase();
+  if (currency === "CNY") return balance.total < DEEPSEEK_LOW_BALANCE_CNY;
+  if (currency === "USD") return balance.total < DEEPSEEK_LOW_BALANCE_USD;
+  return null;
+}
+
+/**
+ * Balance-only band for the focused tool: the full A-quota also estimated days
+ * left from usage counters, which this narrow version intentionally does not
+ * read. The words and thresholds are A-quota's.
+ */
+function balanceBand(balance: DeepSeekBalance): QuotaBand {
+  if (!balance.ok) return "unknown";
+  if (balance.available === false) return "critical";
+  const low = balanceAmountLow(balance);
+  return low === true ? "critical" : low === null ? "unknown" : "ok";
+}
+
 /**
  * Read-only answer for the get_quota tool: the current DeepSeek balance plus
- * how it moved since the previous real read. A failed lookup returns an honest
- * sentence (ok=true, so the model repeats it) instead of invented numbers.
+ * how it moved since the previous real read. Exact amounts only for the owner
+ * who directly asked; everyone else gets A-quota's one-line band. A failed
+ * lookup returns an honest sentence (ok=true, so the model repeats it) instead
+ * of invented numbers.
  */
 export async function renderQuota(
   e: any,
-  options: { now?: number; scope?: string } = {},
+  options: { owner: boolean; now?: number; scope?: string },
 ): Promise<
   | { ok: true; text: string }
   | {
@@ -445,12 +483,13 @@ export async function renderQuota(
   try {
     const previous = await readBalanceSnapshot(e, options.scope);
     const balance = await readDeepSeekBalance(e, at);
-    if (!balance.ok) return { ok: true, text: balanceFailureText(balance) };
-    if (balance.fresh || !previous) {
+    if (balance.ok && (balance.fresh || !previous)) {
       try {
         await writeBalanceSnapshot(e, balance, options.scope);
       } catch {}
     }
+    if (!options.owner) return { ok: true, text: bandText(balanceBand(balance)) };
+    if (!balance.ok) return { ok: true, text: balanceFailureText(balance) };
     return { ok: true, text: balanceLine(balance) + "\n" + changeLine(previous, balance, at) };
   } catch {
     return {
