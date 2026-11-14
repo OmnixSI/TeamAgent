@@ -429,17 +429,26 @@ export async function sweepFeatureRequests(
   let failed = 0;
   let handled = 0;
 
-  // Two discovery reads are mandatory; callers can reserve the cron tail.
-  if (left(e) < reserve + 2) return { requeued, failed };
+  // Both discoveries share one round-trip: the scheduled tick is already at the
+  // chat budget line, so a second scan would push it over (MG2).
+  if (left(e) < reserve + 1) return { requeued, failed };
   let expired: any[];
+  let stale: any[];
   try {
-    expired = (
+    const found = (
       await e.DB.prepare(
-        "SELECT * FROM feature_request WHERE status='developing' AND lease_until<? ORDER BY lease_until,id LIMIT 20",
+        "SELECT 'lease' AS src, * FROM (SELECT * FROM feature_request WHERE status='developing' AND lease_until<? ORDER BY lease_until,id LIMIT 20) " +
+          "UNION ALL " +
+          "SELECT 'stale' AS src, * FROM (SELECT * FROM feature_request WHERE status IN ('queued','developing') AND created_at<? ORDER BY created_at,id LIMIT 20)",
       )
-        .bind(now)
+        .bind(now, now - cfg.stale_hours * 3600000)
         .all()
     ).results;
+    const byLease = (a: any, b: any) => Number(a.lease_until) - Number(b.lease_until);
+    const byCreated = (a: any, b: any) => Number(a.created_at) - Number(b.created_at);
+    const byId = (a: any, b: any) => String(a.id).localeCompare(String(b.id));
+    expired = found.filter((row: any) => row.src === "lease").sort((a: any, b: any) => byLease(a, b) || byId(a, b));
+    stale = found.filter((row: any) => row.src === "stale").sort((a: any, b: any) => byCreated(a, b) || byId(a, b));
   } catch (error: any) {
     // A code-first deploy can land before FR-1's 0070 migration: keep the rest of
     // the cron tick alive instead of failing every maintenance step.
@@ -462,13 +471,6 @@ export async function sweepFeatureRequests(
     if (await failStale(e, row, now)) failed++;
   }
 
-  const stale = (
-    await e.DB.prepare(
-      "SELECT * FROM feature_request WHERE status IN ('queued','developing') AND created_at<? ORDER BY created_at,id LIMIT 20",
-    )
-      .bind(now - cfg.stale_hours * 3600000)
-      .all()
-  ).results;
   for (const row of stale) {
     if (handled >= 20) break;
     if (left(e) < reserve + 6) break;
