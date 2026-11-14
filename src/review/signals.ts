@@ -33,6 +33,7 @@ type SignalConfig = {
   s9_kinds: string[];
   s10_window_ms: number;
   s10_similarity: number;
+  s11_phrases: string[];
   capability_aliases: Record<string, string[]>;
   capability_positive: string[];
   capability_negative: string[];
@@ -57,6 +58,7 @@ export const SIGNAL_DEFAULTS: SignalConfig = {
   s9_kinds: [...(TUNED.s9?.kinds ?? CONSTANTS.s9.kinds)],
   s10_window_ms: (TUNED.s10?.window_minutes ?? CONSTANTS.s10.window_minutes) * 60_000,
   s10_similarity: TUNED.s10?.jaccard ?? CONSTANTS.s10.jaccard,
+  s11_phrases: [...(TUNED.s11?.words ?? CONSTANTS.s11.words)],
   capability_aliases: {
     repo_read: ["仓库", "提交", "分支", "repo_changes", "repo_commit"],
     bili_video: ["b 站", "b站", "bili", "视频"],
@@ -206,6 +208,10 @@ export function signalsOf(trace: Trace, neighbors: Neighbors = {}, config: Parti
       contradiction(reply.body, previous.body, c));
   });
   if (duplicate) found.push("S10");
+
+  // S11：只认群友 inbound、确实在对 bot 说（@ / 回复 / 点名开头）；bot 自己的 outbound 没有 inbound。
+  const addressedToBot = inbound && (inbound.addressed === "bot" || inbound.mentioned === 1);
+  if (trace.kind === "inbound" && inbound && addressedToBot && matches(inbound.body, c.s11_phrases)) found.push("S11");
 
   return found;
 }

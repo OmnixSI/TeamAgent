@@ -23,8 +23,11 @@ export const SIGNAL_DEFAULTS = {
   s9: { lookback_minutes: 15, kinds: ["proactive", "research"] },
   // S10：30 分钟内与自己上一条回复 3-gram Jaccard ≥ 0.8；或对同一 capability 说法前后相反。
   s10: { window_minutes: 30, jaccard: 0.8, ngram: 3 },
-  // 优先级：S1/S4/S10/S3=3，S2/S5/S8/S9=2，S6/S7=1，按信号求和。
-  priority: { S1: 3, S2: 2, S3: 3, S4: 3, S5: 2, S6: 1, S7: 1, S8: 2, S9: 2, S10: 3 },
+  // S11：被点名的群友消息里出现长期要求词（以后/每天/别再/叫我/口头禅…），复盘必须看见。
+  s11: { words: ["以后", "每天", "每周", "每早", "每晚", "定时", "别再", "不要再", "别老", "不许",
+    "叫我", "称呼", "口头禅", "记住", "日报", "早报", "晨报", "周报"] },
+  // 优先级：S1/S4/S10/S3/S11=3，S2/S5/S8/S9=2，S6/S7=1，按信号求和。
+  priority: { S1: 3, S2: 2, S3: 3, S4: 3, S5: 2, S6: 1, S7: 1, S8: 2, S9: 2, S10: 3, S11: 3 },
   // 每晚另外抽 2 条「mentioned=1 且无信号」的 trace（priority 0）。
   sample_mentioned_no_signal: 2,
 } as const;

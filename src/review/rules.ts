@@ -34,14 +34,33 @@ function sourceProof(row:ReviewSource):ReviewStatement {
     AND EXISTS(SELECT 1 FROM members WHERE id IN (m.sender,'qq:'||m.sender) AND revoked=0))`,
     params:[row.id,row.group_id,row.sender,row.body,row.mentioned,row.metadata||'']};
 }
-const requested = (clause:string) => /^(?:(?:你|麻烦|帮我|帮忙|能不能|可以|能|这次|接下来|现在|再|先)\s*)*(?:以后|下次|别|不要|请|少|多|只|收敛|简短)/.test(clause);
+const requested = (clause:string) => /^(?:(?:你|麻烦|帮我|帮忙|能不能|可以|能|这次|接下来|现在|再|先)\s*)*(?:以后|下次|别|不要|请|少|多|只|收敛|简短|每天|每周|每早|每晚|定时|按时)/.test(clause);
+/** 「qq:123」与「123」是同一个群友；称呼规则只比人，不比前缀。 */
+const normMember = (v:string) => String(v ?? '').trim().toLowerCase().replace(/^qq:/,'');
 function admitted(row:ReviewSource|undefined,ev:Evidence):row is ReviewSource {
   return reviewDirectQuote(row,ev) && addressed(row) && reviewOwnClauses(row.body).some(clause=>clause.includes(ev.quote) && requested(clause));
 }
 /** Only these bounded parameters enter templates; unknown properties fail closed. */
-export function renderRule(kind:RuleKind,params:Record<string,string|number>,free:string,ttl:number):string|null {
+export function renderRule(kind:RuleKind,params:Record<string,string|number>,free:string,ttl:number,requester?:string):string|null {
   if (!RULE_KINDS.includes(kind) || !params || typeof params!=='object' || Array.isArray(params) || !Number.isFinite(ttl) || ttl<=0 || !safeRule(JSON.stringify(params)) || !safeRule(free)) return null;
   const keys=Object.keys(params);
+  if (kind==='avoid_phrase') {
+    const phrase=params.phrase;
+    if (keys.length!==1 || keys[0]!=='phrase' || typeof phrase!=='string') return null;
+    const value=phrase.trim(), size=Array.from(value).length;
+    if (size<1 || size>12 || /[「」\r\n]/u.test(value)) return null;
+    return `不要再说「${value}」。`;
+  }
+  if (kind==='address_as') {
+    const member=params.member, name=params.name;
+    if (keys.length!==2 || !keys.includes('member') || !keys.includes('name') ||
+      typeof member!=='string' || typeof name!=='string') return null;
+    const who=member.trim(), label=name.trim(), whoSize=Array.from(who).length, labelSize=Array.from(label).length;
+    if (whoSize<1 || whoSize>40 || labelSize<1 || labelSize>10 || /[「」\r\n]/u.test(who) || /[「」\r\n]/u.test(label)) return null;
+    // 只能自己定自己的称呼：给了原话发送者就必须相等（qq: 前缀归一）。
+    if (requester!==undefined && normMember(who)!==normMember(requester)) return null;
+    return `称呼${who}为「${label}」。`;
+  }
   if (kind==='free') return keys.length===0 && !!free.trim()?text(free.trim(),80):null;
   const key=kind==='mention_only_window'?'minutes':kind==='language'?'language':kind==='format_pref'?'format':'max';
   if (keys.length!==1 || keys[0]!==key) return null;
@@ -52,6 +71,16 @@ export function renderRule(kind:RuleKind,params:Record<string,string|number>,fre
   if (kind==='language' && (value==='zh'||value==='en')) return value==='zh'?'使用中文回复。':'使用英文回复。';
   if (kind==='format_pref' && ['plain','list','table'].includes(String(value))) return ({plain:'优先使用普通段落回复。',list:'优先使用列表回复。',table:'优先使用表格回复。'} as Record<string,string>)[String(value)];
   return null;
+}
+
+const AVOID_PHRASE_WINDOW_MS = 7*DAY;
+/** L3：avoid_phrase 的额外准入。短语必须逐字出现在本群最近 7 天的 bot outbox 里（程序查，不信模型）。 */
+export function avoidPhraseProof(groupId:string,phrase:string,now:number):ReviewStatement {
+  return {sql:`EXISTS(SELECT 1 FROM outbox WHERE group_id=? AND instr(body,?)>0 AND created_at>=?)`,params:[groupId,phrase,now-AVOID_PHRASE_WINDOW_MS]};
+}
+export async function phraseInOutbox(e:ReviewEnv,groupId:string,phrase:string,now=Date.now()):Promise<boolean> {
+  const rows=await reviewRead<{ok:number}>(metered(e),`SELECT EXISTS(SELECT 1 FROM outbox WHERE group_id=? AND instr(body,?)>0 AND created_at>=?) ok`,[groupId,phrase,now-AVOID_PHRASE_WINDOW_MS]);
+  return rows[0]?.ok===1;
 }
 
 /** Revalidate original provenance; only typed rules with matching dual agreement auto-enter trial. */
@@ -67,19 +96,23 @@ export async function applyRequirements(e: ReviewEnv, run: RuleRun, reqs: JudgeR
     const relevant=findings.filter(f=>evidenceOf(f.evidence_json).some(ev=>direct.some(source=>ev?.source==='message' && ev.id===source.id && typeof ev.quote==='string' && Array.from(ev.quote.trim()).length>=4 && quoteIn(messages.get(source.id)!,ev.quote))));
     if(relevant.some(f=>f.agreement==='disagree'||f.status==='disputed'||f.status==='rejected'||f.status==='wontfix')) continue;
     const canary=req.kind!=='free' && relevant.length>0 && relevant.every(f=>f.agreement==='agree');
-    const rule=renderRule(req.kind,req.params,req.rule,req.ttl_days)!, scene=text(req.scene.trim(),120);
-    const proof=sourceProof(messages.get(direct[0].id)!);
+    const source=messages.get(direct[0].id)!;
+    if(req.kind==='address_as' && normMember(String(req.params.member))!==normMember(source.sender)) continue;
+    const rule=renderRule(req.kind,req.params,req.rule,req.ttl_days,source.sender)!, scene=text(req.scene.trim(),120);
+    const guards=[sourceProof(source)];
+    if(req.kind==='avoid_phrase') guards.push(avoidPhraseProof(run.group_id,String(req.params.phrase),now));
+    const guard=guards.map(g=>`(${g.sql})`).join(' AND '), guardParams=guards.flatMap(g=>g.params!);
     const expires=now+Math.min(30*DAY,req.ttl_days*DAY,req.kind==='mention_only_window'?Number(req.params.minutes)*60000:Infinity);
     const params=JSON.stringify(req.params), sourceIds=[...new Set(direct.map(ev=>ev.id))].sort();
     const id=await stableId([run.group_id,scene,req.kind,params,rule,...sourceIds]);
     if(ids.includes(id)) continue;
     ids.push(id);
     statements.push({sql:`INSERT OR IGNORE INTO behavior_rules(id,group_id,rule,scene,kind,params,evidence_json,source,status,canary_until,expires_at,supersedes_id,created_at,updated_at)
-      SELECT ?,?,?,?,?,?,?,?,'candidate',NULL,?,(SELECT id FROM behavior_rules WHERE group_id=? AND scene=? AND status IN ('canary','active') ORDER BY updated_at DESC,id LIMIT 1),?,? WHERE ${proof.sql}`,
-      params:[id,run.group_id,rule,scene,req.kind,params,JSON.stringify(direct),'review:'+run.id,expires,run.group_id,scene,now,now,...proof.params!]});
+      SELECT ?,?,?,?,?,?,?,?,'candidate',NULL,?,(SELECT id FROM behavior_rules WHERE group_id=? AND scene=? AND status IN ('canary','active') ORDER BY updated_at DESC,id LIMIT 1),?,? WHERE ${guard}`,
+      params:[id,run.group_id,rule,scene,req.kind,params,JSON.stringify(direct),'review:'+run.id,expires,run.group_id,scene,now,now,...guardParams]});
     if(canary) {
       statements.push({sql:`UPDATE behavior_rules SET status='canary',canary_until=?,updated_at=? WHERE id=? AND status='candidate' AND expires_at>?
-        AND ${proof.sql} AND NOT EXISTS(SELECT 1 FROM review_findings WHERE id IN (SELECT value FROM json_each(?)) AND (agreement!='agree' OR status IN ('disputed','rejected','wontfix')))`,params:[now+3*DAY,now,id,now,...proof.params!,JSON.stringify(relevant.map(f=>f.id))]});
+        AND ${guard} AND NOT EXISTS(SELECT 1 FROM review_findings WHERE id IN (SELECT value FROM json_each(?)) AND (agreement!='agree' OR status IN ('disputed','rejected','wontfix')))`,params:[now+3*DAY,now,id,now,...guardParams,JSON.stringify(relevant.map(f=>f.id))]});
       statements.push(freezePredecessor(id,now));
     }
   }
@@ -100,15 +133,18 @@ export async function approveRule(e:ReviewEnv,id:string,who:string):Promise<bool
   if(row.status!=='candidate') return ['canary','active'].includes(row.status);
   if(row.expires_at<=now || !safeRule(row.rule) || !safeRule(row.scene)) return false;
   const params=parse<Record<string,string|number>>(row.params,{}),evs=evidenceOf(row.evidence_json);
-  const rendered=renderRule(row.kind,params,row.rule,(row.expires_at-row.created_at)/DAY);
-  if(!rendered || rendered!==row.rule) return false;
   const sources=await reviewSources(ctx,row.group_id,evs.map(ev=>ev.id));
   const evidence=evs.find(ev=>admitted(sources.get(ev.id),ev));
   if(!evidence) return false;
-  const proof=sourceProof(sources.get(evidence.id)!);
+  const source=sources.get(evidence.id)!;
+  const rendered=renderRule(row.kind,params,row.rule,(row.expires_at-row.created_at)/DAY,source.sender);
+  if(!rendered || rendered!==row.rule) return false;
+  const guards=[sourceProof(source)];
+  if(row.kind==='avoid_phrase') guards.push(avoidPhraseProof(row.group_id,String(params.phrase),now));
+  const guard=guards.map(g=>`(${g.sql})`).join(' AND '), guardParams=guards.flatMap(g=>g.params!);
   await reviewBatch(ctx,[
     {sql:`UPDATE behavior_rules SET status='canary',approved_by=?,canary_until=?,updated_at=? WHERE id=? AND status='candidate' AND expires_at>?
-      AND evidence_json=? AND rule=? AND kind=? AND params=? AND ${proof.sql}`,params:[who,now+3*DAY,now,id,now,row.evidence_json,row.rule,row.kind,row.params,...proof.params!]},
+      AND evidence_json=? AND rule=? AND kind=? AND params=? AND ${guard}`,params:[who,now+3*DAY,now,id,now,row.evidence_json,row.rule,row.kind,row.params,...guardParams]},
     {sql:`INSERT OR IGNORE INTO activity(id,kind,entity,actor,summary,created_at) SELECT ?,'review_rule_approved',id,?,'已批准规则试用',? FROM behavior_rules WHERE id=? AND approved_by=?`,params:['review-approve:'+id,who,new Date(now).toISOString(),id,who]},
     freezePredecessor(id,now),freezeSurplus(row.group_id,now),
   ]);
