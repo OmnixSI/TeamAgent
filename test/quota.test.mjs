@@ -87,13 +87,14 @@ async function seedUsage(e, { now = NOW } = {}) {
       .bind(id, cost, at)
       .run();
   }
-  for (const [id, sender, at] of [
-    ["img-1", "u1", now - 3600000],
-    ["img-2", "u2", now - 7200000],
-    ["img-3", "u1", now - 90000000],
+  for (const [id, kind, key, at] of [
+    ["img-1", "imagegen_group", "g1", now - 3600000],
+    ["img-2", "imagegen_group", "g1", now - 7200000],
+    ["img-3", "imagegen_user", "g1:u1", now - 3600000],
+    ["img-old", "imagegen_group", "g1", now - 25 * 3600000],
   ]) {
-    await e.DB.prepare("INSERT INTO image_gen_log(group_id,sender_id,turn_id,prompt,size,status,created_at) VALUES('g1',?,?,'p','1024x1024','ok',?)")
-      .bind(sender, id, at)
+    await e.DB.prepare("INSERT INTO quota_reservations(id,kind,key,created_at) VALUES(?,?,?,?)")
+      .bind(id, kind, key, at)
       .run();
   }
   const utcDay = new Date(now).toISOString().slice(0, 10);
@@ -156,7 +157,7 @@ test("owner sees exact balance, usage, OpenAI, image and neuron numbers", async 
     assert.match(text, /DeepSeek 用量：今天 2 次 \/ \$1\.20/);
     assert.match(text, /本月 3 次 \/ \$2\.40/);
     assert.match(text, /OpenAI：今天 2 次 \/ \$0\.50，上限 \$3\.00，剩 \$2\.50/);
-    assert.match(text, /生图：本群今天 2 \/ 20 张，你 1 \/ 5 张/);
+    assert.match(text, /生图：近 24 小时本群 2 \/ 20 张，你 1 \/ 5 张/);
     assert.match(text, /Workers AI：今天 1200 \/ 8000 neurons/);
     assert.match(text, /Cloudflare 账户级额度没有公开接口/);
     assert.equal(text.includes(SECRET), false);

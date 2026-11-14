@@ -27,6 +27,8 @@ export const QUOTA_MORNING_KEY = "quota:morning";
 export const QUOTA_MORNING_HOUR = 8;
 const IMAGE_USER_DAILY_DEFAULT = 5;
 const IMAGE_GROUP_DAILY_DEFAULT = 20;
+/** Same rolling window as reserveQuota's default. */
+const IMAGE_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const TIMEZONE = TEAM.memory?.timezone || "Australia/Sydney";
 
@@ -393,12 +395,14 @@ export async function quotaSnapshot(
     )
       .bind(today)
       .first()) || {};
+  // Read the same reservations the image limiter checks: a rolling 24 hours,
+  // and failed calls have already been released.
   const images =
     (await e.DB.prepare(
-      "SELECT COALESCE(SUM(status='ok'),0) AS total,COALESCE(SUM(status='ok' AND sender_id=?),0) AS mine" +
-        " FROM image_gen_log WHERE group_id=? AND created_at>=?",
+      "SELECT (SELECT COUNT(*) FROM quota_reservations WHERE kind='imagegen_group' AND key=? AND created_at>=?) AS total," +
+        "(SELECT COUNT(*) FROM quota_reservations WHERE kind='imagegen_user' AND key=? AND created_at>=?) AS mine",
     )
-      .bind(String(options.sender || ""), String(options.group || ""), today)
+      .bind(String(options.group || ""), at - IMAGE_QUOTA_WINDOW_MS, String(options.group || "") + ":" + String(options.sender || ""), at - IMAGE_QUOTA_WINDOW_MS)
       .first()) || {};
 
   const capMicroUsd = positive(settings["openai:daily_cap_micro_usd"], OPENAI_DAILY_CAP_MICRO_USD);
@@ -484,7 +488,7 @@ export function ownerQuotaText(snapshot: QuotaSnapshot): string {
       usdMicro(snapshot.openai.remainingMicroUsd),
   );
   parts.push(
-    "生图：本群今天 " +
+    "生图：近 24 小时本群 " +
       snapshot.images.group +
       " / " +
       snapshot.images.groupCap +
