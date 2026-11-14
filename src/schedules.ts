@@ -445,6 +445,72 @@ export async function createSchedule(e: any, input: NewSchedule, now = Date.now(
   return (await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first()) || row;
 }
 
+export type BackfillScheduleOptions = {
+  dry_run?: boolean;
+  /** 非空时同批入队 `sched-ack:<schedule id>`，并写 learning_acks，供「不对」撤销。 */
+  ack?: string;
+  now?: number;
+};
+
+/**
+ * L8：回填一条日程。与 createSchedule 同一套校验和幂等键；额外支持 dedup/request_quote（在
+ * planSchedule 里已透传）与可选回执。回执和 learning_acks 与日程写入在同一个 db.batch，
+ * 不会出现「日程建了但回执没发」的中间态。
+ */
+export async function backfillSchedule(
+  e: any,
+  input: NewSchedule,
+  opts: BackfillScheduleOptions = {},
+) {
+  const now = opts.now ?? Date.now();
+  const plan = planSchedule(input, now);
+  const ack = String(opts.ack ?? "").trim();
+  if (ack && Array.from(ack).length > 500) throw Error("回执最多 500 字");
+  const ackId = ack ? `sched-ack:${plan.id}` : null;
+  if (opts.dry_run) return { plan, row: null, ack_outbox_id: ackId };
+
+  const existing = await e.DB.prepare("SELECT id,status FROM schedules WHERE id=?").bind(plan.id).first();
+  // 与 createSchedule 相同：同一条消息重放不占新名额，也不和自己抢去重键。
+  if (!existing || existing.status !== "active") {
+    const active = await e.DB.prepare(
+      "SELECT COUNT(*) AS n FROM schedules WHERE group_id=? AND status='active' AND kind<>'mute'",
+    )
+      .bind(plan.group_id)
+      .first();
+    if (Number(active?.n || 0) >= MAX_ACTIVE_PER_GROUP)
+      throw Error(`本群定时已满 ${MAX_ACTIVE_PER_GROUP} 个，先取消一个`);
+  }
+  if (plan.spec.dedup) {
+    const dup = await e.DB.prepare(
+      "SELECT id FROM schedules WHERE status='active' AND id<>? AND json_extract(spec,'$.dedup')=? LIMIT 1",
+    )
+      .bind(plan.id, plan.spec.dedup)
+      .first();
+    if (dup) throw Error(`去重键 ${plan.spec.dedup} 已被 ${dup.id} 占用`);
+  }
+
+  const statements = [
+    e.DB.prepare(
+      "INSERT OR IGNORE INTO schedules(id,group_id,owner,kind,tz,spec,status,next_run_at,fail_count,created_at,source_msg_id) VALUES(?,?,?,?,?,?,'active',?,0,?,?)",
+    ).bind(plan.id, plan.group_id, plan.owner, plan.kind, plan.tz, JSON.stringify(plan.spec), plan.next_run_at, plan.created_at, plan.source_msg_id),
+    e.DB.prepare(
+      "UPDATE schedules SET status='active',spec=?,tz=?,next_run_at=?,fail_count=0,last_error=NULL WHERE id=? AND status='cancelled'",
+    ).bind(JSON.stringify(plan.spec), plan.tz, plan.next_run_at, plan.id),
+  ];
+  if (ack && ackId) {
+    statements.push(
+      e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,'pending',?)")
+        .bind(ackId, plan.group_id, plan.source_msg_id, ack, now),
+      e.DB.prepare(
+        "INSERT OR IGNORE INTO learning_acks(outbox_id,group_id,answer_msg_id,refs,created_at) VALUES(?,?,?,?,?)",
+      ).bind(ackId, plan.group_id, null, JSON.stringify([{ type: "schedule", id: plan.id }]), now),
+    );
+  }
+  await e.DB.batch(statements);
+  const row = await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first();
+  return { plan, row: row || null, ack_outbox_id: ackId };
+}
+
 export async function listSchedules(e: any, groupId: string, opts: { includeDone?: boolean } = {}) {
   const where = opts.includeDone ? "" : "AND status='active'";
   const rows = (
