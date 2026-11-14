@@ -1129,6 +1129,21 @@ async function answerWithTools(e: any, context: any) {
       quotaOnly = turn === 0 && !repoAsk && isQuotaQuestion(context.latest?.body)
         && left(e) >= QUOTA_ASK_FLOOR && left(e) < normalFloor;
       offerTools = (turn < 2 || recovery.retrying && turn < 3) && (quotaOnly || left(e) >= normalFloor);
+      if (!offerTools && !quotaOnly && turn === 0) {
+        const summary = `left=${left(e)} floor=${normalFloor} mentioned=${context.mentioned ? 1 : 0} latest=${String(context.latest?.id || "").slice(0, 48)}`;
+        const logId = "tools.skipped_budget:" + String(context.latest?.id || "") + ":" + turn;
+        if (!e.tail?.ruleActivities?.some((x: any) => x.id === logId)) {
+          e.tail?.ruleActivities?.push({
+            id: logId,
+            kind: "tools.skipped_budget",
+            entity: "tools",
+            actor: "Bot",
+            summary,
+            created_at: new Date().toISOString(),
+          });
+          console.log("tools.skipped_budget", summary);
+        }
+      }
       if (quotaOnly) offeredTools = tools.filter(t => t.function.name === "get_quota");
       const d = await model(
         e,

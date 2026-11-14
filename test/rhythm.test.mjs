@@ -155,7 +155,7 @@ test('B1/B9 meter counts executions and batch statements exactly; plain env has 
   await e.DB.prepare('SELECT 1').all();
   await e.DB.prepare('INSERT INTO settings VALUES(?,?)').bind('meter','1').run();
   await e.DB.batch([e.DB.prepare('SELECT 1'),e.DB.prepare('SELECT 2'),e.DB.prepare('SELECT 3')]);
-  assert.equal(e.meter.used,6);assert.equal(base.DB.executed-before,6);assert.equal(left(e),42);
+  assert.equal(e.meter.used,6);assert.equal(base.DB.executed-before,6);assert.equal(left(e),58);
   assert.equal(left(base),Infinity);
   assert.equal(metered(e),e);
   for(const [key,min] of Object.entries({image:6,turn:2,tool:8,send_row:7,sticker:5,tail:16}))assert.ok(COST[key]>=min,key);
@@ -396,7 +396,7 @@ function traceDB(e){
   return trace;
 }
 async function measured(base,label,run){
-  const trace=traceDB(base),before=base.DB.executed,e=metered(base);
+  const trace=traceDB(base),before=base.DB.executed,e=metered(base,48);
   try{await run(e);}finally{
     mkdirSync('.agent',{recursive:true});writeFileSync('.agent/'+label+'.json',JSON.stringify({used:e.meter.used,executed:base.DB.executed-before,sql:trace},null,2));
   }
@@ -532,17 +532,17 @@ test('budget guards leave a low-budget send and sweep durable; reference fuse co
   const {sweepVideoWaits}=await import('../'+out),base=env();
   for(let i=0;i<8;i++)await base.DB.prepare('INSERT INTO video_waits(id,group_id,ref,latest_id,batch_ids,mentioned,status,due_at,ready,lease_until,created_at,attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind('limited'+i,'g','BV1xx411c7mD','m','["m"]',0,'running',0,1,0,Date.now(),3).run();
   // Media maintenance and age retirement run first; one fresh exhausted wait still fits.
-  const sweep=metered(base);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
+  const sweep=metered(base,48);sweep.meter.used=38;await sweepVideoWaits(sweep);assert.equal(sweep.meter.used,47);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,1);
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,7);
   for(let i=0;i<7;i++){
-    const retry=metered(base);retry.meter.used=38;await sweepVideoWaits(retry);
+    const retry=metered(base,48);retry.meter.used=38;await sweepVideoWaits(retry);
     assert.ok(retry.meter.used<=48);
     assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='failed'").first()).n,i+2);
   }
   assert.equal((await base.DB.prepare("SELECT COUNT(*) n FROM video_waits WHERE status='running'").first()).n,0);
   assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,8);
-  const replay=metered(base);replay.meter.used=38;await sweepVideoWaits(replay);assert.ok(replay.meter.used<=48);
+  const replay=metered(base,48);replay.meter.used=38;await sweepVideoWaits(replay);assert.ok(replay.meter.used<=48);
   assert.equal((await base.DB.prepare('SELECT COUNT(*) n FROM outbox').first()).n,8);
 });
 
@@ -603,11 +603,11 @@ test('P2-1 unparseable oldest timestamp cannot starve an older queued message',a
 test('Codex P1 unmentioned explicit assignment survives the unanswered-proactive gate',async()=>{
   const e=await seedHard();await qq(e,msg('unmentioned-assignment','帮我整理成文档'));
   await decide(n=>n===1?{tool_calls:[{id:'file',type:'function',function:{name:'create_file_task',arguments:JSON.stringify({source_id:'unmentioned-assignment',request_quote:'帮我整理成文档',title:'整理文档',instructions:'把当前原话整理成文档'})}}]}:{content:'{"action":"reply","kind":"direct","brief":"已创建文件整理任务"}'},async state=>{
-    const route=metered(e),beforeRoute=e.DB.executed;
+    const route=metered(e,48),beforeRoute=e.DB.executed;
     await queue(route,'chat-unmentioned-assignment');
     assert.equal(route.meter.used,e.DB.executed-beforeRoute);assert.ok(route.meter.used<=48);
     const research=await e.DB.prepare("SELECT id FROM jobs WHERE id='research-unmentioned-assignment'").first();assert.ok(research,'explicit assignment must reach the existing tool flow');
-    const work=metered(e),beforeWork=e.DB.executed;await queue(work,research.id);
+    const work=metered(e,48),beforeWork=e.DB.executed;await queue(work,research.id);
     assert.equal(work.meter.used,e.DB.executed-beforeWork);assert.ok(work.meter.used<=48);
     writeFileSync('.agent/p1-codex-direct-counts.json',JSON.stringify({chat:route.meter.used,research:work.meter.used}));
     const file=await e.DB.prepare("SELECT payload FROM jobs WHERE kind='media' AND json_extract(payload,'$.message')='unmentioned-assignment'").first();assert.ok(file);assert.equal(JSON.parse(file.payload).want_files,true);
@@ -656,9 +656,9 @@ test('review bare imperative project request still reaches normal tools',async()
 test('Codex unmentioned clean development request reaches tools after proactive speech',async()=>{
   const e=await seedHard(),body='帮我修复 WhalePartner 的登录错误';await qq(e,msg('development-request',body));
   await decide(n=>n===1?{tool_calls:[{id:'dev',type:'function',function:{name:'prepare_project_task',arguments:JSON.stringify({source_id:'development-request',request_quote:body,repo:'OmnixSI/WhalePartner',title:'登录错误',detail:'明确交办修复',execute_requested:true,complexity:'small'})}}]}:{content:'{"action":"reply","kind":"direct","brief":"已建任务"}'},async()=>{
-    const route=metered(e),before=e.DB.executed;await queue(route,'chat-development-request');assert.equal(route.meter.used,e.DB.executed-before);assert.ok(route.meter.used<=48);
+    const route=metered(e,48),before=e.DB.executed;await queue(route,'chat-development-request');assert.equal(route.meter.used,e.DB.executed-before);assert.ok(route.meter.used<=48);
     const job=await e.DB.prepare("SELECT id FROM jobs WHERE id='research-development-request'").first();assert.ok(job);
-    const work=metered(e),beforeWork=e.DB.executed;await queue(work,job.id);assert.equal(work.meter.used,e.DB.executed-beforeWork);assert.ok(work.meter.used<=48);
+    const work=metered(e,48),beforeWork=e.DB.executed;await queue(work,job.id);assert.equal(work.meter.used,e.DB.executed-beforeWork);assert.ok(work.meter.used<=48);
     writeFileSync('.agent/p1-development-counts.json',JSON.stringify({chat:route.meter.used,research:work.meter.used}));
   });
   assert.equal((await e.DB.prepare("SELECT status FROM tasks WHERE source_id='development-request'").first()).status,'queued');

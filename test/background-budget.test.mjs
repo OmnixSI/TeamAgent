@@ -31,13 +31,13 @@ async function tick(e, at, fakeQQ) {
 
 const count = (e, sql, ...args) => e.DB.prepare(sql).bind(...args).first().then(r => r.n);
 
-test('chat keeps 48 statements while background queues and cron get 200', () => {
-  assert.equal(D1_BUDGET.chat, 48);
+test('chat keeps 64 statements while background queues and cron get 200', () => {
+  assert.equal(D1_BUDGET.chat, 64);
   assert.equal(D1_BUDGET.background, 200);
-  assert.equal(queueLimit('inkboard-team-chat'), 48);
+  assert.equal(queueLimit('inkboard-team-chat'), 64);
   assert.equal(queueLimit('inkboard-team'), 200);
   assert.equal(queueLimit('team-agent-tools'), 200);
-  assert.equal(queueLimit(undefined), 48, 'an unknown lane keeps the conservative budget');
+  assert.equal(queueLimit(undefined), 64, 'an unknown lane keeps the conservative budget');
 });
 
 test('fifty queued notices drain in five ticks without duplicates', async (t) => {

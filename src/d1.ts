@@ -8,11 +8,12 @@ export function chunks<T>(xs: T[], n = 90): T[][] {
 export type Meter = { used: number; limit: number; left(): number };
 
 /** Per-invocation statement budgets after the Workers Paid upgrade (D1 allows 1,000).
- *  Chat/HTTP stays at 48 to protect reply latency; cron and background queues get 200. */
-export const D1_BUDGET: { chat: number; background: number } = { chat: 48, background: 200 };
+ *  Chat/HTTP gets 64: 19 statements before the model + 32 tool floor + 10 send = 61,
+ *  leaving headroom so ordinary no-@ turns still offer tools; cron/background get 200. */
+export const D1_BUDGET: { chat: number; background: number } = { chat: 64, background: 200 };
 /** Queue name decides the budget without an extra D1 query. Only the two background
  *  lanes and their dead-letter queues get 200; the chat lane and any unknown name stay
- *  at the conservative 48. */
+ *  at the conservative 64. */
 export const DLQ_QUEUES = ["inkboard-team-dlq", "team-agent-tools-dlq"];
 export function queueLimit(queue: string | undefined): number {
   return queue === "inkboard-team" || queue === "team-agent-tools" || DLQ_QUEUES.includes(String(queue))
@@ -37,7 +38,7 @@ export function metered<E extends { DB: any }>(e: E, limit = D1_BUDGET.chat): E 
     meter.used += statements.length;
     return e.DB.batch(statements.map(s => s.__s));
   };
-  return { ...e, DB: database, meter, tail: { timing: [], cache: [] } };
+  return { ...e, DB: database, meter, tail: { timing: [], cache: [], ruleActivities: [] } };
 }
 // B3–B7: image=8 (cache, vision cap, Workers AI neuron hold + correction, note write); model usage=2; correction with 8 superseded facts=12.
 // send_row=10 includes lazy switches, reference recovery and the third-failure fuse.

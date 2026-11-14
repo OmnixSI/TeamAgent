@@ -185,12 +185,12 @@ for(const sql of denied) test('write boundary rejects '+sql.slice(0,85),async()=
   assert.equal(e.DB.executed,executed,'rejection must precede database execution');
 });
 
-test('batch validates every member before any mutation and meter enforces 48 executions',async()=>{
+test('batch validates every member before any mutation and meter enforces the chat budget',async()=>{
   const e=metered(await setup());
   await assert.rejects(()=>reviewBatch(e,[{sql:allowed[0][0]},{sql:'DELETE FROM tasks'}]));
   assert.equal((await get(e,'SELECT count(*) AS n FROM review_rejects')).n,0);
   await reviewBatch(e,[{sql:allowed[0][0]},{sql:allowed[1][0]}]); assert.equal(e.meter.used,3);
-  e.meter.used=47; await reviewRead(e,'SELECT 1'); assert.equal(e.meter.left(),0);
+  e.meter.used=e.meter.limit-1; await reviewRead(e,'SELECT 1'); assert.equal(e.meter.left(),0);
   await assert.rejects(()=>reviewWrite(e,allowed[1][0]),/资源/);
   await assert.rejects(()=>reviewRead(e,'SELECT 1'),/资源/);
   await assert.rejects(()=>reviewBatch(e,[{sql:allowed[1][0]}]),/资源/);

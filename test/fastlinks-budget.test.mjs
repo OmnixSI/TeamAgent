@@ -8,7 +8,7 @@ const outfile=`.wrangler/fastlinks-budget-${process.pid}.mjs`;
 await build({stdin:{contents:'export {metered,left,COST} from "./src/d1"; export {stage,flushTail} from "./src/timing"; export {fragments} from "./src/voice"; export {fetcherSeen} from "./src/login-flow";',resolveDir:process.cwd(),loader:'ts'},bundle:true,format:'esm',platform:'browser',outfile});
 const {metered,left,COST,stage,flushTail,fragments,fetcherSeen}=await import('../'+outfile);
 const counts={};function save(){mkdirSync('.agent',{recursive:true});writeFileSync('.agent/fastlinks-counts.json',JSON.stringify(counts,null,2));}
-async function measured(base,label,run){const e=metered(base),before=base.DB.executed;await run(e);const used=e.meter.used;assert.equal(used,base.DB.executed-before,label);assert.ok(used<=48,label+' '+used);counts[label]=used;save();return used;}
+async function measured(base,label,run){const e=metered(base,48),before=base.DB.executed;await run(e);const used=e.meter.used;assert.equal(used,base.DB.executed-before,label);assert.ok(used<=48,label+' '+used);counts[label]=used;save();return used;}
 const queue=(e,id)=>worker.queue({messages:[{body:{id},ack(){}}]},e);
 const stages=e=>e.DB.prepare('SELECT * FROM stage_timings ORDER BY at').all().then(x=>x.results);
 test('P0a stage is memory-only and five points flush as one SQL execution',async()=>{
@@ -16,12 +16,12 @@ test('P0a stage is memory-only and five points flush as one SQL execution',async
  assert.equal(base.DB.executed,before);await flushTail(e);assert.equal(e.meter.used,1);assert.equal((await stages(base)).length,5);assert.equal(e.tail.timing.length,0);
 });
 test('P0a tail is shared through shallow environments and gives cache the final query',async()=>{
- const base=env(),e=metered(base);assert.equal({...e}.tail,e.tail);assert.equal(COST.prefetch,1);
+ const base=env(),e=metered(base,48);assert.equal({...e}.tail,e.tail);assert.equal(COST.prefetch,1);
  e.tail.cache.push(['msgref:v1:source',JSON.stringify({ref:'BV1xx411c7mD',match:'id'}),new Date().toISOString()]);stage({...e},'source','outbox');e.meter.used=47;
  const before=base.DB.executed;await flushTail({...e});assert.equal(e.meter.used,48);assert.equal(base.DB.executed-before,1);assert.equal((await stages(base)).length,0);assert.ok(await base.DB.prepare("SELECT id FROM media_notes WHERE id='msgref:v1:source'").first());
 });
 test('R8-4 P0a zero tail budget drops msgref without a query or error',async()=>{
- const base=env(),e=metered(base);e.meter.used=48;e.tail.cache.push(['msgref:v1:no-budget','{}',new Date().toISOString()]);stage(e,'t','sent');const before=base.DB.executed;
+ const base=env(),e=metered(base,48);e.meter.used=48;e.tail.cache.push(['msgref:v1:no-budget','{}',new Date().toISOString()]);stage(e,'t','sent');const before=base.DB.executed;
  await flushTail(e);assert.equal(base.DB.executed,before);assert.equal(e.tail.cache.length,0);assert.equal(e.tail.timing.length,0);
 });
 test('P0a tail bounds timing binds under one hundred and cache binds to twenty-four',async()=>{
@@ -85,7 +85,7 @@ test('P0a a rejected fetch lease never publishes a reported stage',async()=>{
  assert.equal((await stages(base)).length,before);
 });
 test('R8-4 P0a dropped msgref leaves the existing get_work_status media query usable',async()=>{
- const base=env(),drop=metered(base);drop.meter.used=48;drop.tail.cache.push(['msgref:v1:status-source','{}',new Date().toISOString()]);await flushTail(drop);
+ const base=env(),drop=metered(base,48);drop.meter.used=48;drop.tail.cache.push(['msgref:v1:status-source','{}',new Date().toISOString()]);await flushTail(drop);
  await req(base,'/api/admin/bind',{groupId:'GROUP000001'});await qq(base,msg('status-source','查看真实工作状态'));
  await base.DB.prepare('INSERT INTO jobs(id,kind,payload,created_at) VALUES(?,?,?,?)').bind('fast-status','research',JSON.stringify({latestId:'status-source',batchIds:['status-source'],mentioned:true,background:true}),Date.now()).run();
  await modelFixture(async state=>{await measured(base,'P0a-research-work-status',e=>queue(e,'fast-status'));assert.ok(state.tools.some(t=>Array.isArray(t.tasks)&&Array.isArray(t.materials)));},n=>n===1?[{id:'status',type:'function',function:{name:'get_work_status',arguments:JSON.stringify({source_id:'status-source'})}}]:null);

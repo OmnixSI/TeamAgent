@@ -195,7 +195,7 @@ test('S9 runtime switches, pause, daily cap and remaining D1 budget suppress onl
   const e=await sendingFixture(),v=await patched('src/voice.ts');
   if(scenario==='off')await put(e,'off:sticker_send','1');if(scenario==='pause')await put(e,'sticker_paused_until',String(Date.now()+10000));
   if(scenario==='daily')await put(e,'budget:sticker_send:'+new Intl.DateTimeFormat('en-CA',{timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),'20');
-  const metered=await load('src/d1.ts','selection-meter');const target=scenario==='meter'?metered.metered(e):e;if(target.meter)target.meter.used=32;
+  const metered=await load('src/d1.ts','selection-meter');const target=scenario==='meter'?metered.metered(e):e;if(target.meter)target.meter.used=48;
   await v.enqueueVoice(target,'selection-'+scenario,'GROUP000001','sticker-source',scenario==='nomatch'?JSON.stringify({mode:'care',text:'照常说话。',sticker:'开心欢呼'}):voiceSticker);
   assert.equal((await all(e,'outbox')).length,1,scenario);assert.equal((await row(e)).uses,0,scenario);
   if(scenario==='nomatch')assert.equal((await all(e,'settings')).filter(r=>r.key.startsWith('budget:sticker_send:')).length,0);
@@ -329,8 +329,8 @@ test('closed sticker backlog can be skipped within four remaining statements and
  assert.equal((await deliverSticker(e)).length,0);assert.equal(e.meter.used,48);assert.equal(base.DB.executed-before,4);assert.ok((await all(base,'outbox')).every(o=>o.status==='skipped'));
 });
 test('low remaining send budget leaves rich media pending for a later invocation',async()=>{
- const {metered}=await load('src/d1.ts','sticker-defer-meter'),base=await sendingFixture();await mediaRow(base);const e=metered(base);e.meter.used=40;
- const calls=await deliverSticker(e);assert.equal(calls.filter(c=>c.url.endsWith('/files')||c.body.msg_type===7).length,0);assert.ok(e.meter.used<=48);assert.equal((await all(base,'outbox'))[0].status,'pending');
+ const {metered}=await load('src/d1.ts','sticker-defer-meter'),base=await sendingFixture();await mediaRow(base);const e=metered(base);e.meter.used=56;
+ const calls=await deliverSticker(e);assert.equal(calls.filter(c=>c.url.endsWith('/files')||c.body.msg_type===7).length,0);assert.ok(e.meter.used<=64);assert.equal((await all(base,'outbox'))[0].status,'pending');
  await deliverSticker(base);assert.equal((await all(base,'outbox'))[0].status,'sent');
 });
 test('upload TTL missing or zero uses one hour and stale file_info is uploaded again',async()=>{

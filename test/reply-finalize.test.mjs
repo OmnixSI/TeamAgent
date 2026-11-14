@@ -587,13 +587,16 @@ test("F8 漏调工具：群友明确要图但模型只回「没图」时，代�
   assert.equal(JSON.parse(out).text, "画好了，图单独发。");
 });
 
-test("F8 漏调工具：补图被安全拒绝时保留模型的拒绝话术，不改写成画好了", async () => {
+test("F8 漏调工具：补图被安全拒绝时改成如实原因，不改写成画好了", async () => {
   const spoken = JSON.stringify({ mode: "work", text: "这个不画，涉黄的内容直接挡了。" });
   const out = await api.finalizeSpoken(spoken, {
     userText: "画个卡特龙吃几把",
     generateImage: async () => ({ ok: false, error_kind: "refused", reason_text: "图片内容安全系统拒绝了" }),
   });
-  assert.equal(out, spoken);
+  const text = JSON.parse(out).text;
+  assert.match(text, /这次没画成/);
+  assert.ok(text.includes("图片内容安全系统拒绝了"));
+  assert.ok(!text.includes("画好了"));
 });
 
 test("F8 漏调工具：别画了/画饼/画个屁 不触发", async () => {
@@ -636,4 +639,63 @@ test("F8 漏调工具：本轮已经调过 generate_image 且失败，不再花�
     plain,
   );
   assert.equal(calls, 0, "失败后的说明不能被第二次调用覆盖");
+});
+
+test("F8 强制补图失败：改成如实原因，不保留模型编的「刚又试」", async () => {
+  const spoken = JSON.stringify({
+    mode: "work",
+    text: "数学奶蛙记下了：草稿纸、公式、小眼镜那套都有。刚又试，还是没拿到出图回执，就卡在生成结果返回、发图这段。",
+  });
+  const out = await api.finalizeSpoken(spoken, {
+    userText: "画一个会数学的奶娃",
+    generateImage: async () => ({ ok: false, error_kind: "unavailable", reason_text: "生图额度服务暂时不可用" }),
+  });
+  const text = JSON.parse(out).text;
+  assert.match(text, /这次没画成/);
+  assert.ok(text.includes("生图额度服务暂时不可用"));
+  assert.ok(!text.includes("刚又试"));
+});
+
+test("F8 无工具预算回放：19/48 且没 @bot 时，两条奶娃原话仍强制出图", async () => {
+  for (const body of ["你把你的奶娃形象画出来发群里", "画一个会数学的奶娃"]) {
+    const e = env();
+    e.OPENAI_API_KEY = "test-openai";
+    await e.DB.prepare("INSERT INTO settings(key,value) VALUES('off:image_gen','0')").run();
+    e.meter = { used: 19, limit: 48, left() { return this.limit - this.used; } };
+    e.tail = { timing: [], cache: [], ruleActivities: [] };
+    const jpeg = [255,216,255,224,0,4,0,0,255,192,0,17,8,4,0,4,0,3,1,17,0,2,17,0,3,17,0,255,217];
+    const old = globalThis.fetch;
+    globalThis.fetch = async (url, opt) => {
+      if (/api\.openai\.com/.test(String(url)))
+        return Response.json({ data: [{ b64_json: Buffer.from(jpeg).toString("base64") }] });
+      if (!/api\.deepseek\.com/.test(String(url))) return Response.json({});
+      const req = JSON.parse(opt.body || "{}");
+      if (String(req.messages?.[0]?.content || "").includes("最后的嘴替模块"))
+        return Response.json({ choices: [{ message: { content: JSON.stringify({
+          mode: "work",
+          text: "草，这次还是没图。我这边没拿到生图完成的回执。",
+        }) } }] });
+      return Response.json({ choices: [{ message: { content: '{"action":"reply","kind":"direct","brief":"画。"}' } }] });
+    };
+    let answer;
+    try {
+      answer = await sem.agentAnswer(e, await contextFor(e, {
+        id: "budget-no-tools-" + body.length,
+        body,
+        mentioned: 0,
+        sender: "0FC1E8A8BD28981E86866125AC3FCEFF",
+      }));
+    } finally {
+      globalThis.fetch = old;
+    }
+    const images = await rows(e, "SELECT * FROM generated_images");
+    assert.equal(images.length, 1, "没有工具也必须强制出图：" + body);
+    const out = await rows(e, "SELECT * FROM outbox WHERE id LIKE '%~g'");
+    assert.equal(out.length, 1, "必须有一条独立的图片 outbox");
+    assert.equal(JSON.parse(answer).text, "画好了，图单独发。");
+    assert.ok(
+      e.tail.ruleActivities.some((x) => x.kind === "tools.skipped_budget"),
+      "预算拿掉工具必须留痕",
+    );
+  }
 });
