@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import struct
 import subprocess
 import sys
 import tempfile
@@ -126,6 +127,35 @@ def make_xlsx(path):
         z.writestr("xl/worksheets/sheet2.xml", sheet2)
 
 
+def make_zip_bomb(path, member="word/document.xml", size=120 * 1024 * 1024):
+    """An OOXML-shaped zip that inflates to `size` bytes from a few hundred KB on disk."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        with z.open(member, "w") as entry:
+            chunk = b"0" * (1024 * 1024)
+            for _ in range(size // len(chunk)):
+                entry.write(chunk)
+            if size % len(chunk):
+                entry.write(b"0" * (size % len(chunk)))
+
+
+def make_declared_size_zip(path, declared=210 * 1024 * 1024):
+    """A tiny zip whose central directory claims a huge uncompressed entry."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/workbook.xml", "<workbook/>")
+    raw = bytearray(path.read_bytes())
+    offset, patched = 0, 0
+    while True:
+        start = raw.find(b"PK\x01\x02", offset)
+        if start < 0:
+            break
+        raw[start + 24:start + 28] = struct.pack("<I", declared)
+        patched += 1
+        offset = start + 4
+    assert patched, "the fixture must contain a central directory"
+    path.write_bytes(bytes(raw))
+
+
 class DocReadTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -198,6 +228,7 @@ class DocReadTests(unittest.TestCase):
         summary = out["sheets"][0]
         self.assertEqual([f["cell"] for f in summary["formulas"]], ["B7"])
         self.assertEqual(summary["formulas"][0]["formula"], "=SUM(B2:B6)")
+        self.assertEqual(summary["merged"], ["A1:B1"])
         self.assertEqual([s["name"] for s in out["sheets"] if s["formulas"]], ["汇总"])
         self.assertIn("汇总!B7", out["text"])
         self.assertIn("=SUM(B2:B6)", out["text"])
@@ -244,6 +275,22 @@ class DocReadTests(unittest.TestCase):
         self.assertIn("a.txt", out["text"])
         self.assertIn("dir/b.txt", out["text"])
         self.assertEqual(set(p.name for p in self.root.iterdir()), before)
+
+    def test_ooxml_zip_bomb_is_rejected_before_parsing(self):
+        make_zip_bomb(self.root / "bomb.docx")
+        out = self.read("bomb.docx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("压缩比", out["error"])
+        self.assertIn("word/document.xml", out["error"])
+
+    def test_ooxml_declared_uncompressed_total_over_limit_is_rejected(self):
+        make_declared_size_zip(self.root / "huge.xlsx")
+        out = self.read("huge.xlsx")
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["error_kind"], "too_large")
+        self.assertIn("解压后", out["error"])
+        self.assertIn("200", out["error"])
 
     # --- text cap ---------------------------------------------------------
     def test_text_is_capped_at_sixty_thousand_characters(self):

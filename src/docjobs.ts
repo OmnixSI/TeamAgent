@@ -52,7 +52,7 @@ export async function claimDoc(e: any, now = Date.now()) {
 export async function heartbeatDoc(e: any, id: unknown, lease: unknown, now = Date.now()) {
   if (typeof id !== "string" || typeof lease !== "string") return false;
   return !!(await e.DB.prepare(
-    "UPDATE jobs SET lease_until=? WHERE id=? AND kind='docread' AND status='running' AND json_extract(payload,'$.lease')=? AND lease_until>?",
+    "UPDATE jobs SET lease_until=? WHERE id=? AND kind='docread' AND status='running' AND json_extract(payload,'$.lease')=? AND lease_until>? RETURNING id",
   )
     .bind(now + DOC_LEASE_MS, id, lease, now)
     .first());

@@ -66,6 +66,16 @@ test("tool queues a docread job that one runner claims under a lease", async () 
   assert.equal(jobRow(e, first.job_id).status, "running");
 });
 
+test("heartbeat renews a live docread lease and refuses a stale one", async () => {
+  const e = env(); seed(e);
+  await tool.run(e, { question: "金额" }, ctx());
+  const claimed = await doc.claimDoc(e);
+  const claimedAt = jobRow(e, claimed.id).lease_until - 180000;
+  assert.equal(await doc.heartbeatDoc(e, claimed.id, claimed.payload.lease, claimedAt), true);
+  assert.equal(jobRow(e, claimed.id).lease_until, claimedAt + 180000);
+  assert.equal(await doc.heartbeatDoc(e, claimed.id, "00000000-0000-4000-8000-000000000000", claimedAt), false);
+});
+
 test("a reported extraction is stored once and the second tool call returns the text", async () => {
   const e = env(); seed(e);
   const first = await tool.run(e, { question: "第3页的金额" }, ctx());
