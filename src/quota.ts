@@ -307,21 +307,11 @@ function daysLeft(balance: DeepSeekBalance, avg7MicroUsd: number): number | null
   return cny / CNY_PER_USD / dailyUsd;
 }
 
-/** Balance in CNY plus the 7-day daily average (micro USD) decide the band. */
-export function deepseekBand(balance: DeepSeekBalance, avg7MicroUsd: number): QuotaBand {
-  const cny = balanceCny(balance);
-  if (cny === null) return "unknown";
-  if (cny < DEEPSEEK_LOW_BALANCE_CNY) return "critical";
-  const days = daysLeft(balance, avg7MicroUsd);
-  if (days === null) return "ok";
-  if (days < 1.5) return "critical";
-  if (days < DEEPSEEK_LOW_DAYS) return "low";
-  return "ok";
-}
-
 /** Pure band calculator, exported so the thresholds can be tested directly. */
 export function quotaBand(input: {
   balanceCny: number | null;
+  /** false is the provider's own "cannot call" signal. */
+  balanceAvailable?: boolean | null;
   avg7MicroUsd: number;
   openaiUsedMicroUsd: number;
   openaiCapMicroUsd: number;
@@ -329,7 +319,8 @@ export function quotaBand(input: {
   aiCap: number;
 }): QuotaBand {
   let deepseek: QuotaBand;
-  if (input.balanceCny === null || !Number.isFinite(input.balanceCny)) deepseek = "unknown";
+  if (input.balanceAvailable === false) deepseek = "critical";
+  else if (input.balanceCny === null || !Number.isFinite(input.balanceCny)) deepseek = "unknown";
   else if (input.balanceCny < DEEPSEEK_LOW_BALANCE_CNY) deepseek = "critical";
   else {
     const dailyUsd = Math.max(0, Number(input.avg7MicroUsd) || 0) / 1e6;
@@ -524,6 +515,7 @@ export async function renderQuota(
     });
     const band = quotaBand({
       balanceCny: balanceCny(snapshot.balance),
+      balanceAvailable: snapshot.balance.ok ? snapshot.balance.available : null,
       avg7MicroUsd: snapshot.deepseek.avg7MicroUsd,
       openaiUsedMicroUsd: snapshot.openai.todayMicroUsd,
       openaiCapMicroUsd: snapshot.openai.capMicroUsd,
@@ -563,9 +555,11 @@ export async function morningQuotaLine(e: any, at = Date.now()): Promise<string>
   const days = daysLeft(balance, average);
   const belowAmount = (balanceCny(balance) ?? Infinity) < DEEPSEEK_LOW_BALANCE_CNY;
   const belowDays = days !== null && days < DEEPSEEK_LOW_DAYS;
-  if (!belowAmount && !belowDays) return "";
+  const unavailable = balance.available === false;
+  if (!belowAmount && !belowDays && !unavailable) return "";
   const moneyText = money(balance.total, balance.currency);
   const reasons: string[] = [];
+  if (unavailable) reasons.push("账户当前不可用");
   if (belowAmount) reasons.push("低于 ¥" + DEEPSEEK_LOW_BALANCE_CNY + " 警戒线");
   if (belowDays && days !== null) reasons.push("按近 7 天日均只够 " + days.toFixed(1) + " 天");
   return "DeepSeek 余额 " + moneyText + "，" + reasons.join("，") + "。";

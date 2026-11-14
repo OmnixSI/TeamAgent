@@ -217,6 +217,7 @@ test("an unavailable account and an omitted is_available are reported without in
   try {
     const result = await api.renderQuota(e, { owner: true, now: NOW });
     assert.match(result.text, /DeepSeek 余额：账户当前不可用/);
+    assert.equal(result.band, "critical");
   } finally {
     off.restore();
   }
@@ -275,6 +276,7 @@ test("thresholds follow the order: under ¥10 or under three days of spend", () 
   assert.equal(api.quotaBand({ ...base, balanceCny: 20, avg7MicroUsd: 1000000 }), "low");
   assert.equal(api.quotaBand({ ...base, balanceCny: 30, avg7MicroUsd: 1000000 }), "ok");
   assert.equal(api.quotaBand({ ...base, balanceCny: null }), "unknown");
+  assert.equal(api.quotaBand({ ...base, balanceCny: 100, balanceAvailable: false }), "critical");
   assert.equal(api.quotaBand({ ...base, balanceCny: 100, openaiUsedMicroUsd: 2700000 }), "critical");
   assert.equal(api.quotaBand({ ...base, balanceCny: 100, aiUsed: 7000 }), "low");
 });
