@@ -66,7 +66,7 @@ export function validateTeamConfig(c) {
       "vision.enabled",
     );
     check(integer(c?.vision?.daily_cap, 1, 10000), "vision.daily_cap");
-    check(integer(c?.vision?.turn_max, 1, 3), "vision.turn_max");
+    check(integer(c?.vision?.turn_max, 1, 4), "vision.turn_max");
     check(
       integer(c?.vision?.turn_deadline_ms, 1000, 120000),
       "vision.turn_deadline_ms",
