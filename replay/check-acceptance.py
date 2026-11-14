@@ -5,7 +5,7 @@ Read-only: loads the local JSON export only, never contacts D1.
 Usage:
   python3 replay/check-acceptance.py \
     --acceptance ../TeamAgent-p4b-login/.agent/releases/V-D-learning/acceptance.json \
-    --export /tmp/teamagent-l9-export-20261114
+    --fixtures replay/fixtures
 """
 import argparse
 import json
@@ -17,12 +17,32 @@ import sys
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--acceptance", required=True)
-    parser.add_argument("--export", required=True)
+    parser.add_argument("--fixtures", default="replay/fixtures")
+    parser.add_argument("--export", default="")
     args = parser.parse_args()
     entries = json.loads(pathlib.Path(args.acceptance).read_text(encoding="utf-8"))
-    export = pathlib.Path(args.export)
-    messages = {row["rid"]: row for row in json.loads((export / "messages.json").read_text(encoding="utf-8"))}
-    outbox = {row["rid"]: row for row in json.loads((export / "outbox.json").read_text(encoding="utf-8"))}
+    messages, outbox = {}, {}
+    export = pathlib.Path(args.export) if args.export else None
+    if export:
+        messages.update({row["rid"]: row for row in json.loads((export / "messages.json").read_text(encoding="utf-8"))})
+        outbox.update({row["rid"]: row for row in json.loads((export / "outbox.json").read_text(encoding="utf-8"))})
+    fixtures = pathlib.Path(args.fixtures)
+    for path in sorted(fixtures.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("request", "weekly_request", "ban_message"):
+            if isinstance(data.get(key), dict) and "rid" in data[key]:
+                messages[data[key]["rid"]] = data[key]
+        for key in ("matches", "messages"):
+            for row in data.get(key, []):
+                if isinstance(row, dict) and "rid" in row:
+                    messages[row["rid"]] = row
+        for key in ("bot_replies", "rows", "outbox", "outbox_context"):
+            for row in data.get(key, []):
+                if isinstance(row, dict) and "rid" in row and "created_at" in row:
+                    outbox[row["rid"]] = row
+        row = data.get("row")
+        if isinstance(row, dict) and "rid" in row and "created_at" in row:
+            outbox[row["rid"]] = row
 
     errors = []
     if len(entries) != 20:

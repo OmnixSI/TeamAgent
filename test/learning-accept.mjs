@@ -70,11 +70,12 @@ const p1 = fixture("review-p1-case.json");
 const quiet = fixture("quiet-night.json");
 const daytime = fixture("daytime-batch.json");
 const drain = fixture("chat-drain-350.json");
+const address = fixture("address-request.json");
 const audit = fixture("export-audit.json");
 const recorded = fixture("deepseek-recorded.json");
 const index = fixture("index.json");
 
-insertMessages([too.request, too.weekly_request, cao.ban_message, ...signals.matches, ...p1.messages, ...daytime.messages]);
+insertMessages([too.request, too.weekly_request, address.request, cao.ban_message, ...signals.matches, ...p1.messages, ...daytime.messages]);
 insertOutbox([...too.bot_replies, ...cao.rows, ...p1.outbox, ...daytime.outbox_context, drain.row]);
 
 const localCounts = {

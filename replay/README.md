@@ -25,6 +25,7 @@
 | `too-daily-request.json` | t.o.o. 11-13 04:11:39 Sydney 原话（`messages.rid=351`）+ 周报原话（`rid=350`）+ 真实回复 `chat-drain-350` (`outbox.rid=203`)、`outbox.rid=206/207` | VL-8、VL-14、VL-19 |
 | `chat-drain-350.json` | 单独的真实 `chat-drain-350` 行 | VL-19 |
 | `learning-signals-7d.json` | 近 7 天含「别再/口头禅/叫我/以后/每天」的 8 条真实群消息；`别再` 线上 0 条 | VL-4、VL-7、VL-15 |
+| `address-request.json` | 最接近 address_as 的真实原话（`messages.rid=214`，「小马是你叫的吗，要叫马哥」）；库里没有字面「以后叫我 XX」 | VL-7 |
 | `outbox-cao-18.json` | 禁令（`messages.rid=134`，11-11 21:09 Sydney）之后 18 条含「草」的真实 bot 回复；10 条单独成句、8 条是「草稿/草案」或引用 | VL-6、VL-20 |
 | `review-p1-case.json` | V-D v2-notes #17 的真实 22 分钟无回复片段（`messages.rid=428..432`、`outbox.rid=239`） | VL-1、VL-3 |
 | `quiet-night.json` | 2026-11-12 00:00–09:00 (+08) 真实记录 0 条 | VL-2 |

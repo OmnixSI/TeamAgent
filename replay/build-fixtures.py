@@ -98,6 +98,13 @@ def main():
     }
     (out / "too-daily-request.json").write_text(json.dumps(weekly_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    address = next(m for m in messages if m["body"] == "小马是你叫的吗，要叫马哥")
+    (out / "address-request.json").write_text(json.dumps({
+        "source": weekly_json["source"],
+        "request": {k: address[k] for k in ("rid", "id", "group_id", "sender", "body", "ts", "mentioned")},
+        "note": "库里没有字面「以后叫我 XX」的原话；这是最接近的 address_as 真实请求（卡特龙要求称呼马哥）。没有改写原话。",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
     window_start = REFERENCE_NOW.timestamp() - 7 * 24 * 3600
     keyword_rows = []
     for message in messages:

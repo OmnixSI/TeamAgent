@@ -1,0 +1,13 @@
+{
+  "source": "线上 D1 只读导出 2026-11-14T14:19+11:00（scripts/review-export.py；audit 每条 rows_written=0 / changes=0）",
+  "request": {
+    "rid": 214,
+    "id": "ROBOT1.0_t1tA.ydC7W2pLOYS2Ysce-ZUPiD8vO1qs4hqbkIvGkCuutpAPJhA8.do28sGSsFasahPQo5kP11PzQx8Qk4fROfc9CcD.q-wjum3kSu84kM!",
+    "group_id": "9968A083EE07797A987010E64CD421B9",
+    "sender": "B391F15DDBE3390FCC35C5B7C0A2CC8D",
+    "body": "小马是你叫的吗，要叫马哥",
+    "ts": "2026-11-11T20:58:20+08:00",
+    "mentioned": 0
+  },
+  "note": "库里没有字面「以后叫我 XX」的原话；这是最接近的 address_as 真实请求（卡特龙要求称呼马哥）。没有改写原话。"
+}
