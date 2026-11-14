@@ -31,6 +31,10 @@ export type FinalizeOptions = {
   onViolation?: (phrase: string, count: number) => void;
   /** 本轮是否真的成功排入了一张生成图（generate_image 的 accepted 结果）。 */
   imageGenerated?: boolean;
+  /** 群友这条消息是否明确在要一张图；是则即使模型没提画图也要补。 */
+  imageRequested?: boolean;
+  /** 本轮模型已经调过 generate_image（失败也算）；不要因为失败再花第二次钱。 */
+  imageAttempted?: boolean;
   /** 图片承诺没有兑现时的重做：用群友原话直接调 generate_image。 */
   generateImage?: (prompt: string) => Promise<any>;
 };
@@ -153,9 +157,13 @@ function promiseSentence(text: string) {
 }
 
 const IMAGE_CLAIM_RE = /\[图片\]|画好了|画好啦|已经画好|图已发|图发你了|图给你了|这张补上|给你补上|上面那张就是|出图了/;
-const IMAGE_REQUEST_RE =
-  /(?:画|绘制|生成|做|整|来)\s*(?:一|两|几)?\s*(?:下|个|张|幅|只|条|版|套)|(?:画|绘制|生成)\s*(?:一张|一幅|一个|一只)|形象|头像|海报|插画|壁纸|表情包/;
-const NOT_IMAGE_REQUEST_RE = /数据图|图表|流程图|架构图|示意图|画饼|画重点/;
+const IMAGE_MEASURE_RE =
+  /(?:画|绘制|生成|做|整|来)\s*(?:一|两|几)?\s*(?:下|个|张|幅|只|条|版|套)/;
+const IMAGE_SHORT_RE = /^(?:帮我|给我|请|麻烦)?\s*(?:画|绘制|生成)\s*[^，。！？\n]{1,20}$/;
+const IMAGE_NOUN_RE = /形象|头像|海报|插画|壁纸|表情包/;
+const IMAGE_VERB_RE = /画|绘制|生成|做|整|来|拟|设计/;
+const NOT_IMAGE_REQUEST_RE =
+  /数据图|图表|流程图|架构图|示意图|画饼|画重点|画个屁|画个鬼|画你|画啥|画什么|别画|不画|不要画|不想画/;
 const IMAGE_CLAIM_REPLY = "刚才那句不算：这一轮没有真的把图发出去";
 
 /** 模型常见假回执：文字里说图已经发了，但本轮没有任何 generate_image 成功记录。 */
@@ -164,8 +172,13 @@ export function claimsGeneratedImage(text: string) {
 }
 /** 只把明确的画面请求拿去重做；「你单独发图」这类指令不会变成奇怪的生图提示词。 */
 export function isImageRequest(text: string) {
-  const value = String(text ?? "");
-  return !NOT_IMAGE_REQUEST_RE.test(value) && IMAGE_REQUEST_RE.test(value);
+  const value = String(text ?? "").trim();
+  if (!value || NOT_IMAGE_REQUEST_RE.test(value)) return false;
+  return (
+    IMAGE_MEASURE_RE.test(value) ||
+    IMAGE_SHORT_RE.test(value) ||
+    (IMAGE_NOUN_RE.test(value) && IMAGE_VERB_RE.test(value))
+  );
 }
 
 /**
@@ -255,24 +268,34 @@ export async function finalizeSpoken(spoken: string, o: FinalizeOptions = {}): P
   }
   for (const hit of scrubbed.hits) o.onViolation?.(hit.phrase, hit.count);
 
-  // ④ 图片假回执：说「画好了/[图片]」但本轮没有 generate_image 成功记录。
-  // 群友确实在要图时用原话补调一次；补不出来就把假回执换成实话，绝不发「画好了」。
-  if (!o.imageGenerated && claimsGeneratedImage(text)) {
-    let made: any = null;
-    if (o.generateImage && isImageRequest(o.userText || "")) {
-      try {
-        made = await o.generateImage(String(o.userText || "").trim().slice(0, 1000));
-      } catch {
-        made = null;
+  // ④ 图片兜底：本轮没有 generate_image 成功记录时，两种触发都要补。
+  //   a) 模型说「画好了/[图片]」——假回执；
+  //   b) 群友明确在要图、模型只回文字——漏调工具。
+  // 图片和文字始终是两条独立消息：这里只补 outbox~g，文字随后单独发。
+  if (!o.imageGenerated) {
+    const claim = claimsGeneratedImage(text);
+    const requested = o.imageRequested ?? isImageRequest(o.userText || "");
+    if (claim || requested) {
+      let made: any = null;
+      if (o.generateImage && requested && !o.imageAttempted) {
+        try {
+          made = await o.generateImage(String(o.userText || "").trim().slice(0, 1000));
+        } catch {
+          made = null;
+        }
       }
-    }
-    if (made?.ok !== true) {
-      const reason =
-        typeof made?.reason_text === "string" && made.reason_text
-          ? `（${made.reason_text}）`
-          : "";
-      text = `${IMAGE_CLAIM_REPLY}${reason}。你再说一句要画什么，我重画。`;
-      changed = true;
+      if (made?.ok === true) {
+        // 图已经单独排队，文字只留一句回执；不再让模型描述它没看过的图。
+        text = "画好了，图单独发。";
+        changed = true;
+      } else if (claim) {
+        const reason =
+          typeof made?.reason_text === "string" && made.reason_text
+            ? `（${made.reason_text}）`
+            : "";
+        text = `${IMAGE_CLAIM_REPLY}${reason}。你再说一句要画什么，我重画。`;
+        changed = true;
+      }
     }
   }
 

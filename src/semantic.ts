@@ -6,7 +6,7 @@ import { parseDecision, loadSwitches, isOn } from "./rhythm";
 import { repoTools, runRepoTool, toolFailure } from "./repo";
 import { extraToolDefs, extraUntrustedNames, runExtraTool } from "./toolkit";
 import { createSchedule, listSchedules, cancelSchedule, muted, sydneyText, scheduleFailure, describeSchedule, slug, nextRun } from "./schedules";
-import { finalizeSpoken } from "./reply-finalize";
+import { finalizeSpoken, isImageRequest } from "./reply-finalize";
 import { loadGroupRules, queueRuleSkip, queueRuleViolation, ruleIdForPhrase, ruleReserve, rulesBlock, rulesBudgetAllows } from "./rules-inject";
 import { isOrgRepo, resolveRepoRef } from "./repo-discovery";
 export const LOCAL_TOOLS = new Set(["remember_correction", "recall_memory", "get_work_status", "list_repos", "repo_changes", "repo_commit", "repo_file", "schedule_create", "schedule_list", "schedule_cancel", "describe_self", "get_quota"]);
@@ -728,6 +728,7 @@ function finalizeOptions(
   context: any,
   acceptedActions: any[],
   generateImage?: (prompt: string) => Promise<any>,
+  imageAttempted = false,
 ) {
   const latest = context.latest;
   return {
@@ -735,6 +736,8 @@ function finalizeOptions(
     imageGenerated: acceptedActions.some(
       (a: any) => a?.tool === "generate_image" && a.accepted !== false,
     ),
+    imageRequested: isImageRequest(latest?.body || ""),
+    imageAttempted,
     generateImage,
     avoid: context.groupRules?.avoid ?? [],
     userText: latest?.body,
@@ -800,6 +803,7 @@ async function answerWithTools(e: any, context: any) {
     ).all()
   ).results;
   const acceptedActions: any[] = [];
+  let imageAttempted = false;
   const baseTools = [
     {
       type: "function",
@@ -1218,7 +1222,7 @@ async function answerWithTools(e: any, context: any) {
           return JSON.stringify({ mode: "banter", text: "[[SILENT]]" });
         }
       }
-      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply)));
+      return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply, imageAttempted)));
     }
     messages.push(m);
     for (const [index, call] of m.tool_calls.entries()) {
@@ -1682,6 +1686,7 @@ async function answerWithTools(e: any, context: any) {
         }
         return result;
       });
+      if (call.function.name === "generate_image") imageAttempted = true;
       if (call.function.name === "request_feature" && result?.feature_request) {
         const created = result.feature_request;
         result = { ...created, ...(created.ok && !created.duplicate ? { accepted: true } : {}) };
@@ -1699,5 +1704,5 @@ async function answerWithTools(e: any, context: any) {
     recovery.retry(messages);
   }
   const spoken = await speakBrief(e, { facts: recovery.brief("检索轮次已结束，只说明已经核实的结果与限制。"), acceptedActions }, context);
-  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply)));
+  return recovery.voice(await finalizeSpoken(spoken, finalizeOptions(e, context, acceptedActions, generateImageForReply, imageAttempted)));
 }
