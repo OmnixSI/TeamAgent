@@ -3,6 +3,7 @@
 import { left } from "./d1";
 import { model, redact } from "./runtime";
 import { namesFor } from "./context";
+import { TEAM } from "./config";
 
 export type ScheduleKind = "digest_daily" | "digest_weekly" | "reminder" | "mute";
 export type ScheduleSpec = {
@@ -11,6 +12,14 @@ export type ScheduleSpec = {
   run_at?: number | string;
   text?: string;
   minutes?: number;
+  /** L1：自定义主题推送（1–40 字）。有它就不是「昨日总结」，而是写这个话题。 */
+  topic?: string;
+  /** L1：跨群唯一的去重键，出站 id 变成 `<dedup>:<悉尼日期>`。 */
+  dedup?: string;
+  /** L1：只用于展示和复盘统计。 */
+  origin?: "chat" | "review" | "backfill";
+  /** L1：成员原话（≤200 字），作为对推送内容口径的说明。 */
+  request_quote?: string;
 };
 export type NewSchedule = {
   group_id: string;
@@ -29,9 +38,19 @@ export const MAX_MISSED_AGE_MS = 15 * MINUTE;
 const RETRY_AFTER = 5 * MINUTE;
 const DEFAULT_TZ = "Australia/Sydney";
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+// L1：上限放 config/team.json 的 schedules 节；读不到就用设计里的默认值。
+const SCHEDULE_LIMITS = ((TEAM as any)?.schedules || {}) as Record<string, unknown>;
+const MAX_ACTIVE_PER_GROUP = Number(SCHEDULE_LIMITS.max_active_per_group) || 5;
+const MAX_SENDS_PER_GROUP_DAY = Number(SCHEDULE_LIMITS.max_sends_per_group_day) || 6;
+const MAX_SENDS_DAY = Number(SCHEDULE_LIMITS.max_sends_day) || 20;
 const DIGEST_PROMPT =
   "你在为群聊写日报。只写群里发布的日报正文：最多8行，先一句总览，再列3–6条真正有信息量的进展、决定或待办（点到相关的人或项目），最后一行只写一条最该推进的事。" +
   "只用消息里出现的事实，不编造，不猜没提到的计划；没有内容就直说没有新消息。不要客套、标题、表格或链接。";
+/** L1：有 topic 的 digest 走这个提示词；素材不够就直说，不编。 */
+const topicPrompt = (topic: string, maxLines: number) =>
+  `你在为群聊写『${topic}』。只用下面消息里出现的事实；与主题无关的不写；素材不够就写一句『今天没有可报的${topic}内容』。最多 ${maxLines} 行，不要标题、表格、链接。`;
+/** L1：成员原话接在提示词后面，作为内容口径。 */
+const quoteLine = (quote: string) => `\n成员原话要求：${quote}；照这个口径写。`;
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -93,6 +112,169 @@ function parseTime(value: unknown): [number, number] | null {
   return h >= 0 && h <= 23 && mi >= 0 && mi <= 59 ? [h, mi] : null;
 }
 
+// ---------- L1：群友原话 → 日程请求（L2 的 promiseGuard、L8 的回填共用；纯函数，不读写库） ----------
+
+export type ParsedScheduleRequest = {
+  cadence: "daily" | "weekly";
+  time: string;
+  weekdays?: number[];
+  topic: string;
+};
+
+const CN_DIGIT: Record<string, number> = {
+  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+const WEEKDAY_OF: Record<string, number> = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+const CN_NUMBER = "\\d{1,3}|[〇零一二两三四五六七八九十]{1,3}";
+
+/** 「8」「八」「十五」「二十一」→ 数字；认不出返回 null。 */
+function parseCount(text: string): number | null {
+  if (/^\d{1,3}$/.test(text)) return Number(text);
+  if (!text || !/^[〇零一二两三四五六七八九十]+$/.test(text)) return null;
+  let total = 0;
+  let unit = 0;
+  for (const ch of text) {
+    if (ch === "十") {
+      total += (unit || 1) * 10;
+      unit = 0;
+    } else unit = CN_DIGIT[ch];
+  }
+  return total + unit;
+}
+
+/** 时段词 → 上午/下午/夜里；没有时段词时只有「每晚」这类线索才敢当晚上。 */
+function periodOf(word: string | undefined, evening: boolean) {
+  if (word === "下午" || word === "傍晚") return "pm" as const;
+  if (word === "晚上" || word === "夜里" || word === "晚间") return "night" as const;
+  if (word === "中午") return "noon" as const;
+  if (word) return "am" as const;
+  return evening ? ("night" as const) : null;
+}
+
+function applyPeriod(hour: number, period: ReturnType<typeof periodOf>): number | null {
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23) return null;
+  if (period === "pm") return hour === 12 ? 12 : hour + 12;
+  if (period === "night") return hour === 12 ? 0 : hour + 12;
+  if (period === "noon") return hour === 12 ? 12 : hour < 6 ? hour + 12 : hour;
+  if (period === "am") return hour === 12 ? 0 : hour;
+  return hour;
+}
+
+/** 只认紧跟在频率词后面的那个时间；认不出就是 null，不往后猜。 */
+function clockAtStart(text: string, evening: boolean): { h: number; mi: number; rest: string } | null {
+  const src = text.replace(/^\s+/, "");
+  const colon = new RegExp(
+    `^(?:(凌晨|早上|早晨|清早|上午|中午|下午|傍晚|晚上|夜里|晚间))?\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})`,
+  ).exec(src);
+  if (colon) {
+    const h = applyPeriod(Number(colon[2]), periodOf(colon[1], evening));
+    const mi = Number(colon[3]);
+    if (h === null || mi > 59) return null;
+    return { h, mi, rest: src.slice(colon[0].length) };
+  }
+  const point = new RegExp(
+    `^(?:(凌晨|早上|早晨|清早|上午|中午|下午|傍晚|晚上|夜里|晚间))?\\s*(${CN_NUMBER})\\s*[点时]\\s*(?:半|(${CN_NUMBER})\\s*分?)?`,
+  ).exec(src);
+  if (!point) return null;
+  const h = applyPeriod(parseCount(point[2]) ?? NaN, periodOf(point[1], evening));
+  if (h === null) return null;
+  const mi = point[3] ? parseCount(point[3]) : /\s*[点时]\s*半/.test(point[0]) ? 30 : 0;
+  if (mi === null || mi > 59) return null;
+  return { h, mi, rest: src.slice(point[0].length) };
+}
+
+/**
+ * 从群友原话里认出「每天/每周X + X点(半)/HH:MM + 发/推/出 + XX」。
+ * 认不出、被否定（「别每天 8 点发了」）、没写主题或每周没写周几，一律 null——宁可 null 不猜。
+ */
+export function parseScheduleRequest(text: string): ParsedScheduleRequest | null {
+  const raw = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  // 否定/取消：别每天…、不用每天…、取消每天…
+  if (/(?:别|不要|不用|不必|甭|停止|取消|不需要|不想)\s*每/.test(raw)) return null;
+
+  const weekly = /每(?:个|一)?(?:周|星期|礼拜)([一二三四五六日天])/.exec(raw);
+  const daily = /每(?:天|日|早|晚)/.exec(raw);
+  let cadence: "daily" | "weekly";
+  let weekdays: number[] | undefined;
+  let start: number;
+  if (weekly) {
+    cadence = "weekly";
+    weekdays = [WEEKDAY_OF[weekly[1]]];
+    start = weekly.index + weekly[0].length;
+  } else if (/每(?:个|一)?(?:周|星期|礼拜)/.test(raw)) {
+    return null; // 说了每周却没说是周几
+  } else if (daily) {
+    cadence = "daily";
+    start = daily.index + daily[0].length;
+  } else return null;
+
+  const clock = clockAtStart(raw.slice(start), /晚/.test(daily?.[0] || ""));
+  if (!clock) return null;
+  const time = `${pad(clock.h)}:${pad(clock.mi)}`;
+  if (!parseTime(time)) return null; // 用现有 parseTime 收口，25:00 之类直接否决
+
+  let rest = clock.rest;
+  const strip = (pattern: RegExp) => {
+    for (;;) {
+      rest = rest.replace(/^\s+/, "");
+      if (!pattern.test(rest)) return;
+      rest = rest.replace(pattern, "");
+    }
+  };
+  strip(/^(?:（悉尼）|\(悉尼\)|悉尼时间|悉尼)/);
+  strip(/^(?:的时候|时候|在群里|群里|给大家|给我|给|准时|自动)/);
+
+  const verb = /^(?:发送|发出|发|推送|推|出)/.exec(rest);
+  if (!verb) return null;
+  rest = rest.slice(verb[0].length);
+  rest = rest.replace(/^\s*(?:一下|一份|一个|一条|一篇|下|份|个|条|篇)/, "");
+
+  let topic = rest
+    .replace(/^\s+/, "")
+    .split(/[，。！？；、,;!?]/)[0]
+    .trim()
+    .replace(/^[「『“‘"']+/, "")
+    .replace(/[」』”’"']+$/, "")
+    .replace(/[吧呀啊哈哦嘛呢啦~～…]+$/, "");
+  if (!topic) return null;
+  return {
+    cadence,
+    time,
+    ...(weekdays ? { weekdays } : {}),
+    topic: topic.slice(0, 40),
+  };
+}
+
+/** FNV-1a（32 位）压成 6 位 base36：同一 id 稳定，不同 id 几乎不撞。 */
+function idHash(id: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36).padStart(6, "0").slice(-6);
+}
+
+/**
+ * L2：按 topic 生成去重键。ASCII 主题转 kebab-case，已上线的规则保持不变；
+ * 中文等转不出合法键时用完整消息 id 的短哈希（rpt-<6 位 base36>）。QQ 消息 id
+ * 都以 ROBOT1.0_ 开头，不能取前缀，否则所有群共用 rpt-robot1。
+ * 结果保证符合 createSchedule 的 3–31 位小写规则。
+ */
+export function slug(topic: string, id = "") {
+  const ascii = String(topic ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 31);
+  if (/^[a-z][a-z0-9-]{2,30}$/.test(ascii)) return ascii;
+  const key = String(id ?? "");
+  if (!key) return "rpt-000000";
+  return `rpt-${idHash(key)}`;
+}
+
 /** 2026-11-14 08:00（悉尼） */
 export function sydneyText(ts: number | null | undefined, tz = DEFAULT_TZ) {
   if (!ts) return "无";
@@ -127,9 +309,16 @@ function specOf(schedule: any): ScheduleSpec {
 
 export function describeSchedule(schedule: any) {
   const spec = specOf(schedule);
-  if (schedule?.kind === "digest_daily") return `每天 ${spec.time || "08:00"}（悉尼）昨日总结`;
-  if (schedule?.kind === "digest_weekly")
-    return `每周${(spec.weekdays || [0]).map((d: number) => WEEKDAY_NAMES[d] || d).join("、")} ${spec.time || "08:00"}（悉尼）周报`;
+  const topic = String(spec.topic || "").trim();
+  const time = spec.time || "08:00";
+  if (schedule?.kind === "digest_daily")
+    return topic ? `每天 ${time}（悉尼）发${topic}` : `每天 ${time}（悉尼）昨日总结`;
+  if (schedule?.kind === "digest_weekly") {
+    const days = (spec.weekdays || [0])
+      .map((d: number) => String(WEEKDAY_NAMES[d] ?? d).replace(/^周/, ""))
+      .join("、");
+    return topic ? `每周${days} ${time}（悉尼）发${topic}` : `每周${days} ${time}（悉尼）周报`;
+  }
   if (schedule?.kind === "reminder") return `提醒：${spec.text || "未写内容"}`;
   if (schedule?.kind === "mute") return `闭嘴到 ${sydneyText(Number(spec.run_at) || null)}`;
   return String(schedule?.kind || "日程");
@@ -213,6 +402,27 @@ export function planSchedule(input: NewSchedule, now = Date.now()): PlannedSched
     }
   }
 
+  // L1：主题、去重键、来源和成员原话。空值当作没写，不往 spec 里塞默认值。
+  const topic = String(spec.topic ?? "").trim();
+  if (topic) {
+    if (topic.length > 40) throw Error("主题要 1–40 个字");
+    spec.topic = topic;
+  } else delete spec.topic;
+  const dedup = String(spec.dedup ?? "").trim();
+  if (dedup) {
+    if (!/^[a-z][a-z0-9-]{2,30}$/.test(dedup))
+      throw Error("去重键只能用 3–31 位小写字母、数字和连字符，且以字母开头");
+    spec.dedup = dedup;
+  } else delete spec.dedup;
+  const origin = String(spec.origin ?? "").trim();
+  if (origin) {
+    if (!["chat", "review", "backfill"].includes(origin)) throw Error("origin 只能是 chat/review/backfill");
+    spec.origin = origin as ScheduleSpec["origin"];
+  } else delete spec.origin;
+  const quote = String(spec.request_quote ?? "").trim();
+  if (quote) spec.request_quote = quote.slice(0, 200);
+  else delete spec.request_quote;
+
   const next = nextRun(spec, now, tz);
   if (next === null) throw Error("这个时间已经过去，请说下一次的时间");
   return {
@@ -230,6 +440,25 @@ export function planSchedule(input: NewSchedule, now = Date.now()): PlannedSched
 
 export async function createSchedule(e: any, input: NewSchedule, now = Date.now()) {
   const plan = planSchedule(input, now);
+  const existing = await e.DB.prepare("SELECT id,status FROM schedules WHERE id=?").bind(plan.id).first();
+  // 同一条消息重放是幂等的：已经 active 的行不再占新名额，也不和自己抢去重键。
+  if (!existing || existing.status !== "active") {
+    const active = await e.DB.prepare(
+      "SELECT COUNT(*) AS n FROM schedules WHERE group_id=? AND status='active' AND kind<>'mute'",
+    )
+      .bind(plan.group_id)
+      .first();
+    if (Number(active?.n || 0) >= MAX_ACTIVE_PER_GROUP)
+      throw Error(`本群定时已满 ${MAX_ACTIVE_PER_GROUP} 个，先取消一个`);
+  }
+  if (plan.spec.dedup) {
+    const dup = await e.DB.prepare(
+      "SELECT id FROM schedules WHERE status='active' AND id<>? AND json_extract(spec,'$.dedup')=? LIMIT 1",
+    )
+      .bind(plan.id, plan.spec.dedup)
+      .first();
+    if (dup) throw Error(`去重键 ${plan.spec.dedup} 已被 ${dup.id} 占用`);
+  }
   await e.DB.prepare(
     "INSERT OR IGNORE INTO schedules(id,group_id,owner,kind,tz,spec,status,next_run_at,fail_count,created_at,source_msg_id) VALUES(?,?,?,?,?,?,'active',?,0,?,?)",
   )
@@ -243,6 +472,72 @@ export async function createSchedule(e: any, input: NewSchedule, now = Date.now(
       .bind(JSON.stringify(plan.spec), plan.tz, plan.next_run_at, plan.id)
       .run();
   return (await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first()) || row;
+}
+
+export type BackfillScheduleOptions = {
+  dry_run?: boolean;
+  /** 非空时同批入队 `sched-ack:<schedule id>`，并写 learning_acks，供「不对」撤销。 */
+  ack?: string;
+  now?: number;
+};
+
+/**
+ * L8：回填一条日程。与 createSchedule 同一套校验和幂等键；额外支持 dedup/request_quote（在
+ * planSchedule 里已透传）与可选回执。回执和 learning_acks 与日程写入在同一个 db.batch，
+ * 不会出现「日程建了但回执没发」的中间态。
+ */
+export async function backfillSchedule(
+  e: any,
+  input: NewSchedule,
+  opts: BackfillScheduleOptions = {},
+) {
+  const now = opts.now ?? Date.now();
+  const plan = planSchedule(input, now);
+  const ack = String(opts.ack ?? "").trim();
+  if (ack && Array.from(ack).length > 500) throw Error("回执最多 500 字");
+  const ackId = ack ? `sched-ack:${plan.id}` : null;
+  if (opts.dry_run) return { plan, row: null, ack_outbox_id: ackId };
+
+  const existing = await e.DB.prepare("SELECT id,status FROM schedules WHERE id=?").bind(plan.id).first();
+  // 与 createSchedule 相同：同一条消息重放不占新名额，也不和自己抢去重键。
+  if (!existing || existing.status !== "active") {
+    const active = await e.DB.prepare(
+      "SELECT COUNT(*) AS n FROM schedules WHERE group_id=? AND status='active' AND kind<>'mute'",
+    )
+      .bind(plan.group_id)
+      .first();
+    if (Number(active?.n || 0) >= MAX_ACTIVE_PER_GROUP)
+      throw Error(`本群定时已满 ${MAX_ACTIVE_PER_GROUP} 个，先取消一个`);
+  }
+  if (plan.spec.dedup) {
+    const dup = await e.DB.prepare(
+      "SELECT id FROM schedules WHERE status='active' AND id<>? AND json_extract(spec,'$.dedup')=? LIMIT 1",
+    )
+      .bind(plan.id, plan.spec.dedup)
+      .first();
+    if (dup) throw Error(`去重键 ${plan.spec.dedup} 已被 ${dup.id} 占用`);
+  }
+
+  const statements = [
+    e.DB.prepare(
+      "INSERT OR IGNORE INTO schedules(id,group_id,owner,kind,tz,spec,status,next_run_at,fail_count,created_at,source_msg_id) VALUES(?,?,?,?,?,?,'active',?,0,?,?)",
+    ).bind(plan.id, plan.group_id, plan.owner, plan.kind, plan.tz, JSON.stringify(plan.spec), plan.next_run_at, plan.created_at, plan.source_msg_id),
+    e.DB.prepare(
+      "UPDATE schedules SET status='active',spec=?,tz=?,next_run_at=?,fail_count=0,last_error=NULL WHERE id=? AND status='cancelled'",
+    ).bind(JSON.stringify(plan.spec), plan.tz, plan.next_run_at, plan.id),
+  ];
+  if (ack && ackId) {
+    statements.push(
+      e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,'pending',?)")
+        .bind(ackId, plan.group_id, plan.source_msg_id, ack, now),
+      e.DB.prepare(
+        "INSERT OR IGNORE INTO learning_acks(outbox_id,group_id,answer_msg_id,refs,created_at) VALUES(?,?,?,?,?)",
+      ).bind(ackId, plan.group_id, null, JSON.stringify([{ type: "schedule", id: plan.id }]), now),
+    );
+  }
+  await e.DB.batch(statements);
+  const row = await e.DB.prepare("SELECT * FROM schedules WHERE id=?").bind(plan.id).first();
+  return { plan, row: row || null, ack_outbox_id: ackId };
 }
 
 export async function listSchedules(e: any, groupId: string, opts: { includeDone?: boolean } = {}) {
@@ -285,6 +580,16 @@ export async function muted(
 async function digestText(e: any, schedule: any, spec: ScheduleSpec, now: number) {
   const tz = schedule.tz || DEFAULT_TZ;
   const days = schedule.kind === "digest_weekly" ? 7 : 1;
+  // L1：有 topic 就是自定义主题推送；成员原话含「精简/简短/简单」时把行数上限降到 5。
+  const topic = String(spec.topic || "").trim();
+  const quote = String(spec.request_quote || "").trim().slice(0, 200);
+  const maxLines = quote && /精简|简短|简单/.test(quote) ? 5 : 8;
+  const basePrompt = topic
+    ? topicPrompt(topic, maxLines)
+    : maxLines === 8
+      ? DIGEST_PROMPT
+      : DIGEST_PROMPT.replace("最多8行", `最多${maxLines}行`);
+  const prompt = quote ? basePrompt + quoteLine(quote) : basePrompt;
   const p = partsAt(now, tz);
   const startDay = addDays(p.y, p.m, p.d, -days);
   const start = zonedToUtc(startDay.y, startDay.m, startDay.d, 0, 0, tz);
@@ -315,7 +620,7 @@ async function digestText(e: any, schedule: any, spec: ScheduleSpec, now: number
       reasoning_effort: "high",
       max_tokens: 1200,
       messages: [
-        { role: "system", content: DIGEST_PROMPT },
+        { role: "system", content: prompt },
         {
           role: "user",
           content: JSON.stringify({
@@ -329,7 +634,7 @@ async function digestText(e: any, schedule: any, spec: ScheduleSpec, now: number
     60000,
   );
   const text = String(result.choices?.[0]?.message?.content || "").trim();
-  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 8);
+  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, maxLines);
   if (!lines.length) throw Error("日报模型没有返回内容");
   return lines.join("\n");
 }
@@ -350,6 +655,35 @@ async function failSchedule(e: any, schedule: any, runId: string, now: number, e
       .bind(`sched-fail-${schedule.id}-${fails}`, schedule.group_id, schedule.source_msg_id || null, body, "pending", now)
       .run();
   }
+}
+
+/** L1：有 dedup 时出站 id 是 `<dedup>:<悉尼日期>`，没有就沿用 sched-<id>-<due>。 */
+function outboxIdFor(schedule: any, spec: ScheduleSpec, dueAt: number) {
+  const dedup = String(spec.dedup || "").trim();
+  if (!dedup) return `sched-${schedule.id}-${dueAt}`;
+  const p = partsAt(dueAt, schedule.tz || DEFAULT_TZ);
+  return `${dedup}:${p.y}-${pad(p.m)}-${pad(p.d)}`;
+}
+
+/** 今天（悉尼日）本群和全局已经发出的条数到顶没有。mute 没有出站，自然不计。 */
+async function overSendCap(e: any, schedule: any, now: number) {
+  const tz = schedule.tz || DEFAULT_TZ;
+  const p = partsAt(now, tz);
+  const start = zonedToUtc(p.y, p.m, p.d, 0, 0, tz);
+  const tomorrow = addDays(p.y, p.m, p.d, 1);
+  const end = zonedToUtc(tomorrow.y, tomorrow.m, tomorrow.d, 0, 0, tz);
+  const group = await e.DB.prepare(
+    "SELECT COUNT(*) AS n FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE s.group_id=? AND r.status IN ('ok','late') AND r.outbox_id IS NOT NULL AND r.due_at>=? AND r.due_at<?",
+  )
+    .bind(schedule.group_id, start, end)
+    .first();
+  if (Number(group?.n || 0) >= MAX_SENDS_PER_GROUP_DAY) return true;
+  const all = await e.DB.prepare(
+    "SELECT COUNT(*) AS n FROM schedule_runs WHERE status IN ('ok','late') AND outbox_id IS NOT NULL AND due_at>=? AND due_at<?",
+  )
+    .bind(start, end)
+    .first();
+  return Number(all?.n || 0) >= MAX_SENDS_DAY;
 }
 
 /** 每分钟由 cron 调用；抢占式写 schedule_runs，同一到期时间只执行一次。 */
@@ -400,6 +734,19 @@ export async function runSchedules(e: any, now = Date.now()) {
       ]);
       continue;
     }
+    if (schedule.kind !== "mute" && (await overSendCap(e, schedule, now))) {
+      // 当天发送量到顶：这次不写 outbox，进度照常推进，明天配额重新算。
+      const next = nextRun(spec, now, schedule.tz || DEFAULT_TZ);
+      await e.DB.batch([
+        e.DB.prepare(
+          "UPDATE schedule_runs SET finished_at=?,status='skipped',error='cap' WHERE id=?",
+        ).bind(now, runId),
+        e.DB.prepare(
+          "UPDATE schedules SET next_run_at=?,status=?,fail_count=0,last_error='cap' WHERE id=?",
+        ).bind(next, next === null ? "done" : "active", schedule.id),
+      ]);
+      continue;
+    }
     try {
       const body = schedule.kind === "mute"
         ? null
@@ -410,7 +757,7 @@ export async function runSchedules(e: any, now = Date.now()) {
       const late = body === null ? false : now - dueAt > LATE_AFTER;
       if (body !== null) {
         const minutes = Math.max(0, Math.floor((now - dueAt) / MINUTE));
-        outboxId = `sched-${schedule.id}-${dueAt}`;
+        outboxId = outboxIdFor(schedule, spec, dueAt);
         await e.DB.prepare("INSERT OR IGNORE INTO outbox VALUES(?,?,?,?,?,?)")
           .bind(
             outboxId,

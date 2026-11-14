@@ -1,0 +1,33 @@
+{
+  "status": "pending",
+  "source": "待录制",
+  "reason": "L3 的 judge 输出扩展（schedule_requests / avoid_phrase / address_as）和 L4 的 learnings/report 尚未合入；现在录制会得到旧 schema，不能用于验收。",
+  "how_to_record": "L1–L8 合入后，在本地独立库跑一次真实 DeepSeek 只读评分（provider=deepseek，预算记入本地 review_budget），把返回的 ta.review.result.v2 JSON 原样写入本文件，并在 source 写日期、模型、trace 数、输入 rowid。",
+  "expected_schema": {
+    "version": "ta.review.result.v2",
+    "results": [
+      {
+        "id": "trace id",
+        "verdict": "issue|pass|insufficient",
+        "dimension": "truth|intent|execution|coverage|helpfulness|style|none",
+        "kind": "response_fault|capability_gap|system_fault|none",
+        "requirements": [
+          {
+            "kind": "avoid_phrase|address_as|...",
+            "params": {}
+          }
+        ]
+      }
+    ],
+    "schedule_requests": [
+      {
+        "evidence": [{"source": "message", "id": "real message id", "quote": "verbatim"}],
+        "cadence": "daily|weekly",
+        "time": "HH:MM",
+        "weekdays": [],
+        "topic": "<=40 chars"
+      }
+    ]
+  },
+  "note": "本文件不是模型输出，是待录制占位；骨架里凡依赖它的阶段标 skip，不把桩结果当真实评分。"
+}

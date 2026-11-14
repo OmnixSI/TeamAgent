@@ -5,11 +5,13 @@ import { imageCachePurgeJob } from "../imagecache";
 import { summaryAutoJob } from "./summary-auto";
 import { profilesNightJob } from "../profiles";
 import { quotaMorningJob } from "../quota";
+import { reviewReportJob } from "../review-report";
 
 export const CRON_JOBS: CronJob[] = [
   generatedImagesCleanupJob,
   imageCachePurgeJob,
   profilesNightJob,
   quotaMorningJob,
+  reviewReportJob,
   summaryAutoJob,
 ];

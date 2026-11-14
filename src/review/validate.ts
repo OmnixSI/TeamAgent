@@ -5,12 +5,13 @@ import { CAPABILITIES,DIMENSIONS,FAILURE_TYPES,FIX_LAYERS,GAP_TYPES,RULE_KINDS,S
   type Evidence,type JudgeMemoryUpdate,type JudgePromise,type JudgeRequirement,type JudgeVerdict,
   type JudgeReply,type Snapshot,type Trace,type TraceMsg,type Origin,type SecondVerdict } from './types';
 import { redact, redacted } from './redact';
+import type { ScheduleRequest } from '../learning-types';
 export type ValidateContext={traces:readonly Trace[];snapshot:Snapshot;same_family:0|1;memberIds:readonly string[];
   names?:Map<string,string>;revokedMemberIds?:readonly string[];requestWords?:readonly string[];
   imageNotes?:readonly {message_id:string;idx:number;sha:string;desc?:string;text?:string}[];
   finish_reason?:JudgeReply['finish_reason'];imageUnavailableTraceIds?:readonly string[]};
-export type ReviewReject={kind:'result'|'verdict'|'requirement'|'memory_update'|'promise';id:string;reason:string;detail?:string};
-export type ValidatedResult={verdicts:JudgeVerdict[];requirements:JudgeRequirement[];memory_updates:JudgeMemoryUpdate[];promises:JudgePromise[];rejects:ReviewReject[]};
+export type ReviewReject={kind:'result'|'verdict'|'requirement'|'memory_update'|'promise'|'schedule_request';id:string;reason:string;detail?:string};
+export type ValidatedResult={verdicts:JudgeVerdict[];requirements:JudgeRequirement[];memory_updates:JudgeMemoryUpdate[];promises:JudgePromise[];schedule_requests:ScheduleRequest[];rejects:ReviewReject[]};
 const record=(v:unknown):v is Record<string,any>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown,max:number):v is string=>typeof v==='string'&&!!v.trim()&&v.length<=max;
 const nullable=(v:unknown,max:number)=>v===null||text(v,max);
@@ -97,16 +98,30 @@ function directSource(es:Evidence[],t:Trace,ctx:ValidateContext,requirement:bool
     if(e.source!=='message'||e.origin!=='direct'||e.quote.length<4||!m||!sourceClauses(m).some(c=>c.includes(e.quote)))return 'origin_not_direct_own_clause';
     if(!m.bound_member||![m.sender,'qq:'+m.sender].includes(m.bound_member)||!ctx.memberIds.includes(m.bound_member)||ctx.revokedMemberIds?.includes(m.bound_member))return 'unbound_or_revoked';
     if(requirement&&m.addressed!=='bot')return 'not_addressed_to_bot';
-    const words=ctx.requestWords??['以后','下次','别','不要','请','少','多','只','收敛','简短','please','always','never'];
+    const words=ctx.requestWords??['以后','下次','别','不要','请','少','多','只','收敛','简短','每天','每周','每早','每晚','定时','按时','please','always','never'];
     if(requirement&&!sourceClauses(m).some(c=>c.includes(e.quote)&&words.some(w=>c.toLowerCase().includes(w.toLowerCase()))))return 'not_explicit_request';
   }return null;
 }
-/** Canonical params: max, minutes, or value. Downstream can reuse the rendered rule verbatim. */
+const parseClock=(v:unknown):string|null=>{if(typeof v!=='string')return null;const t=v.trim(),m=/^(\d{1,2}):(\d{2})$/.exec(t);if(!m)return null;const h=Number(m[1]),mi=Number(m[2]);return h<=23&&mi<=59?t:null;};
+const safeTopic=(s:string)=>redact(s)===s&&!/[「」\r\n]/u.test(s)&&!DENY_WORDS.some(w=>s.normalize('NFKC').replace(/\p{Default_Ignorable_Code_Point}/gu,'').toLowerCase().includes(w.toLowerCase()));
+const normMember=(v:string)=>String(v??'').trim().toLowerCase().replace(/^qq:/,'');
+/** Canonical params: max, minutes, value, phrase, or member+name. Downstream can reuse the rendered rule verbatim. */
 export function normalizeRequirement(r:Record<string,any>):JudgeRequirement|null {
   if(!oneOf(r.kind,RULE_KINDS)||!record(r.params)||!Number.isInteger(r.ttl_days)||r.ttl_days<1||!text(r.scene,300))return null;
   if(DENY_WORDS.some(w=>JSON.stringify({rule:r.rule,params:r.params}).toLowerCase().includes(w.toLowerCase())))return null;
   let rule='',params:JudgeRequirement['params']={};const keys=Object.keys(r.params),max=r.params.max,value=r.params.value;
-  if(r.kind==='free'){
+  if(r.kind==='avoid_phrase'){
+    // 1–12 字、不夹引号/换行；是否真的在 bot 原话里出现过由 applyRequirements/L4 查 outbox（validate 无 DB）。
+    const phrase=r.params.phrase;if(keys.length!==1||keys[0]!=='phrase'||typeof phrase!=='string')return null;
+    const p=phrase.trim();if(Array.from(p).length<1||Array.from(p).length>12||/[「」\r\n]/u.test(p))return null;
+    params={phrase:p};rule=`不要再说「${p}」。`;
+  }else if(r.kind==='address_as'){
+    const member=r.params.member,name=r.params.name;
+    if(keys.length!==2||!keys.includes('member')||!keys.includes('name')||typeof member!=='string'||typeof name!=='string')return null;
+    const who=member.trim(),label=name.trim();
+    if(Array.from(who).length<1||Array.from(who).length>40||Array.from(label).length<1||Array.from(label).length>10||/[「」\r\n]/u.test(who)||/[「」\r\n]/u.test(label))return null;
+    params={member:who,name:label};rule=`称呼${who}为「${label}」。`;
+  }else if(r.kind==='free'){
     if(keys.length||!text(r.rule,80)||/不主动参与|(?:永远|永久).*(?:回复|参与|说话)|只在被\s*@.*回/u.test(r.rule))return null;
     rule=r.rule;
   }
@@ -132,7 +147,7 @@ export function parseJudgeReply(reply:JudgeReply,schema='ta.review.result.v2'):P
   catch(error){const s=reply.text.trim();return{state:/end of JSON|unterminated/i.test(String(error))||/^[{[]/.test(s)&&!/[}\]]$/.test(s)?'truncated':'invalid'};}
 }
 export function validateResult(raw:unknown,ctx:ValidateContext):ValidatedResult {
-  const out:ValidatedResult={verdicts:[],requirements:[],memory_updates:[],promises:[],rejects:[]};
+  const out:ValidatedResult={verdicts:[],requirements:[],memory_updates:[],promises:[],schedule_requests:[],rejects:[]};
   const reject=(kind:ReviewReject['kind'],id:string,reason:string)=>out.rejects.push({kind,id,reason});
   if(typeof raw==='string'||ctx.finish_reason==='length'){
     const parsed=parseJudgeReply({ok:true,text:typeof raw==='string'?raw:JSON.stringify(raw),finish_reason:ctx.finish_reason??'stop',usage:null});
@@ -154,7 +169,30 @@ export function validateResult(raw:unknown,ctx:ValidateContext):ValidatedResult 
     const src=record(r)?sourceTrace(r.evidence,ctx):null;if(!src){reject('requirement',String(i),'origin_evidence_mismatch');continue;}
     const reason=directSource(src.evidence,src.trace,ctx,true);if(reason){reject('requirement',String(i),reason);continue;}
     const normalized=normalizeRequirement({...r,evidence:src.evidence});if(!normalized){reject('requirement',String(i),'invalid_requirement_params');continue;}
+    if(normalized.kind==='address_as'){
+      const source=messages(src.trace).find(m=>m.id===src.evidence[0].id);
+      if(!source||normMember(String(normalized.params.member))!==normMember(source.sender)){reject('requirement',String(i),'address_sender_mismatch');continue;}
+    }
     out.requirements.push(normalized);
+  }
+  const rawSchedules=raw.schedule_requests==null?[]:raw.schedule_requests;
+  if(!Array.isArray(rawSchedules)) reject('schedule_request','','invalid_schedule_requests');
+  else for(const [i,s] of rawSchedules.entries()){
+    if(out.schedule_requests.length>=3) break;
+    if(!record(s)){reject('schedule_request',String(i),'invalid_schedule_request');continue;}
+    const src=sourceTrace(s.evidence,ctx);if(!src){reject('schedule_request',String(i),'origin_evidence_mismatch');continue;}
+    const reason=directSource(src.evidence,src.trace,ctx,true);if(reason){reject('schedule_request',String(i),reason);continue;}
+    if(!oneOf(s.cadence,['daily','weekly'])){reject('schedule_request',String(i),'invalid_cadence');continue;}
+    const clock=parseClock(s.time);if(!clock){reject('schedule_request',String(i),'invalid_time');continue;}
+    const topic=typeof s.topic==='string'?s.topic.trim():'';const size=Array.from(topic).length;
+    if(size<1||size>40||!safeTopic(topic)){reject('schedule_request',String(i),'invalid_topic');continue;}
+    let weekdays:number[]|undefined;
+    if(s.weekdays!==undefined){
+      if(!Array.isArray(s.weekdays)||!s.weekdays.length||s.weekdays.length>7||!s.weekdays.every(d=>Number.isInteger(d)&&d>=0&&d<=6)){reject('schedule_request',String(i),'invalid_weekdays');continue;}
+      weekdays=[...new Set(s.weekdays as number[])].sort((a,b)=>a-b);
+    }
+    if(s.cadence==='weekly'&&!weekdays){reject('schedule_request',String(i),'weekly_without_weekdays');continue;}
+    out.schedule_requests.push({evidence:src.evidence.map(e=>({source:'message' as const,id:e.id,quote:e.quote})),cadence:s.cadence,time:clock,topic,...(s.cadence==='weekly'?{weekdays}:{})});
   }
   for(const [i,m] of raw.memory_updates.entries()){
     const src=record(m)?sourceTrace(m.evidence,ctx):null;if(!src){reject('memory_update',String(i),'origin_evidence_mismatch');continue;}

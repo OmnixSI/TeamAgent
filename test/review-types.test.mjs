@@ -77,7 +77,7 @@ test('enums have no duplicate values', () => {
     assert.ok(values.length > 0, `${name} is empty`);
   }
   const signals = Object.keys(types.SIGNALS);
-  assert.deepEqual(signals, ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10']);
+  assert.deepEqual(signals, ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11']);
 });
 
 test('tools catalog marks every repo_* tool readonly and only write tools writable', () => {
@@ -138,7 +138,7 @@ test('signal defaults and deny words match the design lists', () => {
 
 test('v2 enum snapshots, CATALOG_VERSION and migrate.mjs list include 0008', () => {
   assert.deepEqual([...types.ORIGINS], ['direct','quoted','forwarded','card','attachment_text','image_text','bot']);
-  assert.deepEqual([...types.RULE_KINDS], ['reply_max_chars','burst_max','mention_only_window','language','format_pref','free']);
+  assert.deepEqual([...types.RULE_KINDS], ['reply_max_chars','burst_max','mention_only_window','language','format_pref','free','avoid_phrase','address_as']);
   assert.deepEqual([...types.PROVIDERS], ['deepseek','workers-ai','openai','codex-offline']);
   assert.deepEqual([...types.AGREEMENT], ['agree','disagree','single','pending']);
   assert.deepEqual([...types.FINDING_STATUS], ['open','disputed','accepted','rejected','fixed','wontfix','regression']);

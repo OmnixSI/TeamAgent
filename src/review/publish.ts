@@ -153,9 +153,26 @@ export type Digest = {
   agreement: { agree: number; disagree: number; single: number; pending: number; rate: number | null };
   tasks: any[];
   findings: { total: number; p0: number; p1: number; p2: number };
+  schedules: { date: string; items: any[]; counts: { ok: number; late: number; skipped: number; failed: number; pending: number } };
+  learnings: { items: any[]; proposed: number; asked: number; applied: number };
   /** A-quota: developer-room line from quota:morning; null when absent. */
   quota: { at: number; line: string } | null;
 };
+
+const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
+/** 只给复盘看板用的短描述；不 import 主 Worker 的 schedules.ts（review bundle 保持独立）。 */
+function describeForDigest(kind: string, spec: Row): string {
+  const time = text(spec.time) || '08:00';
+  const topic = text(spec.topic).trim();
+  if (kind === 'digest_daily') return topic ? `每天 ${time}（悉尼）发${topic}` : `每天 ${time}（悉尼）昨日总结`;
+  if (kind === 'digest_weekly') {
+    const days = (Array.isArray(spec.weekdays) ? spec.weekdays : [0]).map((d: number) => WEEKDAY_NAMES[d] ?? d).join('、');
+    return topic ? `每周${days} ${time}（悉尼）发${topic}` : `每周${days} ${time}（悉尼）周报`;
+  }
+  if (kind === 'reminder') return `提醒：${text(spec.text) || '未写内容'}`;
+  if (kind === 'mute') return '定时闭嘴';
+  return kind;
+}
 
 /** One merged digest for one Sydney date, across all groups. */
 export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> {
@@ -191,6 +208,15 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
   const tasks = await reviewRead<Row>(ctx,
     "SELECT id,title,status,source_id,created_at FROM tasks WHERE source_id LIKE 'review:%' AND created_at>=? AND created_at<? ORDER BY created_at,id",
     [new Date(start).toISOString(), new Date(end).toISOString()]);
+  // 老回放种子（0009/0080 之前）没有这两张表；看板对它们缺省为空，不因旧库报错。
+  const table = async (name: string) => (await reviewRead<Row>(ctx,
+    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])).length > 0;
+  const scheduleRuns = await table('schedule_runs') ? await reviewRead<Row>(ctx, `SELECT r.id,r.schedule_id,r.due_at,r.finished_at,r.status,r.outbox_id,r.error,
+    s.kind,s.spec,s.owner FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id
+    WHERE r.due_at>=? AND r.due_at<? ORDER BY r.due_at,r.id`, [start, end]) : [];
+  const learnings = runIds.length && await table('review_learnings') ? await reviewRead<Row>(ctx,
+    'SELECT * FROM review_learnings WHERE run_id IN (SELECT value FROM json_each(?)) ORDER BY created_at,id',
+    [JSON.stringify(runIds)]) : [];
   const [quotaRow] = await reviewRead<Row>(ctx,
     'SELECT value FROM settings WHERE key=?', ['quota:morning']);
   const quota = morningQuota(quotaRow?.value);
@@ -296,6 +322,29 @@ export async function renderDigest(e: ReviewEnv, date: string): Promise<Digest> 
     agreement,
     tasks: tasks.map(task => ({ id: task.id, title: task.title, status: task.status, created_at: task.created_at })),
     findings: { total: findings.length, ...counts },
+    schedules: {
+      date,
+      items: scheduleRuns.map(run => ({
+        id: run.id, schedule_id: run.schedule_id, kind: run.kind, description: describeForDigest(text(run.kind), parse(run.spec, {})),
+        status: run.status, due_at: run.due_at, finished_at: run.finished_at, outbox_id: run.outbox_id, error: run.error,
+      })),
+      counts: {
+        ok: scheduleRuns.filter(run => run.status === 'ok').length,
+        late: scheduleRuns.filter(run => run.status === 'late').length,
+        skipped: scheduleRuns.filter(run => run.status === 'skipped').length,
+        failed: scheduleRuns.filter(run => run.status === 'failed').length,
+        pending: scheduleRuns.filter(run => ['pending', 'running'].includes(run.status)).length,
+      },
+    },
+    learnings: {
+      items: learnings.map(row => ({
+        id: row.id, kind: row.kind, subkind: row.subkind, plain: row.plain, requester: row.requester,
+        status: row.status, ask_count: row.ask_count, run_id: row.run_id, created_at: row.created_at,
+      })),
+      proposed: learnings.filter(row => row.status === 'proposed').length,
+      asked: learnings.filter(row => row.status === 'asked').length,
+      applied: learnings.filter(row => row.status === 'applied').length,
+    },
     quota,
   };
 }

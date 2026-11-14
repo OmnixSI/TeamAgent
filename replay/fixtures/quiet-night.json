@@ -1,0 +1,7 @@
+{
+  "source": "线上 D1 只读导出 2026-11-14T14:19+11:00（scripts/review-export.py；audit 每条 rows_written=0 / changes=0）",
+  "window": "2026-11-12T00:00:00+08:00 – 2026-11-12T09:00:00+08:00",
+  "count": 0,
+  "messages": [],
+  "note": "线上该窗口真实记录为 0 条；用于「没什么可说的那天」场景。"
+}
