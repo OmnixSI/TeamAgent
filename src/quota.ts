@@ -25,12 +25,10 @@ export const CNY_PER_USD = 7.2;
 
 export const QUOTA_MORNING_KEY = "quota:morning";
 export const QUOTA_MORNING_HOUR = 8;
-export const QUOTA_MORNING_FRESH_MS = 36 * 60 * 60 * 1000;
 const IMAGE_USER_DAILY_DEFAULT = 5;
 const IMAGE_GROUP_DAILY_DEFAULT = 20;
 
 const TIMEZONE = TEAM.memory?.timezone || "Australia/Sydney";
-const DAY = 86400000;
 
 export type BalanceFailureKind = "missing_key" | "timeout" | "upstream" | "auth" | "invalid";
 
