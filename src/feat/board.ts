@@ -16,6 +16,7 @@ import { describeSource } from "./staticsite.ts";
 import { PRICE } from "../meter.ts";
 import { ABILITIES, exampleParts } from "./toolbox.ts";
 import { CSS, APP_JS, PAGE } from "./board-page.ts";
+import { dailyAccountsStatus } from "./daily-accounts.ts";
 import { BJ, fmtDate } from "../util.ts";
 import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, balanceOf, spends, redeem } from "./teamwork.ts";
 
@@ -182,12 +183,12 @@ function monitors(hub: Hub, p: Person) {
   }));
   return { ok: true, uptime: up, feeds, watches };
 }
-function plan(hub: Hub) {
+function plan(hub: Hub, p: Person) {
   const now = Date.now(), today = fmtDate(now, BJ), yesterday = fmtDate(now - DAY, BJ);
   const cny = (d: string) => { try { return Math.round(hub.accounts.dayEstimateCny(d) * 100) / 100; } catch { return null; } };
   const items = safeRows(hub, "SELECT provider, item, calls, usd FROM spend WHERE day=? ORDER BY usd DESC LIMIT 12", today)
     .map(r => ({ what: String(r.item), via: r.provider === "deepseek" ? "DeepSeek" : "OpenAI", calls: Number(r.calls), cny: Math.round(Number(r.usd) * (r.provider === "deepseek" ? PRICE.dsCnyPerUsd : 7.2) * 100) / 100 }));
-  return { ok: true, plan: hub.plan.report(hub.store.r2All(), now), spend: { today: cny(today), yesterday: cny(yesterday), items } };
+  return { ok: true, plan: hub.plan.report(hub.store.r2All(), now), spend: { today: cny(today), yesterday: cny(yesterday), items }, accounts_report: part(() => dailyAccountsStatus(hub, p.conv), null) };
 }
 const tools = () => ({ ok: true, link: "/x/toolbox", abilities: ABILITIES.map(a => ({ title: a.title, what: a.what, examples: a.examples.map(e => exampleParts(e)[0]) })) });
 
@@ -239,7 +240,7 @@ function overview(hub: Hub, p: Person) {
   const live = part(() => taskApi.listTasks(hub, p.conv, { status: ["open", "doing"], limit: 300 }).filter(t => t.conv === p.conv), [] as Task[]);
   const done7 = part(() => taskApi.listTasks(hub, p.conv, { status: ["done"], limit: 300 }).filter(t => t.conv === p.conv && t.updated > now - 7 * DAY).length, 0);
   const m = part(() => monitors(hub, p).uptime, [] as ReturnType<typeof monitors>["uptime"]);
-  const pl = part(() => plan(hub), null);
+  const pl = part(() => plan(hub, p), null);
   return {
     ok: true, name: p.name, today,
     days: part(() => days(hub, p, params("n=2")).days, []),
@@ -417,7 +418,7 @@ export async function serve(hub: Hub, req: Request, u: URL): Promise<Response | 
   if (api === "sites") return json(sites(hub, p));
   if (api === "box") return json(box(hub, p));
   if (api === "monitors") return json(monitors(hub, p));
-  if (api === "plan") return json(plan(hub));
+  if (api === "plan") return json(plan(hub, p));
   if (api === "tools") return json(tools());
   return bad("没有这个接口", 404);
 }

@@ -166,8 +166,9 @@ test("a bought title lasts a week and shows on the person; custom perks wait for
 
 test("the wall: weekly stars, bosses brought down, who holds which badge, records, titles", () => {
   const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
-  const boss = earn(hub, "小明", "big"); earn(hub, "小红");
+  const boss = earn(hub, "小明", "big"), other = earn(hub, "小红");
   at(hub, boss.id, { claimed_at: NOW - 5 * HOUR, done_at: NOW - 2 * HOUR });
+  at(hub, other.id, { claimed_at: NOW - 8 * HOUR, done_at: NOW - 4 * HOUR });
   const stats = teamStats(hub, G, NOW);
   recordStar(hub, G, stats); recordStar(hub, G, stats);
   redeem(hub, G, "小明", "专属头衔一周", "屠龙勇士", "chat", NOW);

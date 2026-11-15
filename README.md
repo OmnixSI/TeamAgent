@@ -81,6 +81,7 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | `uptime` | 定时探测几个网址或接口，连续三次失败才在群里说一次，恢复时再说一次 | `uptime` |
 | `findimage` | 给群里发过的图配文字并算向量，按描述找图 | `find_image` |
 | `steward` | 每天按本月剩余天数给各项额度定当天份额，决定可选的重活开不开；额度见底或月底有富余时在群里说 | `budget` |
+| `daily-accounts` | 每天北京时间 00:00 在主群发前一日的账目日报。群账本和 DeepSeek 余额在发报时读取，token 从 Hub 的 SQLite 计量记录汇总 | `daily_accounts` |
 | `skills` | 技能执行器：`src/skills/` 里的固定配方在云电脑里跑，输入输出自动收发 | `skill` |
 | `filebox` | 文件箱：上传页（单个 2 GB、总共 3 GB、默认留 7 天）和下载链接，文件编号 `x12` 能直接进云电脑 | `filebox` |
 | `webkit` | 无头浏览器的批量用法：多个网页按字段摘成表格、网页存档（文字 + PDF + 整页截图）、站点地图 | `web_extract` `web_archive` `site_map` |
