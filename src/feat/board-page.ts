@@ -374,6 +374,27 @@ code,.code{font-family:var(--mono);font-size:12.5px;background:var(--sunk);borde
 .toggle{display:inline-flex;align-items:center;gap:6px;font-size:14px;color:var(--mute);cursor:pointer;min-height:36px;white-space:nowrap}
 .toggle input{width:18px;height:18px;min-height:0;margin:0;accent-color:var(--acc)}
 .tools-row select{width:auto;min-width:8em}
+.tools-row>.btn{flex:none}
+.pri{display:inline-block;font-size:11px;font-weight:700;line-height:1.5;padding:0 6px;border-radius:4px;white-space:nowrap;margin-right:6px;vertical-align:1px}
+.pri.p1{background:var(--bad);color:var(--surface)}
+.pri.p3{background:var(--sunk);color:var(--mute);font-weight:600}
+.tc.waiting{border-style:dashed;background:var(--bg)}
+.tc.waiting .tt{color:var(--mute)}
+.tc.botlive{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.wait{display:flex;align-items:flex-start;gap:4px;margin-top:6px;font-size:12.5px;line-height:1.5;color:var(--warn);overflow-wrap:anywhere}
+.wait .ic{width:14px;height:14px;flex:none;margin-top:2px}
+.rel{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.rel .ic{width:14px;height:14px}
+.who.bot{color:var(--acc);font-weight:600}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--acc);flex:none}
+.live.on{box-shadow:0 0 0 3px var(--acc-soft);animation:pulse 1.4s ease-in-out infinite}
+.botnow{display:flex;align-items:center;gap:10px;padding:10px 14px;margin:0 0 14px;border-radius:var(--r);background:var(--acc-soft);border:1px solid var(--acc);color:var(--fg);min-width:0}
+.botnow:hover{text-decoration:none}.botnow:hover .bt{text-decoration:underline}
+.botnow .bt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.botnow .meta{flex:none;white-space:nowrap}
+@media (max-width:699px){.botnow{flex-wrap:wrap;gap:4px 10px}.botnow .bt{flex-basis:calc(100% - 18px);white-space:normal}.botnow .meta{flex-basis:100%;padding-left:18px}}
+.col-sub{font-size:12px;font-weight:650;color:var(--mute);margin:8px 4px 0;letter-spacing:.02em}
+.cards>.col-sub:first-child{margin-top:0}
 @media (max-width:699px){.tools-row .search{flex-basis:100%;order:3}.tools-row select{flex:1}}
 
 /* ---- drawer, popover, toast ---- */
@@ -390,6 +411,42 @@ code,.code{font-family:var(--mono);font-size:12.5px;background:var(--sunk);borde
 .facts dt{color:var(--mute)}
 .facts dd{margin:0;overflow-wrap:anywhere}
 .pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.flags{display:flex;flex-wrap:wrap;gap:6px;margin:-6px 0 14px}
+.flags .badge{white-space:normal;line-height:1.3}
+.flags a.badge:hover{text-decoration:none;filter:brightness(.97)}
+.badge.acc{background:var(--acc-soft);color:var(--acc)}
+.badge.hot{background:var(--bad);color:var(--surface)}
+.dw-body h3 .n{font-weight:400;margin-left:6px}
+.quote{margin:0 0 8px;padding:10px 12px;border-left:3px solid var(--acc);background:var(--sunk);border-radius:0 8px 8px 0;font-size:14px;line-height:1.65}
+.quote .meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:6px;font-size:12px}
+.fold{max-height:13em;overflow:hidden;position:relative}
+.fold::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3em;background:linear-gradient(rgba(0,0,0,0),var(--sunk))}
+.mats,.deps{list-style:none;margin:0;padding:0}
+.mats>li{border:1px solid var(--line);border-radius:8px;padding:8px 6px 8px 12px;margin:0 0 8px;min-width:0}
+.mat-h{display:flex;align-items:flex-start;gap:8px;min-width:0}
+.mat-h>.ic{flex:none;width:18px;height:18px;margin-top:3px;color:var(--mute)}
+.mat-h .nm{flex:1;min-width:0}
+.mat-h .nm>b,.mat-h .nm>a{font-weight:600;overflow-wrap:anywhere}
+.mat-h .meta{display:block;font-size:12px;overflow-wrap:anywhere}
+.mat-h .ib{margin:-6px 0 -6px 0}
+.mat-x{flex:none;font-size:13px;min-height:30px;padding:0 8px;border-radius:6px;border:1px solid var(--bad);background:var(--bad-soft);color:var(--bad);cursor:pointer;white-space:nowrap}
+.rep{margin:8px 6px 0 0;padding:8px 10px;border-radius:6px;background:var(--sunk);font-size:13.5px;line-height:1.6}
+.mats .row,.quote .row{margin-top:6px}
+.deps>li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--line);min-width:0}
+.deps>li:first-child{border-top:0}
+.deps .dt{flex:1;min-width:0;overflow-wrap:anywhere}
+.deps .dt .meta{display:block;font-size:12.5px}
+.deps .res{display:block;margin-top:4px;font-size:13px;color:var(--fg)}
+.picks{max-height:15em;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line2);border-radius:8px;padding:2px 4px;background:var(--surface)}
+.pick{display:flex;align-items:flex-start;gap:8px;padding:6px;min-height:36px;cursor:pointer;font-size:14px;border-radius:6px}
+.pick:hover{background:var(--sunk)}
+.pick input{width:18px;height:18px;min-height:0;margin:2px 0 0;flex:none;accent-color:var(--acc)}
+.pick .pt{flex:1;min-width:0;overflow-wrap:anywhere}
+.pick .tid,.deps .tid{color:var(--mute);font-size:12px;font-variant-numeric:tabular-nums;margin-right:4px}
+.addm{margin-top:4px;padding:12px;border-radius:8px;background:var(--sunk)}
+.addm .seg{background:var(--surface);margin-bottom:10px}
+.addm textarea{min-height:9rem}
+.segs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .ai{margin-top:24px;padding:14px;border-radius:var(--r);background:var(--sunk)}
 .ai h3{margin:0 0 4px!important;color:var(--fg)!important;font-size:14px!important}
 .ai p{font-size:13px;color:var(--mute);margin:0 0 10px}
@@ -927,9 +984,21 @@ function dueInfo(t) {
 }
 function dueChip(t) { var d = dueInfo(t); return d ? h("span", { class: "due " + d.cls, title: d.title || null }, d.ic ? icon(d.ic) : null, d.text) : null; }
 function isMine(t) { return !!me.name && (t.owner === me.name || t.claimed_by === me.name); }
+function isBot(n) { return String(n || "").trim().toLowerCase() === "bot"; }
+function whoName(n) { return isBot(n) ? "Bot" : n; }
+function botOn(t) { return t.status === "doing" && isBot(t.claimed_by); }
+function priTag(t) { return t.priority === 1 ? h("span", { class: "pri p1", text: "急" }) : t.priority === 3 ? h("span", { class: "pri p3", text: "不急" }) : null; }
+function live(on) { return h("span", { class: "live" + (on ? " on" : ""), "aria-hidden": "true" }); }
+function clip(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+function holderText(x) { return x.who ? whoName(x.who) + (x.status === "doing" ? " 在做" : " 负责") : "还没人接"; }
+// "等 #25「调研竞品」做完 · Bot 在做": what a waiting task waits for and who holds that one.
+function waitText(b) {
+  if (b.length === 1) return "等 #" + b[0].id + "「" + clip(b[0].title, 16) + "」做完 · " + holderText(b[0]);
+  return "等 " + b.map(function (x) { return "#" + x.id + "（" + holderText(x) + "）"; }).join("、") + " 做完";
+}
 function byDue(a, b) { var x = a.due || "9999", y = b.due || "9999"; return x < y ? -1 : x > y ? 1 : b.id - a.id; }
 function taskRow(t) {
-  return h("a", { class: "trow", href: "#tasks/" + t.id }, h("span", { class: "sdot " + t.status, title: SL[t.status] }), h("span", { class: "tt" }, t.title, h("span", { class: "vh", text: "，" + SL[t.status] })),
+  return h("a", { class: "trow", href: "#tasks/" + t.id }, h("span", { class: "sdot " + t.status, title: SL[t.status] }), h("span", { class: "tt" }, priTag(t), t.title, h("span", { class: "vh", text: "，" + SL[t.status] })),
     h("span", { class: "side-m" }, dueChip(t), t.owner && !isMine(t) ? avatar(t.owner, true) : null));
 }
 function home(root) {
@@ -1297,14 +1366,14 @@ function feedArg(arg) {
 }
 
 // ---------- 任务 ----------
-var TS = { all: [], root: null, view: null, f: store.get("tasks", { who: "", q: "", dropped: false, seg: "" }), doneShow: 20 };
+var TS = { all: [], root: null, view: null, f: store.get("tasks", { who: "", q: "", dropped: false, seg: "" }), doneShow: 20, busy: 0 };
 function saveF() { store.set("tasks", TS.f); }
 function byId(id) { for (var i = 0; i < TS.all.length; i++) if (TS.all[i].id === id) return TS.all[i]; return null; }
 function upsert(t) { var o = byId(t.id); if (o) { for (var k in t) o[k] = t[k]; return o; } TS.all.push(t); return t; }
 function loadTasks() {
   var q = [api("tasks?status=open,doing&n=300"), api("tasks?status=done&n=100")];
   if (TS.f.dropped) q.push(api("tasks?status=dropped&n=60"));
-  return Promise.all(q).then(function (r) { TS.all = r[0].tasks.concat(r[1].tasks, r[2] ? r[2].tasks : []); });
+  return Promise.all(q).then(function (r) { TS.all = r[0].tasks.concat(r[1].tasks, r[2] ? r[2].tasks : []); TS.busy = r[0].bot_busy || 0; });
 }
 function passes(t) {
   var w = TS.f.who, q = (TS.f.q || "").trim().toLowerCase();
@@ -1314,9 +1383,27 @@ function passes(t) {
   if (q && ("#" + t.id + " " + t.title + " " + t.detail + " " + t.owner + " " + t.claimed_by + " " + t.source).toLowerCase().indexOf(q) < 0) return false;
   return true;
 }
+function waiting(t) { return !!(t.blocked_by && t.blocked_by.length) && (t.status === "open" || t.status === "doing"); }
+// Unfinished tasks keep the server's work order (urgent first, then due date, waiting ones last); a task the page has not seen ranked yet goes by due date after them.
+function byRank(a, b) { var x = a.rank || 1e9, y = b.rank || 1e9; return x !== y ? x - y : byDue(a, b); }
 function inCol(s) {
   var l = TS.all.filter(function (t) { return t.status === s && passes(t); });
-  return l.sort(s === "done" || s === "dropped" ? function (a, b) { return b.updated - a.updated; } : function (a, b) { return (a._new ? -1 : 0) - (b._new ? -1 : 0) || byDue(a, b); });
+  return l.sort(s === "done" || s === "dropped" ? function (a, b) { return b.updated - a.updated; } : function (a, b) { return (a._new ? -1 : 0) - (b._new ? -1 : 0) || (waiting(a) ? 1 : 0) - (waiting(b) ? 1 : 0) || byRank(a, b); });
+}
+// Cards of one column, with a line where the tasks still waiting for others begin.
+function fillCards(box, s, l) {
+  var split = s === "open" && l.some(waiting), seen = false;
+  if (split && !waiting(l[0])) box.appendChild(h("p", { class: "col-sub", text: "现在就能开始" }));
+  l.forEach(function (t) {
+    if (split && waiting(t) && !seen) { seen = true; box.appendChild(h("p", { class: "col-sub", text: "在等别的任务先做完" })); }
+    box.appendChild(taskCard(t));
+  });
+}
+function botNow() {
+  var t = TS.busy && byId(TS.busy);
+  if (!t || t.status !== "doing") return null;
+  return h("a", { class: "botnow", href: "#tasks/" + t.id }, live(true), h("span", { class: "bt" }, h("b", { text: "Bot 正在做 " }), "#" + t.id + " " + t.title),
+    h("span", { class: "meta" }, t.claimed_at ? "已经做了 " + (span(Date.now() - t.claimed_at) || "1 分钟") : "刚开始", t.material_count ? " · 挂了 " + t.material_count + " 份材料" : "", t.child_count ? " · 拆出 " + t.child_count + " 件" : ""));
 }
 function people() {
   var seen = {}, out = [];
@@ -1349,13 +1436,13 @@ function drawTasks() {
   if (WIDE.matches) {
     var kb = h("div", { class: "kanban" });
     cols.forEach(function (s) { kb.appendChild(column(s)); });
-    swap(TS.view, [kb, !TS.all.length ? h("p", { class: "empty", text: "还没有任务。点“新任务”加一个，或者在群里说“记个任务”。" }) : !any ? h("p", { class: "empty", text: "没有符合筛选的任务。" }) : null]);
+    swap(TS.view, [botNow(), kb, !TS.all.length ? h("p", { class: "empty", text: "还没有任务。点“新任务”加一个，或者在群里说“记个任务”。" }) : !any ? h("p", { class: "empty", text: "没有符合筛选的任务。" }) : null]);
   } else {
     var s = TS.f.seg && cols.indexOf(TS.f.seg) >= 0 ? TS.f.seg : inCol("doing").length ? "doing" : "open";
     var tabs = seg(cols.map(function (c) { return [c, SL[c], inCol(c).length]; }), s, function (v) { TS.f.seg = v; saveF(); drawTasks(); }, true);
     var l = inCol(s), box = h("div", { class: "cards" });
-    (s === "done" ? l.slice(0, TS.doneShow) : l).forEach(function (t) { box.appendChild(taskCard(t)); });
-    swap(TS.view, [tabs, h("div", { class: "tasks-list" }, h("div", { class: "vh", text: SL[s] }), l.length ? box : h("p", { class: "empty", text: s === "doing" ? "没有进行中的任务。" : s === "open" ? "没有没开始的任务。" : "这里是空的。" }),
+    fillCards(box, s, s === "done" ? l.slice(0, TS.doneShow) : l);
+    swap(TS.view, [botNow(), tabs, h("div", { class: "tasks-list" }, h("div", { class: "vh", text: SL[s] }), l.length ? box : h("p", { class: "empty", text: s === "doing" ? "没有进行中的任务。" : s === "open" ? "没有没开始的任务。" : "这里是空的。" }),
       s === "done" && l.length > TS.doneShow ? moreDone() : null)]);
     tabs.style.marginBottom = "12px";
   }
@@ -1364,7 +1451,7 @@ function moreDone() { return h("div", { class: "more-row" }, h("button", { type:
 var dragId = 0;
 function column(s) {
   var l = inCol(s), cards = h("div", { class: "cards" });
-  (s === "done" ? l.slice(0, TS.doneShow) : l).forEach(function (t) { cards.appendChild(taskCard(t)); });
+  fillCards(cards, s, s === "done" ? l.slice(0, TS.doneShow) : l);
   if (!l.length) cards.appendChild(h("p", { class: "col-empty", text: FINE.matches ? "没有，可以把卡片拖到这里" : "没有" }));
   var addB = s === "open" ? h("button", { type: "button", class: "ib", "aria-label": "新任务", title: "新任务（N）", onclick: function () { go("tasks/new"); } }, icon("plus")) : null;
   var col = h("section", { class: "col", "data-s": s, "aria-label": SL[s] }, h("div", { class: "col-h" }, h("span", { text: SL[s] }), h("span", { class: "n", text: String(l.length) }), addB), cards, s === "done" && l.length > TS.doneShow ? moreDone() : null);
@@ -1374,15 +1461,21 @@ function column(s) {
   return col;
 }
 function taskCard(t) {
-  var who = t.status === "doing" && t.claimed_by ? h("span", { class: "who" }, avatar(t.claimed_by, true), t.claimed_by + " 在做")
+  var who = botOn(t) ? h("span", { class: "who bot" }, live(t.bot_working), t.bot_working ? "Bot 正在做" : "Bot 在做")
+    : t.status === "doing" && t.claimed_by ? h("span", { class: "who" }, avatar(t.claimed_by, true), t.claimed_by + " 在做")
     : t.owner ? h("span", { class: "who" }, avatar(t.owner, true), (t.owner === "bot" ? "交给 Bot" : "交给 " + t.owner) + (t.claimed_by ? "，" + t.claimed_by + " 领了" : ""))
     : t.claimed_by ? h("span", { class: "who" }, avatar(t.claimed_by, true), t.claimed_by + " 领了") : h("span", { class: "who" }, avatar("", true), "没人负责");
   var main = h("a", { class: "tc-main", href: t._new ? null : "#tasks/" + t.id, draggable: "false" },
-    h("span", { class: "tt" }, h("span", { class: "tid", text: t._new ? "新" : "#" + t.id }), t.title),
-    h("span", { class: "tm" }, sizeTag(t.size), who, dueChip(t)), pathLine(t), t.source && t.status !== "done" ? h("span", { class: "src", text: "来自 " + t.source }) : null);
+    h("span", { class: "tt" }, h("span", { class: "tid", text: t._new ? "新" : "#" + t.id }), priTag(t), t.title),
+    h("span", { class: "tm" }, sizeTag(t.size), who, dueChip(t),
+      t.parent ? h("span", { class: "rel", title: "从 #" + t.parent + " 拆出来的" }, "从 #" + t.parent + " 拆出") : null,
+      t.child_count ? h("span", { class: "rel" }, "拆出 " + t.child_count + " 件") : null,
+      t.material_count ? h("span", { class: "rel", title: "挂了 " + t.material_count + " 份材料" }, icon("file"), String(t.material_count)) : null),
+    waiting(t) ? h("span", { class: "wait" }, icon("clock"), h("span", { text: waitText(t.blocked_by) })) : null,
+    pathLine(t), t.source && t.status !== "done" ? h("span", { class: "src", text: "来自 " + clip(t.source, 80) }) : null);
   var menu = t._new ? null : h("button", { type: "button", class: "ib tc-menu", "aria-label": "改状态：" + t.title, "aria-haspopup": "menu", "aria-expanded": "false", title: "改状态" }, icon("dots"));
   if (menu) menu.addEventListener("click", function () { statusMenu(menu, t); });
-  var el = h("article", { class: "tc s-" + t.status + (t.size === "big" ? " boss" : "") + (t._new ? " pending" : "") + (t._win ? " settle" : ""), "data-id": String(t.id) }, main, menu);
+  var el = h("article", { class: "tc s-" + t.status + (t.size === "big" ? " boss" : "") + (t._new ? " pending" : "") + (t._win ? " settle" : "") + (waiting(t) ? " waiting" : "") + (t.bot_working ? " botlive" : ""), "data-id": String(t.id) }, main, menu);
   t._win = false;
   if (FINE.matches && WIDE.matches && !t._new) {
     el.setAttribute("draggable", "true");
@@ -1394,7 +1487,7 @@ function taskCard(t) {
 function pathLine(t) {
   if (t.status === "done" && t.done_at) return h("span", { class: "path" }, "做完", t.claimed_at && t.done_at > t.claimed_at ? "，用了 " + span(t.done_at - t.claimed_at) : "", t.done_by ? [" · ", t.done_by + " ", h("b", { text: "+" + (t.points || 0) + " 分" })] : null);
   if (t.status === "doing" && t.claimed_at) return h("span", { class: "path" }, rt(t.claimed_at, "", "接手"), t.claimed_at - t.created > 3600000 ? "，等了 " + span(t.claimed_at - t.created) : "");
-  if (t.status === "open") return h("span", { class: "path" }, rt(t.created, "", "记下"), t.by ? "，" + t.by : "");
+  if (t.status === "open") return h("span", { class: "path" }, rt(t.created, "", "记下"), t.by ? "，" + whoName(t.by) : "");
   return null;
 }
 function statusMenu(anchor, t) {
@@ -1439,9 +1532,12 @@ function taskForm(t, submitText, onSubmit) {
     detail: h("textarea", { maxlength: "4000", placeholder: "说明、链接、验收标准" }),
     owner: h("input", { maxlength: "40", list: "people", value: t ? t.owner : "", placeholder: "名字，或者 bot", autocomplete: "off" }),
     due: h("input", { type: "date", value: t ? t.due : "" }),
-    size: h("select", {}, h("option", { value: "small", text: "小事（5 分）" }), h("option", { value: "normal", text: "普通（10 分）" }), h("option", { value: "big", text: "大活（30 分）" }))
+    size: h("select", {}, h("option", { value: "small", text: "小事（5 分）" }), h("option", { value: "normal", text: "普通（10 分）" }), h("option", { value: "big", text: "大活（30 分）" })),
+    priority: h("select", {}, h("option", { value: "1", text: "急，先做" }), h("option", { value: "2", text: "普通" }), h("option", { value: "3", text: "不急" }))
   };
   f.size.value = t && t.size ? t.size : "normal";
+  f.priority.value = String(t && t.priority || 2);
+  var pick = afterPicker(t && t.id || 0, t && t.after || []);
   f.detail.value = t ? t.detail : "";
   if (t && t.id) { f.result = h("textarea", { maxlength: "4000", placeholder: "交付了什么：文字、链接、文件编号" }); f.result.value = t.result || ""; }
   var dl = h("datalist", { id: "people" }); people().concat(["bot"]).forEach(function (n) { dl.appendChild(h("option", { value: n })); });
@@ -1450,12 +1546,13 @@ function taskForm(t, submitText, onSubmit) {
     h("label", { class: "field" }, h("span", { text: "标题" }), f.title),
     h("label", { class: "field" }, h("span", { text: "说明" }), f.detail),
     h("div", { class: "two" }, h("label", { class: "field" }, h("span", { text: "谁来做" }), f.owner), h("label", { class: "field" }, h("span", { text: "截止" }), f.due)),
-    h("label", { class: "field" }, h("span", { text: "多大的事（按时做完再加 5 分）" }), f.size),
+    h("div", { class: "two" }, h("label", { class: "field" }, h("span", { text: "多大的事（准时 +5 分）" }), f.size), h("label", { class: "field" }, h("span", { text: "急不急" }), f.priority)),
+    h("div", { class: "field" }, h("span", { text: "要等这些任务先做完（可以不选）" }), pick.el),
     f.result ? h("label", { class: "field" }, h("span", { text: "交付" }), f.result) : null, dl,
     h("div", { class: "row" }, save, cancel));
   form.addEventListener("submit", function (e) {
     e.preventDefault();
-    var v = { title: f.title.value.trim(), detail: f.detail.value.trim(), owner: f.owner.value.trim(), due: f.due.value, size: f.size.value };
+    var v = { title: f.title.value.trim(), detail: f.detail.value.trim(), owner: f.owner.value.trim(), due: f.due.value, size: f.size.value, priority: +f.priority.value, after: pick.value() };
     if (f.result) v.result = f.result.value.trim();
     if (!v.title) { f.title.focus(); return; }
     save.disabled = true;
@@ -1464,12 +1561,24 @@ function taskForm(t, submitText, onSubmit) {
   setTimeout(function () { f.title.focus(); }, 60);
   return form;
 }
+// Checkboxes over the unfinished tasks, in work order. Prerequisites that are already finished are not listed and are kept as they are.
+function afterPicker(selfId, sel) {
+  var cand = TS.all.filter(function (x) { return x.id > 0 && x.id !== selfId && (x.status === "open" || x.status === "doing"); }).sort(byRank), boxes = [];
+  var keep = sel.filter(function (id) { return !cand.some(function (x) { return x.id === id; }); });
+  var list = h("div", { class: "picks", role: "group", "aria-label": "要先做完的任务" });
+  cand.forEach(function (x) {
+    var c = h("input", { type: "checkbox", value: String(x.id) }); c.checked = sel.indexOf(x.id) >= 0; boxes.push(c);
+    list.appendChild(h("label", { class: "pick" }, c, h("span", { class: "pt" }, h("span", { class: "tid", text: "#" + x.id }), priTag(x), x.title,
+      h("span", { class: "meta", text: " · " + (x.status === "doing" ? whoName(x.claimed_by) + " 在做" : x.owner ? "交给 " + whoName(x.owner) : "没人负责") }))));
+  });
+  return { el: cand.length ? list : h("p", { class: "meta", text: "现在没有别的没做完的任务。" }), value: function () { return keep.concat(boxes.filter(function (c) { return c.checked; }).map(function (c) { return +c.value; })); } };
+}
 function newTask(keep) {
   var body = drawerOpen("new", "新任务");
   body.appendChild(h("h2", { id: "dw-title", text: "加一个任务" }));
   body.appendChild(taskForm(keep || null, "加上", function (v) {
     if (!v) { leaveDrawer(); return; }
-    var tmp = { id: -Date.now(), _new: true, title: v.title, detail: v.detail, owner: v.owner, due: v.due, status: "open", source: "看板", by: me.name, claimed_by: "", result: "", created: Date.now(), updated: Date.now() };
+    var tmp = { id: -Date.now(), _new: true, title: v.title, detail: v.detail, owner: v.owner, due: v.due, priority: v.priority, after: v.after, status: "open", source: "看板", by: me.name, claimed_by: "", result: "", created: Date.now(), updated: Date.now() };
     TS.all.push(tmp); leaveDrawer(); drawTasks();
     return api("tasks", v).then(function (j) {
       TS.all = TS.all.filter(function (x) { return x !== tmp; }); upsert(j.task); drawTasks(); toast("加上了 #" + j.task.id);
@@ -1493,16 +1602,95 @@ function fetchTask(id) {
 }
 function stepper(t, tl) {
   var claimed = t.claimed_at, done = t.done_at;
-  function stp(on, word, who, ts, extra) { return h("div", { class: "stp" + (on ? " done" : "") }, h("b", { text: word }), h("span", { class: "meta" }, on ? [who ? who + " · " : "", rt(ts)] : "还没有"), extra); }
+  function stp(on, word, who, ts, extra) { return h("div", { class: "stp" + (on ? " done" : "") }, h("b", { text: word }), h("span", { class: "meta" }, on ? [who ? whoName(who) + " · " : "", rt(ts)] : "还没有"), extra); }
   return h("div", { class: "stepper", role: "list", "aria-label": "经过" },
     stp(true, "记下", t.by, t.created),
     stp(!!claimed, "接手", t.claimed_by, claimed, claimed && claimed - t.created > 60000 ? h("span", { class: "gap", text: "等了 " + span(claimed - t.created) + " 才有人接" }) : !claimed && t.status === "open" ? h("span", { class: "gap", text: "已经等了 " + span(Date.now() - t.created) }) : null),
     stp(!!done, "做完", t.done_by, done, done && claimed ? h("span", { class: "gap ok-t", text: "做了 " + span(done - claimed) }) : t.status === "doing" && claimed ? h("span", { class: "gap", text: "已经做了 " + span(Date.now() - claimed) }) : null));
 }
+var KIND_IC = { report: "file", link: "ext", file: "download", quote: "copy" };
+// Everything a task carries, as plain text for pasting into a local AI that is not connected to the board.
+function packText(j) {
+  var t = j.task, ho = j.handoff || {}, out = ["任务 #" + t.id + "：" + t.title];
+  if (t.priority === 1) out.push("优先级：急"); else if (t.priority === 3) out.push("优先级：不急");
+  if (t.detail) out.push("要做什么：" + t.detail);
+  if (t.owner) out.push("交给：" + whoName(t.owner));
+  if (t.due) out.push("截止：" + t.due);
+  if (t.source) out.push("来源：" + t.source);
+  if (ho.parent) out.push("从 #" + ho.parent.id + "「" + ho.parent.title + "」拆出来" + (ho.parent.result ? "，那件的结果：" + ho.parent.result : ""));
+  (ho.materials || []).forEach(function (m) {
+    out.push("", "【" + m.label + (m.kind === "quote" ? "" : "：" + m.title) + "】" + (m.from ? "（来自 #" + m.from + "）" : ""));
+    if (m.ref) out.push(m.url && m.url.charAt(0) === "/" ? location.origin + m.url + "（" + m.ref + "）" : m.ref);
+    if (m.text) out.push(m.text);
+  });
+  if ((ho.waits_for || []).length) { out.push("", "【要先做完的任务】"); ho.waits_for.forEach(function (w) { out.push("#" + w.id + " " + w.title + "（" + SL[w.status] + (w.owner ? "，" + whoName(w.owner) : "") + "）" + (w.result ? "：" + w.result : "")); }); }
+  if (t.result) out.push("", "【已经交付的】", t.result);
+  return out.join("\n");
+}
+// Long text folds to a few lines; the button opens it in place.
+function foldable(el, text) {
+  if (text.length < 500 && text.split("\n").length < 10) return [el, null];
+  el.classList.add("fold");
+  var b = h("button", { type: "button", class: "btn quiet sm", "aria-expanded": "false" }, "展开全部");
+  b.addEventListener("click", function () { var open = el.classList.toggle("fold"); b.textContent = open ? "展开全部" : "收起"; b.setAttribute("aria-expanded", open ? "false" : "true"); });
+  return [el, b];
+}
+function quoteBlock(m) {
+  var txt = h("div", { class: "pre", text: m.text }), f = foldable(txt, m.text);
+  return h("blockquote", { class: "quote" }, f[0], h("div", { class: "meta" }, m.from ? h("a", { href: "#tasks/" + m.from, text: "来自 #" + m.from }) : null, m.who ? whoName(m.who) + " 记下" : "", rt(m.ts), f[1], copyBtn(m.text, "复制")));
+}
+function matItem(m, onRemove) {
+  var open = m.url ? h("a", { href: m.url, target: "_blank", rel: "noopener noreferrer", text: m.title || m.ref }) : h("b", { text: m.title || m.label });
+  var x = null;
+  if (!m.from && onRemove) {
+    x = h("button", { type: "button", class: "ib", "aria-label": "拿掉：" + (m.title || m.label), title: "拿掉" }, icon("x"));
+    x.addEventListener("click", function () {
+      if (!x.classList.contains("mat-x")) { x.className = "mat-x"; clear(x).appendChild(document.createTextNode("确定拿掉")); setTimeout(function () { if (document.contains(x) && !x.disabled) { x.className = "ib"; clear(x).appendChild(icon("x")); } }, 4000); return; }
+      x.disabled = true; onRemove(m, function () { x.disabled = false; });
+    });
+  }
+  var meta = [m.label, m.who ? whoName(m.who) + " 挂的" : "", ago(m.ts)].filter(Boolean).join(" · ");
+  var li = h("li", {}, h("div", { class: "mat-h" }, icon(KIND_IC[m.kind] || "file"), h("span", { class: "nm" }, open,
+    h("span", { class: "meta" }, meta, m.from ? [" · ", h("a", { href: "#tasks/" + m.from, text: "从 #" + m.from + " 带过来" })] : null, m.url && m.kind !== "link" && m.ref ? " · " + m.ref : "")), x));
+  if (m.text) {
+    var rep = h("div", { class: "rep pre", text: m.text }), f = foldable(rep, m.text);
+    li.appendChild(f[0]); li.appendChild(h("div", { class: "row" }, f[1], copyBtn(m.text, "复制全文")));
+  }
+  return li;
+}
+function addMaterial(t, done) {
+  var mode = "link", box = h("form", { class: "addm" });
+  var title = h("input", { maxlength: "120", placeholder: "标题（可以不写）", autocomplete: "off", "aria-label": "标题" });
+  var ref = h("input", { maxlength: "600", placeholder: "网址，或者文件编号 x12、g300", autocomplete: "off", inputmode: "url", "aria-label": "链接或文件编号" });
+  var text = h("textarea", { maxlength: "40000", placeholder: "把报告全文贴在这里", "aria-label": "报告全文" });
+  var save = h("button", { type: "submit", class: "btn pri sm" }, "挂上"), cancel = h("button", { type: "button", class: "btn sm", onclick: function () { done(false); } }, "取消");
+  var body = h("div");
+  function draw() { clear(body); body.appendChild(title); title.style.marginBottom = "8px"; body.appendChild(mode === "link" ? ref : text); setTimeout(function () { (mode === "link" ? ref : text).focus(); }, 30); }
+  box.appendChild(seg([["link", "链接或文件"], ["report", "贴一份报告"]], mode, function (v) { mode = v; draw(); }));
+  box.appendChild(body); box.appendChild(h("div", { class: "row" }, save, cancel)); box.lastChild.style.marginTop = "10px";
+  draw();
+  box.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = mode === "link" ? { ref: ref.value.trim(), title: title.value.trim() } : { kind: "report", text: text.value, title: title.value.trim() };
+    if (mode === "link" ? !v.ref : !v.text.trim()) { (mode === "link" ? ref : text).focus(); return; }
+    save.disabled = true;
+    api("tasks/" + t.id + "/material", v).then(function () { toast("挂上了"); done(true); }, function (e2) { save.disabled = false; fail(e2); });
+  });
+  return box;
+}
 function taskPanel(j) {
-  var t = upsert(j.task), body = clear($("dw-body")), notes = j.notes || [], tl = j.tl;
-  function redraw() { if (DW.key === "t" + t.id) fetchTask(t.id).then(function (k) { if (DW.key === "t" + t.id) taskPanel(k); }, function () { taskPanel({ task: t, notes: notes, prompt: j.prompt, tl: tl }); }); }
+  var t = upsert(j.task), body = clear($("dw-body")), notes = j.notes || [], tl = j.tl, ho = j.handoff || { materials: [], waits_for: [], blocked_by: [], parent: null, children: [] };
+  function redraw() { if (DW.key === "t" + t.id) fetchTask(t.id).then(function (k) { if (DW.key === "t" + t.id) taskPanel(k); }, function () { redrawLocal(); }); }
+  function redrawLocal() { taskPanel({ task: t, notes: notes, prompt: j.prompt, tl: tl, handoff: ho }); }
+  var liveT = t.status === "open" || t.status === "doing";
   body.appendChild(h("h2", { id: "dw-title", text: t.title }));
+  var flags = h("div", { class: "flags" },
+    t.priority === 1 ? badge("hot", "急，先做") : null,
+    botOn(t) ? h("span", { class: "badge acc" }, live(t.bot_working), t.bot_working ? "Bot 正在做" : "Bot 在做") : null,
+    liveT && t.blocked_by && t.blocked_by.length ? badge("warn", waitText(t.blocked_by), "clock") : null,
+    t.parent ? h("a", { class: "badge", href: "#tasks/" + t.parent }, "从 #" + t.parent + " 拆出") : null,
+    ho.children.length ? badge("", "拆出 " + ho.children.length + " 件") : null);
+  if (flags.firstChild) body.appendChild(flags);
   var stat = h("div", { class: "seg full", role: "group", "aria-label": "状态" });
   ["open", "doing", "done", "dropped"].forEach(function (s) {
     stat.appendChild(h("button", { type: "button", "aria-pressed": t.status === s ? "true" : "false", onclick: function () { moveTask(t, s, moved).catch(function () {}); } }, SL[s]));
@@ -1515,10 +1703,15 @@ function taskPanel(j) {
       api("tasks/" + t.id, { size: z[0] }).then(function (r) { upsert(r.task); drawTasks(); toast("定为" + z[1].split(" ")[0]); }, function (e) { t.size = old; drawTasks(); redrawLocal(); fail(e); });
     } }, z[1] + " 分"));
   });
+  var priSeg = h("div", { class: "seg", role: "group", "aria-label": "急不急" });
+  [[1, "急"], [2, "普通"], [3, "不急"]].forEach(function (z) {
+    priSeg.appendChild(h("button", { type: "button", "aria-pressed": (t.priority || 2) === z[0] ? "true" : "false", onclick: function () {
+      var old = t.priority || 2; if (old === z[0]) return; t.priority = z[0]; drawTasks(); redrawLocal();
+      api("tasks/" + t.id, { priority: z[0] }).then(function (r) { upsert(r.task); drawTasks(); toast("#" + t.id + " 改成" + z[1]); }, function (e) { t.priority = old; drawTasks(); redrawLocal(); fail(e); });
+    } }, z[1]));
+  });
   function moved(x, ph) { if (ph === "ok") redraw(); else redrawLocal(); }
-  function redrawLocal() { taskPanel({ task: t, notes: notes, prompt: j.prompt, tl: tl }); }
-  sizeSeg.style.marginTop = "8px";
-  body.appendChild(sizeSeg);
+  body.appendChild(h("div", { class: "segs" }, sizeSeg, priSeg));
   body.appendChild(stepper(t, tl));
   if (t.status === "done" && t.done_by) body.appendChild(h("p", { class: "credit" }, icon("check"), "记在 " + t.done_by + " 名下，+" + (t.points || 0) + " 分"));
   var acts = h("div", { class: "row" });
@@ -1529,14 +1722,14 @@ function taskPanel(j) {
   body.appendChild(acts);
   var info = h("div");
   var d = dueInfo(t);
+  if (t.detail) { info.appendChild(h("h3", { text: "要做什么" })); info.appendChild(h("p", { class: "pre", text: t.detail })); }
   info.appendChild(h("dl", { class: "facts" },
-    h("dt", { text: "负责人" }), h("dd", { text: t.owner ? (t.owner === "bot" ? "Bot" : t.owner) : "没指定" }),
+    h("dt", { text: "负责人" }), h("dd", { text: t.owner ? whoName(t.owner) : "没指定" }),
     h("dt", { text: "截止" }), h("dd", {}, t.due ? [t.due, d && d.cls ? h("span", { class: "due " + d.cls }, "　", d.text) : null] : "没定"),
-    h("dt", { text: "领取" }), h("dd", { text: t.claimed_by || "还没人领" }),
+    h("dt", { text: "领取" }), h("dd", { text: t.claimed_by ? whoName(t.claimed_by) : "还没人领" }),
     h("dt", { text: "来源" }), h("dd", { text: t.source || "—" }),
-    h("dt", { text: "加的" }), h("dd", {}, t.by ? t.by + " · " : "", rt(t.created)),
+    h("dt", { text: "加的" }), h("dd", {}, t.by ? whoName(t.by) + " · " : "", rt(t.created)),
     h("dt", { text: "更新" }), h("dd", {}, rt(t.updated))));
-  if (t.detail) { info.appendChild(h("h3", { text: "说明" })); info.appendChild(h("p", { class: "pre", text: t.detail })); }
   if (t.result) { info.appendChild(h("h3", { text: "交付" })); info.appendChild(h("p", { class: "pre", text: t.result })); }
   body.appendChild(info);
   edit.addEventListener("click", function () {
@@ -1549,6 +1742,60 @@ function taskPanel(j) {
     info.replaceWith(form);
   });
 
+  var quotes = ho.materials.filter(function (m) { return m.kind === "quote"; }), mats = ho.materials.filter(function (m) { return m.kind !== "quote"; });
+  if (quotes.length) {
+    body.appendChild(h("h3", {}, "原话", h("span", { class: "n", text: "群里怎么说的" })));
+    quotes.forEach(function (m) { body.appendChild(quoteBlock(m)); });
+  }
+  body.appendChild(h("h3", {}, "材料", mats.length ? h("span", { class: "n", text: mats.length + " 份" }) : null));
+  if (mats.length) body.appendChild(h("ul", { class: "mats" }, mats.map(function (m) {
+    return matItem(m, function (x, undo) {
+      api("tasks/" + t.id + "/material/" + x.id + "/remove", {}).then(function () { toast("拿掉了"); redraw(); }, function (e) { undo(); fail(e); });
+    });
+  })));
+  else body.appendChild(h("p", { class: "meta", text: "还没有报告、链接或文件。" }));
+  var mrow = h("div", { class: "row" }), addB = h("button", { type: "button", class: "btn sm" }, icon("plus"), "挂一份材料");
+  addB.addEventListener("click", function () { var f = addMaterial(t, function (ok) { if (ok) redraw(); else f.replaceWith(mrow); }); mrow.replaceWith(f); });
+  mrow.appendChild(addB); body.appendChild(mrow);
+
+  if (ho.waits_for.length || liveT) {
+    body.appendChild(h("h3", { text: "要先做完" }));
+    var deps = h("div");
+    if (ho.waits_for.length) deps.appendChild(h("ul", { class: "deps" }, ho.waits_for.map(function (w) {
+      var res = w.result ? h("span", { class: "res pre", text: w.result }) : null;
+      return h("li", {}, h("span", { class: "sdot " + w.status, title: SL[w.status] }), h("span", { class: "dt" }, h("a", { href: "#tasks/" + w.id }, h("span", { class: "tid", text: "#" + w.id }), w.title),
+        h("span", { class: "meta", text: SL[w.status] + (w.owner ? " · " + whoName(w.owner) : "") + (ho.blocked_by.indexOf(w.id) >= 0 ? " · 还在等它" : "") }), res));
+    })));
+    else deps.appendChild(h("p", { class: "meta", text: "不用等别的任务，现在就能开始。" }));
+    if (liveT) {
+      var chg = h("button", { type: "button", class: "btn sm" }, ho.waits_for.length ? "改一下" : "排到别的任务后面");
+      chg.addEventListener("click", function () {
+        var pk = afterPicker(t.id, t.after || []), ok = h("button", { type: "submit", class: "btn pri sm" }, "保存");
+        var f = h("form", {}, pk.el, h("div", { class: "row" }, ok, h("button", { type: "button", class: "btn sm", onclick: function () { f.replaceWith(chgRow); } }, "取消")));
+        f.lastChild.style.marginTop = "8px";
+        f.addEventListener("submit", function (e) {
+          e.preventDefault(); ok.disabled = true;
+          api("tasks/" + t.id, { after: pk.value() }).then(function (r) { upsert(r.task); drawTasks(); toast("排好了"); redraw(); }, function (e2) { ok.disabled = false; fail(e2); });
+        });
+        chgRow.replaceWith(f);
+      });
+      var chgRow = h("div", { class: "row" }, chg); chgRow.style.marginTop = "6px";
+      deps.appendChild(chgRow);
+    }
+    body.appendChild(deps);
+  }
+  if (ho.parent || ho.children.length) {
+    body.appendChild(h("h3", { text: "拆分" }));
+    var sp = h("ul", { class: "deps" });
+    if (ho.parent) sp.appendChild(h("li", {}, h("span", { class: "sdot " + ho.parent.status, title: SL[ho.parent.status] }), h("span", { class: "dt" }, h("span", { class: "meta", text: "从这件拆出来" }),
+      h("a", { href: "#tasks/" + ho.parent.id }, h("span", { class: "tid", text: "#" + ho.parent.id }), ho.parent.title), ho.parent.result ? h("span", { class: "res pre", text: ho.parent.result }) : null)));
+    ho.children.forEach(function (c) {
+      sp.appendChild(h("li", {}, h("span", { class: "sdot " + c.status, title: SL[c.status] }), h("span", { class: "dt" }, h("a", { href: "#tasks/" + c.id }, h("span", { class: "tid", text: "#" + c.id }), c.title),
+        h("span", { class: "meta", text: "拆出去的 · " + SL[c.status] + (c.owner ? " · " + whoName(c.owner) : " · 还没人接") }))));
+    });
+    body.appendChild(sp);
+  }
+
   body.appendChild(h("h3", { text: "经过和进展" }));
   var nl = h("ul", { class: "vtl" });
   function drawNotes() {
@@ -1556,7 +1803,7 @@ function taskPanel(j) {
     var steps = tl && tl.steps && tl.steps.length ? tl.steps.slice() : notes.map(function (n) { return { ts: n.ts, who: n.who, kind: n.kind || "progress", word: "进展", text: n.text, _p: n._p }; });
     notes.forEach(function (n) { if (n._p) steps.push({ ts: n.ts, who: n.who, kind: "progress", word: "进展", text: n.text, _p: true }); });
     if (!steps.length) nl.appendChild(h("li", { class: "meta", text: "还没有记录。" }));
-    steps.forEach(function (n) { nl.appendChild(h("li", { class: "k-" + n.kind + (n._p ? " pending" : "") }, h("span", { class: "meta" }, (n.who || "") + " " + (n.word || "") + " · ", rt(n.ts)), h("span", { class: "pre", text: n.text }))); });
+    steps.forEach(function (n) { nl.appendChild(h("li", { class: "k-" + n.kind + (n._p ? " pending" : "") }, h("span", { class: "meta" }, (n.who ? whoName(n.who) : "") + " " + (n.word || "") + " · ", rt(n.ts)), h("span", { class: "pre", text: n.text }))); });
   }
   drawNotes(); body.appendChild(nl);
   var note = h("textarea", { maxlength: "2000", placeholder: "进展、问题、链接", "aria-label": "写进展" }), addN = h("button", { type: "submit", class: "btn sm" }, "记一笔");
@@ -1574,8 +1821,9 @@ function taskPanel(j) {
   });
   body.appendChild(nf);
 
-  if (t.status === "open" || t.status === "doing") {
-    var ai = h("div", { class: "ai" }, h("h3", { text: "交给本地 AI" }), h("p", { text: "把这句话发给你电脑上的 AI 工具，它会领走任务，做完交回来。" }), h("code", { text: j.prompt }), h("div", { class: "row" }, copyBtn(j.prompt, "复制这句话")));
+  if (liveT) {
+    var ai = h("div", { class: "ai" }, h("h3", { text: "交给本地 AI" }), h("p", { text: "把这句话发给你电脑上的 AI 工具。它会先读完原话、报告和前置任务的结果再领走任务，做的过程中把进展和产出挂回来，做不了的部分拆成新任务。" }),
+      h("code", { text: j.prompt }), h("div", { class: "row" }, copyBtn(j.prompt, "复制这句话"), copyBtn(function () { return packText({ task: t, handoff: ho }); }, "复制全部材料")));
     var how = h("button", { type: "button", class: "btn quiet", "aria-expanded": "false" }, "第一次用：接上 Claude Code 或 Codex");
     var out = h("div");
     how.addEventListener("click", function () {
@@ -1910,7 +2158,9 @@ function quiet() {
 function tick() {
   document.querySelectorAll("time.rt:not([data-x])").forEach(function (t) { t.textContent = t.getAttribute("data-p") + ago(+t.getAttribute("data-ts")) + t.getAttribute("data-s"); });
   stamp();
-  if (cur && VIEWS[cur].auto && loaded[cur] && Date.now() - loaded[cur] > 90000 && quiet()) load(cur, true);
+  // While the bot works on a task by itself the list refreshes more often, so its progress shows without a reload.
+  var every = cur === "tasks" && TS.busy ? 25000 : 90000;
+  if (cur && VIEWS[cur].auto && loaded[cur] && Date.now() - loaded[cur] > every && quiet()) load(cur, true);
 }
 function helpPop(anchor) {
   var keys = [["G H", "概览"], ["G T", "任务"], ["G Z", "战绩"], ["G B", "功勋墙"], ["G D", "兑换"], ["G F", "动态"], ["G W", "作品和文件"], ["G R", "仓库"], ["G M", "记忆"], ["G S", "监控和额度"], ["G O", "工具"], ["1 9", "按顺序切换分区"], ["N", "新任务"], ["/", "搜索当前分区"], ["R", "刷新"], ["← →", "看图时翻页"], ["Esc", "关掉弹窗"]];
