@@ -68,15 +68,22 @@ export function renderLine(r: Row, captions = true) {
   return "[" + fmtTime(r.ts) + "] " + displayName(r) + (r.mentioned ? "（@你）" : "") + "：" + clip(body.trim(), 1500);
 }
 
-export function systemPrompt(memory: string, notes: string[], rules = "") {
+/**
+ * The part of the prompt that changes rarely: persona, self-added rules and the memory document. The model
+ * provider caches a prompt by its leading part, and tool definitions and the whole day's chat follow this
+ * text, so anything that changes during the day (see dayNotes) must not be in here.
+ */
+export function systemPrompt(memory: string, rules = "") {
   return PERSONA + (rules.trim() ? "\n\n【后来加的规矩】（你自己或群主后来补的，和上面冲突时以这里为准）\n" + rules.trim() : "") +
-    "\n\n【你记得的事】（长期记忆，每晚整理一次）\n" + (memory.trim() || "（还没有）") +
-    (notes.length ? "\n\n【最近刚记下的】\n" + notes.map(n => "· " + n).join("\n") : "");
+    "\n\n【你记得的事】（长期记忆，每晚整理一次）\n" + (memory.trim() || "（还没有）");
 }
+/** What was remembered since last night's consolidation; goes at the very end of the prompt, after the chat. */
+const dayNotes = (notes: string[]) => (notes.length
+  ? "\n[你最近刚记下的事（还没并进长期记忆，和长期记忆冲突时以这里为准）：\n" + notes.map(n => "· " + n).join("\n") + "]" : "");
 
 /** History as real chat turns: people's lines are user content, your own past lines are assistant content. */
 export function buildMessages(input: TurnInput) {
-  const messages: any[] = [{ role: "system", content: systemPrompt(input.memory, input.notes, input.rules) }];
+  const messages: any[] = [{ role: "system", content: systemPrompt(input.memory, input.rules) }];
   const rows = input.rows.slice();
   while (rows.length && rows[0].role === "bot") rows.shift();
   const fresh = new Set((input.images || []).map(im => im.seq));
@@ -97,6 +104,7 @@ export function buildMessages(input: TurnInput) {
     pending.push(renderLine(r, !fresh.has(r.seq)));
   }
   const when = "现在：北京时间 " + fmtFull(input.now, BJ) + "（悉尼 " + fmtFull(input.now, SYD) + "）。";
+  if (input.notes.length) pending.push(dayNotes(input.notes));
   if (input.task) {
     pending.push("\n[" + when + "定时任务触发，不是群友发言：" + input.task + "\n把要发到群里的话直接写出来；如果确实没什么可发，只输出 PASS。]");
   } else {
@@ -127,6 +135,20 @@ export function buildMessages(input: TurnInput) {
 
 const toolDefs = (tools: Tool[]) =>
   tools.map(t => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
+
+/** How many characters each part of a turn's prompt takes, to see where the context goes. `toolsHash` changes whenever any tool definition does. */
+export function promptParts(input: TurnInput, tools: Tool[]) {
+  const size = (m: any) => (typeof m.content === "string" ? m.content.length : (m.content as any[]).reduce((n, c) => n + String(c.text || "").length, 0));
+  const messages = buildMessages(input), defs = JSON.stringify(toolDefs(tools));
+  const rules = (input.rules || "").trim().length, memory = input.memory.trim().length, notes = dayNotes(input.notes).length;
+  const system = size(messages[0]), rest = messages.slice(1).reduce((n, m) => n + size(m), 0);
+  let hash = 2166136261;
+  for (let i = 0; i < defs.length; i++) hash = Math.imul(hash ^ defs.charCodeAt(i), 16777619);
+  return {
+    persona: system - rules - memory, rules, memory, tools: defs.length, chat: rest - notes, notes,
+    total: system + defs.length + rest, rows: input.rows.length, toolCount: tools.length, toolsHash: (hash >>> 0).toString(36),
+  };
+}
 
 function tidy(content: unknown) {
   let text = String(content || "");

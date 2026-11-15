@@ -53,3 +53,21 @@ test("the tool gives links for every address and an MCP line; revoke works for t
   assert.equal((await tool.run({ op: "revoke" })).revoked, 1);
   assert.equal((await feature.tools({ hub, conv: "g:1", askers: [], host: {} })[0].run({ op: "link" })).ok, false);
 });
+test("the owner can mint an MCP address for a member who already has a link, without pushing a live one out", async () => {
+  const hub = mkHub({ PUBLIC_URL: "https://a.example" });
+  hub.get = k => (k === "main" ? "g:1" : "");
+  const call = (method, body) => feature.admin(hub, new Request("https://x/admin/access", { method }), new URL("https://x/admin/access"), body);
+  assert.equal(await feature.admin(hub, new Request("https://x/admin/other"), new URL("https://x/admin/other"), {}), null);
+  assert.equal((await call("POST", { name: "小明" })).status, 404, "nobody by that name holds a link yet");
+  const first = await issueAccess(hub, "g:1", ME);
+  const r = await (await call("POST", { name: "小明" })).json();
+  assert.equal(r.for, "小明");
+  const token = /^https:\/\/a\.example\/x\/mcp\/([a-f0-9]{40})$/.exec(r.mcp[0])[1];
+  assert.deepEqual(await checkAccess(hub, token), { conv: "g:1", uid: "u1", name: "小明" });
+  assert.ok(await checkAccess(hub, first), "the link he already had still works");
+  for (let i = 0; i < 3; i++) await issueAccess(hub, "g:1", ME);
+  assert.equal((await call("POST", { name: "小明" })).status, 409, "five live links: refuses instead of retiring one");
+  assert.ok(await checkAccess(hub, first));
+  const list = await (await call("GET", {})).json();
+  assert.equal(list.people.length, 5); assert.ok(!JSON.stringify(list).includes(token));
+});
