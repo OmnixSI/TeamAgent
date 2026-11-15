@@ -8,7 +8,7 @@ import type { Hub } from "../hub.ts";
 import { personOf, clearCookie, cookieToken, bearerToken, bases, listAccess } from "./access.ts";
 import type { Person } from "./access.ts";
 import * as T from "./tasks.ts";
-import type { Task, TaskStatus } from "./tasks.ts";
+import type { Task, TaskStatus, TaskRef, Handoff } from "./tasks.ts";
 import { latestAll, listRepos } from "./repocheck.ts";
 import { boxLink, newDrop, human, mimeOf, disposition } from "./filebox.ts";
 import { uptimePct } from "./uptime.ts";
@@ -23,12 +23,15 @@ import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, b
 const BASE = "/x/board";
 const DAY = 86400000;
 const MAX_BODY = 100 * 1024;
+const MAX_REPORT = 200 * 1024;   // a 40,000-character report in Chinese is about 120 KB of JSON
 const STATUSES: TaskStatus[] = ["open", "doing", "done", "dropped"];
 
 /** The task contract, behind one object so tests can stand in for the real module. */
 export const taskApi = {
   listTasks: T.listTasks, getTask: T.getTask, addTask: T.addTask, updateTask: T.updateTask,
   claimTask: T.claimTask, addTaskNote: T.addTaskNote, taskNotes: T.taskNotes,
+  workOrder: T.workOrder, blockers: T.blockers, checkAfter: T.checkAfter, handoff: T.handoff, botBusy: T.botBusy,
+  addTaskRef: T.addTaskRef, taskRefs: T.taskRefs, removeTaskRef: T.removeTaskRef,
 };
 
 // ---------- static parts ----------
@@ -84,7 +87,7 @@ const str = (v: unknown, max: number) => typeof v === "string" ? v.trim().slice(
 const parseJson = (s: unknown) => { try { return s ? JSON.parse(String(s)) : null; } catch { return null; } };
 
 /** A POST the page itself sent: JSON, same site, small. Returns the parsed body or an error response. */
-async function readPost(hub: Hub, req: Request, u: URL): Promise<any | Response> {
+async function readPost(hub: Hub, req: Request, u: URL, max = MAX_BODY): Promise<any | Response> {
   const origin = req.headers.get("origin");
   if (origin) {
     let host = "";
@@ -93,9 +96,9 @@ async function readPost(hub: Hub, req: Request, u: URL): Promise<any | Response>
     if (!host || !allowed.has(host)) return bad("不接受从别的网站发来的修改", 403);
   }
   if (!/^application\/json\b/i.test(req.headers.get("content-type") || "")) return bad("请求格式不对", 415);
-  if (Number(req.headers.get("content-length") || 0) > MAX_BODY) return bad("内容太长", 413);
+  if (Number(req.headers.get("content-length") || 0) > max) return bad("内容太长", 413);
   const raw = await req.text();
-  if (raw.length > MAX_BODY) return bad("内容太长", 413);
+  if (raw.length > max) return bad("内容太长", 413);
   if (!raw) return {};
   const body = parseJson(raw);
   return body && typeof body === "object" && !Array.isArray(body) ? body : bad("请求内容不是 JSON 对象");
@@ -110,21 +113,62 @@ function days(hub: Hub, p: Person, u: URL) {
   return { ok: true, days: list.slice(0, n).map(r => ({ date: String(r.date), summary: String(r.summary || "") })), more: list.length > n };
 }
 
-const taskOut = (t: Task) => ({ id: t.id, title: t.title, detail: t.detail, status: t.status, owner: t.owner, due: t.due, source: t.source, by: t.by, claimed_by: t.claimed_by, result: t.result, created: t.created, updated: t.updated,
-  size: t.size || "normal", claimed_at: t.claimed_at || 0, done_at: t.done_at || 0, done_by: t.done_by || "", points: part(() => pointsOf(t), 0) });
+/**
+ * What a list item needs beyond the task itself, worked out once per request: the work order (position and
+ * what each task still waits for), how many tasks were split off each one, and which one the bot is on now.
+ */
+type Ctx = { busy: number; byId: Map<number, Task>; kids: Map<number, number>; order: { task: Task; blocked_by: number[] }[]; rank: Map<number, number> };
+function taskCtx(hub: Hub, conv: string): Ctx {
+  const all = part(() => taskApi.listTasks(hub, conv, { limit: 1000 }).filter(t => t.conv === conv), [] as Task[]);
+  const kids = new Map<number, number>();
+  for (const t of all) if (t.parent) kids.set(t.parent, (kids.get(t.parent) || 0) + 1);
+  const order = part(() => taskApi.workOrder(hub, conv).filter(r => r.task.conv === conv), [] as Ctx["order"]);
+  return { busy: part(() => taskApi.botBusy(hub, conv), 0), byId: new Map(all.map(t => [t.id, t])), kids, order, rank: new Map(order.map((r, i) => [r.task.id, i + 1])) };
+}
+const holder = (t: Task) => t.claimed_by || t.owner || "";
+function waitsOn(hub: Hub, c: Ctx, t: Task) {
+  if (t.status !== "open" && t.status !== "doing") return [];
+  const r = c.order.find(x => x.task.id === t.id);
+  const ids = r ? r.blocked_by : part(() => taskApi.blockers(hub, t.conv, t).map(b => b.id), [] as number[]);
+  return ids.map(id => c.byId.get(id) || mine(taskApi.getTask(hub, t.conv, id), { conv: t.conv } as Person)).filter((b): b is Task => !!b && b.conv === t.conv)
+    .map(b => ({ id: b.id, title: b.title, status: b.status, who: holder(b) }));
+}
+const taskOut = (t: Task, hub?: Hub, c?: Ctx) => ({ id: t.id, title: t.title, detail: t.detail, status: t.status, owner: t.owner, due: t.due, source: t.source, by: t.by, claimed_by: t.claimed_by, result: t.result, created: t.created, updated: t.updated,
+  size: t.size || "normal", claimed_at: t.claimed_at || 0, done_at: t.done_at || 0, done_by: t.done_by || "", points: part(() => pointsOf(t), 0),
+  priority: t.priority || 2, after: t.after || [], parent: t.parent || 0, runs: t.runs || 0,
+  ...(hub && c ? {
+    blocked_by: waitsOn(hub, c, t), rank: c.rank.get(t.id) || 0, child_count: c.kids.get(t.id) || 0,
+    material_count: part(() => taskApi.taskRefs(hub, t.conv, t.id).length, 0), bot_working: !!c.busy && c.busy === t.id,
+  } : {}) });
 const mine = (t: Task | null, p: Person) => t && t.conv === p.conv ? t : null;
+const full = (hub: Hub, p: Person, t: Task) => taskOut(t, hub, taskCtx(hub, p.conv));
 
 function tasks(hub: Hub, p: Person, u: URL) {
   const want = (u.searchParams.get("status") || "open,doing").split(",").filter(s => (STATUSES as string[]).includes(s)) as TaskStatus[];
-  const n = num(u.searchParams.get("n"), 100, 1, 300);
-  const list = taskApi.listTasks(hub, p.conv, { status: want.length ? want : ["open", "doing"], limit: n + 1 }).filter(t => t.conv === p.conv);
-  return { ok: true, tasks: list.slice(0, n).map(taskOut), more: list.length > n };
+  const n = num(u.searchParams.get("n"), 100, 1, 300), st = want.length ? want : ["open", "doing"] as TaskStatus[];
+  const c = taskCtx(hub, p.conv), live: TaskStatus[] = st.filter(s => s === "open" || s === "doing"), ended = st.filter(s => s === "done" || s === "dropped");
+  // Unfinished tasks come in the order to work on them; finished ones after, newest first as before.
+  const list = c.order.map(r => r.task).filter(t => live.includes(t.status))
+    .concat(ended.length ? taskApi.listTasks(hub, p.conv, { status: ended, limit: n + 1 }).filter(t => t.conv === p.conv) : []);
+  return { ok: true, tasks: list.slice(0, n).map(t => taskOut(t, hub, c)), more: list.length > n, bot_busy: c.busy };
 }
+/** A material as the page shows it: `url` is where it opens on this board (a web link, or the board's own picture and file routes), "" when it has none. */
+function refUrl(ref: string) {
+  if (/^https?:\/\/[^\s]+$/i.test(ref)) return ref;
+  const m = /^([gxf])(\d{1,12})$/i.exec(ref);
+  return m ? BASE + "/" + ({ g: "img", x: "box", f: "file" } as Record<string, string>)[m[1].toLowerCase()] + "/" + m[2] : "";
+}
+const refOut = (r: TaskRef & { from?: number }) => ({ id: r.id, kind: r.kind, label: T.REF_LABEL[r.kind] || "材料", title: r.title, ref: r.ref, url: refUrl(r.ref), text: r.text, who: r.who, ts: r.ts, from: r.from || 0 });
+const handoffOut = (h: Handoff | null) => ({
+  materials: (h?.materials || []).map(refOut), waits_for: h?.waits_for || [], blocked_by: h?.blocked_by || [], parent: h?.parent || null, children: h?.children || [],
+});
 function task(hub: Hub, p: Person, id: number) {
   const t = mine(taskApi.getTask(hub, p.conv, id), p);
-  return t ? { ok: true, task: taskOut(t), notes: taskApi.taskNotes(hub, p.conv, id), prompt: promptFor(t) } : null;
+  if (!t) return null;
+  const h = part(() => taskApi.handoff(hub, p.conv, id), null);
+  return { ok: true, task: full(hub, p, t), notes: taskApi.taskNotes(hub, p.conv, id), prompt: promptFor(t), handoff: handoffOut(h && h.task.conv === p.conv ? h : null) };
 }
-const promptFor = (t: Task) => "用 teamagent 的 claim_task 领取任务 #" + t.id + "，做完用 complete_task 交付";
+const promptFor = (t: Task) => "用 teamagent 的 get_task 读任务 #" + t.id + " 的全部交接材料（原话、报告、前置任务的结果），再用 claim_task 领取；做的过程中用 report_progress 记进展，产出的报告和链接用 attach_material 挂到任务上，做完用 complete_task 交付；自己做不了的部分用 add_task（parent 填 " + t.id + "）拆出来并写清原因";
 
 function memory(hub: Hub, p: Person) {
   return { ok: true, memory: hub.memoryOf(p.conv), notes: rows(hub, "SELECT text, ts FROM note WHERE conv=? ORDER BY id DESC LIMIT 60", p.conv).map(r => ({ text: String(r.text), ts: Number(r.ts) })) };
@@ -249,7 +293,7 @@ function part<T>(f: () => T, fallback: T): T { try { return f(); } catch { retur
 
 function overview(hub: Hub, p: Person) {
   const now = Date.now(), today = fmtDate(now, BJ);
-  const live = part(() => taskApi.listTasks(hub, p.conv, { status: ["open", "doing"], limit: 300 }).filter(t => t.conv === p.conv), [] as Task[]);
+  const c = part(() => taskCtx(hub, p.conv), null), live = c ? c.order.map(r => r.task).slice(0, 300) : [];
   const done7 = part(() => taskApi.listTasks(hub, p.conv, { status: ["done"], limit: 300 }).filter(t => t.conv === p.conv && t.updated > now - 7 * DAY).length, 0);
   const m = part(() => monitors(hub, p).uptime, [] as ReturnType<typeof monitors>["uptime"]);
   const pl = part(() => plan(hub, p), null);
@@ -257,7 +301,7 @@ function overview(hub: Hub, p: Person) {
     ok: true, name: p.name, today,
     days: part(() => days(hub, p, params("n=2")).days, []),
     tasks: {
-      list: live.map(taskOut),
+      list: live.map(t => taskOut(t, hub, c!)), bot_busy: c ? c.busy : 0,
       counts: {
         open: live.filter(t => t.status === "open").length, doing: live.filter(t => t.status === "doing").length,
         overdue: live.filter(t => t.due && t.due < today).length, mine: live.filter(t => t.owner === p.name || t.claimed_by === p.name).length, done_7d: done7,
@@ -275,18 +319,42 @@ function overview(hub: Hub, p: Person) {
 
 // ---------- changes ----------
 const DUE = /^(\d{4}-\d{2}-\d{2})?$/;
-function taskPatch(b: any): Record<string, string> | string {
-  const out: Record<string, string> = {};
+function taskPatch(b: any): Record<string, any> | string {
+  const out: Record<string, any> = {};
   for (const [k, max] of [["title", 200], ["detail", 4000], ["owner", 40], ["result", 4000]] as const) { const v = str(b[k], max); if (v !== undefined) out[k] = v; }
   if (b.due !== undefined) { const d = str(b.due, 10) ?? ""; if (!DUE.test(d)) return "日期写成 2026-11-20 这样"; out.due = d; }
   if (b.status !== undefined) { if (!(STATUSES as unknown[]).includes(b.status)) return "状态不对"; out.status = b.status; }
   if (b.size !== undefined) { if (!["small", "normal", "big"].includes(b.size)) return "大小不对"; out.size = b.size; }
+  if (b.priority !== undefined) { const v = T.normPriority(b.priority); if (!v) return "优先级只有急、普通、不急三种"; out.priority = v; }
+  if (b.after !== undefined) {
+    if (!(Array.isArray(b.after) || typeof b.after === "string" || typeof b.after === "number")) return "先做的任务写成编号，比如 25,26";
+    out.after = T.parseIds(b.after);
+  }
   if (out.title !== undefined && !out.title) return "标题不能空着";
   return out;
 }
+/** A "do these first" list for task `self` (0 when it is being made): ids of this conversation only, no loops. Returns the error sentence, or "". */
+function badAfter(hub: Hub, p: Person, self: number, ids: number[]): string {
+  for (const id of ids) if (!mine(taskApi.getTask(hub, p.conv, id), p)) return "没有编号 " + id + " 的任务";
+  return taskApi.checkAfter(hub, p.conv, self, ids).error || "";
+}
+const FILE_REF = /^[gxf]\d{1,12}$/i;
+/** A material from the board: a web link or a file / picture number, or pasted text kept as a report. Returns the piece, or the error sentence. */
+function materialOf(b: any): { kind: "link" | "file" | "report"; title: string; ref: string; text: string } | string {
+  const title = str(b.title, 120) || "", ref = str(b.ref, 600) || "", text = typeof b.text === "string" ? b.text.replace(/\s+$/, "").replace(/^\s*\n/, "").slice(0, 40000) : "";
+  const kind = b.kind === undefined ? (text ? "report" : FILE_REF.test(ref) ? "file" : "link") : b.kind;
+  if (kind === "report") return text.trim() ? { kind, title: title || "报告", ref: ref && refUrl(ref) ? ref : "", text } : "报告的内容是空的";
+  if (kind === "link" || kind === "file") {
+    if (!ref) return "贴一个链接，或者文件编号（比如 x12、g300）";
+    if (FILE_REF.test(ref)) return { kind: "file", title: title || ref, ref: ref.toLowerCase(), text: "" };
+    if (!/^https?:\/\/[^\s]+$/i.test(ref)) return "链接要以 http:// 或 https:// 开头";
+    return { kind: "link", title: title || ref.replace(/^https?:\/\//i, "").slice(0, 120), ref, text: "" };
+  }
+  return "只能挂链接、文件或者报告";
+}
 
 async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Promise<Response> {
-  const b = await readPost(hub, req, u);
+  const b = await readPost(hub, req, u, /^tasks\/\d{1,9}\/material$/.test(path) ? MAX_REPORT : MAX_BODY);
   if (b instanceof Response) return b;
   if (path === "logout") return json({ ok: true }, 200, { "Set-Cookie": clearCookie() });
   if (path === "mcp") {
@@ -323,10 +391,12 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
     const patch = taskPatch(b);
     if (typeof patch === "string") return bad(patch);
     if (!patch.title) return bad("先写个标题");
-    const t = taskApi.addTask(hub, p.conv, { title: patch.title, detail: patch.detail || "", owner: patch.owner || "", due: patch.due || "", source: "看板", by: p.name, ...(patch.size ? { size: patch.size as any } : {}) });
-    return t ? json({ ok: true, task: taskOut(t) }) : bad("没加上，稍后再试", 500);
+    if (patch.after?.length) { const e = badAfter(hub, p, 0, patch.after); if (e) return bad(e); }
+    const t = taskApi.addTask(hub, p.conv, { title: patch.title, detail: patch.detail || "", owner: patch.owner || "", due: patch.due || "", source: "看板", by: p.name, ...(patch.size ? { size: patch.size as any } : {}),
+      ...(patch.priority ? { priority: patch.priority } : {}), ...(patch.after?.length ? { after: patch.after } : {}) });
+    return t ? json({ ok: true, task: full(hub, p, t) }) : bad("没加上，稍后再试", 500);
   }
-  const m = /^tasks\/(\d{1,9})(?:\/(note|claim))?$/.exec(path);
+  const m = /^tasks\/(\d{1,9})(?:\/(note|claim|material)(?:\/(\d{1,12})\/(remove))?)?$/.exec(path);
   if (!m) return bad("没有这个操作", 404);
   const id = Number(m[1]);
   if (!mine(taskApi.getTask(hub, p.conv, id), p)) return bad("没有这个任务", 404);
@@ -337,13 +407,27 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
   }
   if (m[2] === "claim") {
     const t = taskApi.claimTask(hub, p.conv, id, p.name);
-    return t ? json({ ok: true, task: taskOut(t) }) : bad("这个任务已经有人在做了，或者已经结束", 409);
+    return t ? json({ ok: true, task: full(hub, p, t) }) : bad("这个任务已经有人在做了，或者已经结束", 409);
+  }
+  const own = () => taskApi.taskRefs(hub, p.conv, id).map(refOut);
+  if (m[2] === "material" && m[4]) {
+    const r = taskApi.taskRefs(hub, p.conv, id).find(x => x.id === Number(m[3]));
+    if (!r) return bad("这份材料不在这个任务上", 404);
+    if (r.kind === "quote") return bad("群里的原话是交接的依据，不能拿掉");   // the owner wants every hand-off to carry the words it came from
+    return taskApi.removeTaskRef(hub, p.conv, id, r.id, p.name) ? json({ ok: true, materials: own() }) : bad("没拿掉，稍后再试", 500);
+  }
+  if (m[2] === "material") {
+    const v = materialOf(b);
+    if (typeof v === "string") return bad(v);
+    const r = taskApi.addTaskRef(hub, p.conv, id, { ...v, who: p.name });
+    return r ? json({ ok: true, material: refOut(r), materials: own() }) : bad("材料太多了，先拿掉一些再挂", 409);
   }
   const patch = taskPatch(b);
   if (typeof patch === "string") return bad(patch);
   if (!Object.keys(patch).length) return bad("没有要改的");
+  if (patch.after) { const e = badAfter(hub, p, id, patch.after); if (e) return bad(e); }
   const t = taskApi.updateTask(hub, p.conv, id, patch as any, p.name);
-  return t && t.conv === p.conv ? json({ ok: true, task: taskOut(t) }) : bad("没改成", 500);
+  return t && t.conv === p.conv ? json({ ok: true, task: full(hub, p, t) }) : bad("没改成", 500);
 }
 
 // ---------- bytes ----------
@@ -450,6 +534,7 @@ const feature: Feature = {
   about: [
     "团队看板是一个网页（" + BASE + "），群友用自己的看板链接打开：最近每天的群聊小结、任务清单、我的长期记忆、团队仓库的夜检结果、我画的图和收发的文件、做过的网页、文件箱、网站监控和订阅、这个月的额度用量。",
     "任务能在看板上直接加、改、标完成或放弃、写进展，每一步都记着是谁做的；每个任务有“交给本地 AI”，复制一句话给自己电脑上的 AI 工具，它就能领走这个任务、做完交回来。",
+    "任务清单按该做的顺序排：正在做的、现在能开始的（急的在前）、还在等别的任务的；每个任务能定急不急、排在哪几件之后，详情里有群里的原话、挂上的报告链接文件、前置任务的结果和拆出来的子任务。",
     "看板首页先看谁在做什么、这周做完几件；“战绩”一栏有本周和总排行、每个人的徽章、最快一次和最近做完的事，还有大家接任务、写进展、做完的流水。",
     "看板只显示看的人所在的群的东西，图片和文件也要登录才能打开；点“退出”就清掉这台设备上的登录。",
   ],

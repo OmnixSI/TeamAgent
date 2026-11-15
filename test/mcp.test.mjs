@@ -43,11 +43,26 @@ function mkDeps() {
     checkAccess: async (_hub, token) => PEOPLE[token] || null,
     listTasks: (_h, conv, f = {}) => rows.filter(t => t.conv === conv && (!f.status || f.status.includes(t.status)) && (!f.owner || t.owner === f.owner)).slice(0, f.limit || 50).map(t => ({ ...t })),
     getTask: (_h, conv, id) => { const t = find(conv, id); return t ? { ...t } : null; },
-    addTask: (_h, conv, t) => { const r = { id: ++n, conv, title: t.title, detail: t.detail || "", status: "open", owner: t.owner || "", due: t.due || "", source: t.source || "", by: t.by || "", claimed_by: "", result: "", created: 1, updated: 1 }; rows.push(r); return { ...r }; },
+    addTask: (_h, conv, t) => { const r = { id: ++n, conv, title: t.title, detail: t.detail || "", status: "open", owner: t.owner || "", due: t.due || "", source: t.source || "", by: t.by || "", claimed_by: "", result: "", created: 1, updated: 1, priority: t.priority === "high" ? 1 : t.priority === "low" ? 3 : 2, after: t.after || [], parent: t.parent || 0 }; rows.push(r); return { ...r }; },
     updateTask: (_h, conv, id, patch, who) => { const t = find(conv, id); if (!t) return null; Object.assign(t, patch); if (patch.status === "open") t.claimed_by = ""; notes.push({ id, who, text: "改了" }); return { ...t }; },
     claimTask: (_h, conv, id, who) => { const t = find(conv, id); if (!t || t.status === "done" || t.status === "dropped" || (t.claimed_by && t.claimed_by !== who)) return null; t.claimed_by = who; t.status = "doing"; return { ...t }; },
     addTaskNote: (_h, conv, id, who, text) => { if (!find(conv, id)) return false; notes.push({ id, who, text, ts: 2 }); return true; },
     taskNotes: (_h, conv, id) => find(conv, id) ? notes.filter(x => x.id === id).map(x => ({ ts: x.ts || 2, who: x.who, text: x.text })) : [],
+    refs: [],
+    handoff(_h, conv, id) {
+      const t = find(conv, id); if (!t) return null;
+      const own = this.refs.filter(r => r.task === id), up = t.parent ? this.refs.filter(r => r.task === t.parent).map(r => ({ ...r, from: t.parent })) : [];
+      const pre = (t.after || []).map(x => find(conv, x)).filter(Boolean);
+      return { task: { ...t }, materials: [...own, ...up], waits_for: pre.map(x => ({ id: x.id, title: x.title, status: x.status, owner: x.owner, result: x.result })), blocked_by: pre.filter(x => x.status === "open" || x.status === "doing").map(x => x.id),
+        parent: t.parent && find(conv, t.parent) ? { id: t.parent, title: find(conv, t.parent).title, status: find(conv, t.parent).status, result: "" } : null,
+        children: rows.filter(x => x.conv === conv && x.parent === id).map(x => ({ id: x.id, title: x.title, status: x.status, owner: x.owner })), notes: this.taskNotes(_h, conv, id) };
+    },
+    workOrder(_h, conv) {
+      const live = rows.filter(t => t.conv === conv && (t.status === "open" || t.status === "doing")).map(t => ({ task: { ...t }, blocked_by: (t.after || []).filter(x => { const p = find(conv, x); return p && (p.status === "open" || p.status === "doing"); }) }));
+      return live.sort((a, b) => (a.blocked_by.length ? 1 : 0) - (b.blocked_by.length ? 1 : 0) || (a.task.priority || 2) - (b.task.priority || 2) || a.task.id - b.task.id);
+    },
+    checkAfter: (_h, conv, self, ids) => ids.every(x => find(conv, x)) ? { ids } : { ids: [], error: "没有编号 " + ids.find(x => !find(conv, x)) + " 的任务" },
+    addTaskRef(_h, conv, id, r) { if (!find(conv, id)) return null; const x = { id: this.refs.length + 1, task: id, ts: 3, who: r.who || "", kind: r.kind, title: r.title || r.kind, ref: r.ref || "", text: r.text || "" }; this.refs.push(x); return x; },
   };
 }
 
@@ -82,7 +97,7 @@ test("legacy lifecycle: initialize, initialized, tools/list, tools/call, ping", 
   assert.equal(note.status, 202); assert.equal(note.json, null);
   const list = await post(hub, d, rpc("tools/list", {}, 2), { headers: { "mcp-protocol-version": "2025-06-18" } });
   const names = list.json.result.tools.map(t => t.name);
-  assert.deepEqual(names, ["list_tasks", "get_task", "claim_task", "report_progress", "complete_task", "release_task", "add_task", "search_chat", "get_memory", "list_files", "get_file", "repo_status", "notify_group"]);
+  assert.deepEqual(names, ["list_tasks", "get_task", "claim_task", "report_progress", "complete_task", "attach_material", "release_task", "add_task", "search_chat", "get_memory", "list_files", "get_file", "repo_status", "notify_group"]);
   for (const t of list.json.result.tools) { assert.equal(t.inputSchema.type, "object"); assert.ok(t.description.length > 40); assert.equal(t.run, undefined); }
   assert.equal(list.json.result.resultType, undefined);
   assert.deepEqual((await post(hub, d, rpc("ping", undefined, 3))).json, { jsonrpc: "2.0", id: 3, result: {} });
@@ -318,4 +333,38 @@ test("feature shape", () => {
   assert.equal(feature.tunables.mcp_calls_daily.default, 500);
   assert.ok(feature.about.length >= 3);
   assert.equal(typeof feature.open, "function");
+});
+
+test("hand-off: get_task carries the original words, materials and what it waits for; list is in working order; attach and split", async () => {
+  const hub = mkHub(), d = mkDeps();
+  const run = async (name, args) => { const r = await call(hub, d, name, args); return { err: r.isError, out: r.data }; };
+  const a = d.addTask(hub, "g:1", { title: "写奖励方案", owner: "bot", source: "方案交给你了" });
+  d.refs.push({ id: 90, task: a.id, ts: 1, who: "小明", kind: "quote", title: "群里的原话", ref: "", text: "[11-15 21:40] 小明：方案交给你了，能力不够的拆出来" });
+  const low = (await run("add_task", { title: "不急的事", priority: "low" })).out.task;
+  const urgent = (await run("add_task", { title: "急事", priority: "high" })).out.task;
+  const part = (await run("add_task", { title: "拍板排行榜拆不拆", owner: "小明", parent: a.id, detail: "要人拍板，我定不了" })).out.task;
+  assert.equal(part.split_from, a.id);
+  assert.match(d.notes.at(-1).text, /拆出 #\d+「拍板排行榜拆不拆」交给 小明/);
+  const wr = await run("add_task", { title: "按拍板结果改方案", after: [part.id] }); if (!wr.out.task) throw new Error("add_task said: " + JSON.stringify(wr.out));
+  const waits = wr.out.task;
+  assert.deepEqual(waits.after, [part.id]);
+  assert.equal((await run("add_task", { title: "排在不存在的后面", after: [999] })).err, true);
+  const list = (await run("list_tasks", {})).out.tasks;
+  assert.equal(list[0].title, "急事"); assert.equal(list[0].priority, "high");
+  assert.equal(list.at(-1).title, "按拍板结果改方案"); assert.deepEqual(list.at(-1).waiting_for, [part.id]);
+  assert.equal(list.find(t => t.id === low.id).priority, "low");
+  assert.equal((await run("attach_material", { id: a.id, kind: "report", title: "调研报告", text: "第一章……" })).out.attached.chars, 5);
+  assert.equal((await run("attach_material", { id: a.id, kind: "link", url: "ftp://x" })).err, true);
+  assert.equal((await run("attach_material", { id: a.id, kind: "report" })).err, true);
+  assert.equal((await run("attach_material", { id: a.id, kind: "link", title: "PR", url: "https://github.com/o/r/pull/1" })).out.attached.url_or_number, "https://github.com/o/r/pull/1");
+  const got = (await run("get_task", { id: part.id })).out;
+  assert.match(got.original_words, /来自 #1[\s\S]*方案交给你了，能力不够的拆出来/);
+  assert.deepEqual(got.materials.map(m => [m.kind, m.title, m.from_task]), [["report", "调研报告", a.id], ["link", "PR", a.id]]);
+  assert.equal(got.materials[0].text, "第一章……"); assert.equal(got.split_from.id, a.id);
+  const top = (await run("get_task", { id: a.id })).out;
+  assert.deepEqual(top.split_into.map(x => x.id), [part.id]); assert.match(top.original_words, /^\[11-15 21:40\] 小明/);
+  const w = (await run("get_task", { id: waits.id })).out;
+  assert.deepEqual(w.blocked_by, [part.id]); assert.equal(w.waits_for[0].title, "拍板排行榜拆不拆");
+  assert.match((await run("claim_task", { id: waits.id })).out.warning, /排在 #\d+ 之后/);
+  assert.equal((await run("attach_material", { id: 1, kind: "report", text: "x" }, )).err, false);
 });

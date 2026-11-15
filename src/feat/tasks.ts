@@ -22,6 +22,28 @@ export type Task = {
   claimed_at: number;   // when someone took it (0 while nobody has)
   done_at: number;      // when it was finished (0 until then)
   done_by: string;      // the person credited with finishing it (a local AI's work counts for its person)
+  priority: TaskPriority; // 1 urgent, 2 normal, 3 can wait
+  after: number[];      // tasks that have to be finished before this one can start
+  parent: number;       // the task this one was split off from (0 for none)
+  runs: number;         // how many times the bot has set out to work on it by itself
+  last_run: number;     // when it last did
+};
+export type TaskPriority = 1 | 2 | 3;
+export const PRIORITY_LABEL: Record<number, string> = { 1: "急", 2: "普通", 3: "不急" };
+/** What a task carries for whoever takes it over: the words it came from, reports, links, files. */
+export type RefKind = "quote" | "report" | "link" | "file";
+export const REF_KINDS: RefKind[] = ["quote", "report", "link", "file"];
+export const REF_LABEL: Record<RefKind, string> = { quote: "原话", report: "报告", link: "链接", file: "文件" };
+export type TaskRef = { id: number; task: number; ts: number; who: string; kind: RefKind; title: string; ref: string; text: string };
+/** Everything someone needs to pick a task up cold. */
+export type Handoff = {
+  task: Task;
+  materials: (TaskRef & { from?: number })[];   // `from` is the parent task a piece was inherited from
+  waits_for: { id: number; title: string; status: TaskStatus; owner: string; result: string }[];
+  blocked_by: number[];
+  parent: { id: number; title: string; status: TaskStatus; result: string } | null;
+  children: { id: number; title: string; status: TaskStatus; owner: string }[];
+  notes: TaskNote[];
 };
 export type TaskSize = "small" | "normal" | "big";
 export const SIZES: TaskSize[] = ["small", "normal", "big"];
@@ -34,7 +56,9 @@ const NIGHT = "夜间整理";
 const EXTRACT_AT = "02:30";   // Beijing; the previous day is complete and the group is asleep
 const REMIND_AT = "09:00";
 const DAY_MSGS = 3000;        // messages read for one day at most
-const LIMIT = { title: 120, detail: 1000, source: 200, result: 2000, note: 1000, who: 40 };
+const LIMIT = { title: 120, detail: 1000, source: 200, result: 2000, note: 1000, who: 40, refTitle: 120, ref: 600, refText: 40000, quote: 6000, refs: 40 };
+export const BOT = "bot";
+export const isBot = (name: string) => String(name || "").trim().toLowerCase() === BOT;
 
 /** Seam the tests replace: the chat model for the nightly pass. */
 export const deps = {
@@ -50,7 +74,21 @@ const ofRow = (r: any): Task => ({
   owner: String(r.owner || ""), due: String(r.due || ""), source: String(r.source || ""), by: String(r.made_by || ""), claimed_by: String(r.claimed_by || ""),
   result: String(r.result || ""), created: Number(r.created), updated: Number(r.updated),
   size: (SIZES.includes(r.size) ? r.size : "normal") as TaskSize, claimed_at: Number(r.claimed_at) || 0, done_at: Number(r.done_at) || 0, done_by: String(r.done_by || ""),
+  priority: ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priority) : 2) as TaskPriority, after: parseIds(r.after), parent: Number(r.parent) || 0, runs: Number(r.runs) || 0, last_run: Number(r.last_run) || 0,
 });
+/** "25,26", "#25 #26" or [25, 26] → [25, 26]. */
+export function parseIds(v: unknown): number[] {
+  const parts = Array.isArray(v) ? v : String(v ?? "").split(/[^0-9]+/);
+  return [...new Set(parts.map(x => Math.floor(Number(x))).filter(n => n > 0))].slice(0, 12);
+}
+/** 1 / 2 / 3 from a number or a word ("high", "急", "low", "不急"…); 0 when it is not a priority. */
+export function normPriority(v: unknown): TaskPriority | 0 {
+  const t = String(v ?? "").trim().toLowerCase();
+  if (["1", "high", "urgent", "急", "高", "紧急", "优先"].includes(t)) return 1;
+  if (["2", "normal", "medium", "中", "普通"].includes(t)) return 2;
+  if (["3", "low", "低", "不急"].includes(t)) return 3;
+  return 0;
+}
 /** Columns added after the first release: a table made before them gets them on first use. */
 const ready = new WeakSet<object>();
 function ensure(hub: Hub) {
@@ -64,6 +102,8 @@ function ensure(hub: Hub) {
   };
   add("task", "size", "TEXT DEFAULT 'normal'"); add("task", "claimed_at", "INTEGER DEFAULT 0"); add("task", "done_at", "INTEGER DEFAULT 0"); add("task", "done_by", "TEXT DEFAULT ''");
   add("task_note", "kind", "TEXT DEFAULT ''");
+  add("task", "priority", "INTEGER DEFAULT 2"); add("task", "after", "TEXT DEFAULT ''"); add("task", "parent", "INTEGER DEFAULT 0");
+  add("task", "runs", "INTEGER DEFAULT 0"); add("task", "last_run", "INTEGER DEFAULT 0");
   // Tasks finished before finish times were kept: the last change to them was the finishing, so that is their time.
   try { hub.sql.exec("UPDATE task SET done_at=updated WHERE status='done' AND (done_at IS NULL OR done_at=0)"); } catch (e: any) { console.log("tasks: backfill", e?.message); }
 }
@@ -114,13 +154,47 @@ export function listTasks(hub: Hub, conv: string, f: { status?: TaskStatus[]; ow
   if (f.owner) { where.push("(owner=? OR claimed_by=?)"); binds.push(f.owner, f.owner); }
   const limit = Math.max(1, Math.min(1000, Math.floor(Number(f.limit) || 200)));
   return hub.sql.exec("SELECT * FROM task WHERE " + where.join(" AND ") +
-    " ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'open' THEN 1 WHEN 'done' THEN 2 ELSE 3 END, CASE WHEN due='' THEN 1 ELSE 0 END, due, updated DESC LIMIT ?", ...binds, limit).toArray().map(ofRow);
+    " ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'open' THEN 1 WHEN 'done' THEN 2 ELSE 3 END, CASE WHEN status IN ('open','doing') THEN COALESCE(priority,2) ELSE 2 END, CASE WHEN due='' THEN 1 ELSE 0 END, due, updated DESC LIMIT ?", ...binds, limit).toArray().map(ofRow);
 }
 
 export function getTask(hub: Hub, conv: string, id: number): Task | null {
   ensure(hub);
   const r = hub.sql.exec("SELECT * FROM task WHERE conv=? AND id=?", conv, Math.floor(Number(id)) || 0).toArray()[0];
   return r ? ofRow(r) : null;
+}
+
+const active = (t: Task | null | undefined): t is Task => !!t && (t.status === "open" || t.status === "doing");
+/** The unfinished tasks this one is waiting for. */
+export function blockers(hub: Hub, conv: string, t: Task): Task[] {
+  return t.after.map(id => getTask(hub, conv, id)).filter(active);
+}
+/** Checks a "do these first" list for a task (0 for one not made yet): every id must exist and none may end up waiting for this task in turn. */
+export function checkAfter(hub: Hub, conv: string, self: number, ids: number[]): { ids: number[]; error?: string } {
+  for (const id of ids) {
+    if (id === self) return { ids: [], error: "任务不能排在自己后面" };
+    if (!getTask(hub, conv, id)) return { ids: [], error: "没有编号 " + id + " 的任务" };
+    const seen = new Set<number>(), stack = [id];
+    while (self && stack.length) {
+      const x = stack.pop()!;
+      if (x === self) return { ids: [], error: "#" + id + " 自己就在等 #" + self + " 做完，这样排两件事会互相等" };
+      if (seen.has(x)) continue;
+      seen.add(x); stack.push(...(getTask(hub, conv, x)?.after || []));
+    }
+  }
+  return { ids };
+}
+/**
+ * Unfinished tasks in the order to work on them: what is under way, then what can start now (urgent first,
+ * then by due date, then oldest), then what is still waiting for another task. `blocked_by` lists what it waits for.
+ */
+export function workOrder(hub: Hub, conv: string): { task: Task; blocked_by: number[] }[] {
+  const rows = listTasks(hub, conv, { status: ["open", "doing"], limit: 1000 }).map(task => ({ task, blocked_by: blockers(hub, conv, task).map(b => b.id) }));
+  const key = (r: { task: Task; blocked_by: number[] }) => [r.blocked_by.length ? 1 : 0, r.blocked_by.length ? 0 : r.task.status === "doing" ? 0 : 1, r.task.priority, r.task.due ? 0 : 1, r.task.due, r.task.id] as (number | string)[];
+  return rows.sort((a, b) => { const x = key(a), y = key(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; return 0; });
+}
+/** Tasks that were waiting for `id` and have nothing left to wait for. */
+export function unblockedBy(hub: Hub, conv: string, id: number): Task[] {
+  return listTasks(hub, conv, { status: ["open", "doing"], limit: 1000 }).filter(t => t.after.includes(id) && !blockers(hub, conv, t).length);
 }
 
 /**
@@ -136,22 +210,25 @@ export function tell(hub: Hub, conv: string, text: string) {
 }
 export const named = (t: Task) => "#" + t.id + "「" + clip(t.title, 40) + "」";
 
-export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string; size?: TaskSize }, quiet = false): Task | null {
+export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string; size?: TaskSize; priority?: unknown; after?: unknown; parent?: number }, quiet = false): Task | null {
   const title = clean(t?.title, LIMIT.title);
   if (!title) return null;
   const now = Date.now(), by = clean(t.by, LIMIT.who);
   ensure(hub);
-  hub.sql.exec("INSERT INTO task(conv,title,detail,status,owner,due,source,made_by,claimed_by,result,created,updated,size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    conv, title, clean(t.detail, LIMIT.detail), "open", clean(t.owner, LIMIT.who), normDue(t.due, now), clean(t.source, LIMIT.source), by, "", "", now, now, SIZES.includes(t.size as TaskSize) ? t.size! : "normal");
+  // Ids that do not exist are left out rather than refusing the whole task; callers that want to complain use checkAfter first.
+  const after = parseIds(t.after).filter(id => !!getTask(hub, conv, id)), parent = getTask(hub, conv, Number(t.parent) || 0)?.id || 0;
+  hub.sql.exec("INSERT INTO task(conv,title,detail,status,owner,due,source,made_by,claimed_by,result,created,updated,size,priority,after,parent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    conv, title, clean(t.detail, LIMIT.detail), "open", clean(t.owner, LIMIT.who), normDue(t.due, now), clean(t.source, LIMIT.source), by, "", "", now, now, SIZES.includes(t.size as TaskSize) ? t.size! : "normal",
+    normPriority(t.priority) || 2, after.join(","), parent);
   const id = Number(hub.sql.exec("SELECT MAX(id) id FROM task WHERE conv=?", conv).toArray()[0]?.id);
-  note(hub, conv, id, by, "记下了这件事" + (t.source ? "：“" + clean(t.source, 80) + "”" : ""), now, "add");
+  note(hub, conv, id, by, "记下了这件事" + (t.source ? "：“" + clean(t.source, 80) + "”" : "") + (parent ? "（从 #" + parent + " 拆出来的）" : "") + (after.length ? "，排在 " + after.map(x => "#" + x).join("、") + " 之后" : ""), now, "add");
   const made = getTask(hub, conv, id);
-  if (made && !quiet) tell(hub, conv, (by || "有人") + " 加了 " + named(made) + (made.size === "big" ? "（大活）" : "") + (made.owner ? "，交给 " + made.owner : "") + (made.due ? "，" + made.due + " 前" : ""));
+  if (made && !quiet) tell(hub, conv, (by || "有人") + " 加了 " + named(made) + (made.size === "big" ? "（大活）" : "") + (made.priority === 1 ? "（急）" : "") + (made.owner ? "，交给 " + made.owner : "") + (made.due ? "，" + made.due + " 前" : "") + (after.length ? "，要等 " + after.map(x => "#" + x).join("、") + " 做完" : ""));
   return made;
 }
 
 /** Changes fields of a task; `who` is recorded in the task's notes. Returns the task, or null when it does not exist. */
-export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result" | "size">>, who = "", quiet = false): Task | null {
+export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result" | "size">> & { priority?: unknown; after?: unknown }, who = "", quiet = false): Task | null {
   const cur = getTask(hub, conv, id);
   if (!cur) return null;
   const next: Record<string, string | number> = {}, lines: [string, string][] = [];
@@ -162,11 +239,18 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
   if (patch.due !== undefined) { const v = normDue(patch.due); set("due", v, v ? "截止日期定为 " + v : "去掉了截止日期"); }
   if (patch.size !== undefined && SIZES.includes(patch.size)) set("size", patch.size, "定为" + SIZE_LABEL[patch.size]);
   if (patch.result !== undefined) { const v = clean(patch.result, LIMIT.result); set("result", v, v ? "结果：" + clip(v, 300) : "清掉了结果", "progress"); }
+  if (patch.priority !== undefined) { const v = normPriority(patch.priority); if (v && v !== cur.priority) { next.priority = v; lines.push(["优先级改成“" + PRIORITY_LABEL[v] + "”", "edit"]); } }
+  if (patch.after !== undefined) {
+    const ok = checkAfter(hub, conv, cur.id, parseIds(patch.after));
+    if (!ok.error && ok.ids.join(",") !== cur.after.join(",")) { next.after = ok.ids.join(","); lines.push([ok.ids.length ? "排在 " + ok.ids.map(x => "#" + x).join("、") + " 之后" : "不用等别的任务了", "edit"]); }
+  }
   const now = Date.now();
   if (patch.status !== undefined && STATUSES.includes(patch.status) && patch.status !== cur.status) {
     const to = patch.status;
     set("status", to, "状态：" + LABEL[cur.status] + " → " + LABEL[to], to === "done" ? "done" : to === "dropped" ? "drop" : cur.status === "done" || cur.status === "dropped" ? "reopen" : to === "doing" ? "claim" : "release");
-    if (to === "done") { next.done_at = now; next.done_by = personOfName(cur.claimed_by) || personOfName(cur.owner) || personOfName(who); if (!cur.claimed_at) next.claimed_at = cur.created; }
+    // Work the bot did itself is nobody's score, whoever asked for it or ticked it off.
+    const bots = isBot(cur.claimed_by) || (!cur.claimed_by && isBot(cur.owner));
+    if (to === "done") { next.done_at = now; next.done_by = bots ? "" : personOfName(cur.claimed_by) || personOfName(cur.owner) || personOfName(who); if (!cur.claimed_at) next.claimed_at = cur.created; }
     else if (cur.done_at) { next.done_at = 0; next.done_by = ""; }
     if (to === "doing" && !cur.claimed_at) next.claimed_at = now;
     // Put back to "not started" means nobody holds it any more, so someone else can pick it up.
@@ -186,6 +270,15 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
     else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
   }
   if (after && next.status === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
+  if (after && (next.status === "done" || next.status === "dropped")) {
+    // Whatever was waiting for this one can start; the bot's own waiting tasks get their tries back and are picked up by themselves.
+    const free = unblockedBy(hub, conv, after.id);
+    for (const t of free) {
+      note(hub, conv, t.id, who, "#" + after.id + " " + (next.status === "done" ? "做完了" : "不做了") + "，这件可以开始了", now, "ready");
+      hub.sql.exec("UPDATE task SET runs=0, last_run=0 WHERE conv=? AND id=?", conv, t.id);
+    }
+    if (free.length && !quiet) tell(hub, conv, "#" + after.id + " " + (next.status === "done" ? "做完" : "取消") + "之后，" + free.map(t => named(t) + (t.owner || t.claimed_by ? "（" + (t.claimed_by || t.owner) + "）" : "")).join("、") + " 可以开始了");
+  }
   return after;
 }
 
@@ -230,6 +323,76 @@ export function taskNotes(hub: Hub, conv: string, id: number): TaskNote[] {
     .map((r: any) => ({ ts: Number(r.ts), who: String(r.who || ""), text: String(r.text || ""), kind: String(r.kind || "") || kindOf(String(r.text || "")) }));
 }
 
+// ---------- what a task carries: original words, reports, links, files ----------
+const ofRef = (r: any): TaskRef => ({ id: Number(r.id), task: Number(r.task), ts: Number(r.ts), who: String(r.who || ""), kind: (REF_KINDS.includes(r.kind) ? r.kind : "link") as RefKind, title: String(r.title || ""), ref: String(r.ref || ""), text: String(r.text || "") });
+/**
+ * Attaches material to a task: `text` is the content itself (the words from the chat, a report's full text),
+ * `ref` is where it lives (a URL, or a file / picture number like x12 or g300). The same piece is not attached twice.
+ */
+export function addTaskRef(hub: Hub, conv: string, id: number, r: { kind: RefKind; title?: string; ref?: string; text?: string; who?: string }): TaskRef | null {
+  const t = getTask(hub, conv, id);
+  if (!t || !REF_KINDS.includes(r?.kind)) return null;
+  const text = clean(r.text, r.kind === "quote" ? LIMIT.quote : LIMIT.refText), ref = clean(r.ref, LIMIT.ref);
+  if (!text && !ref) return null;
+  const have = taskRefs(hub, conv, t.id);
+  const same = have.find(x => x.kind === r.kind && x.ref === ref && x.text === text);
+  if (same) return same;
+  if (have.length >= LIMIT.refs) return null;
+  const now = Date.now(), who = clean(r.who, LIMIT.who), title = clean(r.title, LIMIT.refTitle) || (r.kind === "quote" ? "群里的原话" : REF_LABEL[r.kind]);
+  hub.sql.exec("INSERT INTO task_ref(task,conv,ts,who,kind,title,ref,text) VALUES(?,?,?,?,?,?,?,?)", t.id, conv, now, who, r.kind, title, ref, text);
+  const row = hub.sql.exec("SELECT MAX(id) id FROM task_ref WHERE conv=? AND task=?", conv, t.id).toArray()[0] as any;
+  if (r.kind !== "quote") note(hub, conv, t.id, who, "挂上了" + REF_LABEL[r.kind] + "《" + title + "》" + (ref ? " " + clip(ref, 120) : ""), now, "attach");
+  hub.sql.exec("UPDATE task SET updated=? WHERE conv=? AND id=?", now, conv, t.id);
+  return { id: Number(row.id), task: t.id, ts: now, who, kind: r.kind, title, ref, text };
+}
+export function taskRefs(hub: Hub, conv: string, id: number): TaskRef[] {
+  ensure(hub);
+  return hub.sql.exec("SELECT * FROM task_ref WHERE conv=? AND task=? ORDER BY ts, id", conv, Math.floor(Number(id)) || 0).toArray().map(ofRef);
+}
+export function removeTaskRef(hub: Hub, conv: string, id: number, refId: number, who = ""): boolean {
+  const r = taskRefs(hub, conv, id).find(x => x.id === Number(refId));
+  if (!r) return false;
+  hub.sql.exec("DELETE FROM task_ref WHERE conv=? AND task=? AND id=?", conv, r.task, r.id);
+  note(hub, conv, r.task, who, "拿掉了" + REF_LABEL[r.kind] + "《" + r.title + "》", Date.now(), "edit");
+  return true;
+}
+/** The whole package for taking a task over: its materials (and those of the task it was split from), what it waits for, its parent and children, its notes. */
+export function handoff(hub: Hub, conv: string, id: number): Handoff | null {
+  const task = getTask(hub, conv, id);
+  if (!task) return null;
+  const materials: Handoff["materials"] = taskRefs(hub, conv, task.id);
+  const seen = new Set([task.id]);
+  for (let up = task.parent, hop = 0; up && !seen.has(up) && hop < 5; hop++) {
+    seen.add(up);
+    const p = getTask(hub, conv, up);
+    if (!p) break;
+    materials.push(...taskRefs(hub, conv, p.id).map(r => ({ ...r, from: p.id })));
+    up = p.parent;
+  }
+  const parent = getTask(hub, conv, task.parent);
+  return {
+    task, materials,
+    waits_for: task.after.map(x => getTask(hub, conv, x)).filter((x): x is Task => !!x).map(x => ({ id: x.id, title: x.title, status: x.status, owner: x.claimed_by || x.owner, result: x.result })),
+    blocked_by: blockers(hub, conv, task).map(b => b.id),
+    parent: parent ? { id: parent.id, title: parent.title, status: parent.status, result: parent.result } : null,
+    children: hub.sql.exec("SELECT * FROM task WHERE conv=? AND parent=? ORDER BY id", conv, task.id).toArray().map(ofRow).map(c => ({ id: c.id, title: c.title, status: c.status, owner: c.claimed_by || c.owner })),
+    notes: taskNotes(hub, conv, task.id),
+  };
+}
+/** The task the bot is working on by itself right now in this conversation (0 for none). */
+export function botBusy(hub: Hub, conv: string): number {
+  const id = Number(hub.get("tasks:bot:running:" + conv) || 0);
+  if (!id) return 0;
+  const t = getTask(hub, conv, id), jobs = (hub as any).jobs as Map<number, { conv: string }> | undefined;
+  return t && t.status === "doing" && (!jobs || [...jobs.values()].some(j => j.conv === conv)) ? id : 0;
+}
+/** The words a task came from, as they were said: the last few messages of the people asking, with time and name. */
+export function quoteOf(hub: Hub, conv: string, askerIds: string[], now = Date.now()): string {
+  if (!askerIds.length || typeof (hub as any).recent !== "function") return "";
+  const rows = ((hub as any).recent(conv, 60) as any[]).filter(r => r.role === "user" && askerIds.includes(String(r.sender || "")) && now - Number(r.ts) < 30 * 60000 && String(r.text || "").trim());
+  return rows.slice(-8).map(r => "[" + fmtFull(Number(r.ts), BJ) + "] " + String(r.name || "群友") + "：" + clip(String(r.text), 1500)).join("\n");
+}
+
 // ---------- matching ----------
 const norm = (s: string) => String(s || "").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
 const grams = (s: string) => { const g = new Set<string>(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); if (s.length === 1) g.add(s); return g; };
@@ -254,13 +417,15 @@ export function similarTask(hub: Hub, conv: string, title: string): Task | null 
 }
 
 // ---------- the chat tool ----------
-const brief = (t: Task) => ({ id: t.id, title: t.title, status: LABEL[t.status], owner: t.owner, due: t.due, claimed_by: t.claimed_by, ...(t.result ? { result: clip(t.result, 200) } : {}) });
+const brief = (t: Task) => ({ id: t.id, title: t.title, status: LABEL[t.status], owner: t.owner, due: t.due, claimed_by: t.claimed_by, ...(t.priority !== 2 ? { priority: PRIORITY_LABEL[t.priority] } : {}), ...(t.after.length ? { after: t.after } : {}), ...(t.parent ? { split_from: t.parent } : {}), ...(t.result ? { result: clip(t.result, 200) } : {}) });
 const full = (t: Task) => ({ ...brief(t), detail: t.detail, source: t.source, by: t.by, result: t.result, created: fmtFull(t.created), updated: fmtFull(t.updated) });
 const STATUS_ARG: Record<string, TaskStatus[]> = { active: ["open", "doing"], open: ["open"], doing: ["doing"], done: ["done"], dropped: ["dropped"], all: [] };
 
 function tools({ hub, conv, askers }: Ctx): Tool[] {
   const me = askers.map(a => a.name || a.id.slice(-4)).filter(Boolean);
-  const who = me.join("、") || "群友";
+  // With nobody asking, it is the bot itself at work (a scheduled run, or a task it is doing on its own).
+  const who = me.join("、") || BOT;
+  const waits = (t: Task) => { const b = blockers(hub, conv, t); return b.length ? { waiting_for: b.map(x => ({ id: x.id, title: clip(x.title, 40), who: x.claimed_by || x.owner })) } : {}; };
   const need = (id: unknown) => {
     const t = getTask(hub, conv, Number(id));
     return t ? { t } : { err: { ok: false, error: Number(id) ? "没有编号 " + Number(id) + " 的任务" : "要说是哪个任务（编号）" } };
@@ -271,16 +436,20 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       + "什么时候记（不用等人开口让你记）：有人明确说自己要做某件事（“我明天把登录页改完”“报告我来写”），或者把事交给某人（“小王你周五前把预算发出来”），而且做完能看得出来（有个具体的东西或结果）。随口的愿望（“哪天想去学滑雪”）、玩笑、反问、已经顺手做完的事都不记。有人说“bot 记一下……”就一定记。\n"
       + "记之前先 list 看一眼有没有同一件事，有就别重复记，改那一条（update / note）；add 自己也会挡掉标题几乎一样的。\n"
       + "有人说做完了（“登录页改好了”“报告发群里了”）就 done，result 写交了什么（文字、链接、文件编号）；说不做了、取消了就 drop；说做到一半、卡住了就 note。有人说“这个我来”就 claim。\n"
-      + "有人问“我们现在有哪些事在做”“我还欠什么”，用 list 照清单回答，不要凭印象。\n"
-      + "op：add（title 必填，一句话说清要交付什么；owner 填负责人在群里的名字，交给你自己就填 bot；due 填 YYYY-MM-DD，也认“明天”“11月20日”；source 填原话里的一小句）、"
+      + "有人问“我们现在有哪些事在做”“我还欠什么”“先做哪个”，用 list 照清单回答，不要凭印象；list 已经按该做的顺序排好（在做的、能开工的按优先级、还在等前置的排最后）。\n"
+      + "交给你自己做的事（owner 是 bot）不是记一笔就完了，清单上要看得出你在干：开工前 start，做出来的东西（调研报告、方案全文、网页链接、PR、文件编号）用 attach 挂到任务上，做完 done。看板和群友的本地 AI 只看得到挂在任务上的东西，只发在群里不算交接。调研、方案、结论这类成文的产出一定用 kind=report 把全文放进 text：只挂图片或 PDF 的编号，别人的 AI 读不了。\n"
+      + "你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 split 从原任务里拆成一件新任务交给合适的人，reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么；你剩下的活要等他做完才能继续就填 blocks=true。在群里说清楚哪部分你做了、哪部分拆给了谁。\n"
+      + "先后和轻重：一件事要等另一件做完才能做，填 after（前置任务的编号）；急的填 priority=high，不急的填 low。别人口头说“先做 A 再做 B”“这个最急”也照这个记。\n"
+      + "op：add（title 必填，一句话说清要交付什么；owner 填负责人在群里的名字，交给你自己就填 bot；due 填 YYYY-MM-DD，也认“明天”“11月20日”；source 填原话里的一小句，提出这件事的人最近说的原话会自动整段存进任务，不用你抄）、"
       + "list（status：active 没做完的（默认）/ open / doing / done / dropped / all；owner 按人筛；mine=true 只看提问的人自己的）、"
-      + "update（id 加要改的 title / detail / owner / due / status）、done（id，result）、drop（id，reason）、note（id，text 进展）、claim（id，认领的人就是提问的人）、show（id，看这件事的全部经过）。\n"
+      + "update（id 加要改的 title / detail / owner / due / status）、done（id，result）、drop（id，reason）、note（id，text 进展）、claim（id，认领的人就是提问的人）、show（id，看这件事的全部经过和挂着的材料）、"
+      + "start（id，你自己开工做这件事）、attach（id，kind：report 报告或方案全文放 text / link 链接放 ref / file 文件或图片编号放 ref，title 起个名字）、split（id 是原任务，title、owner、reason、detail，可选 priority、blocks）。\n"
       + "返回任务的编号、标题、状态、负责人、截止日期。回群里关于任务的话要短：一两句，记下了就说“记下了”，别把整张清单念出来，除非有人要看。",
     parameters: {
       type: "object",
       properties: {
-        op: { type: "string", enum: ["add", "list", "update", "done", "drop", "note", "claim", "show"] },
-        id: { type: "integer", description: "任务编号（update / done / drop / note / claim / show）" },
+        op: { type: "string", enum: ["add", "list", "update", "done", "drop", "note", "claim", "show", "start", "attach", "split"] },
+        id: { type: "integer", description: "任务编号（add 以外都要；split 时是被拆的原任务）" },
         title: { type: "string" }, detail: { type: "string", description: "补充说明，可空" },
         owner: { type: "string", description: "负责人在群里的名字；add / update 用来指定，list 用来筛" },
         due: { type: "string", description: "截止日期 YYYY-MM-DD；清掉就填空字符串" },
@@ -290,7 +459,12 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         mine: { type: "boolean", description: "list：只看提问的人负责或认领的" },
         result: { type: "string", description: "done：交了什么" },
         reason: { type: "string", description: "drop：为什么不做了" },
-        text: { type: "string", description: "note：进展" },
+        text: { type: "string", description: "note：进展；attach：报告或方案的全文（最多 4 万字）" },
+        priority: { type: "string", enum: ["high", "normal", "low"], description: "add / update / split：轻重，high 急、normal 普通（默认）、low 不急" },
+        after: { type: "array", items: { type: "integer" }, description: "add / update：要等哪些任务做完才能开始（它们的编号）；update 填空数组表示不用等了" },
+        kind: { type: "string", enum: ["report", "link", "file"], description: "attach：挂的是什么" },
+        ref: { type: "string", description: "attach：链接，或文件、图片的编号（如 x12、g300）" },
+        blocks: { type: "boolean", description: "split：原任务要等拆出去的这件做完才能继续" },
       },
       required: ["op"],
     },
@@ -301,31 +475,80 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         if (!title) return { ok: false, error: "要说清楚是什么事（title）" };
         const same = similarTask(hub, conv, title);
         if (same) return { ok: true, duplicate: true, note: "清单里已经有这件事了，没有重复记；要补充就 update 或 note 这一条", task: brief(same) };
-        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who, size: a.size }, true)!;
-        return { ok: true, added: brief(t) };
+        const dep = checkAfter(hub, conv, 0, parseIds(a.after));
+        if (dep.error) return { ok: false, error: dep.error };
+        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who, size: a.size, priority: a.priority, after: dep.ids }, true)!;
+        const said = quoteOf(hub, conv, askers.map(x => x.id));
+        if (said) addTaskRef(hub, conv, t.id, { kind: "quote", text: said, who });
+        return { ok: true, added: brief(t), ...waits(t), ...(isBot(t.owner) ? { next: "这件在你名下。这一轮就做的话先 start 再动手；这一轮不做也行，之后轮到它（按优先级和先后顺序）你会自己开工，开工、进展、结果都会显示在看板上。别说“我排期做”却不动。" } : {}) };
       }
       if (op === "list") {
         const st = STATUS_ARG[String(a.status || "active")] ?? STATUS_ARG.active;
         let owner = clean(a.owner, LIMIT.who);
         if (a.mine) { if (!me.length) return { ok: false, error: "不知道是谁在问，没法只看“我的”" }; owner = me[0]; }
-        const list = listTasks(hub, conv, { status: st, owner, limit: 60 });
-        return { ok: true, today: fmtDate(Date.now(), BJ), count: list.length, tasks: list.map(brief) };
+        let list = listTasks(hub, conv, { status: st, owner, limit: 60 });
+        // Unfinished tasks come back in working order, each saying what it still waits for.
+        const order = new Map(workOrder(hub, conv).map((r, i) => [r.task.id, i]));
+        if (list.every(t => order.has(t.id))) list = list.sort((x, y) => order.get(x.id)! - order.get(y.id)!);
+        return { ok: true, today: fmtDate(Date.now(), BJ), count: list.length, tasks: list.map(t => ({ ...brief(t), ...waits(t) })) };
       }
       const { t, err } = need(a.id);
       if (!t) return err;
-      if (op === "show") return { ok: true, task: full(t), history: taskNotes(hub, conv, t.id).map(n => ({ at: fmtFull(n.ts), who: n.who, what: n.text })) };
+      if (op === "show") {
+        const h = handoff(hub, conv, t.id)!;
+        return {
+          ok: true, task: full(t), ...waits(t),
+          ...(h.parent ? { split_from: { id: h.parent.id, title: h.parent.title } } : {}), ...(h.children.length ? { split_into: h.children.map(c => ({ id: c.id, title: c.title, status: LABEL[c.status], who: c.owner })) } : {}),
+          materials: h.materials.map(m => ({ kind: REF_LABEL[m.kind], title: m.title, ...(m.ref ? { ref: m.ref } : {}), ...(m.text ? { text: clip(m.text, m.kind === "quote" ? 2000 : 6000) } : {}), ...(m.from ? { from_task: m.from } : {}) })),
+          history: h.notes.map(n => ({ at: fmtFull(n.ts), who: n.who, what: n.text })),
+        };
+      }
+      if (op === "start") {
+        if (t.status === "done" || t.status === "dropped") return { ok: false, error: "这件事已经" + LABEL[t.status], task: brief(t) };
+        if (t.claimed_by && !isBot(t.claimed_by)) return { ok: false, error: t.claimed_by + " 已经在做这件事了，你别抢；要帮忙就 note 留言", task: brief(t) };
+        const b = blockers(hub, conv, t);
+        if (b.length) return { ok: false, error: "这件要等 " + b.map(x => "#" + x.id).join("、") + " 做完才能开始", ...waits(t) };
+        if (!t.owner) updateTask(hub, conv, t.id, { owner: BOT }, who, true);
+        return { ok: true, task: brief(claimTask(hub, conv, t.id, BOT, true)!), next: "现在动手做。产出用 attach 挂上，做不了的部分用 split 拆给人，做完 done" };
+      }
+      if (op === "attach") {
+        const kind = (REF_KINDS.includes(a.kind) && a.kind !== "quote" ? a.kind : a.text && !a.ref ? "report" : "link") as RefKind;
+        if (!clean(a.text, 10) && !clean(a.ref, 10)) return { ok: false, error: "要挂什么：报告全文放 text，链接或文件编号放 ref" };
+        const r = addTaskRef(hub, conv, t.id, { kind, title: a.title, ref: a.ref, text: a.text, who });
+        if (!r) return { ok: false, error: "没挂上：这件任务挂的材料已经到上限（" + LIMIT.refs + " 份）" };
+        return { ok: true, attached: { kind: REF_LABEL[r.kind], title: r.title, ...(r.ref ? { ref: r.ref } : {}), chars: r.text.length }, task: brief(getTask(hub, conv, t.id)!) };
+      }
+      if (op === "split") {
+        const title = clean(a.title, LIMIT.title), reason = clean(a.reason, 300);
+        if (!title) return { ok: false, error: "拆出来的这件是什么事（title）" };
+        if (!reason) return { ok: false, error: "写清楚这部分为什么要拆出去（reason）：你做不了的原因，或者为什么要别人来" };
+        const same = similarTask(hub, conv, title);
+        if (same && same.id !== t.id) return { ok: true, duplicate: true, note: "清单里已经有这件事了，没有重复拆", task: brief(same) };
+        const detail = [clean(a.detail, 700), "拆出来的原因：" + reason].filter(Boolean).join("\n");
+        // The bot is the one splitting, also when someone's request is what it is working on.
+        const child = addTask(hub, conv, { title, detail, owner: a.owner, due: a.due, source: t.source, by: BOT, size: a.size, priority: a.priority ?? t.priority, parent: t.id }, true)!;
+        addTaskNote(hub, conv, t.id, BOT, "拆出 #" + child.id + "「" + clip(child.title, 40) + "」" + (child.owner ? "交给 " + child.owner : "，还没定谁做") + "：" + reason);
+        if (a.blocks) updateTask(hub, conv, t.id, { after: [...t.after, child.id] }, BOT, true);
+        return { ok: true, split: brief(child), from: brief(getTask(hub, conv, t.id)!), ...(a.blocks ? { note: "原任务会等 #" + child.id + " 做完再继续，到时候自动轮到" } : {}), say: "在群里说清楚这部分为什么拆给" + (child.owner || "别人") + "，别悄悄挂上去" };
+      }
       if (op === "update") {
         const patch: any = {};
         for (const k of ["title", "detail", "owner", "due", "size"]) if (a[k] !== undefined) patch[k] = a[k];
+        if (a.priority !== undefined) { if (!normPriority(a.priority)) return { ok: false, error: "优先级只能是 high / normal / low" }; patch.priority = a.priority; }
+        if (a.after !== undefined) { const dep = checkAfter(hub, conv, t.id, parseIds(a.after)); if (dep.error) return { ok: false, error: dep.error }; patch.after = dep.ids; }
         if (a.status !== undefined) { if (!STATUSES.includes(a.status)) return { ok: false, error: "状态只能是 open / doing / done / dropped" }; patch.status = a.status; }
         if (a.result !== undefined) patch.result = a.result;
         if (patch.due && !normDue(patch.due)) return { ok: false, error: "截止日期看不懂，用 2026-11-20 这样的写法" };
-        return { ok: true, task: brief(updateTask(hub, conv, t.id, patch, who, true)!) };
+        const up = updateTask(hub, conv, t.id, patch, who, true)!;
+        return { ok: true, task: brief(up), ...waits(up) };
       }
       if (op === "done") {
         const fin = updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who, true)!;
-        const cheer = hooks.facts?.(hub, conv, fin);
-        return { ok: true, task: brief(fin), ...(cheer ? { cheer, say: "做完一件事值得当场夸一句：用你平时的口气，具体说他做成了什么，带上 cheer 里一两个真实的数（这周第几件、连续几天、花了多久、新拿的称号），别说“辛苦了”这种套话，别编 cheer 里没有的数" } : {}) };
+        const cheer = fin.done_by ? hooks.facts?.(hub, conv, fin) : null, free = unblockedBy(hub, conv, fin.id);
+        const bare = isBot(fin.claimed_by) && !taskRefs(hub, conv, fin.id).some(r => r.kind === "report" || r.kind === "link");
+        return { ok: true, task: brief(fin),
+          ...(bare ? { missing: "这件任务上还没有挂成文的产出。有报告、方案、结论就现在补挂：attach kind=report，全文放 text（图片和 PDF 别人的 AI 读不了）；有网页或 PR 就 attach kind=link" } : {}),
+          ...(fin.done_by ? {} : { note: "这是你自己做的活，不给任何人记分，别说算在谁头上" }), ...(free.length ? { now_can_start: free.map(x => ({ id: x.id, title: clip(x.title, 40), who: x.claimed_by || x.owner })), tell: "顺口说一句这几件现在可以开始了" } : {}), ...(cheer ? { cheer, say: "做完一件事值得当场夸一句：用你平时的口气，具体说他做成了什么，带上 cheer 里一两个真实的数（这周第几件、连续几天、花了多久、新拿的称号），别说“辛苦了”这种套话，别编 cheer 里没有的数" } : {}) };
       }
       if (op === "drop") {
         const r = updateTask(hub, conv, t.id, { status: "dropped" }, who, true)!;
@@ -475,8 +698,83 @@ export async function remind(hub: Hub, now: number) {
   return sent;
 }
 
+// ---------- the bot doing the tasks that are its own ----------
+const BOT_RUNS = 3;                 // tries per task before it stops and asks for a person
+const RETRY_MS = 30 * 60000;        // between two tries at the same task
+const SETTLE_MS = 2 * 60000;        // a task just made may be under way in the chat turn that made it
+const WORK_FROM = "08:00", WORK_TO = "23:30";   // Beijing: results are posted to the group, so not at night
+
+/** The bot's next task in this conversation: its own, not waiting for anything, not tried too often or too recently. */
+export function nextBotTask(hub: Hub, conv: string, now = Date.now()): Task | null {
+  return workOrder(hub, conv).filter(r => !r.blocked_by.length).map(r => r.task)
+    .find(t => (isBot(t.owner) || isBot(t.claimed_by)) && (!t.claimed_by || isBot(t.claimed_by)) && t.runs < BOT_RUNS && now - t.created >= SETTLE_MS && now - t.last_run >= RETRY_MS) || null;
+}
+/** What the bot is told when it sets out on one of its tasks: the whole hand-off package and how to work. */
+export function botBrief(hub: Hub, conv: string, id: number): string {
+  const h = handoff(hub, conv, id)!, t = h.task;
+  const mat = h.materials.map(m => "〔" + REF_LABEL[m.kind] + (m.from ? "，来自 #" + m.from : "") + "〕" + m.title + (m.ref ? " " + m.ref : "") + (m.text ? "\n" + clip(m.text, m.kind === "quote" ? 3000 : 5000) : "")).join("\n\n");
+  const pre = h.waits_for.map(w => "#" + w.id + "「" + w.title + "」" + LABEL[w.status] + (w.result ? "，结果：" + clip(w.result, 600) : "")).join("\n");
+  const log = h.notes.filter(n => n.kind === "progress" || n.kind === "attach").slice(-8).map(n => fmtFull(n.ts) + " " + n.who + "：" + clip(n.text, 300)).join("\n");
+  return "做任务 #" + t.id + "「" + t.title + "」。这是群里交给你的活，现在轮到它了" + (t.runs > 1 ? "（第 " + t.runs + " 轮，接着上次的做）" : "") + "。\n"
+    + (t.detail ? "要求：" + t.detail + "\n" : "") + (t.source ? "来由：" + t.source + "\n" : "")
+    + (h.parent ? "它是从 #" + h.parent.id + "「" + h.parent.title + "」拆出来的。\n" : "")
+    + (mat ? "\n挂在任务上的材料：\n" + mat + "\n" : "") + (pre ? "\n前置任务：\n" + pre + "\n" : "") + (log ? "\n之前的进展：\n" + log + "\n" : "")
+    + "\n怎么做：\n"
+    + "0. 先对一下上面的聊天和进展：这件事如果你其实已经做完、成果也发过了，不要重做，把成果用 tasks op=attach 挂上，直接 op=done。\n"
+    + "1. 现在就动手，用你的工具把能做的部分做完：调研就真的去搜、去读；写方案就写成文档发出来；改代码就用编码代理开 PR。不要只说打算怎么做。\n"
+    + "2. 做出来的东西挂到任务上：tasks op=attach（kind=report 放报告或方案全文，kind=link 放网页或 PR 链接，kind=file 放文件、图片编号）。看板和群友的本地 AI 靠这个接手，只发在群里不算。成文的东西一定要有一份 kind=report 的全文，只挂图片或 PDF 别人的 AI 读不了。\n"
+    + "3. 你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 tasks op=split（id=" + t.id + "）拆成一件新任务交给合适的人：owner 填他在群里的名字（不知道给谁就空着），reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么。你剩下的活要等他那件做完才能继续，就加 blocks=true，到时候会自动再轮到你。\n"
+    + "4. 中途值得记的进展用 tasks op=note。\n"
+    + "5. 收尾：你这部分全做完了就 tasks op=done，result 写交付了什么、在哪。还要等别人的那件就不要 done。\n"
+    + "最后用两三句话在群里交代：做成了什么、成果在哪（给链接）、哪几块拆给了谁、为什么。这几句会直接发到群里，别写成报告。";
+}
+/** Sets the bot to work on one of its tasks in the background; resolves when that run has ended. */
+export async function workOn(hub: Hub, conv: string, id: number, now = Date.now()): Promise<boolean> {
+  const t = getTask(hub, conv, id);
+  if (!active(t) || (t.claimed_by && !isBot(t.claimed_by)) || blockers(hub, conv, t).length) return false;
+  const fresh = t.status !== "doing";
+  hub.sql.exec("UPDATE task SET runs=COALESCE(runs,0)+1, last_run=? WHERE conv=? AND id=?", now, conv, t.id);
+  if (!t.owner) updateTask(hub, conv, t.id, { owner: BOT }, BOT, true);
+  claimTask(hub, conv, t.id, BOT, true);
+  hub.set("tasks:bot:running:" + conv, String(t.id));
+  if (fresh) tell(hub, conv, "Bot 接了 " + named(t) + "，开干了，进展在看板上");
+  try { await (hub as any).runTask(conv, botBrief(hub, conv, t.id)); }
+  catch (e: any) { console.log("tasks: bot run failed", e?.message); }
+  finally { hub.set("tasks:bot:running:" + conv, ""); }
+  // The run was told to finish the task itself; say on the task what happened when it did not.
+  const after = getTask(hub, conv, t.id);
+  if (active(after)) {
+    const wait = blockers(hub, conv, after);
+    if (wait.length) note(hub, conv, after.id, BOT, "这一轮做到这里，剩下的等 " + wait.map(x => "#" + x.id).join("、") + " 做完再继续", Date.now(), "progress");
+    else if (after.runs >= BOT_RUNS) {
+      note(hub, conv, after.id, BOT, "自己试了 " + BOT_RUNS + " 轮还没做完，先停下，等人看一眼卡在哪", Date.now(), "progress");
+      tell(hub, conv, named(after) + " 我自己试了 " + BOT_RUNS + " 轮还没做完，先停在这，需要有人看一眼卡在哪");
+    } else note(hub, conv, after.id, BOT, "这一轮没做完，过半小时接着做", Date.now(), "progress");
+  }
+  return true;
+}
+/** Starts at most one of the bot's own tasks per conversation at a time, in working hours, within the day's allowance. */
+function botTick(hub: Hub, now: number) {
+  const today = fmtDate(now, BJ);
+  if (now < zonedToUtc(today, WORK_FROM, BJ) || now >= zonedToUtc(today, WORK_TO, BJ)) return;
+  ensure(hub);
+  const convs = hub.sql.exec("SELECT DISTINCT conv FROM task WHERE status IN ('open','doing') AND (lower(owner)='bot' OR lower(claimed_by)='bot')").toArray().map((r: any) => String(r.conv));
+  for (const conv of convs) {
+    if (conv.startsWith("t:") || String(hub.edit.cfg(conv, "tasks_bot_auto")) !== "on") continue;
+    const jobs = (hub as any).jobs as Map<number, { conv: string }> | undefined;
+    if ((jobs && [...jobs.values()].some(j => j.conv === conv)) || (hub as any).running?.has?.(conv)) continue;   // one thing at a time per group
+    const t = nextBotTask(hub, conv, now);
+    if (!t) continue;
+    const k = "tasks:bot:day:" + conv, [day, n] = String(hub.get(k) || "").split("|"), used = day === today ? Number(n) || 0 : 0;
+    if (used >= Number(hub.edit.cfg(conv, "tasks_bot_daily"))) continue;
+    hub.set(k, today + "|" + (used + 1));
+    hub.ctx.waitUntil(workOn(hub, conv, t.id, now).catch(e => console.log("tasks: bot work failed", e?.message)));
+  }
+}
+
 function tick(hub: Hub, now: number) {
   const today = fmtDate(now, BJ);
+  try { botTick(hub, now); } catch (e: any) { console.log("tasks: bot tick failed", e?.message); }
   if (hub.get("tasks:extract:day") !== today && now >= zonedToUtc(today, EXTRACT_AT, BJ) && !busy.has(hub)) {
     hub.set("tasks:extract:day", today);
     busy.add(hub);
@@ -496,23 +794,42 @@ const feature: Feature = {
     CREATE TABLE IF NOT EXISTS task(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, title TEXT NOT NULL, detail TEXT DEFAULT '',
       status TEXT NOT NULL DEFAULT 'open', owner TEXT DEFAULT '', due TEXT DEFAULT '', source TEXT DEFAULT '', made_by TEXT DEFAULT '',
       claimed_by TEXT DEFAULT '', result TEXT DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL, reminded TEXT DEFAULT '',
-      size TEXT DEFAULT 'normal', claimed_at INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0, done_by TEXT DEFAULT '');
+      size TEXT DEFAULT 'normal', claimed_at INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0, done_by TEXT DEFAULT '',
+      priority INTEGER DEFAULT 2, after TEXT DEFAULT '', parent INTEGER DEFAULT 0, runs INTEGER DEFAULT 0, last_run INTEGER DEFAULT 0);
     CREATE INDEX IF NOT EXISTS task_conv ON task(conv, status, updated);
     CREATE INDEX IF NOT EXISTS task_due ON task(due, status);
     CREATE TABLE IF NOT EXISTS task_note(id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, conv TEXT NOT NULL, ts INTEGER NOT NULL, who TEXT DEFAULT '', text TEXT NOT NULL, kind TEXT DEFAULT '');
     CREATE INDEX IF NOT EXISTS task_note_task ON task_note(conv, task, ts);
+    CREATE TABLE IF NOT EXISTS task_ref(id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, conv TEXT NOT NULL, ts INTEGER NOT NULL, who TEXT DEFAULT '',
+      kind TEXT NOT NULL, title TEXT DEFAULT '', ref TEXT DEFAULT '', text TEXT DEFAULT '');
+    CREATE INDEX IF NOT EXISTS task_ref_task ON task_ref(conv, task, ts);
   `,
   tunables: {
     tasks_nightly: { default: "on", options: ["on", "off"], what: "每天夜里从前一天的聊天里补记任务、标出做完和不做的" },
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
     tasks_announce: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 接了任务、做完、放下、加了新任务时，在群里说一句" },
+    tasks_bot_auto: { default: "on", options: ["on", "off"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
+    tasks_bot_daily: { default: 6, min: 0, max: 20, what: "Bot 一天最多自己开工做几次名下的任务" },
   },
   tools,
   tick,
   async admin(hub, req, url, body) {
     if (url.pathname !== "/admin/tasks") return null;
     if (req.method === "POST") {
+      // POST {"work":"t:room"} (optionally "id"): the bot starts on its next own task there right now, whatever the hour.
+      if (body?.work) {
+        const c = String(body.work), t = body.id ? getTask(hub, c, Number(body.id)) : nextBotTask(hub, c, Date.now() + SETTLE_MS + RETRY_MS);
+        if (!t) return json({ ok: false, error: "这个会话里没有轮到 Bot 做的任务" }, 404);
+        // The run can take many minutes, longer than a request may stay open: it goes on in the background; read the task afterwards.
+        hub.ctx.waitUntil(workOn(hub, c, t.id).catch(e => console.log("tasks: bot work failed", e?.message)));
+        return json({ ok: true, started: t.id, title: t.title });
+      }
+      // POST {"attach":{"conv","id","kind","title","text","ref","who"}}: put material on a task by hand, the original words included.
+      if (body?.attach) {
+        const x = body.attach, r = addTaskRef(hub, String(x.conv || hub.get("main") || ""), Number(x.id), { kind: x.kind, title: x.title, text: x.text, ref: x.ref, who: x.who });
+        return r ? json({ ok: true, attached: { id: r.id, kind: r.kind, title: r.title, chars: r.text.length } }) : json({ ok: false, error: "没挂上：任务不存在、种类不对，或者内容是空的" }, 400);
+      }
       const conv = String(body?.extract || "");
       if (!conv) return json({ error: "extract 要填群的会话编号" }, 400);
       return json(await extractDay(hub, conv, String(body.day || yesterday(Date.now())), body.dry !== false));
@@ -530,6 +847,10 @@ const feature: Feature = {
     "每天夜里我会把前一天的聊天再过一遍，补上漏记的、标出做完和取消的，每件新记的都对得上群里的原话；一晚最多新记 8 件（可以改），不在群里说。",
     "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，我会在群里说一句（以【任务】开头）；在群里直接跟我说的不重复提醒。不想要可以把 tasks_announce 关掉。",
     "到期提醒默认关着；打开后，任务到期那天早上我在群里提一句，每件只提一次。",
+    "任务有轻重（急、普通、不急）和先后（这件要等哪几件做完）。清单和看板按该做的顺序排：正在做的、现在能开工的（急的在前）、还在等别的任务的；前面那件做完，后面等着的会被点名可以开始了。",
+    "交给我自己的任务我会真的去做，看板上看得到：轮到它时我自己开工（北京时间 8 点到 23 点半，同一个群一次只做一件，一天最多 6 次，可以改），状态变成“在做”，做出来的报告、链接、文件挂在任务上，做完写上结果。一件任务我自己最多试 3 轮，还没做完就停下来在群里说卡在哪。",
+    "我做不了的部分不硬做：要人拍板的、要线下办的、要别人账号或权限的，我从原任务里拆成新任务交给合适的人，写明为什么我做不了、我已经做到哪。原任务要等那件做完的，会排在它后面，做完后自动再轮到我。",
+    "每件任务带着交接要用的东西：提出这件事的人当时在群里说的原话（整段照存）、调研报告或方案的全文、链接和文件。看板的任务页和群友本地 AI 的 get_task 拿到的是同一份。",
   ],
 };
 export default feature;
