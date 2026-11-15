@@ -273,13 +273,14 @@ test("lookup tools: memory, files, search, repo status", async () => {
   assert.deepEqual(hub.calls.at(-1), ["repo_health", "g:1", { op: "last", repo: "TeamAgent" }]);
 });
 
-test("notify_group: prefixed, 300 characters, rate limited per person", async () => {
+test("notify_group: prefixed, 500 characters, rate limited per person", async () => {
   const hub = mkHub(), d = mkDeps();
   const r = await call(hub, d, "notify_group", { text: "任务 #12 做完了：登录页上线" });
   assert.equal(r.isError, false);
   assert.deepEqual(hub.said, [{ conv: "g:1", text: "【小明的本地 AI】任务 #12 做完了：登录页上线" }]);
-  assert.match((await call(hub, d, "notify_group", { text: "长".repeat(301) })).text, /300/);
+  assert.match((await call(hub, d, "notify_group", { text: "长".repeat(501) })).text, /500/);
   assert.match((await call(hub, d, "notify_group", { text: "好了", task: 77 })).text, /没有 #77/);
+  hub.cfg.mcp_notify_daily = 6;
   for (let i = 0; i < 5; i++) assert.equal((await call(hub, d, "notify_group", { text: "进展 " + i })).isError, false);
   const over = await call(hub, d, "notify_group", { text: "再来一条" });
   assert.equal(over.isError, true); assert.match(over.text, /6 条/);
@@ -313,7 +314,7 @@ test("body size limit", async () => {
 
 test("feature shape", () => {
   assert.equal(feature.name, "mcp");
-  assert.equal(feature.tunables.mcp_notify_daily.default, 6);
+  assert.equal(feature.tunables.mcp_notify_daily.default, 30);
   assert.equal(feature.tunables.mcp_calls_daily.default, 500);
   assert.ok(feature.about.length >= 3);
   assert.equal(typeof feature.open, "function");

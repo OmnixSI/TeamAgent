@@ -83,7 +83,20 @@ export function getTask(hub: Hub, conv: string, id: number): Task | null {
   return r ? ofRow(r) : null;
 }
 
-export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string }): Task | null {
+/**
+ * One line in the group when something happens to a task outside the chat (on the board, or by someone's
+ * local AI). Changes made by talking to the bot pass `quiet`: the bot's own reply already says it.
+ */
+function tell(hub: Hub, conv: string, text: string) {
+  try {
+    if (String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "on") !== "on") return;
+    const p = (hub as any).say?.(conv, "【任务】" + text);
+    if (p && typeof p.catch === "function") { const q = p.catch((e: any) => console.log("tasks: notice failed", e?.message)); (hub as any).ctx?.waitUntil?.(q); }
+  } catch (e: any) { console.log("tasks: notice failed", e?.message); }
+}
+const named = (t: Task) => "#" + t.id + "「" + clip(t.title, 40) + "」";
+
+export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string }, quiet = false): Task | null {
   const title = clean(t?.title, LIMIT.title);
   if (!title) return null;
   const now = Date.now(), by = clean(t.by, LIMIT.who);
@@ -91,11 +104,13 @@ export function addTask(hub: Hub, conv: string, t: { title: string; detail?: str
     conv, title, clean(t.detail, LIMIT.detail), "open", clean(t.owner, LIMIT.who), normDue(t.due, now), clean(t.source, LIMIT.source), by, "", "", now, now);
   const id = Number(hub.sql.exec("SELECT MAX(id) id FROM task WHERE conv=?", conv).toArray()[0]?.id);
   note(hub, conv, id, by, "记下了这件事" + (t.source ? "：“" + clean(t.source, 80) + "”" : ""), now);
-  return getTask(hub, conv, id);
+  const made = getTask(hub, conv, id);
+  if (made && !quiet) tell(hub, conv, (by || "有人") + " 加了 " + named(made) + (made.owner ? "，交给 " + made.owner : "") + (made.due ? "，" + made.due + " 前" : ""));
+  return made;
 }
 
 /** Changes fields of a task; `who` is recorded in the task's notes. Returns the task, or null when it does not exist. */
-export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result">>, who = ""): Task | null {
+export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result">>, who = "", quiet = false): Task | null {
   const cur = getTask(hub, conv, id);
   if (!cur) return null;
   const next: Record<string, string> = {}, lines: string[] = [];
@@ -112,11 +127,19 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
   const now = Date.now(), keys = Object.keys(next);
   hub.sql.exec("UPDATE task SET " + keys.map(k => k + "=?").join(",") + ", updated=? WHERE conv=? AND id=?", ...keys.map(k => next[k]), now, conv, cur.id);
   for (const l of lines) note(hub, conv, cur.id, who, l, now);
-  return getTask(hub, conv, cur.id);
+  const after = getTask(hub, conv, cur.id);
+  if (after && !quiet && next.status) {
+    const by = who || "有人";
+    if (next.status === "done") tell(hub, conv, named(after) + " 做完了（" + by + "）" + (after.result ? "：" + clip(after.result, 160) : ""));
+    else if (next.status === "dropped") tell(hub, conv, named(after) + " 不做了（" + by + "）");
+    else if (next.status === "open" && cur.claimed_by) tell(hub, conv, cur.claimed_by + " 放下了 " + named(after) + "，谁有空可以接");
+    else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
+  }
+  return after;
 }
 
 /** Marks a task as picked up by `who` and in progress; null when it does not exist, is finished, or is already claimed by someone else. */
-export function claimTask(hub: Hub, conv: string, id: number, who: string): Task | null {
+export function claimTask(hub: Hub, conv: string, id: number, who: string, quiet = false): Task | null {
   const cur = getTask(hub, conv, id), w = clean(who, LIMIT.who);
   if (!cur || !w || cur.status === "done" || cur.status === "dropped") return null;
   if (cur.claimed_by && cur.claimed_by !== w) return null;
@@ -124,7 +147,9 @@ export function claimTask(hub: Hub, conv: string, id: number, who: string): Task
   const now = Date.now();
   hub.sql.exec("UPDATE task SET claimed_by=?, status='doing', updated=? WHERE conv=? AND id=?", w, now, conv, cur.id);
   note(hub, conv, cur.id, w, cur.claimed_by ? "接着做" : "认领了，开始做", now);
-  return getTask(hub, conv, cur.id);
+  const after = getTask(hub, conv, cur.id);
+  if (after && !quiet) tell(hub, conv, w + " 接了 " + named(after) + "，开干了");
+  return after;
 }
 
 export function addTaskNote(hub: Hub, conv: string, id: number, who: string, text: string): boolean {
@@ -211,7 +236,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         if (!title) return { ok: false, error: "要说清楚是什么事（title）" };
         const same = similarTask(hub, conv, title);
         if (same) return { ok: true, duplicate: true, note: "清单里已经有这件事了，没有重复记；要补充就 update 或 note 这一条", task: brief(same) };
-        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who })!;
+        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who }, true)!;
         return { ok: true, added: brief(t) };
       }
       if (op === "list") {
@@ -230,11 +255,11 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         if (a.status !== undefined) { if (!STATUSES.includes(a.status)) return { ok: false, error: "状态只能是 open / doing / done / dropped" }; patch.status = a.status; }
         if (a.result !== undefined) patch.result = a.result;
         if (patch.due && !normDue(patch.due)) return { ok: false, error: "截止日期看不懂，用 2026-11-20 这样的写法" };
-        return { ok: true, task: brief(updateTask(hub, conv, t.id, patch, who)!) };
+        return { ok: true, task: brief(updateTask(hub, conv, t.id, patch, who, true)!) };
       }
-      if (op === "done") return { ok: true, task: brief(updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who)!) };
+      if (op === "done") return { ok: true, task: brief(updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who, true)!) };
       if (op === "drop") {
-        const r = updateTask(hub, conv, t.id, { status: "dropped" }, who)!;
+        const r = updateTask(hub, conv, t.id, { status: "dropped" }, who, true)!;
         if (clean(a.reason, 300)) addTaskNote(hub, conv, t.id, who, "不做的原因：" + clean(a.reason, 300));
         return { ok: true, task: brief(r) };
       }
@@ -245,7 +270,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       }
       if (op === "claim") {
         if (!me.length) return { ok: false, error: "不知道是谁要认领" };
-        const r = claimTask(hub, conv, t.id, me[0]);
+        const r = claimTask(hub, conv, t.id, me[0], true);
         if (!r) return { ok: false, error: t.status === "done" || t.status === "dropped" ? "这件事已经" + LABEL[t.status] : t.claimed_by + " 已经在做这件事了", task: brief(t) };
         return { ok: true, task: brief(r) };
       }
@@ -339,10 +364,10 @@ export async function extractDay(hub: Hub, conv: string, day: string, dry = fals
   }
   if (dry) return plan;
 
-  for (const f of plan.finished) { updateTask(hub, conv, f.id, { status: "done", ...(f.result ? { result: f.result } : {}) }, NIGHT); addTaskNote(hub, conv, f.id, NIGHT, "聊天里说：“" + f.quote + "”"); }
-  for (const f of plan.dropped) { updateTask(hub, conv, f.id, { status: "dropped" }, NIGHT); addTaskNote(hub, conv, f.id, NIGHT, "聊天里说：“" + f.quote + "”"); }
+  for (const f of plan.finished) { updateTask(hub, conv, f.id, { status: "done", ...(f.result ? { result: f.result } : {}) }, NIGHT, true); addTaskNote(hub, conv, f.id, NIGHT, "聊天里说：“" + f.quote + "”"); }
+  for (const f of plan.dropped) { updateTask(hub, conv, f.id, { status: "dropped" }, NIGHT, true); addTaskNote(hub, conv, f.id, NIGHT, "聊天里说：“" + f.quote + "”"); }
   for (const a of plan.added) {
-    const t = addTask(hub, conv, { title: a.title, owner: a.owner, due: a.due, source: a.source, detail: a.detail, by: NIGHT });
+    const t = addTask(hub, conv, { title: a.title, owner: a.owner, due: a.due, source: a.source, detail: a.detail, by: NIGHT }, true);
     if (t) a.id = t.id;
   }
   plan.ran = new Date().toISOString();
@@ -411,6 +436,7 @@ const feature: Feature = {
     tasks_nightly: { default: "on", options: ["on", "off"], what: "每天夜里从前一天的聊天里补记任务、标出做完和不做的" },
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
+    tasks_announce: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 接了任务、做完、放下、加了新任务时，在群里说一句" },
   },
   tools,
   tick,
@@ -432,6 +458,7 @@ const feature: Feature = {
     "有人明确说要做某件具体的事，或者把事交给别人，我会自己记下；随口说说的、开玩笑的不记。想让我记，说“记一下……”就行。",
     "说做完了、不做了、做到哪了，我会在清单上改；问“现在有哪些事在做”，我照清单回答。",
     "每天夜里我会把前一天的聊天再过一遍，补上漏记的、标出做完和取消的，每件新记的都对得上群里的原话；一晚最多新记 8 件（可以改），不在群里说。",
+    "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，我会在群里说一句（以【任务】开头）；在群里直接跟我说的不重复提醒。不想要可以把 tasks_announce 关掉。",
     "到期提醒默认关着；打开后，任务到期那天早上我在群里提一句，每件只提一次。",
   ],
 };

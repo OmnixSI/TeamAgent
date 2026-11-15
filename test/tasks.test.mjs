@@ -152,6 +152,7 @@ test("extraction applies adds, finishes and drops from the model answer, grounde
   const doc = addTask(hub, G, { title: "写接口文档", owner: "小明" });
   const poster = addTask(hub, G, { title: "做海报", owner: "小红" });
   const login = addTask(hub, G, { title: "改完登录页", owner: "小明" });
+  hub.said.length = 0;   // the setup above speaks; the extraction below must not
   const calls = fake({
     new: [
       { title: "写季度报告", owner: "小红", due: "2026-11-20", quote: "周五前要交季度报告" },
@@ -241,12 +242,14 @@ test("morning reminders: off by default, then one line per group, once", async (
   addTask(hub, G, { title: "交报告", owner: "小红", due: "2026-11-15" });
   addTask(hub, G, { title: "明天的事", due: "2026-11-16" });
   const fin = addTask(hub, G, { title: "做完的", due: "2026-11-15" }); updateTask(hub, G, fin.id, { status: "done" });
+  hub.said.length = 0;   // notices from the setup
   feature.tick(hub, now); await Promise.all(hub.waits);
   assert.equal(hub.said.length, 0, "off by default");
   const on = mkHub({ tasks_remind: "on" });
   addTask(on, G, { title: "交报告", owner: "小红", due: "2026-11-15" });
   addTask(on, G, { title: "订会议室", due: "2026-11-15" });
   addTask(on, G, { title: "做完的", due: "2026-11-15" }); updateTask(on, G, 3, { status: "done" });
+  on.said.length = 0;
   feature.tick(on, Date.parse("2026-11-15T08:00:00+08:00")); await Promise.all(on.waits);
   assert.equal(on.said.length, 0, "not before 09:00");
   feature.tick(on, now); await Promise.all(on.waits);
@@ -263,4 +266,34 @@ test("about lines and tunables are Chinese and bounded", () => {
   assert.equal(feature.tunables.tasks_nightly_max.default, 8);
   assert.equal(feature.tunables.tasks_remind.default, "off");
   assert.match(tool(mkHub()).description, /先 list/);
+});
+
+// ---- notices in the group ----
+import { test as test2 } from "node:test";
+import assert2 from "node:assert/strict";
+import * as TK from "../src/feat/tasks.ts";
+test2("work picked up or finished outside the chat is told to the group; chat changes and the switch stay quiet", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:"); db.exec(TK.default.schema);
+  const said = []; let on = "on";
+  const hub = {
+    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA)/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
+    say: async (conv, text) => { said.push(conv + "|" + text); return true; }, ctx: { waitUntil() {} }, edit: { cfg: () => on },
+  };
+  const t = TK.addTask(hub, "g:1", { title: "改完登录页", owner: "小明", by: "小红" });
+  assert2.match(said.pop(), /^g:1\|【任务】小红 加了 #\d+「改完登录页」，交给 小明$/);
+  TK.claimTask(hub, "g:1", t.id, "小明的本地 AI");
+  assert2.match(said.pop(), /小明的本地 AI 接了 #\d+「改完登录页」，开干了/);
+  TK.claimTask(hub, "g:1", t.id, "小明的本地 AI");
+  assert2.equal(said.length, 0, "claiming again says nothing");
+  TK.updateTask(hub, "g:1", t.id, { status: "open" }, "小明的本地 AI");
+  assert2.match(said.pop(), /小明的本地 AI 放下了 #\d+/);
+  TK.claimTask(hub, "g:1", t.id, "小红", true);
+  TK.updateTask(hub, "g:1", t.id, { detail: "补充" }, "小红");
+  assert2.equal(said.length, 0, "quiet claim and a plain edit say nothing");
+  TK.updateTask(hub, "g:1", t.id, { status: "done", result: "已上线" }, "小红");
+  assert2.match(said.pop(), /#\d+「改完登录页」 做完了（小红）：已上线/);
+  on = "off";
+  TK.addTask(hub, "g:1", { title: "另一件事", by: "小红" });
+  assert2.equal(said.length, 0, "switched off");
 });

@@ -23,7 +23,7 @@ const BODY_MAX = 1024 * 1024;
 const SERVER = { name: "teamagent", title: "TeamAgent 群任务", version: "1.0.0" };
 const INSTRUCTIONS = "TeamAgent is the QQ group bot of a small team of friends. This server gives you the group's task list (任务) and read access to what the bot keeps. "
   + "Typical flow: list_tasks → get_task → claim_task (领任务) → work on it locally → report_progress (进展) → complete_task (交付, with the result and links); release_task if you give up. "
-  + "notify_group posts one short line to the group chat and is only for task progress and results. Everything you do is recorded as \"<person>的本地 AI\". Reply to the person in Chinese.";
+  + "Claiming, completing and releasing a task are announced in the group chat automatically, so do not repeat them; notify_group posts one extra short line and is only for progress or results worth telling the group. Everything you do is recorded as \"<person>的本地 AI\". Reply to the person in Chinese.";
 
 export type Deps = {
   listTasks: typeof tasks.listTasks; getTask: typeof tasks.getTask; addTask: typeof tasks.addTask; updateTask: typeof tasks.updateTask;
@@ -39,7 +39,7 @@ const no = (text: string): never => { throw new Refused(text); };
 
 const TUNABLES = {
   mcp_calls_daily: { default: 500, min: 20, max: 5000, what: "每个人的本地 AI 每天最多调用几次群里的工具" },
-  mcp_notify_daily: { default: 6, min: 0, max: 30, what: "每个人的本地 AI 每天最多往群里发几条进展" },
+  mcp_notify_daily: { default: 30, min: 0, max: 200, what: "每个人的本地 AI 每天最多让我往群里说几句" },
 };
 const cfg = (hub: Hub, conv: string, key: keyof typeof TUNABLES) => {
   const v = Number((hub as any).edit?.cfg(conv, key));
@@ -155,7 +155,7 @@ export const TOOLS: Tool[] = [
       if (t.claimed_by && !mine(t, c)) no("任务 #" + t.id + " 是" + t.claimed_by + "领的，只有他能交付。可以用 report_progress 把你的成果留在进展里。");
       const done = c.d.updateTask(c.hub, c.conv, t.id, { status: "done", result: [text, ...links].join("\n") }, c.actor);
       if (!done) no("没交付上，任务可能刚被删了。");
-      return { ok: true, task: full(done!), next: "想在群里说一声就用 notify_group" };
+      return { ok: true, task: full(done!), next: "群里已经自动说过这条任务做完了，不用再 notify_group；有额外要交代的才用" };
     },
   },
   {
@@ -283,13 +283,13 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "notify_group", title: "在群里说一声", annotations: { ...WRITE, openWorldHint: true },
-    description: "Post one short message to the group chat (发到群里) as the bot, shown as 【<person>的本地 AI】<text>. ONLY for task progress and results, for example \"任务 #12 做完了：…\"; nothing else (no chatting, no questions unrelated to a task). "
-      + "At most 300 characters, a few times a day per person; prefer report_progress, which does not interrupt the chat.",
-    inputSchema: schema({ text: str("The message, at most 300 characters; mention the task number"), task: int("The task it is about (optional)") }, ["text"]),
+    description: "Say something in the group chat (发到群里) through the bot, shown as 【<person>的本地 AI】<text>. Use it when the person asks you to tell the group something, or when the group should hear it now: a result worth announcing, a question for a teammate that blocks the task, a hand-over. "
+      + "Claiming, completing and releasing a task are already announced automatically, so do not repeat those. Keep it to what a teammate would want to read; routine progress belongs in report_progress, which does not interrupt the chat. At most 500 characters.",
+    inputSchema: schema({ text: str("The message, at most 500 characters; mention the task number when it is about a task"), task: int("The task it is about (optional)") }, ["text"]),
     async run(a, c) {
       const text = String(a.text).trim().replace(/\s*\n\s*/g, " ");
       if (!text) no("消息是空的。");
-      if (text.length > 300) no("消息太长了（" + text.length + " 字），群消息最多 300 字，长的放进 complete_task 的结果里。");
+      if (text.length > 500) no("消息太长了（" + text.length + " 字），群消息最多 500 字，长的放进 complete_task 的结果里。");
       if (a.task !== undefined) need(c, a.task);
       const limit = cfg(c.hub, c.conv, "mcp_notify_daily");
       if (!count(c.hub, "notify", c.who, limit)) no("今天" + c.who.name + "的本地 AI 已经在群里发了 " + limit + " 条，到上限了；进展请用 report_progress 记在任务上。");
@@ -450,7 +450,7 @@ const feature: Feature = {
   about: [
     "群友电脑上的 AI 工具（Claude Code 等支持 MCP 的）可以接群里的活：用看板链接里同一个令牌连上 /x/mcp，它就能看任务清单、领任务、记进展、交付结果，还能翻群聊记录、看长期记忆、看我存的文件和图片、看仓库体检。",
     "本地 AI 做的每件事都记成“某某的本地 AI”；别人领了的任务它交付不了，只能留进展。它只能碰任务清单，改不了我的设置、记忆和代码。",
-    "本地 AI 能往群里发一句话，但只用于任务进展和结果，开头写明是谁的本地 AI，每人每天默认最多 6 条、每条 300 字以内；每人每天调用工具默认最多 500 次，这两个数可以调。",
+    "本地 AI 接任务、做完、放下时我会自动在群里说一句；它也能让我在群里替它说话（值得大家知道的结果、卡住要问人的事、交接），开头写明是谁的本地 AI，每人每天默认最多 30 条、每条 500 字以内；每人每天调用工具默认最多 500 次，这两个数可以调。",
     "连法：在群里让我给看板链接，回复里有一行 claude mcp add 的命令，在自己电脑的终端里运行就连上了；令牌作废后本地 AI 也就连不上了。",
   ],
 };
