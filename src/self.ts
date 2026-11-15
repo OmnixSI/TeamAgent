@@ -30,6 +30,7 @@ const CONNECTED = (env: Env & { CODE_MODEL?: string }) => [
   "Cloudflare 的无头浏览器：把文档（Markdown）、思维导图、Mermaid 图和自定义网页渲染成图片和 PDF 发到群里；别的办法读不出来的动态网页用它真打开，也能给网页截图。",
   "云电脑：Cloudflare 上的一台 Linux 容器（Debian，1 核 1 GB 内存），要用时才开机（装好的工具从 R2 里的缓存恢复，约 8 秒）、闲置一分半钟关机并清空。里面有 ffmpeg、git、Python、Node、中文字体；LibreOffice、文字识别、LaTeX 这些大件分成工具包，各自在 R2 里存一层，哪次要用才恢复（Office 约一分多钟）。常见的文件活（转 PDF、PDF 拆合、OCR、排版报告和 PPT、图片和音视频处理、二维码）写成了固定的技能，由 skill 工具照配方在里面执行。用来处理视频和音频、克隆仓库看代码跑测试、做 PPT 和 Word。看视频（watch_video）就是在它里面把视频取下来、抽声音、截帧，声音再转成文字。",
   "香港中转：部署在 Vercel 香港的一个带密钥的小函数。B 站接口、小红书、知乎、微博、抖音这些拒绝 Cloudflare 出口地址的站点走它，能带登录态；QQ 语音要的 SILK 编码也在它上面做。",
+  "香港镜像：同一个 Vercel 香港项目还把我自己的公开页面（看板、发布的网页、工具箱）原样转发一份，给打不开 workers.dev 的网络用；管理接口不经过它。",
   "GitHub：读 " + (env.GITHUB_ORG || "OmnixSI") + " 组织的仓库（代码、提交、Issue、PR）；写只有一种——code_task 在云电脑里改完代码后推一个 bot/ 开头的新分支并开草稿 PR，等人审。我不合并、不推主分支。",
   "Workers AI（Cloudflare 自带，每天有免费额度）：语音和视频的转写先用它，用完才走 OpenAI；按意思搜聊天记录和资料库用它算向量。到每天的停止线就停，不会多花钱。",
   "微软 Edge 的朗读服务（免费）：方言和其他音色的语音、有声视频和音频节目的配音。",
