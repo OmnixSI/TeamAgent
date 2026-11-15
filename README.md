@@ -243,7 +243,7 @@ QQ 的 Webhook 用不了（腾讯访问不到 `*.workers.dev`），所以用长�
 | `POST /admin/trust {"name":"…","on":true}` | 授权或收回某个群友 |
 | `POST /admin/dry {"room":"x","text":"…","name":"…"}` | 私下试一句，带真实记忆和设置，不发群 |
 | `POST /admin/tool {"name":"…","args":{…},"conv":"t:x"}` | 手动跑一个工具 |
-| `POST /admin/tasks {"work":"t:x"}` | 让 Bot 现在就去做那个会话里轮到它的任务（可带 `"id"`），做完返回这件任务的整份交接材料；`{"extract":"g:…"}` 试跑夜间任务提取 |
+| `POST /admin/tasks {"work":"t:x"}` | 让 Bot 现在就去做那个会话里轮到它的任务（可带 `"id"`），在后台做；`{"attach":{"id","kind","title","text","ref"}}` 手工给任务挂材料（原话也行）；`{"extract":"g:…"}` 试跑夜间任务提取 |
 | `POST /admin/task {"task":"…","conv":"t:x"}` | 交办一个后台任务（`"wait":true` 等它做完） |
 | `GET /admin/img?id=12` | 取一张图；`&made=1` 看它是怎么画出来的 |
 | `POST /admin/reflect` | 现在整理一次记忆 |

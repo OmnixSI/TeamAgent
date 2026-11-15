@@ -817,12 +817,13 @@ const feature: Feature = {
   async admin(hub, req, url, body) {
     if (url.pathname !== "/admin/tasks") return null;
     if (req.method === "POST") {
-      // POST {"work":"t:room"} (optionally "id"): the bot works on its next own task there right now, whatever the hour; answers when the run has ended.
+      // POST {"work":"t:room"} (optionally "id"): the bot starts on its next own task there right now, whatever the hour.
       if (body?.work) {
         const c = String(body.work), t = body.id ? getTask(hub, c, Number(body.id)) : nextBotTask(hub, c, Date.now() + SETTLE_MS + RETRY_MS);
         if (!t) return json({ ok: false, error: "这个会话里没有轮到 Bot 做的任务" }, 404);
-        const ran = await workOn(hub, c, t.id);
-        return json({ ok: ran, handoff: handoff(hub, c, t.id) });
+        // The run can take many minutes, longer than a request may stay open: it goes on in the background; read the task afterwards.
+        hub.ctx.waitUntil(workOn(hub, c, t.id).catch(e => console.log("tasks: bot work failed", e?.message)));
+        return json({ ok: true, started: t.id, title: t.title });
       }
       // POST {"attach":{"conv","id","kind","title","text","ref","who"}}: put material on a task by hand, the original words included.
       if (body?.attach) {
