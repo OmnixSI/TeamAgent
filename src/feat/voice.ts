@@ -291,15 +291,22 @@ async function speakOnce(escaped: string, voiceId: string, rate: string, pitch: 
       size ? resolve(pcm) : reject(new Error("语音服务没有返回声音"));
     };
     const timer = setTimeout(() => finish(new Error("语音服务超时")), 40000);
+    // Binary messages arrive as ArrayBuffer or, on newer runtimes, as Blob; a Blob has to be read first, and
+    // the reads are chained so the pieces stay in order. An empty binary message carries nothing and is skipped.
+    try { (ws as any).binaryType = "arraybuffer"; } catch {}
+    let queue: Promise<void> = Promise.resolve();
+    const take = (data: string | ArrayBuffer | Uint8Array) => {
+      if (typeof data !== "string" && (data as ArrayBuffer).byteLength < 2) { console.log("voice: short binary message skipped", (data as ArrayBuffer).byteLength); return; }
+      const f = parseFrame(data);
+      if (f.type === "audio") { if (f.data.length) parts.push(f.data.slice()); }
+      else if (f.type === "end") finish();
+    };
     ws.addEventListener("message", (ev: MessageEvent) => {
-      try {
-        const f = parseFrame(ev.data as any);
-        if (f.type === "audio") { if (f.data.length) parts.push(f.data.slice()); }
-        else if (f.type === "end") finish();
-      } catch (e: any) { finish(e); }
+      const d: any = ev.data;
+      queue = queue.then(async () => take(typeof d === "string" || d instanceof ArrayBuffer || d instanceof Uint8Array ? d : typeof d?.arrayBuffer === "function" ? await d.arrayBuffer() : new Uint8Array(0))).catch((e: any) => finish(e));
     });
     ws.addEventListener("error", () => finish(new Error("语音服务连接出错")));
-    ws.addEventListener("close", () => finish());
+    ws.addEventListener("close", () => { queue.then(() => finish()); });
     ws.send(configMessage(dateLine()));
     ws.send(ssmlMessage(uuid(), dateLine(), ssml(voiceId, escaped, rate, pitch)));
   });

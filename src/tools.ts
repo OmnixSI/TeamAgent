@@ -418,9 +418,15 @@ export function buildTools(host: Host): Tool[] {
         const usual = () => ttsSilk(net, text, voice.key === "male" ? "male" : "female");
         const other = () => edgeSpeak(text, voice.key).then(v => pcmSilk(net, v.pcm));
         const everyday = voice.key === "female" || voice.key === "male";
-        const audio = await (everyday ? usual().catch(other) : other().catch(usual));
+        // Say which voice really spoke: a dialect that silently came out in the everyday voice misleads everyone.
+        let fell = "";
+        const note = (e: any) => { fell = clip(String(e?.message || e), 160); console.log("speak: first choice failed", voice.key, fell); };
+        const audio = await (everyday ? usual().catch(e => { note(e); return other(); }) : other().catch(e => { note(e); return usual(); }));
         const sent = await host.sendVoice(audio.silk);
-        return sent.ok ? { ok: true, sent: true, seconds: audio.seconds } : { ok: false, sent: false, error: "语音合成好了但发到 QQ 失败：" + (sent.error || "未知原因") };
+        const spoke = fell ? (everyday ? "备用音色" : "平时的普通话声音") : voice.key;
+        return sent.ok
+          ? { ok: true, sent: true, seconds: audio.seconds, voice_used: spoke, ...(fell ? { fallback: (everyday ? "平时的声音这次没合成出来，换了备用音色" : "要的「" + voice.key + "」没合成出来，这条是用平时的普通话声音发的，不是方言；照实告诉群友") + "（原因：" + fell + "）" } : {}) }
+          : { ok: false, sent: false, error: "语音合成好了但发到 QQ 失败：" + (sent.error || "未知原因") };
       },
     },
     {
