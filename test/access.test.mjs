@@ -47,7 +47,7 @@ test("the tool gives links for every address and an MCP line; revoke works for t
   const tool = feature.tools({ hub, conv: "g:1", askers: [ME], host: {} })[0];
   const r = await tool.run({ op: "link" });
   assert.equal(r.links.length, 2); assert.match(r.links[1], /^https:\/\/b\.example\/x\/board\/k\/[a-f0-9]{40}$/);
-  assert.match(r.mcp.command, /^claude mcp add --transport http teamagent https:\/\/b\.example\/x\/mcp\/[a-f0-9]{40}$/);
+  assert.match(r.mcp.command, /^claude mcp add --scope user --transport http teamagent https:\/\/b\.example\/x\/mcp\/[a-f0-9]{40}$/);
   assert.equal((await tool.run({ op: "list" })).people.length, 1);
   assert.equal((await tool.run({ op: "revoke" })).revoked, 1);
   assert.equal((await feature.tools({ hub, conv: "g:1", askers: [], host: {} })[0].run({ op: "link" })).ok, false);

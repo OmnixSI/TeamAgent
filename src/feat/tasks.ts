@@ -106,6 +106,8 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
   if (patch.due !== undefined) { const v = normDue(patch.due); set("due", v, v ? "截止日期定为 " + v : "去掉了截止日期"); }
   if (patch.result !== undefined) { const v = clean(patch.result, LIMIT.result); set("result", v, v ? "结果：" + clip(v, 300) : "清掉了结果"); }
   if (patch.status !== undefined && STATUSES.includes(patch.status)) set("status", patch.status, "状态：" + LABEL[cur.status] + " → " + LABEL[patch.status]);
+  // Put back to "not started" means nobody holds it any more, so someone else can pick it up.
+  if (patch.status === "open" && cur.status !== "open" && cur.claimed_by) { next.claimed_by = ""; lines.push(cur.claimed_by + " 放下了，可以重新领取"); }
   if (!lines.length) return cur;
   const now = Date.now(), keys = Object.keys(next);
   hub.sql.exec("UPDATE task SET " + keys.map(k => k + "=?").join(",") + ", updated=? WHERE conv=? AND id=?", ...keys.map(k => next[k]), now, conv, cur.id);

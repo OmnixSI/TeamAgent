@@ -86,7 +86,7 @@ const feature: Feature = {
           ok: true, for: who.name,
           links: b.map(u => u + "/x/board/k/" + token),
           ...(b.length > 1 ? { which: "第一个是直连地址，第二个是香港镜像，大陆网络打不开第一个就用第二个" } : {}),
-          mcp: { what: "本地 AI 接任务：在 Claude Code 里运行下面这一行（别的工具填同样的地址，类型选 HTTP）", command: "claude mcp add --transport http teamagent " + b[b.length - 1] + "/x/mcp/" + token },
+          mcp: { what: "本地 AI 接任务：在 Claude Code 里运行下面这一行（别的工具填同样的地址，类型选 HTTP）", command: "claude mcp add --scope user --transport http teamagent " + b[b.length - 1] + "/x/mcp/" + token },
           note: "链接代表" + who.name + "本人，别转给群外的人；想作废就说“把我的看板链接作废”",
         };
       },
