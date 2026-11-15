@@ -198,14 +198,32 @@ const ITEMS: Item[] = [
 ];
 export const SHOP_SCHEMA = `
   CREATE TABLE IF NOT EXISTS team_spend(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, who TEXT NOT NULL, item TEXT NOT NULL, name TEXT NOT NULL,
-    cost INTEGER NOT NULL, ts INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', note TEXT DEFAULT '', until INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0);
+    cost INTEGER NOT NULL, ts INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', note TEXT DEFAULT '', until INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0,
+    balance_after INTEGER, settled_by TEXT NOT NULL DEFAULT '', weekly_at INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS team_spend_who ON team_spend(conv, who, ts);
   CREATE TABLE IF NOT EXISTS team_item(conv TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, cost INTEGER NOT NULL, what TEXT DEFAULT '', made_by TEXT DEFAULT '', ts INTEGER, PRIMARY KEY(conv, key));
   CREATE TABLE IF NOT EXISTS team_star(conv TEXT NOT NULL, week INTEGER NOT NULL, who TEXT NOT NULL, points INTEGER, done INTEGER, cert TEXT DEFAULT '', PRIMARY KEY(conv, week));
 `;
 const q = (hub: Hub, sql: string, ...b: any[]): any[] => { try { return hub.sql.exec(sql, ...b).toArray() as any[]; } catch (e: any) { if (/no such table/i.test(String(e?.message))) return []; throw e; } };
-export type Spend = { id: number; who: string; item: string; name: string; cost: number; ts: number; state: "pending" | "done" | "refunded"; note: string; until: number };
-const spendOf = (r: any): Spend => ({ id: Number(r.id), who: String(r.who), item: String(r.item), name: String(r.name), cost: Number(r.cost), ts: Number(r.ts), state: r.state, note: String(r.note || ""), until: Number(r.until) || 0 });
+export type Spend = { id: number; who: string; item: string; name: string; cost: number; ts: number; state: "pending" | "done" | "refunded"; note: string; until: number;
+  settled_at: number; settled_by: string; balance_after: number | null; weekly_at: number };
+const spendOf = (r: any): Spend => ({
+  id: Number(r.id), who: String(r.who), item: String(r.item), name: String(r.name), cost: Number(r.cost), ts: Number(r.ts), state: r.state, note: String(r.note || ""), until: Number(r.until) || 0,
+  settled_at: Number(r.done_at) || 0, settled_by: String(r.settled_by || ""), balance_after: r.balance_after == null ? null : Number(r.balance_after), weekly_at: Number(r.weekly_at) || 0,
+});
+const spendReady = new WeakSet<Hub>();
+function ensureSpendFields(hub: Hub) {
+  if (spendReady.has(hub)) return;
+  const columns = q(hub, "PRAGMA table_info(team_spend)").map(c => c.name);
+  if (!columns.length) return;
+  for (const [name, type] of [["balance_after", "INTEGER"], ["settled_by", "TEXT NOT NULL DEFAULT ''"], ["weekly_at", "INTEGER NOT NULL DEFAULT 0"]]) {
+    if (!columns.includes(name)) hub.sql.exec("ALTER TABLE team_spend ADD COLUMN " + name + " " + type);
+  }
+  spendReady.add(hub);
+}
+export function canSettleSpend(hub: Hub, conv: string, actor?: { id: string; name: string }) {
+  return !!actor && hub.edit?.rank?.(conv, [actor]) === "owner";
+}
 
 /** The weeks (their Monday) someone was the star, newest first. */
 const starWeeks = (hub: Hub, conv: string, who: string): number[] => q(hub, "SELECT week FROM team_star WHERE conv=? AND who=? ORDER BY week DESC", conv, who).map(r => Number(r.week));
@@ -221,11 +239,13 @@ const spentBy = (hub: Hub, conv: string, who: string) => Number(q(hub, "SELECT C
 export function titleOf(hub: Hub, conv: string, who: string, now = Date.now()): string {
   return String(q(hub, "SELECT note FROM team_spend WHERE conv=? AND who=? AND item='title' AND state<>'refunded' AND until>? ORDER BY ts DESC LIMIT 1", conv, who, now)[0]?.note || "");
 }
-export function spends(hub: Hub, conv: string, o: { who?: string; state?: string; limit?: number } = {}): Spend[] {
+export function spends(hub: Hub, conv: string, o: { who?: string; state?: string; limit?: number; before?: number; item?: string } = {}): Spend[] {
   const where = ["conv=?"], b: any[] = [conv];
   if (o.who) { where.push("who=?"); b.push(o.who); }
   if (o.state) { where.push("state=?"); b.push(o.state); }
-  return q(hub, "SELECT * FROM team_spend WHERE " + where.join(" AND ") + " ORDER BY ts DESC LIMIT ?", ...b, Math.max(1, Math.min(200, Number(o.limit) || 50))).map(spendOf);
+  if (o.before) { where.push("id<?"); b.push(o.before); }
+  if (o.item) { where.push("item=?"); b.push(o.item); }
+  return q(hub, "SELECT * FROM team_spend WHERE " + where.join(" AND ") + " ORDER BY id DESC LIMIT ?", ...b, Math.max(1, Math.min(200, Number(o.limit) || 50))).map(spendOf);
 }
 export function balanceOf(hub: Hub, conv: string, who: string, now = Date.now()): { earned: number; spent: number; balance: number } {
   const p = teamStats(hub, conv, now).people.find(x => x.name === who);
@@ -260,10 +280,11 @@ export function redeem(hub: Hub, conv: string, who: string, key: string, note = 
   const { balance } = balanceOf(hub, conv, person, now);
   if (balance < item.cost) return { ok: false, error: person + " 现在有 " + balance + " 分，「" + item.name + "」要 " + item.cost + " 分，还差 " + (item.cost - balance) + " 分" };
   const until = item.kind === "timed" ? now + (item.days || 7) * DAY : 0;
-  const state = item.kind === "now" || item.kind === "timed" ? "done" : "pending";
-  hub.sql.exec("INSERT INTO team_spend(conv, who, item, name, cost, ts, state, note, until, done_at) VALUES(?,?,?,?,?,?,?,?,?,?)", conv, person, item.key, item.name, item.cost, now, state, text, until, state === "done" ? now : 0);
-  const row = spendOf(hub.sql.exec("SELECT * FROM team_spend WHERE conv=? AND who=? ORDER BY id DESC LIMIT 1", conv, person).toArray()[0]);
-  const todo = honour(item, person, text), left = balance - item.cost;
+  const state = item.kind === "timed" ? "done" : "pending", left = balance - item.cost;
+  ensureSpendFields(hub);
+  const row = spendOf(hub.sql.exec("INSERT INTO team_spend(conv, who, item, name, cost, ts, state, note, until, done_at, balance_after, settled_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *",
+    conv, person, item.key, item.name, item.cost, now, state, text, until, state === "done" ? now : 0, left, state === "done" ? "Bot" : "").toArray()[0]);
+  const todo = honour(item, person, text) + " 兑换记录 #" + row.id + "。" + (state === "pending" ? "在群里说明办理结果；待群主确认兑现，办不成可由群主退分。" : "");
   if (via === "board") {
     const p = (hub as any).runTask?.(conv, todo + "（这是他在看板上兑换的，花了 " + item.cost + " 分，还剩 " + left + " 分。你这一轮只有最后那条回复会发到群里，开头先说一句谁用多少分换了什么。）");
     if (p && typeof p.catch === "function") (hub as any).ctx?.waitUntil?.(p.catch((e: any) => console.log("teamwork: honour failed", e?.message)));
@@ -271,11 +292,12 @@ export function redeem(hub: Hub, conv: string, who: string, key: string, note = 
   return { ok: true, spend: row, balance: left, do: todo };
 }
 /** Marks a perk as honoured, or gives the points back. */
-export function settle(hub: Hub, conv: string, id: number, to: "done" | "refunded", now = Date.now()): Spend | null {
-  const r = q(hub, "SELECT * FROM team_spend WHERE conv=? AND id=?", conv, Math.floor(Number(id)) || 0)[0];
-  if (!r) return null;
-  hub.sql.exec("UPDATE team_spend SET state=?, done_at=?, until=CASE WHEN ?='refunded' THEN 0 ELSE until END WHERE conv=? AND id=?", to, now, to, conv, Number(r.id));
-  return spendOf({ ...r, state: to });
+export function settle(hub: Hub, conv: string, id: number, to: "done" | "refunded", now = Date.now(), by = ""): Spend | null {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  ensureSpendFields(hub);
+  const updated = q(hub, "UPDATE team_spend SET state=?,done_at=?,settled_by=? WHERE conv=? AND id=? AND state='pending' RETURNING *", to, now, by, conv, id)[0];
+  const row = updated || q(hub, "SELECT * FROM team_spend WHERE conv=? AND id=? AND state=?", conv, id, to)[0];
+  return row ? spendOf(row) : null;
 }
 export function setItem(hub: Hub, conv: string, name: string, cost: number, what: string, by: string, now = Date.now()): Item | string {
   const n = clip(String(name || "").trim(), 20), c = Math.round(Number(cost));
@@ -473,13 +495,16 @@ export async function weekly(hub: Hub, now: number, only = "") {
   for (const conv of convs) {
     if (String(hub.edit.cfg(conv, "team_weekly")) !== "on") continue;
     const stats = teamStats(hub, conv, now);
-    if (!stats.week.done && !stats.totals.doing && !stats.totals.open && !spends(hub, conv, { state: "pending" }).some(x => x.item === "cover")) continue;
+    const covers = spends(hub, conv, { state: "pending", item: "cover", limit: 200 }).filter(x => !x.weekly_at);
+    if (!stats.week.done && !stats.totals.doing && !stats.totals.open && !covers.length) continue;
     const done = listTasks(hub, conv, { status: ["done"], limit: 1000 }).filter(t => t.done_at >= stats.week.start).sort((a, b) => a.done_at - b.done_at);
     recordStar(hub, conv, stats);
-    const covers = spends(hub, conv, { state: "pending" }).filter(x => x.item === "cover");
-    for (const c of covers) settle(hub, conv, c.id, "done", now);
     const cert = await awardCertificate(hub, conv, stats, done, now).catch(e => { console.log("teamwork: certificate failed", e?.message); return ""; });
-    await hub.runTask(conv, weeklyTask(stats, done, [...new Set(covers.map(c => c.who))], cert));
+    const dispatched = covers.filter(c => {
+      ensureSpendFields(hub);
+      return q(hub, "UPDATE team_spend SET weekly_at=? WHERE conv=? AND id=? AND state='pending' AND weekly_at=0 RETURNING id", now, conv, c.id).length > 0;
+    });
+    await hub.runTask(conv, weeklyTask(stats, done, [...new Set(dispatched.map(c => c.who))], cert));
   }
 }
 function tick(hub: Hub, now: number) {
@@ -506,7 +531,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       + "有人问“谁在做什么”“大家进度怎么样”“这周战绩”“排行榜”“我有多少分”“我有什么称号”“这件事是谁什么时候接的、做了多久”时用，不要凭印象答。"
       + "op=status：全队现在的情况和本周战绩，每个人的 balance 是还能花的积分（who 填名字只看一个人，mine=true 看提问的人）；op=timeline：一件任务的过程（id 必填）；op=recent：最近发生的事（谁接了、谁做完了）；op=wall：功勋墙（历届本周之星、打下的大活、谁有哪些称号、各项纪录、谁挂着什么头衔）。"
       + "积分能换特权：op=shop 看能换什么、各多少分、提问的人有多少分；有人说要换某样（“我要换甩锅券”“用积分点一张图”），用 op=redeem（item 填名字，note 填他的具体要求，头衔必须给名字）。redeem 成功后返回的 do 就是你现在要做的事，当场照做；返回失败（分不够、没这一项）就照实说，别替他垫分。"
-      + "op=fulfil：群主说某次兑换“兑现了”时标记（id 必填）；op=refund：群主说退分时用。op=add_item / remove_item：群主或被授权的人增删自定的特权（name、cost、what），比如“奶茶一杯 30 分，群主请”。"
+      + "即时权益当场办理，办理结果在群里照实说。op=fulfil：群主说某次兑换“兑现了”时按记录编号标记；op=refund：群主要求退回未兑现的积分时用。op=add_item / remove_item：群主或被授权的人增删自定的特权（name、cost、what），比如“奶茶一杯 30 分，群主请”。"
       + "计分规矩：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做的算在它主人头上。回答时点名、说具体的事，简短，别念数据表。",
     parameters: {
       type: "object", required: ["op"],
@@ -559,9 +584,9 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         return r.ok ? { ok: true, redeemed: r.spend.name, cost: r.spend.cost, balance_left: r.balance, record: r.spend.id, do: r.do } : r;
       }
       if (op === "fulfil" || op === "refund") {
-        if (!boss()) return { ok: false, error: "这个要群主或被授权的人来说" };
-        const x = settle(hub, conv, Number(a.id), op === "fulfil" ? "done" : "refunded", now);
-        return x ? { ok: true, record: x.id, who: x.who, item: x.name, state: op === "fulfil" ? "兑现了" : "分已退回 " + x.cost } : { ok: false, error: "没有这条兑换记录" };
+        if (!canSettleSpend(hub, conv, askers[askers.length - 1])) return { ok: false, error: "兑现确认和退分由群主办理" };
+        const x = settle(hub, conv, Number(a.id), op === "fulfil" ? "done" : "refunded", now, me);
+        return x ? { ok: true, record: x.id, who: x.who, item: x.name, state: op === "fulfil" ? "兑现了" : "分已退回 " + x.cost, balance: balanceOf(hub, conv, x.who, now).balance } : { ok: false, error: "查不到这条兑换，或已按另一结果结算" };
       }
       if (op === "add_item" || op === "remove_item") {
         if (!boss()) return { ok: false, error: "增删特权要群主或被授权的人来说" };
