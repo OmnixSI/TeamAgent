@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import tasksFeature, { addTask, claimTask, updateTask, addTaskNote, getTask, hooks } from "../src/feat/tasks.ts";
 import feature, { deps, teamStats, taskEvents, taskTimeline, cheerFacts, cheer, plainCheer, weekStart, span, pointsOf, streakOf, weeklyTask } from "../src/feat/teamwork.ts";
+import { RULES as CONTRIB_RULES } from "../src/feat/contrib.ts";
+CONTRIB_RULES.claim.points = 0;   // these tests are about task scoring alone; picking a task up is scored in contrib.test.mjs
 
 const G = "g:1", HOUR = 3600000, DAY = 86400000;
 function mkHub(cfg = {}) {

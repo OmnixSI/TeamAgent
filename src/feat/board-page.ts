@@ -1180,15 +1180,20 @@ function team(root) {
           var pts = wk ? x.points_week : x.points_total;
           return h("div", { class: "lb-row" + (i === 0 && pts ? " top" : "") }, h("span", { class: "rk", text: String(i + 1) }),
             h("span", { class: "nm" }, avatar(x.name, true), titled(x.name, x.title), j.mvp === x.name ? starMark(true) : null), h("span", { class: "pts" }, String(pts), h("small", { text: " 分" })),
-            meter(pts / max * 100), h("span", { class: "meta", text: "做完 " + (wk ? x.done_week : x.done_total) + " 件 · " + (x.streak ? "连续 " + x.streak + " 天" : "最长连续 " + x.best_streak + " 天") }));
+            meter(pts / max * 100), h("span", { class: "meta", text: "做完 " + (wk ? x.done_week : x.done_total) + " 件 · " + (x.streak ? "连续 " + x.streak + " 天" : "最长连续 " + x.best_streak + " 天") + repoPart(x, wk) }));
         }));
       }
-      drawLb(); lbc.b.appendChild(list); left.appendChild(lbc.el);
+      drawLb(); lbc.b.appendChild(list);
+      // Say from when the points count, once the scoring has been started over, and how repository work is scored.
+      if (j.since) lbc.b.appendChild(h("p", { class: "meta", text: "积分从 " + new Date(j.since + 8 * 3600000).toISOString().slice(5, 16).replace("T", " ") + "（北京时间）重新起算，之前的不算。" }));
+      if (j.people.some(function (x) { return x.activity; })) lbc.b.appendChild(h("p", { class: "meta", text: "分数里包含组织仓库的活和接任务：PR 合并 10、开 PR 2、写 issue 1–2、审别人的 PR 2、合别人的 PR 1、直接提交 0.5、接任务 1；每人每天最多 20 分。" }));
+      left.appendChild(lbc.el);
       var grid = h("div", { class: "people" });
       grid.style.marginTop = "16px";
       j.people.forEach(function (x) {
         var c = h("section", { class: "card" }, h("div", { class: "pname" }, avatar(x.name), h("span", {}, titled(x.name, x.title)), starMark(j.mvp === x.name)),
-          h("p", { class: "meta", text: "共 " + x.points_total + " 分 · 做完 " + x.done_total + " 件 · 这个月 " + x.done_month + " 件" + (x.fastest_ms ? " · 最快 " + span(x.fastest_ms) : "") }));
+          h("p", { class: "meta", text: "共 " + x.points_total + " 分 · 做完 " + x.done_total + " 件 · 这个月 " + x.done_month + " 件" + (x.fastest_ms ? " · 最快 " + span(x.fastest_ms) : "") }),
+          x.activity ? h("p", { class: "meta", text: "仓库和接活：本周 " + x.activity.week + " 分，累计 " + x.activity.total + " 分" + repoKinds(x) + (x.activity.over_total ? "；超出每天上限的 " + x.activity.over_total + " 分只记账" : "") }) : null);
         var b = h("div", { class: "badges" });
         x.badges.filter(function (g) { return g.earned; }).concat(x.badges.filter(function (g) { return !g.earned; }).slice(0, 3)).forEach(function (g) {
           b.appendChild(h("span", { class: "bdg" + (g.earned ? "" : " no"), tabindex: "0", title: g.what + (g.earned ? (g.at ? "，" + md(g.at) + " 拿到" : "") : "，还没拿到") }, g.earned ? icon("star") : null, g.name, g.earned ? null : h("span", { class: "vh", text: "：" + g.what })));
@@ -2209,6 +2214,12 @@ function show() {
   ready.then(function () { if (route === r && VIEWS[r.id].arg) VIEWS[r.id].arg(r.arg); });
   stamp();
 }
+var REPO_KIND = { pr_merged: "PR 合并", pr_opened: "开 PR", issue: "写 issue", commit: "直接提交", review: "审 PR", merge: "合 PR", claim: "接任务" };
+function repoKinds(x) {
+  var k = x.activity && x.activity.kinds || {}, parts = Object.keys(k).map(function (key) { return (REPO_KIND[key] || key) + " " + k[key].n; });
+  return parts.length ? "（本周：" + parts.join("、") + "）" : "";
+}
+function repoPart(x, wk) { var a = x.activity; return a && (wk ? a.week : a.total) ? " · 仓库和接活 " + (wk ? a.week : a.total) + " 分" : ""; }
 function stamp() { var s = $("stamp"); if (s) s.textContent = loaded[cur] ? "更新于 " + ago(loaded[cur]) : ""; }   // the signed-out page has no stamp
 function quiet() {
   var a = document.activeElement, tag = a && a.tagName;

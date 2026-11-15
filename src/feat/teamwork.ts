@@ -9,6 +9,7 @@ import { BJ, clip, fmtDate, zonedToUtc } from "../util.ts";
 import { hooks, kindOf, listTasks, getTask, named, personOfName, tell, SIZE_LABEL } from "./tasks.ts";
 import type { Task } from "./tasks.ts";
 
+import * as contrib from "./contrib.ts";
 const DAY = 86400000, HOUR = 3600000;
 const POINTS = { small: 5, normal: 10, big: 30 } as const;
 const ON_TIME_BONUS = 5;
@@ -106,18 +107,24 @@ export type PersonStats = {
   balance: number;           // points_total minus spent: what can still be traded in
   title: string;             // a title bought with points, while it lasts; else "本周之星" for the reigning star
   stars?: number;            // how many weeks they were the week's star (each is worth a bonus)
+  /** Points from repository work and picking tasks up (already inside points_week / points_total); `over` is what the daily limits cut off. */
+  activity?: { week: number; total: number; over_week: number; over_total: number; kinds: Record<string, { n: number; points: number }> };
 };
 export type TeamStats = {
   week: { start: number; end: number; done: number; points: number; by_day: number[] };   // by_day: Monday..Sunday
   totals: { open: number; doing: number; done: number; overdue: number };
   mvp: string;               // most points this week, "" when nobody scored
   people: PersonStats[];     // most points this week first
+  since: number;             // when the scoring was last started over (0 = never); nothing before it counts
 };
 
 export function teamStats(hub: Hub, conv: string, now = Date.now()): TeamStats {
-  const all = listTasks(hub, conv, { limit: 1000 });
+  const since = contrib.sinceOf(hub, conv);
+  // Tasks finished before the scoring was started over are history: they stay on the list but score nothing.
+  const all = listTasks(hub, conv, { limit: 1000 }).filter(t => t.status !== "done" || t.done_at >= since);
   const ws = weekStart(now), ms = monthStart(now), today = dayOf(now);
-  const names = new Set<string>();
+  const acts = contrib.activity(hub, conv, ws, now);
+  const names = new Set<string>([...acts.keys(), ...contrib.logins(hub, conv).map(l => l.who)]);
   for (const t of all) { for (const n of [creditOf(t), holderOf(t), personOfName(t.by)]) if (n) names.add(n); }
   const people: PersonStats[] = [...names].map(name => {
     const done = all.filter(t => t.status === "done" && creditOf(t) === name).sort((a, b) => a.done_at - b.done_at);
@@ -137,21 +144,24 @@ export function teamStats(hub: Hub, conv: string, now = Date.now()): TeamStats {
     };
   }).map(p => {
     // Each week as the star is worth a bonus, and the star wears the title until the next one is named (a bought title comes first).
-    const stars = starWeeks(hub, conv, p.name), spent = spentBy(hub, conv, p.name), total = p.points_total + stars.length * STAR_BONUS;
-    const crowned = stars.length && now - stars[0] < 14 * DAY && latestStar(hub, conv) === p.name;
-    return { ...p, points_total: total, spent, balance: Math.max(0, total - spent), title: titleOf(hub, conv, p.name, now) || (crowned ? "本周之星" : ""), stars: stars.length };
+    // A star named before the scoring was started over keeps its place on the wall but not its bonus.
+    const every = starWeeks(hub, conv, p.name), stars = every.filter(w => w + 6 * DAY + 21.5 * HOUR >= since);   // the award is made on the week's Sunday evening
+    const act = acts.get(p.name), spent = spentBy(hub, conv, p.name, since), total = p.points_total + stars.length * STAR_BONUS + (act?.total || 0);
+    const crowned = every.length && now - every[0] < 14 * DAY && latestStar(hub, conv) === p.name;
+    return { ...p, points_week: p.points_week + (act?.week || 0), points_total: total, spent, balance: Math.max(0, total - spent), title: titleOf(hub, conv, p.name, now) || (crowned ? "本周之星" : ""), stars: stars.length,
+      ...(act ? { activity: { week: act.week, total: act.total, over_week: act.over_week, over_total: act.over_total, kinds: act.kinds } } : {}) };
   }).sort((a, b) => b.points_week - a.points_week || b.points_total - a.points_total || b.doing.length - a.doing.length || a.name.localeCompare(b.name, "zh"));
   const weekDone = all.filter(t => t.status === "done" && t.done_at >= ws);
   const by_day = [0, 0, 0, 0, 0, 0, 0];
   for (const t of weekDone) { const i = Math.floor((t.done_at - ws) / DAY); if (i >= 0 && i < 7) by_day[i]++; }
   return {
-    week: { start: ws, end: ws + 7 * DAY, done: weekDone.length, points: weekDone.reduce((s, t) => s + pointsOf(t), 0), by_day },
+    week: { start: ws, end: ws + 7 * DAY, done: weekDone.length, points: Math.round((weekDone.reduce((s, t) => s + pointsOf(t), 0) + [...acts.values()].reduce((s, a) => s + a.week, 0)) * 10) / 10, by_day },
     totals: {
       open: all.filter(t => t.status === "open").length, doing: all.filter(t => t.status === "doing").length, done: all.filter(t => t.status === "done").length,
       overdue: all.filter(t => (t.status === "open" || t.status === "doing") && !!t.due && t.due < today).length,
     },
     mvp: people[0] && people[0].points_week > 0 ? people[0].name : "",
-    people,
+    people, since,
   };
 }
 
@@ -235,7 +245,7 @@ export function shop(hub: Hub, conv: string): Item[] {
     .map(r => ({ key: String(r.key), name: String(r.name), cost: Number(r.cost), what: String(r.what || ""), kind: "manual" as const, custom: true }));
   return [...ITEMS, ...custom].sort((a, b) => a.cost - b.cost);
 }
-const spentBy = (hub: Hub, conv: string, who: string) => Number(q(hub, "SELECT COALESCE(SUM(cost),0) n FROM team_spend WHERE conv=? AND who=? AND state<>'refunded'", conv, who)[0]?.n) || 0;
+const spentBy = (hub: Hub, conv: string, who: string, since = 0) => Number(q(hub, "SELECT COALESCE(SUM(cost),0) n FROM team_spend WHERE conv=? AND who=? AND state<>'refunded' AND ts>=?", conv, who, since)[0]?.n) || 0;
 /** The title someone bought, while it lasts. */
 export function titleOf(hub: Hub, conv: string, who: string, now = Date.now()): string {
   return String(q(hub, "SELECT note FROM team_spend WHERE conv=? AND who=? AND item='title' AND state<>'refunded' AND until>? ORDER BY ts DESC LIMIT 1", conv, who, now)[0]?.note || "");
@@ -336,7 +346,7 @@ export type Wall = {
   perks: Spend[];                                                                             // what points were traded for lately
 };
 export function honorWall(hub: Hub, conv: string, now = Date.now()): Wall {
-  const stats = teamStats(hub, conv, now), done = listTasks(hub, conv, { status: ["done"], limit: 1000 });
+  const stats = teamStats(hub, conv, now), done = listTasks(hub, conv, { status: ["done"], limit: 1000 }).filter(t => t.done_at >= stats.since);
   const badges = BADGES.map(b => ({ key: b.key, name: b.name, what: b.what,
     holders: stats.people.map(p => { const x = p.badges.find(y => y.key === b.key); return x?.earned ? { who: p.name, at: x.at || p.last_done } : null; }).filter(Boolean).sort((a, c) => a!.at - c!.at) as { who: string; at: number }[] }));
   const records: Wall["records"] = [];
@@ -488,7 +498,9 @@ export async function awardCertificate(hub: Hub, conv: string, stats: TeamStats,
 export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = [], cert = ""): string {
   const facts = {
     本周做完: stats.week.done, 本周总分: stats.week.points, 还在做: stats.totals.doing, 没开始: stats.totals.open, 已过期: stats.totals.overdue, 本周之星: stats.mvp || "（没有人得分）",
-    每个人: stats.people.filter(p => p.done_week || p.doing.length).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name) })),
+    每个人: stats.people.filter(p => p.done_week || p.doing.length || p.activity?.week).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name),
+      ...(p.activity?.week ? { 其中仓库和接活得分: p.activity.week, 仓库和接活: Object.entries(p.activity.kinds).map(([k, v]) => (contrib.RULES[k as contrib.Kind]?.name || k) + " " + v.n + " 次") } : {}) })),
+    ...(stats.since > stats.week.start ? { 说明: "积分在 " + dayOf(stats.since) + " 重新起算过，这之前的不算" } : {}),
     本周做完的事: done.map(t => ({ 事: t.title, 谁: creditOf(t), 大小: SIZE_LABEL[t.size], 用时: t.claimed_at ? span(t.done_at - t.claimed_at) : "" })),
   };
   return "发本周的团队战报。下面是这一周任务清单的真实数据，只能用这些数，不许编：\n" + JSON.stringify(facts) +
@@ -506,7 +518,7 @@ export async function weekly(hub: Hub, now: number, only = "") {
     const stats = teamStats(hub, conv, now);
     const covers = spends(hub, conv, { state: "pending", item: "cover", limit: 200 }).filter(x => !x.weekly_at);
     if (!stats.week.done && !stats.totals.doing && !stats.totals.open && !covers.length) continue;
-    const done = listTasks(hub, conv, { status: ["done"], limit: 1000 }).filter(t => t.done_at >= stats.week.start).sort((a, b) => a.done_at - b.done_at);
+    const done = listTasks(hub, conv, { status: ["done"], limit: 1000 }).filter(t => t.done_at >= Math.max(stats.week.start, stats.since)).sort((a, b) => a.done_at - b.done_at);
     recordStar(hub, conv, stats);
     const cert = await awardCertificate(hub, conv, stats, done, now).catch(e => { console.log("teamwork: certificate failed", e?.message); return ""; });
     const dispatched = covers.filter(c => {
@@ -523,6 +535,10 @@ function tick(hub: Hub, now: number) {
   hub.set("team:weekly:day", today);
   hub.ctx.waitUntil(weekly(hub, now).catch(e => console.log("teamwork: weekly failed", e?.message)));
 }
+function tickAll(hub: Hub, now: number) {
+  try { contrib.tick(hub, now); } catch (e: any) { console.log("contrib: tick failed", e?.message); }
+  tick(hub, now);
+}
 
 // ---------- chat tool ----------
 const personLine = (p: PersonStats, now: number) => ({
@@ -530,6 +546,11 @@ const personLine = (p: PersonStats, now: number) => ({
   doing: p.doing.map(d => "#" + d.id + " " + d.title + "（" + span(now - d.since) + "前接的" + (d.by_ai ? "，本地 AI 在做" : "") + (d.overdue ? "，已过期" : "") + "）"),
   waiting: p.waiting, done_this_week: p.done_week, points_this_week: p.points_week, done_total: p.done_total, points_total: p.points_total,
   balance: p.balance, spent: p.spent, ...(p.title ? { title: p.title } : {}),
+  ...(p.activity ? { repo_and_claims: {
+    points_this_week: p.activity.week, points_total: p.activity.total,
+    this_week: Object.entries(p.activity.kinds).map(([k, v]) => (contrib.RULES[k as contrib.Kind]?.name || k) + " " + v.n + " 次"),
+    ...(p.activity.over_week ? { over_daily_limit_this_week: p.activity.over_week + " 分（超过每天上限的部分，只记账不算分）" } : {}),
+  } } : {}),
   streak_days: p.streak, fastest: p.fastest_ms ? span(p.fastest_ms) : "", badges: p.badges.filter(b => b.earned).map(b => b.name),
   next_badges: p.badges.filter(b => !b.earned).slice(0, 2).map(b => b.name + "：" + b.what),
 });
@@ -541,11 +562,16 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       + "op=status：全队现在的情况和本周战绩，每个人的 balance 是还能花的积分（who 填名字只看一个人，mine=true 看提问的人）；op=timeline：一件任务的过程（id 必填）；op=recent：最近发生的事（谁接了、谁做完了）；op=wall：功勋墙（历届本周之星、打下的大活、谁有哪些称号、各项纪录、谁挂着什么头衔）。"
       + "积分能换特权：op=shop 看能换什么、各多少分、提问的人有多少分；有人说要换某样（“我要换甩锅券”“用积分点一张图”），用 op=redeem（item 填名字，note 填他的具体要求，头衔必须给名字）。redeem 成功后返回的 do 就是你现在要做的事，当场照做；返回失败（分不够、没这一项）就照实说，别替他垫分。"
       + "即时权益当场办理，办理结果在群里照实说。op=fulfil：群主说某次兑换“兑现了”时按记录编号标记；op=refund：群主要求退回未兑现的积分时用。op=add_item / remove_item：群主或被授权的人增删自定的特权（name、cost、what），比如“奶茶一杯 30 分，群主请”。"
-      + "计分规矩：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做的算在它主人头上。回答时点名、说具体的事，简短，别念数据表。",
+      + "计分规矩：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做的算在它主人头上。回答时点名、说具体的事，简短，别念数据表。"
+      + "组织仓库里的活和接任务也算分，系统每半小时自己去 GitHub 读一次，按账号记到人头上：PR 合并 10 分、开 PR 2 分（每天最多 6）、写 issue 1 分（写清现象和修法的 2 分，每天最多 8）、审别人的 PR 2 分（每天最多 6）、合别人的 PR 1 分（每天最多 3）、不走 PR 的直接提交 0.5 分（每天最多 3）、接任务 1 分（每天最多 3）；这些加起来每人每天最多 20 分，超出的只记账不算分。Bot 自己开的 PR 不算任何人的。status 里每个人的分已经包含这部分。"
+      + "op=activity：这些分的明细（who 填名字只看一个人，refresh=true 先重新读一遍），每条带仓库和 PR / issue 号，报分、对账都用它，不要自己去翻仓库手算。op=link_github：记下某个 GitHub 账号是谁的（login、who，群主或被授权的人说了才用）。"
+      + "op=restart：群主说“重新开始统计”“积分归零重来”时用，从那一刻起之前做完的任务、花掉的分、仓库里的活都不再算（清单和功勋墙上的历届之星还在），只有群主能办。归零、起算时间、谁多少分一律以这个工具的结果为准，没调用成功就不要说“已经归零”。",
     parameters: {
       type: "object", required: ["op"],
       properties: {
-        op: { type: "string", enum: ["status", "timeline", "recent", "wall", "shop", "redeem", "fulfil", "refund", "add_item", "remove_item"] },
+        op: { type: "string", enum: ["status", "timeline", "recent", "wall", "shop", "redeem", "fulfil", "refund", "add_item", "remove_item", "activity", "link_github", "restart"] },
+        login: { type: "string", description: "link_github：GitHub 账号名" }, at: { type: "string", description: "restart：从什么时候起算，北京时间 YYYY-MM-DD HH:MM；不填就是现在" },
+        refresh: { type: "boolean", description: "activity：先去 GitHub 重新读一遍再答（平时半小时自动读一次）" },
         item: { type: "string", description: "redeem：要换的那一项的名字" }, note: { type: "string", description: "redeem：他的具体要求（画什么、什么锅、头衔叫什么……）" },
         name: { type: "string", description: "add_item / remove_item：特权的名字" }, cost: { type: "integer", description: "add_item：要多少分" }, what: { type: "string", description: "add_item：换到的是什么" },
         who: { type: "string", description: "status：只看这个人" }, mine: { type: "boolean", description: "status：只看提问的人" },
@@ -603,6 +629,34 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         const it = setItem(hub, conv, String(a.name || ""), Number(a.cost), String(a.what || ""), me, now);
         return typeof it === "string" ? { ok: false, error: it } : { ok: true, added: it.name, cost: it.cost, note: "这一项要人来兑现：有人换了之后我会在群里说，兑现后说一声“兑现了”" };
       }
+      if (op === "restart") {
+        if ((hub as any).edit?.rank?.(conv, askers) !== "owner") return { ok: false, error: "重新起算只有群主能办" };
+        const at = a.at ? contrib.parseWhen(a.at) : now;
+        if (!at || at > now + 60000) return { ok: false, error: "起算时间看不懂或者在将来，用 2026-11-15 21:56 这样的写法（北京时间）" };
+        contrib.restart(hub, conv, at, me);
+        const after = teamStats(hub, conv, now);
+        return { ok: true, counting_from: dayOf(at) + " " + new Date(at + 8 * HOUR).toISOString().slice(11, 16) + "（北京时间）", now: after.people.map(p => p.name + " " + p.points_total + " 分"), note: "这之前做完的任务、花掉的分、仓库里的活都不再算；任务清单和历届之星还在" };
+      }
+      if (op === "link_github") {
+        if (!boss()) return { ok: false, error: "账号对应要群主或被授权的人来说" };
+        if (!contrib.linkLogin(hub, conv, String(a.login || ""), String(a.who || ""))) return { ok: false, error: "要给 GitHub 账号名（login）和他在群里的名字（who）" };
+        return { ok: true, accounts: contrib.logins(hub, conv).map(l => l.login + " = " + l.who), note: "下次读仓库（半小时内，或 activity 带 refresh=true）就按这个记" };
+      }
+      if (op === "activity") {
+        let fresh: any = null;
+        if (a.refresh) fresh = await contrib.syncRepos(hub, conv, now).catch(e => ({ errors: [String(e?.message || e)] }));
+        const want = a.mine ? personOfName(me) || me : String(a.who || "").trim(), ev = contrib.events(hub, conv, now).filter(e => !want || e.who === want || e.who.includes(want));
+        const stats = teamStats(hub, conv, now), since = stats.since;
+        return {
+          ok: true, counting_from: since ? dayOf(since) + " " + new Date(since + 8 * HOUR).toISOString().slice(11, 16) + "（北京时间）" : "一直都算",
+          accounts: contrib.logins(hub, conv).map(l => l.login + " = " + l.who),
+          people: stats.people.filter(p => p.activity && (!want || p.name === want || p.name.includes(want))).map(p => ({ name: p.name, points_this_week: p.activity!.week, points_total: p.activity!.total, ...(p.activity!.over_total ? { over_daily_limit: p.activity!.over_total } : {}) })),
+          events: ev.slice(-40).reverse().map(e => dayOf(e.ts).slice(5) + " " + new Date(e.ts + 8 * HOUR).toISOString().slice(11, 16) + " " + e.who + " " + (contrib.RULES[e.kind]?.name || e.kind) + " +" + e.points + (e.repo ? " " + e.repo + (e.kind === "commit" ? "@" : "#") + e.num : " #" + e.num) + " " + clip(e.title, 50)),
+          ...(contrib.strangers(hub, conv).length ? { unmatched_accounts: contrib.strangers(hub, conv).map(x => x.login + "（" + x.events + " 条）"), tell: "这些账号还没对上人，它们的活没算进任何人的分；问群主是谁的" } : {}),
+          ...(fresh ? { refreshed: { new_events: fresh.added || 0, ...(fresh.errors?.length ? { errors: fresh.errors } : {}) } } : {}),
+          ...(!ev.length ? { note: "起算以来还没有记到仓库活动或接任务" } : {}),
+        };
+      }
       const stats = teamStats(hub, conv, now);
       const want = a.mine ? me : String(a.who || "").trim();
       const people = want ? stats.people.filter(p => p.name === want || p.name.includes(want)) : stats.people;
@@ -610,6 +664,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       return {
         ok: true,
         this_week: { done: stats.week.done, points: stats.week.points, star: stats.mvp || "还没有人得分" },
+        ...(stats.since ? { counting_from: dayOf(stats.since) + " " + new Date(stats.since + 8 * HOUR).toISOString().slice(11, 16) + "（北京时间）起算，之前的不算" } : {}),
         now: { in_progress: stats.totals.doing, not_started: stats.totals.open, overdue: stats.totals.overdue },
         people: people.map(p => personLine(p, now)),
       };
@@ -619,26 +674,32 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
 
 const feature: Feature = {
   name: "teamwork",
-  schema: SHOP_SCHEMA,
+  schema: SHOP_SCHEMA + contrib.SCHEMA,
   tunables: {
     team_praise: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 做完任务时，在群里夸一句（带上他这周的战绩）" },
     team_weekly: { default: "on", options: ["on", "off"], what: "每周日晚上发一份团队战报：这周谁做成了什么、本周之星" },
   },
   tools,
-  tick,
+  tick: tickAll,
   async admin(hub, req, url, body) {
     if (url.pathname !== "/admin/team") return null;
     const json = (o: any, status = 200) => new Response(JSON.stringify(o, null, 1), { status, headers: { "content-type": "application/json; charset=utf-8" } });
     const conv = String(body?.conv || url.searchParams.get("conv") || hub.get("main") || "");
     // POST {"weekly":"t:room"} runs the Sunday ceremony for one conversation right now (for rehearsing in a test room).
+    // POST {"since":"2026-11-15 21:56"} starts the scoring over from that Beijing time; {"link":{"login":"who",…}} matches GitHub accounts to members; {"sync":true} reads the repositories now.
+    if (req.method === "POST" && body?.since) { const at = contrib.parseWhen(body.since); if (!at) return json({ ok: false, error: "since 要写成 2026-11-15 21:56（北京时间）" }, 400); contrib.restart(hub, conv, at, "admin"); }
+    if (req.method === "POST" && body?.link) for (const [login, who] of Object.entries(body.link)) contrib.linkLogin(hub, conv, login, String(who));
+    if (req.method === "POST" && body?.sync) return json({ ok: true, conv, sync: await contrib.syncRepos(hub, conv), accounts: contrib.logins(hub, conv), unmatched: contrib.strangers(hub, conv), events: contrib.events(hub, conv).slice(-60), stats: teamStats(hub, conv) });
     if (req.method === "POST" && body?.weekly) { await weekly(hub, Date.now(), String(body.weekly)); return json({ ok: true, ran: body.weekly, wall: honorWall(hub, String(body.weekly)) }); }
-    return json({ ok: true, conv, stats: teamStats(hub, conv), wall: honorWall(hub, conv), shop: shop(hub, conv) });
+    return json({ ok: true, conv, since: contrib.sinceOf(hub, conv), accounts: contrib.logins(hub, conv), stats: teamStats(hub, conv), wall: honorWall(hub, conv), shop: shop(hub, conv) });
   },
   about: [
     "任务清单同时是团队的记分牌：每件任务记着谁记下的、谁什么时候接的手、做了多久、什么时候做完，看板上能看到完整过程。",
     "做完一件事有分：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做完的算在它主人头上。还有称号（开张、屠龙、闪电、三天不断等），都是从任务记录里算出来的，不是我随口封的。",
     "积分能换特权：定制表情包 5 分、点一段方言语音 10 分、甩锅券 15 分、点一张图 20 分、专属头衔一周 25 分、代办券 40 分、战报封面人物 50 分；群主还能加自定的（比如请奶茶）。积分只能靠做完任务挣，不能转让、不能预支，换了就从余额里扣。在群里跟我说“我要换……”，或者在看板上点。",
     "功勋墙记着历届本周之星、打下来的大活、谁拿了哪些称号、各项纪录和大家挂着的头衔，看板上有，在群里问我也行。",
+    "积分不只认任务清单：组织仓库里的活和接任务也算，我每半小时自己去 GitHub 读一次，按账号记到人头上。PR 合并 10 分、开 PR 2 分、写 issue 1 分（写清现象和修法的 2 分）、审别人的 PR 2 分、合别人的 PR 1 分、不走 PR 的直接提交 0.5 分、接任务 1 分；各项有每天的上限，加起来每人每天最多 20 分，超出的只记账。我自己开的 PR 和机器人账号的不算任何人的。每一分都对得上具体的 PR、issue 或提交，用 team 的 activity 能逐条看。",
+    "积分可以重新起算：群主说“重新开始统计”，从那一刻起之前做完的任务、花掉的分、仓库里的活都不再算，任务清单和历届之星还留着。起算时间、谁多少分以 team 工具查到的为准，我不靠记忆和手算报分。",
     "有人做完任务我会在群里夸一句，说的数（这周第几件、连续几天、用了多久）都来自记录；每周日晚上九点半发一份战报，点名这周谁做成了什么。本周之星有颁奖：一张正式的奖状发到群里（也挂上功勋墙）、20 分奖金、接下来一周的“本周之星”头衔，我还会念颁奖词。不想要可以关（team_praise、team_weekly）。",
   ],
 };
