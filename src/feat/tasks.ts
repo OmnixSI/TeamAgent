@@ -201,12 +201,13 @@ export function unblockedBy(hub: Hub, conv: string, id: number): Task[] {
  * One line in the group when something happens to a task outside the chat (on the board, or by someone's
  * local AI). Changes made by talking to the bot pass `quiet`: the bot's own reply already says it.
  */
-export function tell(hub: Hub, conv: string, text: string, now = Date.now()) {
+export function tell(hub: Hub, conv: string, text: string, loud = false, now = Date.now()) {
   try {
     const mode = String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "digest");
     if (mode === "off") return;
     // Gathered: the line waits and goes out with the others in one message (see flushNotices), so a busy hour is not a flood.
-    if (mode !== "on") { ensure(hub); hub.sql.exec("INSERT INTO task_notice(conv, ts, text) VALUES(?,?,?)", conv, now, clip(text, 300)); return; }
+    // `loud` lines are the ones the group wants at once: a member picking a task up, a member finishing one.
+    if (mode !== "on" && !loud) { ensure(hub); hub.sql.exec("INSERT INTO task_notice(conv, ts, text) VALUES(?,?,?)", conv, now, clip(text, 300)); return; }
     const p = (hub as any).say?.(conv, "【任务】" + text);
     if (p && typeof p.catch === "function") { const q = p.catch((e: any) => console.log("tasks: notice failed", e?.message)); (hub as any).ctx?.waitUntil?.(q); }
   } catch (e: any) { console.log("tasks: notice failed", e?.message); }
@@ -288,10 +289,10 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
   if (after && !quiet && next.status) {
     const by = who || "有人";
     // A finished task is the team feature's moment (praise with the person's tally); the plain line is the fallback.
-    if (next.status === "done") { if (!hooks.done) tell(hub, conv, named(after) + " 做完了（" + by + "）" + (after.result ? "：" + clip(after.result, 160) : "")); }
+    if (next.status === "done") { if (!hooks.done) tell(hub, conv, named(after) + " 做完了（" + by + "）" + (after.result ? "：" + clip(after.result, 160) : ""), !!after.done_by); }
     else if (next.status === "dropped") tell(hub, conv, named(after) + " 不做了（" + by + "）");
     else if (next.status === "open" && cur.claimed_by) tell(hub, conv, cur.claimed_by + " 放下了 " + named(after) + "，谁有空可以接");
-    else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
+    else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after), !!personOfName(who));
   }
   if (after && next.status === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
   if (after && (next.status === "done" || next.status === "dropped")) {
@@ -316,7 +317,7 @@ export function claimTask(hub: Hub, conv: string, id: number, who: string, quiet
   hub.sql.exec("UPDATE task SET claimed_by=?, status='doing', updated=?, claimed_at=? WHERE conv=? AND id=?", w, now, cur.claimed_at || now, conv, cur.id);
   note(hub, conv, cur.id, w, cur.claimed_by ? "接着做" : "认领了，开始做", now, "claim");
   const after = getTask(hub, conv, cur.id);
-  if (after && !quiet) tell(hub, conv, w + " 接了 " + named(after) + "，开干了");
+  if (after && !quiet) tell(hub, conv, w + " 接了 " + named(after) + "，开干了", !isBot(w));
   return after;
 }
 
@@ -835,7 +836,7 @@ const feature: Feature = {
     tasks_nightly: { default: "on", options: ["on", "off"], what: "每天夜里从前一天的聊天里补记任务、标出做完和不做的" },
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
-    tasks_announce: { default: "digest", options: ["digest", "on", "off"], what: "看板上、本地 AI 和 Bot 自己对任务的动作（接了、做完、放下、新加）怎么在群里说：digest 攒起来隔一阵合成一条，on 每件事当场说一句，off 不说" },
+    tasks_announce: { default: "digest", options: ["digest", "on", "off"], what: "任务的动静怎么在群里说：digest 是群友接活、群友做完当场说（做完带表扬），其余的（Bot 自己开工和做完、新加、拆分、放下）攒起来隔一阵合成一条；on 每件事都当场说；off 都不说" },
     tasks_digest_minutes: { default: 30, min: 5, max: 240, what: "任务动静攒多少分钟合成一条发群里" },
     tasks_bot_auto: { default: "on", options: ["on", "off"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
     tasks_bot_daily: { default: 6, min: 0, max: 20, what: "Bot 一天最多自己开工做几次名下的任务" },
@@ -873,7 +874,7 @@ const feature: Feature = {
     "有人明确说要做某件具体的事，或者把事交给别人，我会自己记下；随口说说的、开玩笑的不记。想让我记，说“记一下……”就行。",
     "说做完了、不做了、做到哪了，我会在清单上改；问“现在有哪些事在做”，我照清单回答。",
     "每天夜里我会把前一天的聊天再过一遍，补上漏记的、标出做完和取消的，每件新记的都对得上群里的原话；一晚最多新记 8 件（可以改），不在群里说。",
-    "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，还有我自己开工，这些动静不再一件一条地发：攒起来每半小时合成一条（以【任务】开头，最多列 8 条，更多的看看板），免得一开发就把群淹了。在群里直接跟我说的不重复提醒。想要每件当场说把 tasks_announce 改成 on，都不要就 off；间隔用 tasks_digest_minutes 改。",
+    "群友（或他的本地 AI）接了任务、做完任务，我当场在群里说，做完的带表扬和得分。别的动静不一件一条地发：我自己开工和做完、新加的任务、拆分、放下、谁可以开始了，攒起来每半小时合成一条（以【任务】开头，最多列 8 条，更多的看看板），免得一开发就把群淹了。在群里直接跟我说的不重复提醒。想要每件都当场说把 tasks_announce 改成 on，都不要就 off；间隔用 tasks_digest_minutes 改。",
     "到期提醒默认关着；打开后，任务到期那天早上我在群里提一句，每件只提一次。",
     "任务有轻重（急、普通、不急）和先后（这件要等哪几件做完）。清单和看板按该做的顺序排：正在做的、现在能开工的（急的在前）、还在等别的任务的；前面那件做完，后面等着的会被点名可以开始了。",
     "交给我自己的任务我会真的去做，看板上看得到：轮到它时我自己开工（北京时间 8 点到 23 点半，同一个群一次只做一件，一天最多 6 次，可以改），状态变成“在做”，做出来的报告、链接、文件挂在任务上，做完写上结果。一件任务我自己最多试 3 轮，还没做完就停下来在群里说卡在哪。",

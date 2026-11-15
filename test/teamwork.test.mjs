@@ -272,15 +272,21 @@ test("Sunday: the star is recorded, gets a certificate in the group, a bonus and
   } finally { deps.render = old; }
 });
 
-test("while task news is gathered, an ordinary finished task is a plain line in that message, not a praise of its own", async () => {
+test("while task news is gathered, a member's finished task is still praised at once; the bot's own is a line in the gathered message", async () => {
   const { flushNotices } = await import("../src/feat/tasks.ts");
   const hub = mkHub({ tasks_announce: "digest" });
+  deps.line = async () => "这手速可以";
   const t = addTask(hub, G, { title: "修首页图片加载慢", owner: "小明", by: "小红" }, true);
   claimTask(hub, G, t.id, "小明", true);
   updateTask(hub, G, t.id, { status: "done", result: "换成了懒加载" }, "小明");
   await Promise.all(hub.waits);
-  assert.equal(hub.said.length, 0, "nothing on the spot");
+  assert.equal(hub.said.length, 1, "said on the spot");
+  assert.match(hub.said[0], /^【任务】#\d+「修首页图片加载慢」 做完了。这手速可以（小明 \+10 分/);
+  const own = addTask(hub, G, { title: "整理周报", owner: "bot", by: "小红" }, true);
+  claimTask(hub, G, own.id, "bot", true);
+  updateTask(hub, G, own.id, { status: "done", result: "发在看板上了" }, "bot");
+  await Promise.all(hub.waits);
+  assert.equal(hub.said.length, 1, "the bot's own work is not announced at once");
   await flushNotices(hub, Date.now(), true);
-  assert.equal(hub.said.length, 1);
-  assert.match(hub.said[0], /^【任务】#\d+「修首页图片加载慢」 做完了，小明 拿下：.*\+10 分，这周第 1 件/);
+  assert.match(hub.said[1], /^【任务】#\d+「整理周报」 做完了：发在看板上了$/);
 });
