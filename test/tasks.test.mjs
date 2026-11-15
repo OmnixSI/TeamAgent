@@ -108,7 +108,7 @@ test("the tool: add de-duplicates, list filters, update/done/drop/note/claim/sho
   assert.equal(dup.duplicate, true); assert.equal(dup.task.id, id);
   assert.equal(listTasks(hub, G).length, 1);
   assert.equal((await anon.run({ op: "add", title: "周五前交报告" })).ok, true);
-  assert.equal(getTask(hub, G, id + 1).by, "群友");
+  assert.equal(getTask(hub, G, id + 1).by, "bot");
   assert.equal((await t.run({ op: "list" })).count, 2);
   assert.equal((await t.run({ op: "list", mine: true })).count, 1);
   assert.equal((await anon.run({ op: "list", mine: true })).ok, false);
