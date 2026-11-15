@@ -482,7 +482,7 @@ describe("notification caps", () => {
     assert.deepEqual(lines.slice(0, 5).map(l => l.match(/item (\d+)/)[1]), ["4", "5", "6", "7", "8"], "oldest to newest of the newest five");
     assert.match(lines[5], /还有 3 条没逐条发/);
     net[URL_A] = ok(rssDoc([{ g: "base" }, ...burst(1, 12)]));
-    await checkFeed(hub, feedRow(r.id), now + 60000);   // a minute later, not an hour: the two checks must fall on the same day even when the suite runs late in the evening
+    await checkFeed(hub, feedRow(r.id), now + HOUR);
     assert.equal(said.length, 1, "allowance spent: no more lines today, and the overflow note is not repeated");
     assert.equal(count("feeditem"), 13, "everything is still stored for latest");
     net[URL_A] = ok(rssDoc([{ g: "base" }, ...burst(1, 12), ...burst(100, 2)]));
