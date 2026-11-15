@@ -376,6 +376,13 @@ export function handoff(hub: Hub, conv: string, id: number): Handoff | null {
     notes: taskNotes(hub, conv, task.id),
   };
 }
+/** The task the bot is working on by itself right now in this conversation (0 for none). */
+export function botBusy(hub: Hub, conv: string): number {
+  const id = Number(hub.get("tasks:bot:running:" + conv) || 0);
+  if (!id) return 0;
+  const t = getTask(hub, conv, id);
+  return t && t.status === "doing" ? id : 0;
+}
 /** The words a task came from, as they were said: the last few messages of the people asking, with time and name. */
 export function quoteOf(hub: Hub, conv: string, askerIds: string[], now = Date.now()): string {
   if (!askerIds.length || typeof (hub as any).recent !== "function") return "";
