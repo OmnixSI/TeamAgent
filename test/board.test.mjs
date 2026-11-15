@@ -547,6 +547,30 @@ describe("teamwork endpoints over the real task module", () => {
     assert.equal(j.events.length, 0);
     assert.equal((await call("/x/board/api/team")).status, 401);
   });
+  test("redemptions expose receipts and let only the owner settle within the same conversation", async () => {
+    let { j } = await post("/x/board/api/tasks", { title: "攒兑换积分", size: "big" });
+    await post("/x/board/api/tasks/" + j.task.id + "/claim", {});
+    await post("/x/board/api/tasks/" + j.task.id, { status: "done" });
+    ({ j } = await post("/x/board/api/shop/redeem", { item: "draw", note: "画只猫" }));
+    const id = j.spend.id;
+    assert.equal(j.spend.state, "pending");
+    ({ j } = await get("/x/board/api/redemptions?state=pending"));
+    assert.equal(j.can_settle, false);
+    assert.deepEqual(j.records.map(x => [x.id, x.who, x.balance_after, x.balance]), [[id, "小明", 10, 10]]);
+    assert.equal((await post("/x/board/api/redemptions/settle", { id, state: "refunded", by: "群主" })).r.status, 403);
+    hub.edit.rank = conv => conv === "g:a" ? "owner" : "trusted";
+    assert.equal((await post("/x/board/api/redemptions/settle", { id, state: "refunded" }, { token: B })).r.status, 403);
+    ({ j } = await post("/x/board/api/redemptions/settle", { id, state: "refunded" }));
+    assert.equal(j.entry.settled_by, "小明");
+    assert.ok(j.entry.settled_at > 0);
+    assert.equal(j.balance, 30);
+    assert.equal((await post("/x/board/api/redemptions/settle", { id, state: "done" })).r.status, 409);
+    ({ j } = await get("/x/board/api/redemptions?state=refunded"));
+    assert.equal(j.records[0].balance_after, 10);
+    assert.equal(j.records[0].balance, 30);
+    assert.deepEqual((await get("/x/board/api/redemptions", B)).j.records, []);
+    assert.equal((await call("/x/board/api/redemptions")).status, 401);
+  });
   test("wall and shop: points are spent only from the visitor's own balance", async () => {
     await post("/x/board/api/tasks", { title: "屠龙", size: "big" });
     await post("/x/board/api/tasks/1/claim", {});

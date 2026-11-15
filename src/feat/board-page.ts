@@ -69,7 +69,7 @@ ${SPRITE}<template id="ic"><svg ${ATTR}><use href=""/></svg></template>
 </nav>
 <div class="content">
 <header class="bar"><h1 id="title">概览</h1><span id="stamp" class="stamp"></span><button type="button" id="refresh" class="ib" aria-label="刷新" title="刷新（R）">${svg("refresh")}</button></header>
-<main id="main">${NAV.concat([["shop", "兑换", "兑换"]]).map(n => `<section id="s-${n[0]}" class="sec" hidden aria-label="${n[1]}"><div class="body"></div></section>`).join("")}
+<main id="main">${NAV.concat([["shop", "兑换", "兑换"], ["redemptions", "兑换台账", "台账"]]).map(n => `<section id="s-${n[0]}" class="sec" hidden aria-label="${n[1]}"><div class="body"></div></section>`).join("")}
 <noscript><p class="empty">看板需要开启 JavaScript。</p></noscript></main>
 </div>
 <nav class="tabbar" aria-label="主要分区">${NAV.filter(n => TABBAR.includes(n[0])).map(navLink).join("")}<button type="button" id="more-btn" aria-expanded="false" aria-controls="more">${svg("more")}<span class="s">更多</span></button></nav>
@@ -1276,7 +1276,7 @@ function wallView(root) {
 // ---------- 兑换 ----------
 var SHOP = null;
 var KINDW = { now: "Bot 马上兑现", timed: "持续几天", weekly: "下期周报兑现", manual: "要人来兑现" };
-var STW = { pending: ["warn", "等兑现"], done: ["ok", "已兑现"], refunded: ["", "已退回"] };
+var STW = { pending: ["warn", "待兑现"], done: ["ok", "已兑现"], refunded: ["", "已退分"] };
 function shopView(root) {
   return api("shop").then(function (j) {
     SHOP = j;
@@ -1298,7 +1298,7 @@ function shopView(root) {
           h("span", { class: "meta" }, x.cost + " 分 · ", rt(x.ts), x.until && x.state !== "refunded" ? [" · ", rt(x.until, "", "到期")] : null)), badge(st[0], st[1]));
       }));
     }
-    swap(root, [wallet, h("div", { class: "sect" }, h("h2", { text: "能换的" }), items),
+    swap(root, [wallet, h("div", { class: "row" }, h("a", { class: "btn", href: "#redemptions" }, icon("file"), "兑换台账")), h("div", { class: "sect" }, h("h2", { text: "能换的" }), items),
       h("div", { class: "cols2" }, h("div", { class: "sect" }, h("h2", { text: "我的兑换" }), spendList(j.mine, false)), h("div", { class: "sect" }, h("h2", { text: "大家最近换的" }), spendList(j.recent, true)))]);
   });
 }
@@ -1325,16 +1325,70 @@ function shopArg(arg) {
     api("shop/redeem", { item: it.key, note: v }).then(function (r) {
       var b2 = clear($("dw-body"));
       b2.appendChild(h("div", { class: "done-box" }, h("span", { class: "m" }, icon("check")), h("h2", { id: "dw-title", text: "换到了：" + r.spend.name }),
-        h("p", { text: "花了 " + r.spend.cost + " 分，还剩 " + r.balance + " 分。" }), h("p", { class: "meta", text: it.kind === "manual" ? "Bot 会在群里说一声，请群主兑现。" : it.kind === "weekly" ? "记下了，下期周日战报兑现。" : "Bot 会在群里兑现。" }),
-        h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "好的"))));
+        h("p", { text: "记录 #" + r.spend.id + " · 花了 " + r.spend.cost + " 分，还剩 " + r.balance + " 分。" }), h("p", { class: "meta", text: it.kind === "manual" ? "等群主兑现。" : it.kind === "weekly" ? "已登记到周报，等群主确认兑现。" : it.kind === "timed" ? "新头衔已生效。" : "Bot 会在群里办理，办完由群主确认。" }),
+        h("div", { class: "row" }, h("a", { class: "btn", href: "#redemptions" }, "查看台账"), h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "好的"))));
       b2.querySelector(".row").style.justifyContent = "center";
       toast("换到了：" + r.spend.name + "，还剩 " + r.balance + " 分", "win");
-      loaded.shop = 0; loaded.team = 0; loaded.wall = 0; loaded.home = 0;
+      loaded.shop = 0; loaded.team = 0; loaded.wall = 0; loaded.home = 0; loaded.redemptions = 0;
       load("shop", true); mine();
     }, function (e) { go2.disabled = false; fail(e); });
   });
   body.appendChild(form);
   if (note) setTimeout(function () { note.focus(); }, 60);
+}
+
+function redemptionsView(root) {
+  var filter = "", next = null, serial = 0;
+  var list = h("div", { class: "sect", "aria-live": "polite" });
+  var more = h("button", { type: "button", class: "btn", hidden: true }, "更早的兑换");
+  var filters = [["", "全部"], ["pending", "待兑现"], ["done", "已兑现"], ["refunded", "已退分"]];
+  var toolbar = h("div", { class: "row" });
+  function tabs() {
+    var group = seg(filters, filter, function (value) { filter = value; tabs(); fetchPage(null).catch(fail); });
+    clear(toolbar).append(h("a", { class: "btn", href: "#shop" }, "返回兑换"), group);
+  }
+  function record(x, can) {
+    var st = STW[x.state] || ["", x.state];
+    var event = x.state === "refunded" ? "退分" : "兑现";
+    var detail = h("div", { class: "card" },
+      h("div", { class: "row" }, h("strong", { text: "#" + x.id + " · " + x.who + " · " + x.name }), badge(st[0], st[1])),
+      h("p", { class: "meta" }, "兑换 " + exact(x.ts) + " · 花 " + x.cost + " 分 · 现在可用 " + x.balance + " 分",
+        x.balance_after === null ? null : " · 兑换后余 " + x.balance_after + " 分"),
+      x.settled_at ? h("p", { class: "meta", text: event + " " + exact(x.settled_at) + (x.settled_by ? " · " + x.settled_by : " · 旧记录") }) : null,
+      x.note ? h("p", { text: x.note }) : null);
+    if (can && x.state === "pending") {
+      var yes = h("button", { type: "button", class: "btn pri sm", onclick: function () { finish(x, "done", yes, back); } }, "确认兑现");
+      var back = h("button", { type: "button", class: "btn sm", onclick: function () { finish(x, "refunded", yes, back); } }, "退回 " + x.cost + " 分");
+      detail.appendChild(h("div", { class: "row" }, yes, back));
+    }
+    return detail;
+  }
+  function finish(x, state, yes, back) {
+    var refund = state === "refunded";
+    if (!window.confirm((refund ? "退回 " + x.cost + " 分给" : "确认已为") + x.who + "办理「" + x.name + "」？")) return;
+    yes.disabled = back.disabled = true;
+    api("redemptions/settle", { id: x.id, state: state }).then(function (r) {
+      toast((refund ? "已退回 " + x.cost + " 分" : "已确认兑现") + " · 可用 " + r.balance + " 分", "win");
+      loaded.shop = 0; loaded.team = 0; loaded.wall = 0; loaded.home = 0;
+      mine();
+      return fetchPage(null);
+    }).catch(function (e) { yes.disabled = back.disabled = false; fail(e); });
+  }
+  function fetchPage(before) {
+    var id = ++serial;
+    more.disabled = true;
+    return api("redemptions?state=" + filter + (before ? "&before=" + before : "")).then(function (j) {
+      if (id !== serial) return;
+      if (!before) clear(list);
+      j.records.forEach(function (x) { list.appendChild(record(x, j.can_settle)); });
+      if (!list.childNodes.length) list.appendChild(empty("没有这个状态的兑换记录", ""));
+      next = j.next; more.hidden = !next;
+    }).finally(function () { if (id === serial) more.disabled = false; });
+  }
+  more.addEventListener("click", function () { if (next) fetchPage(next).catch(fail); });
+  tabs();
+  swap(root, [toolbar, list, more]);
+  return fetchPage(null);
 }
 
 // ---------- 动态 ----------
@@ -2098,6 +2152,7 @@ var VIEWS = {
   team: { t: "战绩", load: team, auto: true },
   wall: { t: "功勋墙", load: wallView, auto: true },
   shop: { t: "兑换", load: shopView, arg: shopArg },
+  redemptions: { t: "兑换台账", load: redemptionsView },
   feed: { t: "动态", load: feed, arg: feedArg },
   works: { t: "作品和文件", load: works },
   repos: { t: "仓库", load: repos, auto: true },

@@ -18,7 +18,7 @@ import { ABILITIES, exampleParts } from "./toolbox.ts";
 import { CSS, APP_JS, PAGE } from "./board-page.ts";
 import { dailyAccountsStatus } from "./daily-accounts.ts";
 import { BJ, fmtDate } from "../util.ts";
-import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, balanceOf, spends, redeem } from "./teamwork.ts";
+import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, balanceOf, spends, redeem, canSettleSpend, settle } from "./teamwork.ts";
 
 const BASE = "/x/board";
 const DAY = 86400000;
@@ -276,6 +276,18 @@ function wall(hub: Hub, p: Person) {
 function shopOut(hub: Hub, p: Person) {
   return { ok: true, name: p.name, items: shop(hub, p.conv), me: balanceOf(hub, p.conv, p.name), mine: spends(hub, p.conv, { who: p.name, limit: 30 }), recent: spends(hub, p.conv, { limit: 20 }) };
 }
+const settleAs = (hub: Hub, p: Person) => canSettleSpend(hub, p.conv, { id: p.uid, name: p.name });
+function redemptions(hub: Hub, p: Person, u: URL) {
+  const status = u.searchParams.get("state");
+  const state = status === "pending" || status === "done" || status === "refunded" ? status : undefined;
+  const before = num(u.searchParams.get("before"), 0, 0, Number.MAX_SAFE_INTEGER);
+  const list = spends(hub, p.conv, { state, before, limit: 31 });
+  const canSettle = settleAs(hub, p), balances = new Map(teamStats(hub, p.conv).people.map(person => [person.name, person.balance]));
+  const records = list.slice(0, 30).map(({ note, ...entry }) => ({
+    ...entry, ...(canSettle || entry.who === p.name ? { note } : {}), balance: balances.get(entry.who) ?? 0,
+  }));
+  return { ok: true, can_settle: canSettle, records, next: list.length > 30 ? records[records.length - 1].id : null };
+}
 const params = (s: string) => ({ searchParams: new URLSearchParams(s) }) as URL;
 function part<T>(f: () => T, fallback: T): T { try { return f(); } catch { return fallback; } }   // one missing table must not blank the whole overview
 
@@ -366,6 +378,12 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
     if (!item) return bad("选一项再兑换");
     const r = redeem(hub, p.conv, p.name, item, str(b.note, 200) || "", "board");
     return r.ok ? json({ ok: true, spend: r.spend, balance: r.balance }) : bad(r.error, 400);
+  }
+  if (path === "redemptions/settle") {
+    if (!settleAs(hub, p)) return bad("兑现确认和退分由群主办理", 403);
+    if (!Number.isSafeInteger(b.id) || b.id <= 0 || (b.state !== "done" && b.state !== "refunded")) return bad("兑换编号或结算结果不对");
+    const entry = settle(hub, p.conv, b.id, b.state, Date.now(), p.name);
+    return entry ? json({ ok: true, entry, balance: balanceOf(hub, p.conv, entry.who).balance }) : bad("查不到这条兑换，或已按另一结果结算", 409);
   }
   if (path === "tasks") {
     const patch = taskPatch(b);
@@ -485,6 +503,7 @@ export async function serve(hub: Hub, req: Request, u: URL): Promise<Response | 
   if (api === "overview") return json(overview(hub, p));
   if (api === "wall") return json(wall(hub, p));
   if (api === "shop") return json(shopOut(hub, p));
+  if (api === "redemptions") return json(redemptions(hub, p, u));
   if (api === "team") return json({ ok: true, name: p.name, ...teamStats(hub, p.conv) });
   if (api === "events") {
     const before = num(u.searchParams.get("before"), 0, 0, 2 ** 52), n = num(u.searchParams.get("n"), 50, 1, 200);
