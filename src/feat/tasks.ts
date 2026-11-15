@@ -824,6 +824,11 @@ const feature: Feature = {
         const ran = await workOn(hub, c, t.id);
         return json({ ok: ran, handoff: handoff(hub, c, t.id) });
       }
+      // POST {"attach":{"conv","id","kind","title","text","ref","who"}}: put material on a task by hand, the original words included.
+      if (body?.attach) {
+        const x = body.attach, r = addTaskRef(hub, String(x.conv || hub.get("main") || ""), Number(x.id), { kind: x.kind, title: x.title, text: x.text, ref: x.ref, who: x.who });
+        return r ? json({ ok: true, attached: { id: r.id, kind: r.kind, title: r.title, chars: r.text.length } }) : json({ ok: false, error: "没挂上：任务不存在、种类不对，或者内容是空的" }, 400);
+      }
       const conv = String(body?.extract || "");
       if (!conv) return json({ error: "extract 要填群的会话编号" }, 400);
       return json(await extractDay(hub, conv, String(body.day || yesterday(Date.now())), body.dry !== false));
