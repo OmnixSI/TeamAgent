@@ -70,7 +70,7 @@ test("finishing a task outside the chat is praised with true numbers; in the cha
     updateTask(hub, G, first.id, { status: "done", result: "跑通了" }, "小明");
     await Promise.all(hub.waits);
     assert.equal(hub.said.length, 1);
-    assert.match(hub.said[0], /^【任务】#\d+「搭测试环境」 做完了。测试环境说搭就搭，这周头一件就这么利索。（小明 \+10 分，新称号：开张）$/);
+    assert.match(hub.said[0], /^【任务】#\d+「搭测试环境」 做完了。测试环境说搭就搭，这周头一件就这么利索。（小明 \+10 分，新称号：开张(、闪电)?）$/);   // 闪电 too when the claim and the finish fall in different milliseconds
     assert.equal(seen[0].week_count, 1); assert.equal(seen[0].who, "小明"); assert.ok(seen[0].new_badges.some(b => b.startsWith("开张")));
     // the model down: a plain, true line
     deps.line = async () => { throw new Error("down"); };
