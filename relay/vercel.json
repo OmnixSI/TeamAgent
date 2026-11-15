@@ -1,1 +1,12 @@
-{ "regions": ["hkg1"], "functions": { "api/fetch.js": { "maxDuration": 30 }, "api/silk.js": { "maxDuration": 30, "includeFiles": "node_modules/silk-wasm/lib/**" } } }
+{
+  "regions": ["hkg1"],
+  "functions": {
+    "api/fetch.js": { "maxDuration": 30 },
+    "api/silk.js": { "maxDuration": 30, "includeFiles": "node_modules/silk-wasm/lib/**" },
+    "api/site.js": { "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/x/(.*)", "destination": "/api/site?__p=/x/$1" },
+    { "source": "/p/(.*)", "destination": "/api/site?__p=/p/$1" }
+  ]
+}
