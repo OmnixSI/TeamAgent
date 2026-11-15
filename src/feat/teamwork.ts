@@ -97,6 +97,9 @@ export type PersonStats = {
   fastest_ms: number;        // quickest claim-to-done, 0 when none
   last_done: number;
   badges: Badge[];
+  spent: number;             // points traded in for perks
+  balance: number;           // points_total minus spent: what can still be traded in
+  title: string;             // a title bought with points, while it lasts
 };
 export type TeamStats = {
   week: { start: number; end: number; done: number; points: number; by_day: number[] };   // by_day: Monday..Sunday
@@ -124,8 +127,9 @@ export function teamStats(hub: Hub, conv: string, now = Date.now()): TeamStats {
       points_week: done.filter(t => t.done_at >= ws).reduce((s, t) => s + pointsOf(t), 0), points_total: done.reduce((s, t) => s + pointsOf(t), 0),
       streak, best_streak: best, fastest_ms: times.length ? Math.min(...times) : 0, last_done: done.length ? done[done.length - 1].done_at : 0,
       badges: badgesOf(done, streak, best),
+      spent: 0, balance: 0, title: "",
     };
-  }).sort((a, b) => b.points_week - a.points_week || b.points_total - a.points_total || b.doing.length - a.doing.length || a.name.localeCompare(b.name, "zh"));
+  }).map(p => { const spent = spentBy(hub, conv, p.name); return { ...p, spent, balance: Math.max(0, p.points_total - spent), title: titleOf(hub, conv, p.name, now) }; }).sort((a, b) => b.points_week - a.points_week || b.points_total - a.points_total || b.doing.length - a.doing.length || a.name.localeCompare(b.name, "zh"));
   const weekDone = all.filter(t => t.status === "done" && t.done_at >= ws);
   const by_day = [0, 0, 0, 0, 0, 0, 0];
   for (const t of weekDone) { const i = Math.floor((t.done_at - ws) / DAY); if (i >= 0 && i < 7) by_day[i]++; }
@@ -167,6 +171,151 @@ export function taskTimeline(hub: Hub, conv: string, id: number, now = Date.now(
   const steps = rows.map(r => { const kind = String(r.kind || "") || kindOf(String(r.text || "")); return { ts: Number(r.ts), task: task.id, title: task.title, who: String(r.who || ""), kind, text: String(r.text || ""), word: EVENT_WORD[kind] || "修改" }; });
   const claimed = task.claimed_at, end = task.done_at || (task.status === "doing" ? now : 0);
   return { task, created: task.created, claimed_at: claimed, done_at: task.done_at, waited_ms: claimed ? Math.max(0, claimed - task.created) : 0, worked_ms: claimed && end ? Math.max(0, end - claimed) : 0, steps };
+}
+
+// ---------- trading points for perks ----------
+export type Item = { key: string; name: string; cost: number; what: string; kind: "now" | "timed" | "weekly" | "manual"; days?: number; needs?: string; custom?: boolean };
+/** What points buy. "now": the bot does it on the spot. "timed": lasts some days. "weekly": honoured in the next weekly report. "manual": a person has to honour it. */
+const ITEMS: Item[] = [
+  { key: "meme", name: "定制表情包", cost: 5, kind: "now", what: "指定一张图或一个人，Bot 做成梗图并存进表情库", needs: "用哪张图、配什么字" },
+  { key: "roast", name: "点一段语音", cost: 10, kind: "now", what: "让 Bot 用你选的方言夸你一段，或者损你点名的人一段", needs: "夸谁损谁、用什么方言" },
+  { key: "blame", name: "甩锅券", cost: 15, kind: "now", what: "Bot 当众替你背一次锅，认错要诚恳", needs: "什么锅" },
+  { key: "draw", name: "点一张图", cost: 20, kind: "now", what: "Bot 按你的要求认真画一张图", needs: "画什么" },
+  { key: "title", name: "专属头衔一周", cost: 25, kind: "timed", days: 7, what: "自己起一个头衔，挂在看板和功勋墙上，这一周 Bot 就这么叫你", needs: "头衔叫什么（12 个字以内）" },
+  { key: "delegate", name: "代办券", cost: 40, kind: "now", what: "把一件小事甩给 Bot 去做：查资料、写文档、整理表格这类一两步能做完的", needs: "要它做什么" },
+  { key: "cover", name: "战报封面人物", cost: 50, kind: "weekly", what: "下一期周日战报以你为主角，Bot 给你画一张专属封面" },
+];
+export const SHOP_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS team_spend(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, who TEXT NOT NULL, item TEXT NOT NULL, name TEXT NOT NULL,
+    cost INTEGER NOT NULL, ts INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', note TEXT DEFAULT '', until INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0);
+  CREATE INDEX IF NOT EXISTS team_spend_who ON team_spend(conv, who, ts);
+  CREATE TABLE IF NOT EXISTS team_item(conv TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, cost INTEGER NOT NULL, what TEXT DEFAULT '', made_by TEXT DEFAULT '', ts INTEGER, PRIMARY KEY(conv, key));
+  CREATE TABLE IF NOT EXISTS team_star(conv TEXT NOT NULL, week INTEGER NOT NULL, who TEXT NOT NULL, points INTEGER, done INTEGER, PRIMARY KEY(conv, week));
+`;
+const q = (hub: Hub, sql: string, ...b: any[]): any[] => { try { return hub.sql.exec(sql, ...b).toArray() as any[]; } catch (e: any) { if (/no such table/i.test(String(e?.message))) return []; throw e; } };
+export type Spend = { id: number; who: string; item: string; name: string; cost: number; ts: number; state: "pending" | "done" | "refunded"; note: string; until: number };
+const spendOf = (r: any): Spend => ({ id: Number(r.id), who: String(r.who), item: String(r.item), name: String(r.name), cost: Number(r.cost), ts: Number(r.ts), state: r.state, note: String(r.note || ""), until: Number(r.until) || 0 });
+
+export function shop(hub: Hub, conv: string): Item[] {
+  const custom = q(hub, "SELECT key, name, cost, what FROM team_item WHERE conv=? ORDER BY cost, name", conv)
+    .map(r => ({ key: String(r.key), name: String(r.name), cost: Number(r.cost), what: String(r.what || ""), kind: "manual" as const, custom: true }));
+  return [...ITEMS, ...custom].sort((a, b) => a.cost - b.cost);
+}
+const spentBy = (hub: Hub, conv: string, who: string) => Number(q(hub, "SELECT COALESCE(SUM(cost),0) n FROM team_spend WHERE conv=? AND who=? AND state<>'refunded'", conv, who)[0]?.n) || 0;
+/** The title someone bought, while it lasts. */
+export function titleOf(hub: Hub, conv: string, who: string, now = Date.now()): string {
+  return String(q(hub, "SELECT note FROM team_spend WHERE conv=? AND who=? AND item='title' AND state<>'refunded' AND until>? ORDER BY ts DESC LIMIT 1", conv, who, now)[0]?.note || "");
+}
+export function spends(hub: Hub, conv: string, o: { who?: string; state?: string; limit?: number } = {}): Spend[] {
+  const where = ["conv=?"], b: any[] = [conv];
+  if (o.who) { where.push("who=?"); b.push(o.who); }
+  if (o.state) { where.push("state=?"); b.push(o.state); }
+  return q(hub, "SELECT * FROM team_spend WHERE " + where.join(" AND ") + " ORDER BY ts DESC LIMIT ?", ...b, Math.max(1, Math.min(200, Number(o.limit) || 50))).map(spendOf);
+}
+export function balanceOf(hub: Hub, conv: string, who: string, now = Date.now()): { earned: number; spent: number; balance: number } {
+  const p = teamStats(hub, conv, now).people.find(x => x.name === who);
+  return { earned: p?.points_total || 0, spent: p?.spent || 0, balance: p?.balance || 0 };
+}
+/** What the bot has to do to honour a perk bought just now. */
+function honour(item: Item, who: string, note: string): string {
+  const ask = note ? "他的要求：“" + note + "”。" : "他没说具体要求，先问清楚再做。";
+  switch (item.key) {
+    case "meme": return who + " 用积分换了一个定制表情包。" + ask + "用 meme 做出来发到群里，再用 sticker 存进表情库。";
+    case "roast": return who + " 用积分点了一段语音。" + ask + "写一段 60 字以内的词，用 speak 选对应的方言说出来，跟一条文字稿。";
+    case "blame": return who + " 用积分买了一张甩锅券。" + ask + "你当众把这个锅认下来：说得诚恳、具体，像真是你干的，最后保证不再犯。";
+    case "draw": return who + " 用积分点了一张图。" + ask + "用 generate_image 认真画一张发到群里，intent 里写明这是他用积分换的。";
+    case "delegate": return who + " 用积分买了一张代办券。" + ask + "现在就把这件事做了（需要好几步就先调 plan），做完把结果发群里；如果这事太大、不是一两步能做完的，照实说并请他换一件，积分让群主退。";
+    case "title": return who + " 用积分换了一周的专属头衔“" + note + "”。用 remember 记下：到期之前称呼 " + who + " 时带上这个头衔。在群里用这个头衔叫他一声。";
+    case "cover": return who + " 用积分换了下一期战报的封面人物，周日晚上的战报会给他画封面。现在在群里说一声已经记下了。";
+    default: return who + " 用积分换了「" + item.name + "」（" + item.what + "）。" + (note ? "附言：“" + note + "”。" : "") + "这个要人来兑现：在群里说清楚谁换了什么，请群主兑现，兑现后让群主说一声“兑现了”。";
+  }
+}
+export type Redeemed = { ok: true; spend: Spend; balance: number; do: string } | { ok: false; error: string };
+/**
+ * Trades points for a perk. `via` "chat": the caller is the bot in a conversation and gets back what to do.
+ * `via` "board": nobody is talking to the bot, so it is told in a background task and does it in the group.
+ */
+export function redeem(hub: Hub, conv: string, who: string, key: string, note = "", via: "chat" | "board" = "chat", now = Date.now()): Redeemed {
+  const person = personOfName(who);
+  if (!person) return { ok: false, error: "不知道是谁要兑换" };
+  const item = shop(hub, conv).find(i => i.key === key || i.name === key);
+  if (!item) return { ok: false, error: "没有这一项，能换的有：" + shop(hub, conv).map(i => i.name + "（" + i.cost + " 分）").join("、") };
+  const text = clip(String(note || "").trim(), 200);
+  if (item.key === "title" && (!text || text.length > 12)) return { ok: false, error: "头衔要给一个名字，12 个字以内" };
+  const { balance } = balanceOf(hub, conv, person, now);
+  if (balance < item.cost) return { ok: false, error: person + " 现在有 " + balance + " 分，「" + item.name + "」要 " + item.cost + " 分，还差 " + (item.cost - balance) + " 分" };
+  const until = item.kind === "timed" ? now + (item.days || 7) * DAY : 0;
+  const state = item.kind === "now" || item.kind === "timed" ? "done" : "pending";
+  hub.sql.exec("INSERT INTO team_spend(conv, who, item, name, cost, ts, state, note, until, done_at) VALUES(?,?,?,?,?,?,?,?,?,?)", conv, person, item.key, item.name, item.cost, now, state, text, until, state === "done" ? now : 0);
+  const row = spendOf(hub.sql.exec("SELECT * FROM team_spend WHERE conv=? AND who=? ORDER BY id DESC LIMIT 1", conv, person).toArray()[0]);
+  const todo = honour(item, person, text), left = balance - item.cost;
+  if (via === "board") {
+    const p = (hub as any).runTask?.(conv, todo + "（这是他在看板上兑换的，花了 " + item.cost + " 分，还剩 " + left + " 分。你这一轮只有最后那条回复会发到群里，开头先说一句谁用多少分换了什么。）");
+    if (p && typeof p.catch === "function") (hub as any).ctx?.waitUntil?.(p.catch((e: any) => console.log("teamwork: honour failed", e?.message)));
+  }
+  return { ok: true, spend: row, balance: left, do: todo };
+}
+/** Marks a perk as honoured, or gives the points back. */
+export function settle(hub: Hub, conv: string, id: number, to: "done" | "refunded", now = Date.now()): Spend | null {
+  const r = q(hub, "SELECT * FROM team_spend WHERE conv=? AND id=?", conv, Math.floor(Number(id)) || 0)[0];
+  if (!r) return null;
+  hub.sql.exec("UPDATE team_spend SET state=?, done_at=?, until=CASE WHEN ?='refunded' THEN 0 ELSE until END WHERE conv=? AND id=?", to, now, to, conv, Number(r.id));
+  return spendOf({ ...r, state: to });
+}
+export function setItem(hub: Hub, conv: string, name: string, cost: number, what: string, by: string, now = Date.now()): Item | string {
+  const n = clip(String(name || "").trim(), 20), c = Math.round(Number(cost));
+  if (!n) return "要给这一项起个名字";
+  if (!(c >= 1 && c <= 1000)) return "价格要在 1 到 1000 分之间";
+  if (ITEMS.some(i => i.name === n)) return "已经有一项叫这个名字了";
+  const have = q(hub, "SELECT COUNT(*) n FROM team_item WHERE conv=?", conv)[0];
+  const key = "c" + Math.abs([...n].reduce((h, ch) => (h * 31 + ch.codePointAt(0)!) | 0, 7)).toString(36);
+  if (Number(have?.n) >= 20 && !q(hub, "SELECT 1 FROM team_item WHERE conv=? AND key=?", conv, key).length) return "自定的特权最多 20 项，先删掉不用的";
+  hub.sql.exec("INSERT INTO team_item(conv, key, name, cost, what, made_by, ts) VALUES(?,?,?,?,?,?,?) ON CONFLICT(conv, key) DO UPDATE SET cost=excluded.cost, what=excluded.what, made_by=excluded.made_by, ts=excluded.ts", conv, key, n, c, clip(String(what || "").trim(), 120), by, now);
+  return { key, name: n, cost: c, what: clip(String(what || "").trim(), 120), kind: "manual", custom: true };
+}
+export function dropItem(hub: Hub, conv: string, name: string): boolean {
+  const it = shop(hub, conv).find(i => i.custom && (i.name === name || i.key === name));
+  if (!it) return false;
+  hub.sql.exec("DELETE FROM team_item WHERE conv=? AND key=?", conv, it.key);
+  return true;
+}
+
+// ---------- the wall of honour ----------
+export type Wall = {
+  stars: { week: number; who: string; points: number; done: number }[];                       // each past week's star, newest first
+  bosses: { id: number; title: string; who: string; done_at: number; took_ms: number }[];     // big tasks brought down, newest first
+  badges: { key: string; name: string; what: string; holders: { who: string; at: number }[] }[];
+  records: { what: string; who: string; value: string; task?: number }[];
+  titles: { who: string; title: string; until: number }[];
+  perks: Spend[];                                                                             // what points were traded for lately
+};
+export function honorWall(hub: Hub, conv: string, now = Date.now()): Wall {
+  const stats = teamStats(hub, conv, now), done = listTasks(hub, conv, { status: ["done"], limit: 1000 });
+  const badges = BADGES.map(b => ({ key: b.key, name: b.name, what: b.what,
+    holders: stats.people.map(p => { const x = p.badges.find(y => y.key === b.key); return x?.earned ? { who: p.name, at: x.at || p.last_done } : null; }).filter(Boolean).sort((a, c) => a!.at - c!.at) as { who: string; at: number }[] }));
+  const records: Wall["records"] = [];
+  const timed = done.filter(t => t.claimed_at && t.done_at > t.claimed_at && creditOf(t)).sort((a, b) => (a.done_at - a.claimed_at) - (b.done_at - b.claimed_at))[0];
+  if (timed) records.push({ what: "最快做完", who: creditOf(timed), value: span(timed.done_at - timed.claimed_at), task: timed.id });
+  const top = (f: (p: PersonStats) => number) => [...stats.people].sort((a, b) => f(b) - f(a))[0];
+  const streak = top(p => p.best_streak); if (streak?.best_streak >= 2) records.push({ what: "最长连续", who: streak.name, value: streak.best_streak + " 天" });
+  const most = top(p => p.done_total); if (most?.done_total) records.push({ what: "做完最多", who: most.name, value: most.done_total + " 件" });
+  const rich = top(p => p.points_total); if (rich?.points_total) records.push({ what: "累计积分最高", who: rich.name, value: rich.points_total + " 分" });
+  const stars = q(hub, "SELECT week, who, points, done FROM team_star WHERE conv=? ORDER BY week DESC LIMIT 26", conv).map(r => ({ week: Number(r.week), who: String(r.who), points: Number(r.points), done: Number(r.done) }));
+  const bestWeek = [...stars].sort((a, b) => b.points - a.points)[0];
+  if (bestWeek) records.push({ what: "单周最高分", who: bestWeek.who, value: bestWeek.points + " 分" });
+  return {
+    stars,
+    bosses: done.filter(t => t.size === "big").sort((a, b) => b.done_at - a.done_at).slice(0, 30).map(t => ({ id: t.id, title: t.title, who: creditOf(t), done_at: t.done_at, took_ms: t.claimed_at ? Math.max(0, t.done_at - t.claimed_at) : 0 })),
+    badges, records,
+    titles: q(hub, "SELECT who, note, until FROM team_spend WHERE conv=? AND item='title' AND state<>'refunded' AND until>? ORDER BY ts DESC", conv, now).map(r => ({ who: String(r.who), title: String(r.note), until: Number(r.until) })),
+    perks: spends(hub, conv, { limit: 20 }).filter(s => s.state !== "refunded"),
+  };
+}
+/** Writes down this week's star, so the wall keeps every week's. */
+export function recordStar(hub: Hub, conv: string, stats: TeamStats) {
+  if (!stats.mvp) return;
+  const p = stats.people.find(x => x.name === stats.mvp)!;
+  hub.sql.exec("INSERT INTO team_star(conv, week, who, points, done) VALUES(?,?,?,?,?) ON CONFLICT(conv, week) DO UPDATE SET who=excluded.who, points=excluded.points, done=excluded.done", conv, stats.week.start, p.name, p.points_week, p.done_week);
 }
 
 // ---------- praise ----------
@@ -214,7 +363,7 @@ export async function cheer(hub: Hub, conv: string, task: Task, now = Date.now()
 
 // ---------- weekly report ----------
 /** What the bot is asked to do on Sunday night; it runs as a normal background task, so it can use its tools. */
-export function weeklyTask(stats: TeamStats, done: Task[]): string {
+export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = []): string {
   const facts = {
     本周做完: stats.week.done, 本周总分: stats.week.points, 还在做: stats.totals.doing, 没开始: stats.totals.open, 已过期: stats.totals.overdue, 本周之星: stats.mvp || "（没有人得分）",
     每个人: stats.people.filter(p => p.done_week || p.doing.length).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name) })),
@@ -223,6 +372,7 @@ export function weeklyTask(stats: TeamStats, done: Task[]): string {
   return "发本周的团队战报。下面是这一周任务清单的真实数据，只能用这些数，不许编：\n" + JSON.stringify(facts) +
     "\n规矩：你这一轮只有最后那条回复会发到群里，战报写在最后的回复里，一条消息写完，用你平时的口气，不超过 12 行，不要写成公告，不要标题。内容：这周一共做成了几件、每个人做成了什么（点名，具体到事），本周之星是谁、凭什么；谁手上还压着活、哪件过期了（点到为止，别训人）；最后一句给下周起个头。"
     + (stats.mvp ? "写之前先用 meme 工具给本周之星做一张图发出来（拿保存的形象“奶蛙”套“摸头”这类模板就行，不要用 generate_image）；meme 做不出来就跳过，战报照发。" : "")
+    + (covers.length ? "另外，" + covers.join("、") + " 用积分换了这一期的封面人物：用 generate_image 给" + (covers.length > 1 ? "他们各" : "他") + "画一张专属封面发出来（画成奶蛙给他颁奖之类的场面，intent 里写明是战报封面），战报开头点一句这一期的封面人物是谁。" : "")
     + "这周一件都没做成也照实说，别硬夸。";
 }
 async function weekly(hub: Hub, now: number) {
@@ -230,9 +380,12 @@ async function weekly(hub: Hub, now: number) {
   for (const conv of convs) {
     if (String(hub.edit.cfg(conv, "team_weekly")) !== "on") continue;
     const stats = teamStats(hub, conv, now);
-    if (!stats.week.done && !stats.totals.doing && !stats.totals.open) continue;
+    if (!stats.week.done && !stats.totals.doing && !stats.totals.open && !spends(hub, conv, { state: "pending" }).some(x => x.item === "cover")) continue;
     const done = listTasks(hub, conv, { status: ["done"], limit: 1000 }).filter(t => t.done_at >= stats.week.start).sort((a, b) => a.done_at - b.done_at);
-    await hub.runTask(conv, weeklyTask(stats, done));
+    recordStar(hub, conv, stats);
+    const covers = spends(hub, conv, { state: "pending" }).filter(x => x.item === "cover");
+    for (const c of covers) settle(hub, conv, c.id, "done", now);
+    await hub.runTask(conv, weeklyTask(stats, done, [...new Set(covers.map(c => c.who))]));
   }
 }
 function tick(hub: Hub, now: number) {
@@ -248,6 +401,7 @@ const personLine = (p: PersonStats, now: number) => ({
   name: p.name,
   doing: p.doing.map(d => "#" + d.id + " " + d.title + "（" + span(now - d.since) + "前接的" + (d.by_ai ? "，本地 AI 在做" : "") + (d.overdue ? "，已过期" : "") + "）"),
   waiting: p.waiting, done_this_week: p.done_week, points_this_week: p.points_week, done_total: p.done_total, points_total: p.points_total,
+  balance: p.balance, spent: p.spent, ...(p.title ? { title: p.title } : {}),
   streak_days: p.streak, fastest: p.fastest_ms ? span(p.fastest_ms) : "", badges: p.badges.filter(b => b.earned).map(b => b.name),
   next_badges: p.badges.filter(b => !b.earned).slice(0, 2).map(b => b.name + "：" + b.what),
 });
@@ -256,14 +410,18 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
     name: "team",
     description: "团队的协作情况，数据来自任务清单：谁正在做什么、什么时候接的手、这周每个人做成了几件、得了多少分、连续几天有产出、拿了哪些称号、本周之星是谁；也能看一件任务从记下到做完的完整过程。"
       + "有人问“谁在做什么”“大家进度怎么样”“这周战绩”“排行榜”“我有多少分”“我有什么称号”“这件事是谁什么时候接的、做了多久”时用，不要凭印象答。"
-      + "op=status：全队现在的情况和本周战绩（who 填名字只看一个人，mine=true 看提问的人）；op=timeline：一件任务的过程（id 必填）；op=recent：最近发生的事（谁接了、谁做完了）。"
+      + "op=status：全队现在的情况和本周战绩，每个人的 balance 是还能花的积分（who 填名字只看一个人，mine=true 看提问的人）；op=timeline：一件任务的过程（id 必填）；op=recent：最近发生的事（谁接了、谁做完了）；op=wall：功勋墙（历届本周之星、打下的大活、谁有哪些称号、各项纪录、谁挂着什么头衔）。"
+      + "积分能换特权：op=shop 看能换什么、各多少分、提问的人有多少分；有人说要换某样（“我要换甩锅券”“用积分点一张图”），用 op=redeem（item 填名字，note 填他的具体要求，头衔必须给名字）。redeem 成功后返回的 do 就是你现在要做的事，当场照做；返回失败（分不够、没这一项）就照实说，别替他垫分。"
+      + "op=fulfil：群主说某次兑换“兑现了”时标记（id 必填）；op=refund：群主说退分时用。op=add_item / remove_item：群主或被授权的人增删自定的特权（name、cost、what），比如“奶茶一杯 30 分，群主请”。"
       + "计分规矩：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做的算在它主人头上。回答时点名、说具体的事，简短，别念数据表。",
     parameters: {
       type: "object", required: ["op"],
       properties: {
-        op: { type: "string", enum: ["status", "timeline", "recent"] },
+        op: { type: "string", enum: ["status", "timeline", "recent", "wall", "shop", "redeem", "fulfil", "refund", "add_item", "remove_item"] },
+        item: { type: "string", description: "redeem：要换的那一项的名字" }, note: { type: "string", description: "redeem：他的具体要求（画什么、什么锅、头衔叫什么……）" },
+        name: { type: "string", description: "add_item / remove_item：特权的名字" }, cost: { type: "integer", description: "add_item：要多少分" }, what: { type: "string", description: "add_item：换到的是什么" },
         who: { type: "string", description: "status：只看这个人" }, mine: { type: "boolean", description: "status：只看提问的人" },
-        id: { type: "integer", description: "timeline：任务编号" }, limit: { type: "integer", description: "recent：最多几条，默认 15" },
+        id: { type: "integer", description: "timeline：任务编号；fulfil / refund：兑换记录的编号" }, limit: { type: "integer", description: "recent：最多几条，默认 15" },
       },
     },
     run: async (a: any) => {
@@ -281,7 +439,43 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         const ev = taskEvents(hub, conv, { limit: Math.min(Number(a.limit) || 15, 40), kinds: ["add", "claim", "done", "drop", "release", "progress"] });
         return { ok: true, events: ev.map(e => span(now - e.ts) + "前 " + (e.who || "有人") + " " + (EVENT_WORD[e.kind] || "") + " #" + e.task + " " + clip(e.title, 30) + (e.kind === "progress" ? "：" + clip(e.text, 60) : "")) };
       }
-      const stats = teamStats(hub, conv, now), me = askers[askers.length - 1]?.name || "";
+      const me = askers[askers.length - 1]?.name || "";
+      const boss = () => { const r = (hub as any).edit?.rank?.(conv, askers); return r === "owner" || r === "trusted"; };
+      if (op === "wall") {
+        const w = honorWall(hub, conv, now);
+        return {
+          ok: true,
+          stars: w.stars.map(x => dayOf(x.week).slice(5) + " 那周：" + x.who + "（" + x.points + " 分，" + x.done + " 件）"),
+          bosses: w.bosses.map(b => "#" + b.id + " " + b.title + "：" + (b.who || "没记是谁") + "，" + dayOf(b.done_at).slice(5) + (b.took_ms ? "，用了 " + span(b.took_ms) : "")),
+          badges: w.badges.filter(b => b.holders.length).map(b => b.name + "（" + b.what + "）：" + b.holders.map(h => h.who).join("、")),
+          records: w.records.map(r => r.what + "：" + r.who + "，" + r.value),
+          titles: w.titles.map(t => t.who + "：" + t.title + "（到 " + dayOf(t.until).slice(5) + "）"),
+          recent_perks: w.perks.slice(0, 8).map(x => x.who + " 换了" + x.name + (x.state === "pending" ? "（还没兑现）" : "")),
+          ...(!w.stars.length && !w.bosses.length && !w.badges.some(b => b.holders.length) ? { note: "功勋墙还是空的：还没人做完过任务" } : {}),
+        };
+      }
+      if (op === "shop") {
+        const b = me ? balanceOf(hub, conv, personOfName(me) || me, now) : null;
+        return { ok: true, ...(b ? { asker: me, balance: b.balance, earned: b.earned, spent: b.spent } : {}), items: shop(hub, conv).map(i => ({ name: i.name, cost: i.cost, what: i.what, ...(i.needs ? { tell_me: i.needs } : {}), ...(i.custom ? { honoured_by: "群主" } : {}) })),
+          pending: spends(hub, conv, { state: "pending" }).map(x => "#" + x.id + " " + x.who + " 的" + x.name + (x.note ? "：" + x.note : "")), rule: "积分只能靠做完任务挣，不能转让、不能预支" };
+      }
+      if (op === "redeem") {
+        if (!me) return { ok: false, error: "不知道是谁要换；让他自己在群里说" };
+        const r = redeem(hub, conv, me, String(a.item || ""), String(a.note || ""), "chat", now);
+        return r.ok ? { ok: true, redeemed: r.spend.name, cost: r.spend.cost, balance_left: r.balance, record: r.spend.id, do: r.do } : r;
+      }
+      if (op === "fulfil" || op === "refund") {
+        if (!boss()) return { ok: false, error: "这个要群主或被授权的人来说" };
+        const x = settle(hub, conv, Number(a.id), op === "fulfil" ? "done" : "refunded", now);
+        return x ? { ok: true, record: x.id, who: x.who, item: x.name, state: op === "fulfil" ? "兑现了" : "分已退回 " + x.cost } : { ok: false, error: "没有这条兑换记录" };
+      }
+      if (op === "add_item" || op === "remove_item") {
+        if (!boss()) return { ok: false, error: "增删特权要群主或被授权的人来说" };
+        if (op === "remove_item") return dropItem(hub, conv, String(a.name || "")) ? { ok: true, removed: a.name } : { ok: false, error: "没有这一项自定的特权（自带的那几项删不了）" };
+        const it = setItem(hub, conv, String(a.name || ""), Number(a.cost), String(a.what || ""), me, now);
+        return typeof it === "string" ? { ok: false, error: it } : { ok: true, added: it.name, cost: it.cost, note: "这一项要人来兑现：有人换了之后我会在群里说，兑现后说一声“兑现了”" };
+      }
+      const stats = teamStats(hub, conv, now);
       const want = a.mine ? me : String(a.who || "").trim();
       const people = want ? stats.people.filter(p => p.name === want || p.name.includes(want)) : stats.people;
       if (want && !people.length) return { ok: true, note: want + " 在任务清单里还没有记录：没接过也没做完过任务" };
@@ -297,6 +491,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
 
 const feature: Feature = {
   name: "teamwork",
+  schema: SHOP_SCHEMA,
   tunables: {
     team_praise: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 做完任务时，在群里夸一句（带上他这周的战绩）" },
     team_weekly: { default: "on", options: ["on", "off"], what: "每周日晚上发一份团队战报：这周谁做成了什么、本周之星" },
@@ -306,6 +501,8 @@ const feature: Feature = {
   about: [
     "任务清单同时是团队的记分牌：每件任务记着谁记下的、谁什么时候接的手、做了多久、什么时候做完，看板上能看到完整过程。",
     "做完一件事有分：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做完的算在它主人头上。还有称号（开张、屠龙、闪电、三天不断等），都是从任务记录里算出来的，不是我随口封的。",
+    "积分能换特权：定制表情包 5 分、点一段方言语音 10 分、甩锅券 15 分、点一张图 20 分、专属头衔一周 25 分、代办券 40 分、战报封面人物 50 分；群主还能加自定的（比如请奶茶）。积分只能靠做完任务挣，不能转让、不能预支，换了就从余额里扣。在群里跟我说“我要换……”，或者在看板上点。",
+    "功勋墙记着历届本周之星、打下来的大活、谁拿了哪些称号、各项纪录和大家挂着的头衔，看板上有，在群里问我也行。",
     "有人做完任务我会在群里夸一句，说的数（这周第几件、连续几天、用了多久）都来自记录；每周日晚上九点半发一份战报，点名这周谁做成了什么、谁是本周之星。不想要可以关（team_praise、team_weekly）。",
   ],
 };
