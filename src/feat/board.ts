@@ -15,8 +15,9 @@ import { uptimePct } from "./uptime.ts";
 import { describeSource } from "./staticsite.ts";
 import { PRICE } from "../meter.ts";
 import { ABILITIES, exampleParts } from "./toolbox.ts";
-import { CSS, APP_JS } from "./board-page.ts";
+import { CSS, APP_JS, PAGE } from "./board-page.ts";
 import { BJ, fmtDate } from "../util.ts";
+import { teamStats, taskEvents, taskTimeline, pointsOf, span } from "./teamwork.ts";
 
 const BASE = "/x/board";
 const DAY = 86400000;
@@ -41,21 +42,9 @@ type Asset = { body: string; type: string; etag: string };
 const asset = (body: string, type: string): Asset => ({ body, type, etag: '"' + tag(body) + '"' });
 const vurl = (name: string, a: Asset) => BASE + "/" + name + "?v=" + a.etag.slice(1, -1);
 
-const NAV: [string, string][] = [["feed", "动态"], ["tasks", "任务"], ["memory", "记忆"], ["repos", "仓库"], ["works", "作品和文件"], ["watch", "监控和额度"], ["tools", "工具"]];
-
 function build() {
   const files: Record<string, Asset> = { "app.css": asset(CSS, "text/css; charset=utf-8"), "app.js": asset(APP_JS, "text/javascript; charset=utf-8") };
-  files[""] = asset(`<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
-<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>看板</title><link rel="icon" href="data:,"><link rel="stylesheet" href="${vurl("app.css", files["app.css"])}">
-<script src="${vurl("app.js", files["app.js"])}" defer></script></head>
-<body><header class="top"><a href="#feed" class="home">看板</a><span id="who"></span><button type="button" id="logout" class="sm">退出</button></header>
-<nav class="tabs" aria-label="分区">${NAV.map(([id, t]) => `<a href="#${id}" data-tab="${id}">${t}</a>`).join("")}</nav>
-<main class="wrap">${NAV.map(([id, t]) => `<section id="s-${id}" hidden><h1 class="vh">${t}</h1><div class="body"></div></section>`).join("")}
-<p id="status" class="status" role="status"></p>
-<noscript><p>看板需要开启 JavaScript。</p></noscript></main>
-<dialog id="pic"><figure><img alt=""><figcaption></figcaption></figure><div class="row"><a class="btn" target="_blank" rel="noopener">原图</a><button type="button" class="close">关闭</button></div></dialog>
-</body></html>`, "text/html; charset=utf-8");
+  files[""] = asset(PAGE(vurl("app.css", files["app.css"]), vurl("app.js", files["app.js"])), "text/html; charset=utf-8");
   return files;
 }
 let FILES: Record<string, Asset> | null = null;
@@ -120,7 +109,8 @@ function days(hub: Hub, p: Person, u: URL) {
   return { ok: true, days: list.slice(0, n).map(r => ({ date: String(r.date), summary: String(r.summary || "") })), more: list.length > n };
 }
 
-const taskOut = (t: Task) => ({ id: t.id, title: t.title, detail: t.detail, status: t.status, owner: t.owner, due: t.due, source: t.source, by: t.by, claimed_by: t.claimed_by, result: t.result, created: t.created, updated: t.updated });
+const taskOut = (t: Task) => ({ id: t.id, title: t.title, detail: t.detail, status: t.status, owner: t.owner, due: t.due, source: t.source, by: t.by, claimed_by: t.claimed_by, result: t.result, created: t.created, updated: t.updated,
+  size: t.size || "normal", claimed_at: t.claimed_at || 0, done_at: t.done_at || 0, done_by: t.done_by || "", points: part(() => pointsOf(t), 0) });
 const mine = (t: Task | null, p: Person) => t && t.conv === p.conv ? t : null;
 
 function tasks(hub: Hub, p: Person, u: URL) {
@@ -150,7 +140,7 @@ function images(hub: Hub, p: Person, u: URL) {
     images: list.slice(0, n).map(r => {
       const made = parseJson(r.made);
       return { id: Number(r.id), ref: "g" + r.id, ts: Number(r.ts), note: String(r.note || ""), kind: imgKind(r), name: r.name ? String(r.name).replace(/^sticker:/, "") : "",
-        how: made ? String(made.request || made.idea || made.prompt || "").slice(0, 600) : "", size: Number(r.size || 0), url: BASE + "/img/" + r.id };
+        how: made ? String(made.request || made.idea || made.prompt || "").slice(0, 600) : "", size: Number(r.size || 0), url: BASE + "/img/" + r.id, mime: String(r.mime || "") };
     }),
   };
 }
@@ -179,7 +169,8 @@ function monitors(hub: Hub, p: Person) {
   const up = safeRows(hub, "SELECT id, name, url, state, since, last, latency_ms, err, active, created FROM uptime WHERE conv=? ORDER BY id", p.conv).map(r => {
     let pct: number | null = null;
     try { pct = uptimePct(hub, { ...r, id: Number(r.id), created: Number(r.created || 0) } as any, now, 7 * DAY); } catch {}
-    return { name: String(r.name || r.url), url: String(r.url), state: String(r.state || ""), since: Number(r.since || 0), last: Number(r.last || 0), ms: r.latency_ms === null ? null : Number(r.latency_ms), error: String(r.err || ""), active: !!r.active, uptime_7d: pct };
+    return { name: String(r.name || r.url), url: String(r.url), state: String(r.state || ""), since: Number(r.since || 0), last: Number(r.last || 0), ms: r.latency_ms === null ? null : Number(r.latency_ms), error: String(r.err || ""), active: !!r.active, uptime_7d: pct,
+      days: uptimeDays(hub, Number(r.id), Number(r.created || 0), now) };
   });
   const feeds = safeRows(hub, "SELECT id, title, url, kind, last, fails, active FROM feed WHERE conv=? ORDER BY id", p.conv).map(r => {
     const it = safeRows(hub, "SELECT title, link, published FROM feeditem WHERE feed=? ORDER BY COALESCE(published, seen) DESC LIMIT 1", r.id)[0];
@@ -200,6 +191,59 @@ function plan(hub: Hub) {
 }
 const tools = () => ({ ok: true, link: "/x/toolbox", abilities: ABILITIES.map(a => ({ title: a.title, what: a.what, examples: a.examples.map(e => exampleParts(e)[0]) })) });
 
+// ---------- page extras: history for the visual indicators, and the overview in one request ----------
+/** Per Beijing day for the last 7 days, the share of time the site was up (null before monitoring started). */
+export function uptimeDays(hub: Hub, id: number, created: number, now = Date.now()) {
+  const off = 8 * 3600000, from = Math.floor((now + off) / DAY) * DAY - off - 6 * DAY;
+  const inc = safeRows(hub, "SELECT start, end FROM uptimeinc WHERE target=? AND start<? AND (end IS NULL OR end>?)", id, now, from);
+  const out: { date: string; pct: number | null }[] = [];
+  for (let d = 0; d < 7; d++) {
+    const a = Math.max(from + d * DAY, created), b = Math.min(from + (d + 1) * DAY, now), date = fmtDate(from + d * DAY, BJ);
+    if (b <= a) { out.push({ date, pct: null }); continue; }
+    let down = 0;
+    for (const i of inc) down += Math.max(0, Math.min(b, Number(i.end ?? now)) - Math.max(a, Number(i.start)));
+    out.push({ date, pct: Math.round((1 - Math.min(down, b - a) / (b - a)) * 1000) / 10 });
+  }
+  return out;
+}
+/** A repository's recent runs: the latest verdict, since when it has been failing, the last pass, and up to 14 runs oldest first. */
+export function repoHistory(hub: Hub, repo: string) {
+  const list = safeRows(hub, "SELECT ts, ok FROM repocheck WHERE repo=? ORDER BY id DESC LIMIT 30", repo)
+    .map(r => ({ ts: Number(r.ts), ok: r.ok === null || r.ok === undefined ? null : Number(r.ok) }));
+  const known = list.filter(r => r.ok !== null), pass = known.find(r => r.ok === 1);
+  let since: number | null = null;
+  if (known.length && known[0].ok === 0) { let i = 0; while (i + 1 < known.length && known[i + 1].ok === 0) i++; since = known[i].ts; }
+  return { ok: list.length ? list[0].ok : null, checked_at: list.length ? list[0].ts : null, failing_since: since, last_pass: pass ? pass.ts : null, history: list.slice(0, 14).reverse() };
+}
+const reposOut = (hub: Hub) => latestAll(hub, listRepos(hub)).map((r: any) => ({ ...r, ...repoHistory(hub, String(r.repo)) }));
+
+const params = (s: string) => ({ searchParams: new URLSearchParams(s) }) as URL;
+function part<T>(f: () => T, fallback: T): T { try { return f(); } catch { return fallback; } }   // one missing table must not blank the whole overview
+
+function overview(hub: Hub, p: Person) {
+  const now = Date.now(), today = fmtDate(now, BJ);
+  const live = part(() => taskApi.listTasks(hub, p.conv, { status: ["open", "doing"], limit: 300 }).filter(t => t.conv === p.conv), [] as Task[]);
+  const done7 = part(() => taskApi.listTasks(hub, p.conv, { status: ["done"], limit: 300 }).filter(t => t.conv === p.conv && t.updated > now - 7 * DAY).length, 0);
+  const m = part(() => monitors(hub, p).uptime, [] as ReturnType<typeof monitors>["uptime"]);
+  const pl = part(() => plan(hub), null);
+  return {
+    ok: true, name: p.name, today,
+    days: part(() => days(hub, p, params("n=2")).days, []),
+    tasks: {
+      list: live.map(taskOut),
+      counts: {
+        open: live.filter(t => t.status === "open").length, doing: live.filter(t => t.status === "doing").length,
+        overdue: live.filter(t => t.due && t.due < today).length, mine: live.filter(t => t.owner === p.name || t.claimed_by === p.name).length, done_7d: done7,
+      },
+    },
+    repos: part(() => reposOut(hub).map((r: any) => ({ repo: r.repo, result: r.result, ok: r.ok, checked_at: r.checked_at, failing_since: r.failing_since, commit: r.commit || "" })), []),
+    images: part(() => images(hub, p, params("n=8")).images, []),
+    uptime: m.map(u => ({ name: u.name, url: u.url, state: u.state, since: u.since, last: u.last, error: u.error, active: u.active, uptime_7d: u.uptime_7d })),
+    plan: pl ? pl.plan : null, spend: pl ? pl.spend : null,
+    team: part(() => { const s = teamStats(hub, p.conv, now); return { week: s.week, mvp: s.mvp, people: s.people.map(x => ({ name: x.name, doing: x.doing, waiting: x.waiting, done_week: x.done_week, points_week: x.points_week, streak: x.streak })) }; }, null),
+  };
+}
+
 // ---------- changes ----------
 const DUE = /^(\d{4}-\d{2}-\d{2})?$/;
 function taskPatch(b: any): Record<string, string> | string {
@@ -207,6 +251,7 @@ function taskPatch(b: any): Record<string, string> | string {
   for (const [k, max] of [["title", 200], ["detail", 4000], ["owner", 40], ["result", 4000]] as const) { const v = str(b[k], max); if (v !== undefined) out[k] = v; }
   if (b.due !== undefined) { const d = str(b.due, 10) ?? ""; if (!DUE.test(d)) return "日期写成 2026-11-20 这样"; out.due = d; }
   if (b.status !== undefined) { if (!(STATUSES as unknown[]).includes(b.status)) return "状态不对"; out.status = b.status; }
+  if (b.size !== undefined) { if (!["small", "normal", "big"].includes(b.size)) return "大小不对"; out.size = b.size; }
   if (out.title !== undefined && !out.title) return "标题不能空着";
   return out;
 }
@@ -235,7 +280,7 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
     const patch = taskPatch(b);
     if (typeof patch === "string") return bad(patch);
     if (!patch.title) return bad("先写个标题");
-    const t = taskApi.addTask(hub, p.conv, { title: patch.title, detail: patch.detail || "", owner: patch.owner || "", due: patch.due || "", source: "看板", by: p.name });
+    const t = taskApi.addTask(hub, p.conv, { title: patch.title, detail: patch.detail || "", owner: patch.owner || "", due: patch.due || "", source: "看板", by: p.name, ...(patch.size ? { size: patch.size as any } : {}) });
     return t ? json({ ok: true, task: taskOut(t) }) : bad("没加上，稍后再试", 500);
   }
   const m = /^tasks\/(\d{1,9})(?:\/(note|claim))?$/.exec(path);
@@ -329,7 +374,20 @@ export async function serve(hub: Hub, req: Request, u: URL): Promise<Response | 
   if (api === "tasks") return json(tasks(hub, p, u));
   if ((m = /^tasks\/(\d{1,9})$/.exec(api))) { const t = task(hub, p, Number(m[1])); return t ? json(t) : bad("没有这个任务", 404); }
   if (api === "memory") return json(memory(hub, p));
-  if (api === "repos") return json({ ok: true, repos: latestAll(hub, listRepos(hub)) });
+  if (api === "repos") return json({ ok: true, repos: reposOut(hub) });
+  if (api === "overview") return json(overview(hub, p));
+  if (api === "team") return json({ ok: true, name: p.name, ...teamStats(hub, p.conv) });
+  if (api === "events") {
+    const before = num(u.searchParams.get("before"), 0, 0, 2 ** 52), n = num(u.searchParams.get("n"), 50, 1, 200);
+    const list = taskEvents(hub, p.conv, { limit: n + 1, ...(before ? { before } : {}) });
+    return json({ ok: true, events: list.slice(0, n), more: list.length > n });
+  }
+  if ((m = /^tasks\/(\d{1,9})\/timeline$/.exec(api))) {
+    const tl = taskTimeline(hub, p.conv, Number(m[1]));
+    if (!tl || tl.task.conv !== p.conv) return bad("没有这个任务", 404);
+    return json({ ok: true, created: tl.created, claimed_at: tl.claimed_at, done_at: tl.done_at, waited_ms: tl.waited_ms, worked_ms: tl.worked_ms, waited: span(tl.waited_ms), worked: span(tl.worked_ms),
+      status: tl.task.status, done_by: tl.task.done_by, points: pointsOf(tl.task), steps: tl.steps.map(s => ({ ts: s.ts, who: s.who, kind: s.kind, word: s.word, text: s.text })) });
+  }
   if (api === "images") return json(images(hub, p, u));
   if (api === "files") return json(blobs(hub, p, u));
   if (api === "sites") return json(sites(hub, p));
@@ -346,6 +404,7 @@ const feature: Feature = {
   about: [
     "团队看板是一个网页（" + BASE + "），群友用自己的看板链接打开：最近每天的群聊小结、任务清单、我的长期记忆、团队仓库的夜检结果、我画的图和收发的文件、做过的网页、文件箱、网站监控和订阅、这个月的额度用量。",
     "任务能在看板上直接加、改、标完成或放弃、写进展，每一步都记着是谁做的；每个任务有“交给本地 AI”，复制一句话给自己电脑上的 AI 工具，它就能领走这个任务、做完交回来。",
+    "看板首页先看谁在做什么、这周做完几件；“战绩”一栏有本周和总排行、每个人的徽章、最快一次和最近做完的事，还有大家接任务、写进展、做完的流水。",
     "看板只显示看的人所在的群的东西，图片和文件也要登录才能打开；点“退出”就清掉这台设备上的登录。",
   ],
 };
