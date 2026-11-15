@@ -469,7 +469,8 @@ describe("checks", () => {
 
 describe("notification caps", () => {
   const burst = (from, n) => Array.from({ length: n }, (_, i) => ({ g: "n" + (from + i), t: "item " + (from + i), at: Date.now() - (n - i) * 60000 }));
-  test("per feed: 5 a day, the newest five, one overflow line for the conversation", async () => {
+  test("per feed: 5 a day, the newest five, one overflow line for the conversation", async t => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-16T10:00:00+08:00") });
     net[URL_A] = ok(rssDoc([{ g: "base" }]));
     const r = await add({ notify: true, title: "源" });
     net[URL_A] = ok(rssDoc([{ g: "base" }, ...burst(1, 8)]));
