@@ -1173,7 +1173,12 @@ function wallView(root) {
         : h("div", {}, h("div", { class: "k", text: "本周之星" }), h("div", { class: "n", text: "还空着" }), h("div", { class: "meta", text: "这周第一个做完任务的人先上。" })));
     var roll = card("", "历届本周之星");
     if (!j.stars.length) roll.b.appendChild(h("p", { class: "meta", text: "每周日晚上记下这周的之星，第一位会出现在这里。" }));
-    else roll.b.appendChild(h("ul", { class: "list roll" }, j.stars.map(function (x) { return h("li", {}, h("span", { class: "star", "aria-hidden": "true" }, icon("star")), h("span", { class: "w" }, who(x.who, true)), h("span", { class: "meta", text: weekName(x.week) + " · " + x.points + " 分" })); })));
+    else roll.b.appendChild(h("ul", { class: "list roll" }, j.stars.map(function (x) {
+      var kids = [h("span", { class: "star", "aria-hidden": "true" }, icon("star")), h("span", { class: "w" }, who(x.who, true)), h("span", { class: "meta", text: weekName(x.week) + " · " + x.points + " 分" })];
+      // The certificate printed for that week, kept as a picture.
+      if (x.cert) kids.push(h("a", { class: "meta", href: "/x/board/img/" + String(x.cert).replace(/^g/, ""), target: "_blank", rel: "noopener", text: "看奖状" }));
+      return h.apply(null, ["li", {}].concat(kids));
+    })));
     out.push(h("div", { class: "hero" }, sc, roll.el));
     var bs = h("div", { class: "sect" }, h("h2", {}, "拿下的大活", h("span", { class: "n", text: String(j.bosses.length) })));
     if (!j.bosses.length) bs.appendChild(h("div", { class: "card" }, empty("还没有人拿下大活", "大活值 30 分，拿下就挂在这里，带上是谁、用了多久。")));
