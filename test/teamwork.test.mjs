@@ -10,7 +10,7 @@ function mkHub(cfg = {}) {
   const said = [], ran = [], kv = new Map(), waits = [];
   return {
     db, said, ran, waits,
-    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA)/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
+    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = st.columns().length ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
     say: async (conv, text) => { said.push(text); return true; }, runTask: async (conv, task) => { ran.push({ conv, task }); },
     ctx: { waitUntil: p => waits.push(p) }, edit: { cfg: (_c, k) => cfg[k] ?? "on" },
     get: k => kv.get(k) ?? null, set: (k, v) => kv.set(k, String(v)), env: {},
@@ -132,7 +132,8 @@ test("points are spent, not minted: redeeming checks the balance, records the sp
   assert.match(redeem(hub, G, "小明", "专属头衔一周", "").error, /12 个字以内/);
   assert.equal(redeem(hub, G, "bot", "甩锅券").ok, false);
   const r = redeem(hub, G, "小明", "甩锅券", "昨晚把测试库删了");
-  assert.equal(r.ok, true); assert.equal(r.balance, 15); assert.equal(r.spend.state, "done");
+  assert.equal(r.ok, true); assert.equal(r.balance, 15); assert.equal(r.spend.state, "pending");
+  assert.equal(r.spend.settled_at, 0); assert.equal(r.spend.balance_after, 15);
   assert.match(r.do, /甩锅券.*昨晚把测试库删了.*认下来/);
   assert.equal(hub.ran.length, 0, "in the chat the bot does it in its own reply");
   assert.equal(teamStats(hub, G).people[0].balance, 15);
@@ -140,7 +141,10 @@ test("points are spent, not minted: redeeming checks the balance, records the sp
   const t = redeem(hub, G, "小明", "定制表情包", "奶蛙举牌", "board");
   assert.equal(t.ok, true); await Promise.all(hub.waits);
   assert.equal(hub.ran.length, 1); assert.match(hub.ran[0].task, /小明 用积分换了一个定制表情包.*看板上兑换.*花了 5 分，还剩 10 分/);
-  assert.equal(settle(hub, G, t.spend.id, "refunded").state, "refunded");
+  const paidBack = settle(hub, G, t.spend.id, "refunded", NOW, "群主");
+  assert.equal(paidBack.state, "refunded"); assert.equal(paidBack.settled_at, NOW); assert.equal(paidBack.settled_by, "群主");
+  assert.equal(settle(hub, G, t.spend.id, "refunded", NOW + HOUR).settled_at, NOW, "refund retry keeps original receipt");
+  assert.equal(settle(hub, G, t.spend.id, "done"), null, "refunding is final");
   assert.equal(balanceOf(hub, G, "小明").balance, 15, "refunded points come back");
   assert.equal(settle(hub, G, 999, "done"), null);
 });
@@ -159,9 +163,23 @@ test("a bought title lasts a week and shows on the person; custom perks wait for
   const tea = redeem(hub, G, "小红", "奶茶一杯", "", "chat", now);
   assert.equal(tea.spend.state, "pending"); assert.match(tea.do, /请群主兑现/);
   assert.equal(spends(hub, G, { state: "pending" }).length, 1);
-  assert.equal(settle(hub, G, tea.spend.id, "done").state, "done");
+  assert.equal(settle(hub, G, tea.spend.id, "done", now + HOUR, "群主").state, "done");
+  assert.equal(settle(hub, G, tea.spend.id, "refunded"), null, "fulfilled promises cannot be refunded");
   assert.equal(dropItem(hub, G, "奶茶一杯"), true); assert.equal(dropItem(hub, G, "甩锅券"), false);
   assert.equal(shop(hub, "g:2").some(i => i.custom), false);
+});
+
+test("legacy redemption rows keep their timestamps and migrate when the owner settles them", () => {
+  const hub = mkHub();
+  for (const column of ["balance_after", "settled_by", "weekly_at"]) hub.db.exec("ALTER TABLE team_spend DROP COLUMN " + column);
+  hub.db.prepare("INSERT INTO team_spend(conv,who,item,name,cost,ts) VALUES(?,?,?,?,?,?)").run(G, "小明", "mint", "薄荷糖", 5, NOW);
+  const old = spends(hub, G)[0];
+  assert.equal(old.balance_after, null);
+  const entry = settle(hub, G, old.id, "done", NOW + HOUR, "群主");
+  assert.equal(entry.ts, NOW);
+  assert.equal(entry.settled_at, NOW + HOUR);
+  assert.equal(entry.settled_by, "群主");
+  assert.equal(entry.balance_after, null);
 });
 
 test("the wall: weekly stars, bosses brought down, who holds which badge, records, titles", () => {
@@ -193,6 +211,8 @@ test("the chat tool: shop, redeem for the asker only, wall, and owner-only settl
   assert.equal(r.ok, true); assert.equal(r.balance_left, 10); assert.match(r.do, /generate_image/);
   assert.equal((await as("小红").run({ op: "redeem", item: "定制表情包" })).ok, false, "no points of her own");
   assert.equal((await as("小明").run({ op: "refund", id: r.record })).ok, false);
+  const batched = feature.tools({ hub, conv: G, askers: [{ id: "群主", name: "群主" }, { id: "小明", name: "小明" }], host: {} })[0];
+  assert.equal((await batched.run({ op: "refund", id: r.record })).ok, false);
   assert.equal((await as("群主").run({ op: "refund", id: r.record })).ok, true);
   assert.equal((await as("小明").run({ op: "add_item", name: "奶茶", cost: 30 })).ok, false);
   assert.equal((await as("群主").run({ op: "add_item", name: "奶茶一杯", cost: 30, what: "群主请" })).ok, true);
@@ -203,6 +223,18 @@ test("the chat tool: shop, redeem for the asker only, wall, and owner-only settl
 
 // ---- the star's certificate and ceremony ----
 import { certificateHtml, awardCertificate, weekly } from "../src/feat/teamwork.ts";
+test("an offered weekly cover stays pending without being offered twice", async () => {
+  const hub = mkHub();
+  for (const day of [1, 2]) at(hub, earn(hub, "小明", "big").id, { claimed_at: NOW - day * DAY - HOUR, done_at: NOW - day * DAY });
+  const buy = redeem(hub, G, "小明", "cover", "", "chat", NOW);
+  assert.equal(buy.spend.state, "pending");
+  await weekly(hub, NOW + DAY, G);
+  assert.match(hub.ran[0].task, /小明 用积分换了这一期的封面/);
+  assert.equal(spends(hub, G)[0].state, "pending");
+  assert.equal(spends(hub, G)[0].weekly_at, NOW + DAY);
+  await weekly(hub, NOW + 2 * DAY, G);
+  assert.doesNotMatch(hub.ran[1].task, /小明 用积分换了这一期的封面/);
+});
 test("the certificate names the person and their deeds, and nothing in it can break the page", () => {
   const html = certificateHtml({ who: "小<明>", title: "首席&救火官", group: "做 AI 高手", from: Date.parse("2026-11-09T00:00:00+08:00"), to: Date.parse("2026-11-15T23:59:00+08:00"), done: 3, points: 45, deeds: ["改完<b>登录页</b>", "二", "三", "四", "五"], streak: 3, issued: Date.parse("2026-11-15T21:30:00+08:00"), no: "第 2026-46 号", times: 2 });
   assert.match(html, /<h1>奖状<\/h1>/); assert.match(html, /小&lt;明&gt;<\/b> 同志/); assert.match(html, /首席&amp;救火官/);
