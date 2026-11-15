@@ -2150,7 +2150,7 @@ function show() {
   ready.then(function () { if (route === r && VIEWS[r.id].arg) VIEWS[r.id].arg(r.arg); });
   stamp();
 }
-function stamp() { $("stamp").textContent = loaded[cur] ? "更新于 " + ago(loaded[cur]) : ""; }
+function stamp() { var s = $("stamp"); if (s) s.textContent = loaded[cur] ? "更新于 " + ago(loaded[cur]) : ""; }   // the signed-out page has no stamp
 function quiet() {
   var a = document.activeElement, tag = a && a.tagName;
   return document.visibilityState !== "hidden" && $("drawer").hidden && $("lb").hidden && $("pop").hidden && $("more").hidden && !/^(INPUT|TEXTAREA|SELECT)$/.test(tag || "") && !dragId;

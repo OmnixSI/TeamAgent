@@ -809,7 +809,7 @@ const feature: Feature = {
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
     tasks_announce: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 接了任务、做完、放下、加了新任务时，在群里说一句" },
-    tasks_bot_auto: { default: "off", options: ["off", "on"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
+    tasks_bot_auto: { default: "on", options: ["on", "off"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
     tasks_bot_daily: { default: 6, min: 0, max: 20, what: "Bot 一天最多自己开工做几次名下的任务" },
   },
   tools,
