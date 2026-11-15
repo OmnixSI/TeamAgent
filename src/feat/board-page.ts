@@ -1248,18 +1248,22 @@ function shopArg(arg) {
   var go2 = h("button", { type: "submit", class: "btn pri" }, "确认兑换，花 " + it.cost + " 分"), cancel = h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "再想想");
   var form = h("form", {}, note ? h("label", { class: "field" }, h("span", { text: isTitle ? "头衔（12 个字以内，必填）" : "你的要求" }), note) : null, h("div", { class: "row" }, go2, cancel));
   form.style.marginTop = "18px";
+  var last = null;
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (go2.disabled) return;
     var v = note ? note.value.trim() : "";
     if (isTitle && !v) { note.focus(); return; }
     go2.disabled = true;
-    api("shop/redeem", { item: it.key, note: v }).then(function (r) {
-      var b2 = clear($("dw-body"));
-      b2.appendChild(h("div", { class: "done-box" }, h("span", { class: "m" }, icon("check")), h("h2", { id: "dw-title", text: "换到了：" + r.spend.name }),
-        h("p", { text: "记录 #" + r.spend.id + " · 花了 " + r.spend.cost + " 分，还剩 " + r.balance + " 分。" }), h("p", { class: "meta", text: it.kind === "manual" ? "等群主兑现。" : it.kind === "weekly" ? "已登记到周报，等群主确认兑现。" : it.kind === "timed" ? "新头衔已生效。" : "Bot 会在群里办理，办完由群主确认。" }),
+    if (!last || last.note !== v) last = { note: v, id: crypto.randomUUID() };
+    api("shop/redeem", { item: it.key, note: v, request_id: last.id }).then(function (r) {
+      var b2 = clear($("dw-body")), receipt = (r.spend.state === "refunded" ? "已退分：" : "换到了：") + r.spend.name;
+      b2.appendChild(h("div", { class: "done-box" }, h("span", { class: "m" }, icon("check")), h("h2", { id: "dw-title", text: receipt }),
+        h("p", { text: "记录 #" + r.spend.id + " · " + (r.spend.state === "refunded" ? "已退回 " : "花了 ") + r.spend.cost + " 分，当前可用 " + r.balance + " 分。" }),
+        h("p", { class: "meta", text: r.spend.state === "done" ? "已兑现。" : r.spend.state === "refunded" ? "退分已记入台账。" : it.kind === "manual" ? "等群主兑现。" : it.kind === "weekly" ? "已登记到周报，等群主确认兑现。" : "Bot 会在群里办理，办完由群主确认。" }),
         h("div", { class: "row" }, h("a", { class: "btn", href: "#redemptions" }, "查看台账"), h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "好的"))));
       b2.querySelector(".row").style.justifyContent = "center";
-      toast("换到了：" + r.spend.name + "，还剩 " + r.balance + " 分", "win");
+      toast(receipt + "，当前可用 " + r.balance + " 分", "win");
       loaded.shop = 0; loaded.team = 0; loaded.wall = 0; loaded.home = 0; loaded.redemptions = 0;
       load("shop", true); mine();
     }, function (e) { go2.disabled = false; fail(e); });

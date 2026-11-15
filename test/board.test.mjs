@@ -38,7 +38,7 @@ function mkHub() {
     db, r2, reads,
     env: { PUBLIC_URL: "https://bot.example", FILES: { async get(k) { reads.n++; const b = r2.get(k); return b ? { body: b, size: b.byteLength } : null; }, async put(k, v) { r2.set(k, new Uint8Array(v)); }, async delete() {} } },
     ctx: { waitUntil() {} },
-    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|WITH)|RETURNING/i.test(q) ? st.all(...b.map(fix)) : (st.run(...b.map(fix)), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
+    sql: { exec(q, ...b) { const st = db.prepare(q); const rows = st.columns().length ? st.all(...b.map(fix)) : (st.run(...b.map(fix)), []); return { toArray: () => rows.map(r => ({ ...r })) }; } },
     get(k) { const r = db.prepare("SELECT v FROM kv WHERE k=?").get(k); return r ? String(r.v) : null; },
     set(k, v) { db.prepare("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(k, v); },
     shadow: () => "",
@@ -384,9 +384,15 @@ describe("teamwork endpoints over the real task module", () => {
     let { j } = await post("/x/board/api/tasks", { title: "攒兑换积分", size: "big" });
     await post("/x/board/api/tasks/" + j.task.id + "/claim", {});
     await post("/x/board/api/tasks/" + j.task.id, { status: "done" });
-    ({ j } = await post("/x/board/api/shop/redeem", { item: "draw", note: "画只猫" }));
+    const request = { item: "draw", note: "画只猫", request_id: crypto.randomUUID() };
+    ({ j } = await post("/x/board/api/shop/redeem", request));
     const id = j.spend.id;
     assert.equal(j.spend.state, "pending");
+    const retry = await post("/x/board/api/shop/redeem", request);
+    assert.equal(retry.j.spend.id, id);
+    assert.equal(retry.j.balance, 10);
+    assert.equal(hub.tasksRun.length, 1);
+    assert.equal((await post("/x/board/api/shop/redeem", { ...request, note: "改画只狗" })).r.status, 400);
     ({ j } = await get("/x/board/api/redemptions?state=pending"));
     assert.equal(j.can_settle, false);
     assert.deepEqual(j.records.map(x => [x.id, x.who, x.balance_after, x.balance]), [[id, "小明", 10, 10]]);
@@ -397,6 +403,7 @@ describe("teamwork endpoints over the real task module", () => {
     assert.equal(j.entry.settled_by, "小明");
     assert.ok(j.entry.settled_at > 0);
     assert.equal(j.balance, 30);
+    assert.equal((await post("/x/board/api/shop/redeem", request)).j.spend.state, "refunded");
     assert.equal((await post("/x/board/api/redemptions/settle", { id, state: "done" })).r.status, 409);
     ({ j } = await get("/x/board/api/redemptions?state=refunded"));
     assert.equal(j.records[0].balance_after, 10);

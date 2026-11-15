@@ -171,7 +171,7 @@ test("a bought title lasts a week and shows on the person; custom perks wait for
 
 test("legacy redemption rows keep their timestamps and migrate when the owner settles them", () => {
   const hub = mkHub();
-  for (const column of ["balance_after", "settled_by", "weekly_at"]) hub.db.exec("ALTER TABLE team_spend DROP COLUMN " + column);
+  for (const column of ["balance_after", "settled_by", "weekly_at", "request_id"]) hub.db.exec("ALTER TABLE team_spend DROP COLUMN " + column);
   hub.db.prepare("INSERT INTO team_spend(conv,who,item,name,cost,ts) VALUES(?,?,?,?,?,?)").run(G, "小明", "mint", "薄荷糖", 5, NOW);
   const old = spends(hub, G)[0];
   assert.equal(old.balance_after, null);

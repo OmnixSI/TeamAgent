@@ -308,7 +308,9 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
   if (path === "shop/redeem") {   // always the visitor's own points: the name comes from the sign-in, never from the body
     const item = str(b.item, 40);
     if (!item) return bad("选一项再兑换");
-    const r = redeem(hub, p.conv, p.name, item, str(b.note, 200) || "", "board");
+    const id = b.request_id;
+    if (id !== undefined && (typeof id !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))) return bad("兑换请求编号不对");
+    const r = redeem(hub, p.conv, p.name, item, str(b.note, 200) || "", "board", Date.now(), id);
     return r.ok ? json({ ok: true, spend: r.spend, balance: r.balance }) : bad(r.error, 400);
   }
   if (path === "redemptions/settle") {
