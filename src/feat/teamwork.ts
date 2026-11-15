@@ -12,10 +12,15 @@ import type { Task } from "./tasks.ts";
 const DAY = 86400000, HOUR = 3600000;
 const POINTS = { small: 5, normal: 10, big: 30 } as const;
 const ON_TIME_BONUS = 5;
+const STAR_BONUS = 20;       // for being the week's star
 const WEEKLY_AT = "21:30";   // Sunday, Beijing
 
-/** Seam the tests replace: one short model call for a line of praise. */
+/** Seams the tests replace: one short model call for a line of praise, and the headless browser that prints the certificate. */
 export const deps = {
+  render: async (hub: Hub, html: string, width: number, height: number): Promise<Uint8Array> => {
+    const { render } = await import("../render.ts");
+    return (await render(hub, { html, width, height, full: false, settle: 300 })).bytes;
+  },
   line: async (hub: Hub, system: string, user: string): Promise<string> => {
     const r = await dsChat(hub.env, { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: 2000, label: "任务夸奖" }, "none", 30000);
     return String(r.message?.content || "").trim();
@@ -99,7 +104,8 @@ export type PersonStats = {
   badges: Badge[];
   spent: number;             // points traded in for perks
   balance: number;           // points_total minus spent: what can still be traded in
-  title: string;             // a title bought with points, while it lasts
+  title: string;             // a title bought with points, while it lasts; else "本周之星" for the reigning star
+  stars?: number;            // how many weeks they were the week's star (each is worth a bonus)
 };
 export type TeamStats = {
   week: { start: number; end: number; done: number; points: number; by_day: number[] };   // by_day: Monday..Sunday
@@ -129,7 +135,12 @@ export function teamStats(hub: Hub, conv: string, now = Date.now()): TeamStats {
       badges: badgesOf(done, streak, best),
       spent: 0, balance: 0, title: "",
     };
-  }).map(p => { const spent = spentBy(hub, conv, p.name); return { ...p, spent, balance: Math.max(0, p.points_total - spent), title: titleOf(hub, conv, p.name, now) }; }).sort((a, b) => b.points_week - a.points_week || b.points_total - a.points_total || b.doing.length - a.doing.length || a.name.localeCompare(b.name, "zh"));
+  }).map(p => {
+    // Each week as the star is worth a bonus, and the star wears the title until the next one is named (a bought title comes first).
+    const stars = starWeeks(hub, conv, p.name), spent = spentBy(hub, conv, p.name), total = p.points_total + stars.length * STAR_BONUS;
+    const crowned = stars.length && now - stars[0] < 14 * DAY && latestStar(hub, conv) === p.name;
+    return { ...p, points_total: total, spent, balance: Math.max(0, total - spent), title: titleOf(hub, conv, p.name, now) || (crowned ? "本周之星" : ""), stars: stars.length };
+  }).sort((a, b) => b.points_week - a.points_week || b.points_total - a.points_total || b.doing.length - a.doing.length || a.name.localeCompare(b.name, "zh"));
   const weekDone = all.filter(t => t.status === "done" && t.done_at >= ws);
   const by_day = [0, 0, 0, 0, 0, 0, 0];
   for (const t of weekDone) { const i = Math.floor((t.done_at - ws) / DAY); if (i >= 0 && i < 7) by_day[i]++; }
@@ -190,11 +201,15 @@ export const SHOP_SCHEMA = `
     cost INTEGER NOT NULL, ts INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', note TEXT DEFAULT '', until INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0);
   CREATE INDEX IF NOT EXISTS team_spend_who ON team_spend(conv, who, ts);
   CREATE TABLE IF NOT EXISTS team_item(conv TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, cost INTEGER NOT NULL, what TEXT DEFAULT '', made_by TEXT DEFAULT '', ts INTEGER, PRIMARY KEY(conv, key));
-  CREATE TABLE IF NOT EXISTS team_star(conv TEXT NOT NULL, week INTEGER NOT NULL, who TEXT NOT NULL, points INTEGER, done INTEGER, PRIMARY KEY(conv, week));
+  CREATE TABLE IF NOT EXISTS team_star(conv TEXT NOT NULL, week INTEGER NOT NULL, who TEXT NOT NULL, points INTEGER, done INTEGER, cert TEXT DEFAULT '', PRIMARY KEY(conv, week));
 `;
 const q = (hub: Hub, sql: string, ...b: any[]): any[] => { try { return hub.sql.exec(sql, ...b).toArray() as any[]; } catch (e: any) { if (/no such table/i.test(String(e?.message))) return []; throw e; } };
 export type Spend = { id: number; who: string; item: string; name: string; cost: number; ts: number; state: "pending" | "done" | "refunded"; note: string; until: number };
 const spendOf = (r: any): Spend => ({ id: Number(r.id), who: String(r.who), item: String(r.item), name: String(r.name), cost: Number(r.cost), ts: Number(r.ts), state: r.state, note: String(r.note || ""), until: Number(r.until) || 0 });
+
+/** The weeks (their Monday) someone was the star, newest first. */
+const starWeeks = (hub: Hub, conv: string, who: string): number[] => q(hub, "SELECT week FROM team_star WHERE conv=? AND who=? ORDER BY week DESC", conv, who).map(r => Number(r.week));
+const latestStar = (hub: Hub, conv: string): string => String(q(hub, "SELECT who FROM team_star WHERE conv=? ORDER BY week DESC LIMIT 1", conv)[0]?.who || "");
 
 export function shop(hub: Hub, conv: string): Item[] {
   const custom = q(hub, "SELECT key, name, cost, what FROM team_item WHERE conv=? ORDER BY cost, name", conv)
@@ -282,7 +297,7 @@ export function dropItem(hub: Hub, conv: string, name: string): boolean {
 
 // ---------- the wall of honour ----------
 export type Wall = {
-  stars: { week: number; who: string; points: number; done: number }[];                       // each past week's star, newest first
+  stars: { week: number; who: string; points: number; done: number; cert: string }[];         // each past week's star, newest first; cert is the certificate picture ("g12") when one was made
   bosses: { id: number; title: string; who: string; done_at: number; took_ms: number }[];     // big tasks brought down, newest first
   badges: { key: string; name: string; what: string; holders: { who: string; at: number }[] }[];
   records: { what: string; who: string; value: string; task?: number }[];
@@ -300,7 +315,8 @@ export function honorWall(hub: Hub, conv: string, now = Date.now()): Wall {
   const streak = top(p => p.best_streak); if (streak?.best_streak >= 2) records.push({ what: "最长连续", who: streak.name, value: streak.best_streak + " 天" });
   const most = top(p => p.done_total); if (most?.done_total) records.push({ what: "做完最多", who: most.name, value: most.done_total + " 件" });
   const rich = top(p => p.points_total); if (rich?.points_total) records.push({ what: "累计积分最高", who: rich.name, value: rich.points_total + " 分" });
-  const stars = q(hub, "SELECT week, who, points, done FROM team_star WHERE conv=? ORDER BY week DESC LIMIT 26", conv).map(r => ({ week: Number(r.week), who: String(r.who), points: Number(r.points), done: Number(r.done) }));
+  starColumns(hub);
+  const stars = q(hub, "SELECT week, who, points, done, cert FROM team_star WHERE conv=? ORDER BY week DESC LIMIT 26", conv).map(r => ({ week: Number(r.week), who: String(r.who), points: Number(r.points), done: Number(r.done), cert: String(r.cert || "") }));
   const bestWeek = [...stars].sort((a, b) => b.points - a.points)[0];
   if (bestWeek) records.push({ what: "单周最高分", who: bestWeek.who, value: bestWeek.points + " 分" });
   return {
@@ -311,9 +327,20 @@ export function honorWall(hub: Hub, conv: string, now = Date.now()): Wall {
     perks: spends(hub, conv, { limit: 20 }).filter(s => s.state !== "refunded"),
   };
 }
+/** A star table made before certificates existed gets the column on first use. */
+const starReady = new WeakSet<object>();
+function starColumns(hub: Hub) {
+  if (starReady.has(hub)) return;
+  starReady.add(hub);
+  try {
+    const have = hub.sql.exec("PRAGMA table_info(team_star)").toArray().map((c: any) => String(c.name));
+    if (have.length && !have.includes("cert")) hub.sql.exec("ALTER TABLE team_star ADD COLUMN cert TEXT DEFAULT ''");
+  } catch (e: any) { console.log("teamwork: star column", e?.message); }
+}
 /** Writes down this week's star, so the wall keeps every week's. */
 export function recordStar(hub: Hub, conv: string, stats: TeamStats) {
   if (!stats.mvp) return;
+  starColumns(hub);
   const p = stats.people.find(x => x.name === stats.mvp)!;
   hub.sql.exec("INSERT INTO team_star(conv, week, who, points, done) VALUES(?,?,?,?,?) ON CONFLICT(conv, week) DO UPDATE SET who=excluded.who, points=excluded.points, done=excluded.done", conv, stats.week.start, p.name, p.points_week, p.done_week);
 }
@@ -361,9 +388,73 @@ export async function cheer(hub: Hub, conv: string, task: Task, now = Date.now()
   return line;
 }
 
+// ---------- the certificate ----------
+const esc = (t: string) => String(t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as any)[c]);
+const cnDate = (ts: number) => { const d = dayOf(ts); return Number(d.slice(0, 4)) + " 年 " + Number(d.slice(5, 7)) + " 月 " + Number(d.slice(8, 10)) + " 日"; };
+const shortDate = (ts: number) => { const d = dayOf(ts); return Number(d.slice(5, 7)) + " 月 " + Number(d.slice(8, 10)) + " 日"; };
+export type CertFacts = { who: string; title: string; group: string; from: number; to: number; done: number; points: number; deeds: string[]; streak: number; issued: number; no: string; times: number; mascot?: string };
+/** A formal certificate of merit as a page, 1400 × 990, printed to a picture by the headless browser. */
+export function certificateHtml(c: CertFacts): string {
+  const deeds = c.deeds.slice(0, 4).map(d => "<li>" + esc(clip(d, 26)) + "</li>").join("");
+  const serif = `"Noto Serif CJK SC","Source Han Serif SC","Songti SC","STSong","SimSun","Noto Sans CJK SC","PingFang SC",serif`;
+  const seal = `<svg class="seal" viewBox="0 0 200 200" aria-hidden="true"><circle cx="100" cy="100" r="92" fill="none" stroke="#c0271f" stroke-width="7"/><circle cx="100" cy="100" r="80" fill="none" stroke="#c0271f" stroke-width="1.6"/>
+    <path id="arc" d="M 30 100 A 70 70 0 0 1 170 100" fill="none"/><text font-size="21" font-weight="700" fill="#c0271f" letter-spacing="5"><textPath href="#arc" startOffset="50%" text-anchor="middle">${esc(c.group)}</textPath></text>
+    <polygon points="100,66 108,88 131,88 113,102 120,124 100,110 80,124 87,102 69,88 92,88" fill="#c0271f"/><text x="100" y="158" text-anchor="middle" font-size="16" font-weight="700" fill="#c0271f" letter-spacing="4">功勋认证</text></svg>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}html,body{margin:0;width:1400px;height:990px}
+body{font-family:${serif};color:#3a2a1a;background:#8f1d17;padding:26px}
+.paper{position:relative;width:100%;height:100%;background:#fbf4e2;border:3px solid #c9a04a;padding:22px}
+.inner{position:relative;width:100%;height:100%;border:1.5px solid #c9a04a;outline:6px double #b8892e;outline-offset:-14px;padding:54px 96px 0}
+.corner{position:absolute;width:74px;height:74px;border:5px solid #b8892e}.c1{left:30px;top:30px;border-right:0;border-bottom:0}.c2{right:30px;top:30px;border-left:0;border-bottom:0}.c3{left:30px;bottom:30px;border-right:0;border-top:0}.c4{right:30px;bottom:30px;border-left:0;border-top:0}
+.no{position:absolute;right:120px;top:58px;font-size:19px;color:#8a6a35;letter-spacing:1px}
+h1{margin:6px 0 0;text-align:center;font-size:118px;letter-spacing:64px;padding-left:64px;color:#b3201a;font-weight:900;line-height:1.15}
+.rule{width:420px;height:0;margin:10px auto 34px;border-top:2px solid #c9a04a;position:relative}.rule:after{content:"";position:absolute;left:50%;top:-8px;width:14px;height:14px;margin-left:-7px;background:#c9a04a;transform:rotate(45deg)}
+.to{font-size:44px;font-weight:700;margin:0 0 20px}.to b{font-size:54px;padding:0 10px;border-bottom:2px solid #3a2a1a}.to small{font-size:26px;font-weight:400;color:#8a6a35;margin-left:14px}
+p.body{font-size:34px;line-height:1.85;margin:0;text-indent:2em;text-align:justify}
+p.body em{font-style:normal;font-weight:700;color:#b3201a}
+ul{margin:10px 0 0 2em;padding:0 0 0 1.2em;font-size:27px;line-height:1.6;color:#4d3a24;columns:2;column-gap:60px}
+.award{text-align:center;margin:20px 0 0;font-size:34px}.award b{display:inline-block;font-size:76px;letter-spacing:18px;padding-left:18px;color:#b3201a;font-weight:900;line-height:1.2}
+.close{font-size:32px;text-indent:2em;margin:6px 0 0}
+.foot{position:absolute;right:236px;bottom:74px;text-align:center;font-size:28px;line-height:1.7}.foot .org{font-weight:700;font-size:30px}
+.seal{position:absolute;right:104px;bottom:50px;width:186px;height:186px;opacity:.82;transform:rotate(-8deg)}
+.mascot{position:absolute;left:112px;bottom:56px;display:flex;align-items:flex-end;gap:14px;font-size:22px;color:#8a6a35}.mascot img{width:150px;height:150px;object-fit:contain}
+</style></head><body><div class="paper"><i class="corner c1"></i><i class="corner c2"></i><i class="corner c3"></i><i class="corner c4"></i><div class="inner">
+<div class="no">${esc(c.no)}</div>
+<h1>奖状</h1><div class="rule"></div>
+<p class="to"><b>${esc(c.who)}</b> 同志：${c.title ? "<small>" + esc(c.title) + "</small>" : ""}</p>
+<p class="body">在 ${shortDate(c.from)}至 ${shortDate(c.to)}的团队协作中，做成 <em>${c.done}</em> 件事，拿下 <em>${c.points}</em> 分${c.streak >= 2 ? "，连续 <em>" + c.streak + "</em> 天都有产出" : ""}${deeds ? "，其中：" : "。"}</p>
+${deeds ? "<ul>" + deeds + "</ul>" : ""}
+<div class="award">成绩突出，被评为<br><b>本周之星</b></div>
+<p class="close">特发此状，以资鼓励。${c.times > 1 ? "（第 " + c.times + " 次获此荣誉）" : ""}</p>
+${c.mascot ? `<div class="mascot"><img src="${c.mascot}" alt=""><span>颁奖人：Bot</span></div>` : ""}
+<div class="foot"><div class="org">「${esc(c.group)}」群</div><div>${cnDate(c.issued)}</div></div>${seal}
+</div></div></body></html>`;
+}
+/** Prints this week's certificate, posts it in the group and keeps it for the wall. Returns the picture's reference, "" when it could not be made. */
+export async function awardCertificate(hub: Hub, conv: string, stats: TeamStats, done: Task[], now = Date.now()): Promise<string> {
+  if (!stats.mvp) return "";
+  const p = stats.people.find(x => x.name === stats.mvp)!;
+  let mascot = "";
+  try {
+    const img = await (hub as any).store?.imageRef?.(conv, "奶蛙");
+    if (img?.bytes?.length && img.bytes.length < 900_000) { let b = ""; for (let i = 0; i < img.bytes.length; i += 0x8000) b += String.fromCharCode(...img.bytes.subarray(i, i + 0x8000)); mascot = "data:" + (img.mime || "image/png") + ";base64," + btoa(b); }
+  } catch {}
+  const week = new Date(stats.week.start + 8 * HOUR), jan1 = Date.UTC(week.getUTCFullYear(), 0, 1), weekNo = Math.floor((week.getTime() - jan1) / (7 * DAY)) + 1;
+  const facts: CertFacts = {
+    who: p.name, title: titleOf(hub, conv, p.name, now), group: String(hub.get("team:group_name") || "做 AI 高手"), from: stats.week.start, to: stats.week.end - 1, done: p.done_week, points: p.points_week,
+    deeds: done.filter(t => creditOf(t) === p.name).sort((a, b) => pointsOf(b) - pointsOf(a)).map(t => t.title), streak: p.streak, issued: now,
+    no: "第 " + week.getUTCFullYear() + "-" + String(weekNo).padStart(2, "0") + " 号", times: starWeeks(hub, conv, p.name).length || 1, ...(mascot ? { mascot } : {}),
+  };
+  const bytes = await deps.render(hub, certificateHtml(facts), 1400, 990);
+  const sent = await (hub as any).sendImage(conv, bytes, "本周之星奖状：" + p.name + "（" + shortDate(stats.week.start) + "那一周）", "image/jpeg");
+  const ref = String(sent?.id || "");
+  if (ref) hub.sql.exec("UPDATE team_star SET cert=? WHERE conv=? AND week=?", ref, conv, stats.week.start);
+  return ref;
+}
+
 // ---------- weekly report ----------
 /** What the bot is asked to do on Sunday night; it runs as a normal background task, so it can use its tools. */
-export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = []): string {
+export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = [], cert = ""): string {
   const facts = {
     本周做完: stats.week.done, 本周总分: stats.week.points, 还在做: stats.totals.doing, 没开始: stats.totals.open, 已过期: stats.totals.overdue, 本周之星: stats.mvp || "（没有人得分）",
     每个人: stats.people.filter(p => p.done_week || p.doing.length).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name) })),
@@ -371,12 +462,14 @@ export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = []
   };
   return "发本周的团队战报。下面是这一周任务清单的真实数据，只能用这些数，不许编：\n" + JSON.stringify(facts) +
     "\n规矩：你这一轮只有最后那条回复会发到群里，战报写在最后的回复里，一条消息写完，用你平时的口气，不超过 12 行，不要写成公告，不要标题。内容：这周一共做成了几件、每个人做成了什么（点名，具体到事），本周之星是谁、凭什么；谁手上还压着活、哪件过期了（点到为止，别训人）；最后一句给下周起个头。"
-    + (stats.mvp ? "写之前先用 meme 工具给本周之星做一张图发出来（拿保存的形象“奶蛙”套“摸头”这类模板就行，不要用 generate_image）；meme 做不出来就跳过，战报照发。" : "")
+    + (stats.mvp ? (cert
+        ? "这一期有颁奖仪式，要隆重。本周之星 " + stats.mvp + " 的奖状（图 " + cert + "）刚刚已经发到群里了，不用再发图。你来主持：先用 speak 把颁奖那一句念出来（像主持人宣布获奖者那样，一句话，带上他的名字和“本周之星”，声音选 lively）；然后最后的回复以颁奖词开头：三四句，郑重其事但还是你的口气，点名他这周做成的具体的事和数，说清楚奖励是这张奖状、" + STAR_BONUS + " 分奖金、接下来一周挂“本周之星”头衔、名字上功勋墙；颁奖词之后再接战报。"
+        : "写之前先用 meme 工具给本周之星做一张图发出来（拿保存的形象“奶蛙”套“摸头”这类模板就行，不要用 generate_image）；meme 做不出来就跳过，战报照发。战报里说清楚本周之星的奖励：" + STAR_BONUS + " 分奖金、接下来一周挂“本周之星”头衔、名字上功勋墙。") : "")
     + (covers.length ? "另外，" + covers.join("、") + " 用积分换了这一期的封面人物：用 generate_image 给" + (covers.length > 1 ? "他们各" : "他") + "画一张专属封面发出来（画成奶蛙给他颁奖之类的场面，intent 里写明是战报封面），战报开头点一句这一期的封面人物是谁。" : "")
     + "这周一件都没做成也照实说，别硬夸。";
 }
-async function weekly(hub: Hub, now: number) {
-  const convs = (hub.sql.exec("SELECT DISTINCT conv FROM task").toArray() as any[]).map(r => String(r.conv)).filter(c => !c.startsWith("t:"));
+export async function weekly(hub: Hub, now: number, only = "") {
+  const convs = only ? [only] : (hub.sql.exec("SELECT DISTINCT conv FROM task").toArray() as any[]).map(r => String(r.conv)).filter(c => !c.startsWith("t:"));
   for (const conv of convs) {
     if (String(hub.edit.cfg(conv, "team_weekly")) !== "on") continue;
     const stats = teamStats(hub, conv, now);
@@ -385,7 +478,8 @@ async function weekly(hub: Hub, now: number) {
     recordStar(hub, conv, stats);
     const covers = spends(hub, conv, { state: "pending" }).filter(x => x.item === "cover");
     for (const c of covers) settle(hub, conv, c.id, "done", now);
-    await hub.runTask(conv, weeklyTask(stats, done, [...new Set(covers.map(c => c.who))]));
+    const cert = await awardCertificate(hub, conv, stats, done, now).catch(e => { console.log("teamwork: certificate failed", e?.message); return ""; });
+    await hub.runTask(conv, weeklyTask(stats, done, [...new Set(covers.map(c => c.who))], cert));
   }
 }
 function tick(hub: Hub, now: number) {
@@ -498,12 +592,20 @@ const feature: Feature = {
   },
   tools,
   tick,
+  async admin(hub, req, url, body) {
+    if (url.pathname !== "/admin/team") return null;
+    const json = (o: any, status = 200) => new Response(JSON.stringify(o, null, 1), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+    const conv = String(body?.conv || url.searchParams.get("conv") || hub.get("main") || "");
+    // POST {"weekly":"t:room"} runs the Sunday ceremony for one conversation right now (for rehearsing in a test room).
+    if (req.method === "POST" && body?.weekly) { await weekly(hub, Date.now(), String(body.weekly)); return json({ ok: true, ran: body.weekly, wall: honorWall(hub, String(body.weekly)) }); }
+    return json({ ok: true, conv, stats: teamStats(hub, conv), wall: honorWall(hub, conv), shop: shop(hub, conv) });
+  },
   about: [
     "任务清单同时是团队的记分牌：每件任务记着谁记下的、谁什么时候接的手、做了多久、什么时候做完，看板上能看到完整过程。",
     "做完一件事有分：小事 5 分、普通 10 分、大活 30 分，赶在截止日期前做完再加 5 分；本地 AI 做完的算在它主人头上。还有称号（开张、屠龙、闪电、三天不断等），都是从任务记录里算出来的，不是我随口封的。",
     "积分能换特权：定制表情包 5 分、点一段方言语音 10 分、甩锅券 15 分、点一张图 20 分、专属头衔一周 25 分、代办券 40 分、战报封面人物 50 分；群主还能加自定的（比如请奶茶）。积分只能靠做完任务挣，不能转让、不能预支，换了就从余额里扣。在群里跟我说“我要换……”，或者在看板上点。",
     "功勋墙记着历届本周之星、打下来的大活、谁拿了哪些称号、各项纪录和大家挂着的头衔，看板上有，在群里问我也行。",
-    "有人做完任务我会在群里夸一句，说的数（这周第几件、连续几天、用了多久）都来自记录；每周日晚上九点半发一份战报，点名这周谁做成了什么、谁是本周之星。不想要可以关（team_praise、team_weekly）。",
+    "有人做完任务我会在群里夸一句，说的数（这周第几件、连续几天、用了多久）都来自记录；每周日晚上九点半发一份战报，点名这周谁做成了什么。本周之星有颁奖：一张正式的奖状发到群里（也挂上功勋墙）、20 分奖金、接下来一周的“本周之星”头衔，我还会念颁奖词。不想要可以关（team_praise、team_weekly）。",
   ],
 };
 export default feature;

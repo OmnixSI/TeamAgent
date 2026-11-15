@@ -9,7 +9,7 @@ export const LIMITS = {
   perConv: 20, perTick: 5, minEvery: 2, maxEvery: 1440, defaultEvery: 5, timeoutMs: 10000, maxTimeoutMs: 30000,
   failsToDown: 3, oksToUp: 2, recheckMs: 30000, remindMs: 6 * 3600000, bodyBytes: 200 * 1024,
   keepChecksMs: 7 * 86400000, keepIncidentsMs: 90 * 86400000,
-  slowFactor: 5, slowRuns: 3, slowFloorMs: 200, slowMinSamples: 10,
+  slowFactor: 5, slowRuns: 3, slowFloorMs: 2000, slowMinSamples: 10,   // under two seconds nobody feels it, however many times the usual it is
 };
 
 /** The network seam: tests replace it with scripted responses. */
@@ -311,7 +311,7 @@ CREATE INDEX IF NOT EXISTS uptimeinc_t ON uptimeinc(target, start);`,
     "我能替群里盯自家网站和服务有没有挂：给我一个链接，我每隔几分钟（最少 2 分钟，默认 5 分钟）访问一次，看能不能打开、多快、返回什么状态；还可以要求页面里必须有某段文字。这一项不花钱，也不用模型。",
     "它和盯网页内容的功能不一样：那个是读页面看群友关心的事有没有变，这个只管“活着没有”。",
     "防误报：某个地址连着 3 次检查失败（失败后半分钟再查两次）才算挂了，我会在群里说一次：什么挂了、从什么时候起、原因是超时、域名解析不了、证书出错还是返回了错误状态。挂着的时候最多每 6 小时提醒一次，恢复后连着 2 次正常才说好了，并告诉你们挂了多久。",
-    "响应时间连着 3 次超过 7 天中位数的 5 倍，我会提醒一次，同一个地址一天最多一次。",
+    "响应时间连着 3 次超过 7 天中位数的 5 倍、而且慢到 2 秒以上，我才提醒一次，同一个地址一天最多一次；只是比平时慢几倍但仍然很快的不提。",
     "每个群最多盯 20 个地址。检查记录留 7 天，每次故障（开始、结束、持续多久、第一个报错）留 90 天，可以问我某个地址的故障记录和 24 小时、7 天的可用率。",
     "HTTPS 证书什么时候到期我查不了（这里读不到证书信息），所以不做证书到期提醒。",
   ],
