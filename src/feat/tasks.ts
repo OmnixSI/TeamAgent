@@ -32,7 +32,7 @@ const LIMIT = { title: 120, detail: 1000, source: 200, result: 2000, note: 1000,
 /** Seam the tests replace: the chat model for the nightly pass. */
 export const deps = {
   model: async (hub: Hub, system: string, user: string): Promise<{ text: string; usage: any }> => {
-    const r = await dsChat(hub.env, { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: 6000, label: "任务提取" }, "high", 180000);
+    const r = await dsChat(hub.env, { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: 24000, label: "任务提取" }, "high", 240000);   // the limit covers the reasoning too: 6,000 ran out on a 1,300-message day before any answer came
     return { text: String(r.message?.content || ""), usage: r.usage || {} };
   },
 };
