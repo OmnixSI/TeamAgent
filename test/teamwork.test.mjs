@@ -120,7 +120,7 @@ test("the chat tool answers who is doing what and how a task went", async () => 
 });
 
 // ---- points for perks, and the wall ----
-import { shop, redeem, settle, balanceOf, spends, titleOf, setItem, dropItem, honorWall, recordStar, SHOP_SCHEMA } from "../src/feat/teamwork.ts";
+import { shop, redeem, settle, balanceOf, spends, titleOf, setItem, dropItem, honorWall, recordStar, SHOP_SCHEMA, tip, tips, postBounty, bounties, WEEKLY_CAP, WEEKLY_TIP } from "../src/feat/teamwork.ts";
 const earn = (hub, who, size = "normal") => { const t = addTask(hub, G, { title: who + " 的活 " + Math.random().toString(36).slice(2, 6), owner: who, size }, true); claimTask(hub, G, t.id, who, true); updateTask(hub, G, t.id, { status: "done" }, who, true); return t; };
 
 test("points are spent, not minted: redeeming checks the balance, records the spend, and says what to do", async () => {
@@ -219,6 +219,119 @@ test("the chat tool: shop, redeem for the asker only, wall, and owner-only settl
   const w = await as("小红").run({ op: "wall" });
   assert.ok(w.bosses.length === 1 && w.badges.some(b => b.startsWith("屠龙")));
   assert.equal((await as("小明").run({ op: "status", mine: true })).people[0].balance, 30);
+});
+
+// ---- weekly cap, tips and the bounty market ----
+test("weekly task points are capped at 60; the excess is ledger only and the star bonus stays outside the cap", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  for (let i = 0; i < 7; i++) at(hub, earn(hub, "小明", "big").id, { claimed_at: NOW - HOUR, done_at: NOW - i * 60000 });
+  let p = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
+  assert.equal(p.points_week, 210);
+  assert.equal(p.points_week_capped, WEEKLY_CAP);
+  assert.equal(p.points_capped, WEEKLY_CAP);
+  assert.equal(p.ledger, 150);
+  assert.equal(p.points_total, WEEKLY_CAP);
+  assert.equal(p.balance, WEEKLY_CAP);
+  assert.equal(teamStats(hub, G, NOW).week.points_capped, WEEKLY_CAP);
+  hub.db.prepare("INSERT INTO team_star(conv,week,who,points,done) VALUES(?,?,?,?,?)").run(G, weekStart(NOW), "小明", 210, 7);
+  p = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
+  assert.equal(p.points_total, WEEKLY_CAP + 20, "the star's 20 is added on top");
+  assert.equal(p.balance, WEEKLY_CAP + 20);
+  assert.equal(p.ledger, 150);
+  for (let i = 0; i < 7; i++) at(hub, earn(hub, "小明", "big").id, { claimed_at: NOW - 8 * DAY - HOUR, done_at: NOW - 8 * DAY - i * 60000 });
+  p = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
+  assert.equal(p.points_capped, 2 * WEEKLY_CAP, "each week has its own cap");
+  assert.equal(p.ledger, 300);
+  assert.equal(p.balance, 2 * WEEKLY_CAP + 20);
+});
+
+test("tip points come from the balance, cannot be given to yourself or overdrawn, and each week has a 15 point allowance", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  earn(hub, "小红", "big"); earn(hub, "小明", "normal");
+  assert.match(tip(hub, G, "小红", "小红", 5, "", NOW).error, /不能给自己打赏/);
+  assert.match(tip(hub, G, "小明", "小红", 15, "", NOW).error, /现在有 10 分.*不能透支/);
+  const r = tip(hub, G, "小红", "小明", 10, "重做看板", NOW);
+  assert.equal(r.ok, true); assert.equal(r.left, WEEKLY_TIP - 10); assert.equal(r.balance, 20);
+  assert.equal(tips(hub, G, { from: "小红" }).length, 1);
+  const m = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
+  assert.equal(m.tips_in, 10); assert.equal(m.balance, 20);
+  assert.match(tip(hub, G, "小红", "小明", 10, "再补", NOW + 1000).error, /额度还剩 5 分/);
+  const next = tip(hub, G, "小红", "小明", 15, "下周的", NOW + 7 * DAY);
+  assert.equal(next.ok, true); assert.equal(next.left, 0, "the allowance resets next week");
+});
+
+test("bounty points are escrowed at posting, paid to the taker, refunded for the poster, cancellation and release", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  earn(hub, "小明", "big");
+  const t = addTask(hub, G, { title: "搬砖", owner: "小红" }, true);
+  assert.match(postBounty(hub, G, t.id, "小明", 40, NOW).error, /现在有 30 分.*不能透支/);
+  const posted = postBounty(hub, G, t.id, "小明", 20, NOW);
+  assert.equal(posted.ok, true); assert.equal(posted.balance, 10);
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 10, "the held amount leaves the poster's balance at once");
+  assert.equal(bounties(hub, G, { task: t.id })[0].status, "held");
+  claimTask(hub, G, t.id, "小红", true);
+  updateTask(hub, G, t.id, { status: "done" }, "小红", true);
+  let b = bounties(hub, G, { task: t.id })[0];
+  assert.equal(b.status, "settled"); assert.equal(b.taker, "小红"); assert.ok(b.settled_at > 0);
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 10);
+  assert.equal(balanceOf(hub, G, "小红", NOW).balance, 30, "10 for the task plus the 20 bounty");
+  assert.equal(bounties(hub, G, { who: "小红" }).length, 1);
+
+  const own = addTask(hub, G, { title: "自己修", owner: "小明" }, true);
+  assert.equal(postBounty(hub, G, own.id, "小明", 5, NOW).ok, true);
+  claimTask(hub, G, own.id, "小明", true);
+  updateTask(hub, G, own.id, { status: "done" }, "小明", true);
+  b = bounties(hub, G, { task: own.id })[0];
+  assert.equal(b.status, "refunded"); assert.equal(b.taker, "小明");
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 20);
+
+  const cancel = addTask(hub, G, { title: "取消的事" }, true);
+  assert.equal(postBounty(hub, G, cancel.id, "小明", 5, NOW).ok, true);
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 15);
+  updateTask(hub, G, cancel.id, { status: "dropped" }, "小明", true);
+  assert.equal(bounties(hub, G, { task: cancel.id })[0].status, "refunded");
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 20);
+
+  const rel = addTask(hub, G, { title: "接了又放" }, true);
+  assert.equal(postBounty(hub, G, rel.id, "小明", 5, NOW).ok, true);
+  claimTask(hub, G, rel.id, "小红", true);
+  updateTask(hub, G, rel.id, { status: "open" }, "小红", true);
+  assert.equal(bounties(hub, G, { task: rel.id })[0].status, "refunded");
+  assert.equal(balanceOf(hub, G, "小明", NOW).balance, 20);
+});
+
+test("bounty income does not count against the taker's weekly cap", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  for (let i = 0; i < 7; i++) at(hub, earn(hub, "小明", "big").id, { claimed_at: NOW - HOUR, done_at: NOW - i * 60000 });
+  earn(hub, "小刚", "big");
+  const t = addTask(hub, G, { title: "帮个忙", owner: "小明" }, true);
+  assert.equal(postBounty(hub, G, t.id, "小刚", 20, NOW).ok, true);
+  claimTask(hub, G, t.id, "小明", true);
+  updateTask(hub, G, t.id, { status: "done" }, "小明", true);
+  at(hub, t.id, { claimed_at: NOW - HOUR, done_at: NOW - HOUR });
+  const p = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
+  assert.equal(p.points_week, 220); assert.equal(p.points_week_capped, WEEKLY_CAP);
+  assert.equal(p.ledger, 160); assert.equal(p.bounty_in, 20);
+  assert.equal(p.balance, WEEKLY_CAP + 20, "the bounty is added without raising the capped task points");
+});
+
+test("the team tool has entry points for tipping and for posting and querying bounties", async () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  earn(hub, "小明", "big");
+  const tool = feature.tools({ hub, conv: G, askers: [{ id: "u1", name: "小明" }], host: {} })[0];
+  const t = addTask(hub, G, { title: "帮忙看看" }, true);
+  const posted = await tool.run({ op: "bounty", id: t.id, amount: 20 });
+  assert.equal(posted.ok, true); assert.equal(posted.balance_left, 10);
+  const list = await tool.run({ op: "bounties", id: t.id });
+  assert.equal(list.bounties.length, 1); assert.equal(list.bounties[0].status, "held");
+  const tipped = await tool.run({ op: "tip", who: "小红", amount: 5, reason: "写 issue" });
+  assert.equal(tipped.ok, true); assert.equal(tipped.balance_left, 5); assert.equal(tipped.tip_allowance_left, 10);
+  const mine = await tool.run({ op: "status", mine: true });
+  assert.equal(mine.people[0].contribution_ledger, 0); assert.equal(mine.people[0].tip_allowance_left, 10);
+  const wall = await tool.run({ op: "wall" });
+  assert.deepEqual(wall.ledger, []); assert.match(wall.tip_allowance[0], /还可打赏 10 分/); assert.equal(wall.week_points_capped[0], "小明：30 分");
+  const recent = await tool.run({ op: "recent" });
+  assert.equal(recent.people.find(p => p.name === "小明").points_week_capped, 30);
 });
 
 // ---- the star's certificate and ceremony ----
