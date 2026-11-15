@@ -40,6 +40,8 @@ OWNERS = "0FC1E8A8BD28981E86866125AC3FCEFF"
 RELAY_URL = "https://relay-dusky-five.vercel.app"
 # Where published pages and transfers are reachable from outside.
 PUBLIC_URL = "https://teamagent.inkboard-server.workers.dev"
+# The same pages through the Hong Kong mirror (relay/api/site.js), for networks that cannot reach workers.dev.
+PUBLIC_URL_CN = "https://relay-dusky-five.vercel.app"
 
 # Headless browser for rendering documents, mind maps and pages to pictures (included in Workers Paid).
 [browser]

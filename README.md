@@ -93,6 +93,10 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | `staticsite` | 在云电脑里构建静态网站并托管到 `/p/<id>/`，重新部署原地替换 | `deploy_site` |
 | `flashcards` | 从材料生成记忆卡片，按人做间隔重复，可发布成学习网页、导出 Anki | `flashcards` |
 | `toolbox` | 工具箱网页 `/x/toolbox`：全部在浏览器本地运行的小工具，加一份能力清单 | `toolbox` |
+| `access` | 看板和本地 AI 接口的个人链接：点开即登录，只存令牌的哈希，可作废 | `board_link` |
+| `tasks` | 群里的任务清单：能直接让它记，每晚 02:30（北京）从前一天的聊天里提取承诺和交办，原话对不上的不记 | `tasks` |
+| `board` | 团队看板 `/x/board`：动态、任务、记忆、仓库、作品和文件、监控和额度、工具 | — |
+| `mcp` | 给本地 AI 工具的 MCP 接口 `/x/mcp/<令牌>`：列任务、领取、汇报、交付、查聊天和记忆 | — |
 
 ## 技能（`src/skills/`）
 
@@ -178,6 +182,10 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | 计算 | `run_python`（云端沙箱） `computer`（云电脑：视频音频、克隆仓库、PPT/Word） `chat_stats` |
 | 记忆与时间 | `remember` `forget` `search_history` `get_history` `past_summaries` `schedule` |
 | 自身 | `about_self`（链路、能力、状态、自检） `self_update`（改参数和做法、授权、写改进提议） |
+
+## 香港镜像
+
+`relay/api/site.js`（和中转同一个 Vercel 香港项目）把 Bot 自己的公开页面原样转发：`https://relay-dusky-five.vercel.app/x/…` 和 `/p/…` 对应 Worker 的同一路径，给打不开 `workers.dev` 的网络用。只转发这两个前缀，管理接口不经过它；经镜像上传最多 4 MB。地址写在 `wrangler.toml` 的 `PUBLIC_URL_CN`。
 
 ## 出网的三条路
 
