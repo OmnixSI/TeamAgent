@@ -1,6 +1,6 @@
 // The control surface. The Worker checks the admin token and forwards the request here.
 import type { Hub } from "./hub.ts";
-import { displayName } from "./core.ts";
+import { displayName, promptParts } from "./core.ts";
 import { checkHealth } from "./health.ts";
 import { FEATURES } from "./feat/index.ts";
 import { SYD, clip, fmtFull } from "./util.ts";
@@ -78,6 +78,15 @@ export async function route(hub: Hub, req: Request): Promise<Response> {
   if (path === "/admin/memory") {
     if (req.method === "POST" && typeof body.memory === "string") { hub.set("memory:prev:" + conv, hub.get("memory:" + conv) || ""); hub.set("memory:" + conv, body.memory); }
     return json({ conv, memory: hub.get("memory:" + conv) || "", notes: hub.notes(conv), days: hub.sql.exec("SELECT date,summary FROM day WHERE conv=? ORDER BY date DESC LIMIT 7", conv).toArray() });
+  }
+  if (path === "/admin/prompt") {
+    // What the next turn's prompt is made of, in characters, beside what recent turns really used and how much of it the provider had cached.
+    const rows = hub.window(conv), asker = url.searchParams.get("asker") || "";
+    const parts = promptParts({ rows, cursor: Number(hub.get("cursor:" + conv) || 0), mentioned: false, memory: hub.memoryOf(conv), notes: hub.notes(conv), now: Date.now(), rules: hub.edit.play(conv, "persona") },
+      hub.tools(conv, asker ? [{ id: "admin", name: asker }] : []));
+    const recent = hub.sql.exec("SELECT COALESCE(SUM(calls),0) calls, COALESCE(SUM(in_tok),0) in_tok, COALESCE(SUM(cached),0) cached FROM turn WHERE conv=? AND ts>?", conv, Date.now() - 86400000).toArray()[0] as any;
+    const calls = Number(recent.calls), inTok = Number(recent.in_tok);
+    return json({ conv, chars: parts, last24h: { calls, tokens_per_call: calls ? Math.round(inTok / calls) : 0, cached_share: inTok ? Math.round(Number(recent.cached) / inTok * 1000) / 1000 : 0 } });
   }
   if (path === "/admin/turns") return json(hub.sql.exec("SELECT * FROM turn ORDER BY id DESC LIMIT ?", limit).toArray());
   if (path === "/admin/toolruns") {

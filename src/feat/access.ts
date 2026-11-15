@@ -97,6 +97,23 @@ const feature: Feature = {
       },
     }];
   },
+  /**
+   * POST /admin/access {"name":"…"}: a new MCP address for a member who already holds a link, so the owner
+   * can connect a local AI tool as that member without asking in the group. The token is shown this once.
+   */
+  async admin(hub, req, url, body) {
+    if (url.pathname !== "/admin/access") return null;
+    const json = (o: any, status = 200) => new Response(JSON.stringify(o, null, 1), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+    const conv = String(body?.conv || url.searchParams.get("conv") || hub.get("main") || "");
+    if (req.method !== "POST") return json({ ok: true, conv, people: listAccess(hub, conv).map(p => ({ name: p.name, last_used: p.seen })) });
+    const name = String(body?.name || "").trim();
+    const who = rows(hub, "SELECT uid, name FROM access WHERE conv=? AND name=? AND revoked=0 ORDER BY created DESC LIMIT 1", conv, name)[0];
+    if (!who) return json({ ok: false, error: "这个群里没有叫这个名字、手上有看板链接的人；先让他在群里对 Bot 说“给我看板链接”" }, 404);
+    const live = Number(rows(hub, "SELECT COUNT(*) n FROM access WHERE conv=? AND uid=? AND revoked=0", conv, String(who.uid))[0].n);
+    if (live >= MAX_PER_PERSON) return json({ ok: false, error: "他已经有 " + live + " 个有效链接，再发会把最早的挤掉；先让他作废不用的" }, 409);
+    const token = await issueAccess(hub, conv, { id: String(who.uid), name: String(who.name) }), b = bases(hub);
+    return json({ ok: true, for: String(who.name), mcp: b.map(u => u + "/x/mcp/" + token) });
+  },
   async open(hub, req, url) {
     const m = /^\/x\/board\/k\/([a-f0-9]{40})\/?$/.exec(url.pathname);
     if (!m) return null;

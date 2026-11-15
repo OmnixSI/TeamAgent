@@ -1,7 +1,7 @@
 // Offline tests for the conversation loop: a scripted model and fake tools, no network.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { runTurn, buildMessages, renderLine, displayName } from "../src/core.ts";
+import { runTurn, buildMessages, renderLine, displayName, promptParts } from "../src/core.ts";
 
 const T = Date.UTC(2026, 10, 15, 2, 0); // 2026-11-15 10:00 Beijing
 
@@ -458,7 +458,7 @@ describe("buildMessages", () => {
     ]);
   });
 
-  test("trailer: idle levels, askers, job, task, memory/rules/notes in the system prompt", () => {
+  test("trailer: idle levels, askers, job, task; memory and rules in the system prompt, day notes at the end", () => {
     const quiet = buildMessages(input({ talkative: "quiet" })).at(-1).content;
     assert.match(quiet, /除非有非说不可的新信息/);
     const chatty = buildMessages(input({ talkative: "chatty" })).at(-1).content;
@@ -474,6 +474,22 @@ describe("buildMessages", () => {
     assert.equal(sys.role, "system");
     assert.match(sys.content, /规矩Z/);
     assert.match(sys.content, /记忆X/);
-    assert.match(sys.content, /· 笔记Y/);
+    assert.doesNotMatch(sys.content, /笔记Y/, "a note added during the day must not change the cached start of the prompt");
+    const withNote = buildMessages(input({ memory: "记忆X", notes: ["笔记Y"], rules: "规矩Z" }));
+    assert.equal(withNote[0].content, buildMessages(input({ memory: "记忆X", notes: [], rules: "规矩Z" }))[0].content);
+    const tail = withNote.at(-1).content;
+    assert.match(tail, /刚记下的事[^\n]*\n· 笔记Y\]/);
+    assert.ok(tail.indexOf("笔记Y") > tail.indexOf("大家好") && tail.indexOf("笔记Y") < tail.indexOf("现在：北京时间"), "after the chat, before the closing instruction");
+    assert.match(buildMessages(input({ task: "发早报", notes: ["笔记Y"] })).at(-1).content, /· 笔记Y\][\s\S]*定时任务触发/);
+    assert.doesNotMatch(buildMessages(input()).at(-1).content, /刚记下的事/);
+  });
+
+  test("promptParts: sizes add up and the tool hash follows the definitions", () => {
+    const tool = (d) => ({ name: "t", description: d, parameters: { type: "object", properties: {} }, run: async () => ({}) });
+    const a = promptParts(input({ memory: "记忆X", notes: ["笔记Y"], rules: "规矩Z" }), [tool("甲")]);
+    assert.equal(a.memory, 3); assert.equal(a.rules, 3); assert.ok(a.notes > 3); assert.equal(a.toolCount, 1); assert.equal(a.rows, 1);
+    assert.equal(a.total, a.persona + a.rules + a.memory + a.tools + a.chat + a.notes);
+    assert.equal(a.toolsHash, promptParts(input(), [tool("甲")]).toolsHash);
+    assert.notEqual(a.toolsHash, promptParts(input(), [tool("乙")]).toolsHash);
   });
 });

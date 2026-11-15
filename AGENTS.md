@@ -31,5 +31,6 @@ npm run deploy     # 先 check，通过才部署
 - 推到 `main` 会自动部署：Cloudflare Workers Builds 先跑 `npm run check`，通过才 `npx wrangler deploy`（2026-11-15 接通）。结果在 GitHub 提交的检查项里看。`npm run deploy` 仍可手动用。
 - 部署后 Hub 会在两分钟内自己发现版本变了并重启换上（想立刻生效：`POST /admin/restart`）。云电脑对象不一样：机器开着的时候它一直用旧代码，要等机器空闲关机一次（约 90 秒没人用）才换上。
 - 行为改动先在测试房间试：`POST /admin/dry {"room":"x","text":"…"}` 或 `POST /admin/tool`，带真实记忆和设置，不发群。测试画图、发消息一律用 `t:` 房间，不要直接往真群发。
+- 提示词按“越不常变的越靠前”排（人设 → 规矩 → 长期记忆 → 工具说明 → 当天聊天 → 末尾提示）。模型服务商按开头相同的部分给缓存价，命中便宜 50 倍。往系统提示词或工具说明里加任何白天会变的内容（时间、计数、列表、状态）都会让它后面的几万 token 按原价重读；这类内容放到 `buildMessages` 末尾。改完用 `GET /admin/prompt` 看 `toolsHash` 稳不稳、`cached_share` 掉没掉。
 - 改完验证过就合并到 main 并部署，不用再问。
 - 说“已经好了”之前看真实结果：`/admin/turns`、`/admin/toolruns`、`/admin/jobs`、`/admin/recent`。
