@@ -16,6 +16,8 @@ export type Env = {
   RELAY_URL?: string;
   RELAY_KEY?: string;
   PUBLIC_URL?: string;
+  /** The same site through the Hong Kong mirror, for networks that cannot reach workers.dev. */
+  PUBLIC_URL_CN?: string;
   CODE_MODEL?: string;
   OWNERS?: string;
   BROWSER?: any;
