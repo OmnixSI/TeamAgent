@@ -64,6 +64,8 @@ function ensure(hub: Hub) {
   };
   add("task", "size", "TEXT DEFAULT 'normal'"); add("task", "claimed_at", "INTEGER DEFAULT 0"); add("task", "done_at", "INTEGER DEFAULT 0"); add("task", "done_by", "TEXT DEFAULT ''");
   add("task_note", "kind", "TEXT DEFAULT ''");
+  // Tasks finished before finish times were kept: the last change to them was the finishing, so that is their time.
+  try { hub.sql.exec("UPDATE task SET done_at=updated WHERE status='done' AND (done_at IS NULL OR done_at=0)"); } catch (e: any) { console.log("tasks: backfill", e?.message); }
 }
 /** The person behind a name on a task: someone's local AI works for that someone; the bot and the nightly pass are nobody. */
 export function personOfName(name: string): string {

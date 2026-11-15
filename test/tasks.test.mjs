@@ -297,3 +297,11 @@ test2("work picked up or finished outside the chat is told to the group; chat ch
   TK.addTask(hub, "g:1", { title: "另一件事", by: "小红" });
   assert2.equal(said.length, 0, "switched off");
 });
+
+test2("a task finished before finish times were kept gets its last change as the finish time", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:"); db.exec(TK.default.schema);
+  db.prepare("INSERT INTO task(conv,title,status,owner,created,updated,done_at) VALUES('g:1','旧任务','done','小明',1000,5000,0)").run();
+  const hub = { sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA)/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } } };
+  assert2.equal(TK.listTasks(hub, "g:1", { status: ["done"] })[0].done_at, 5000);
+});
