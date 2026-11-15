@@ -96,7 +96,7 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 | `access` | 看板和本地 AI 接口的个人链接：点开即登录，只存令牌的哈希，可作废 | `board_link` |
 | `tasks` | 群里的任务清单：能直接让它记，每晚 02:30（北京）从前一天的聊天里提取承诺和交办，原话对不上的不记 | `tasks` |
 | `board` | 团队看板 `/x/board`：动态、任务、记忆、仓库、作品和文件、监控和额度、工具 | — |
-| `mcp` | 给本地 AI 工具的 MCP 接口 `/x/mcp/<令牌>`：列任务、领取、汇报、交付、查聊天和记忆 | — |
+| `mcp` | 给本地 AI 工具的 MCP 接口 `/x/mcp/<令牌>`：列任务、领取、汇报、交付、查聊天和记忆；Claude Code（`claude mcp add --transport http`）和 Codex（`codex mcp add --url`）都实测过 | — |
 
 ## 技能（`src/skills/`）
 
