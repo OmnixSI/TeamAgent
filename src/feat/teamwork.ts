@@ -199,7 +199,7 @@ const ITEMS: Item[] = [
 export const SHOP_SCHEMA = `
   CREATE TABLE IF NOT EXISTS team_spend(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, who TEXT NOT NULL, item TEXT NOT NULL, name TEXT NOT NULL,
     cost INTEGER NOT NULL, ts INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', note TEXT DEFAULT '', until INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0,
-    balance_after INTEGER, settled_by TEXT NOT NULL DEFAULT '', weekly_at INTEGER NOT NULL DEFAULT 0);
+    balance_after INTEGER, settled_by TEXT NOT NULL DEFAULT '', weekly_at INTEGER NOT NULL DEFAULT 0, request_id TEXT);
   CREATE INDEX IF NOT EXISTS team_spend_who ON team_spend(conv, who, ts);
   CREATE TABLE IF NOT EXISTS team_item(conv TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, cost INTEGER NOT NULL, what TEXT DEFAULT '', made_by TEXT DEFAULT '', ts INTEGER, PRIMARY KEY(conv, key));
   CREATE TABLE IF NOT EXISTS team_star(conv TEXT NOT NULL, week INTEGER NOT NULL, who TEXT NOT NULL, points INTEGER, done INTEGER, cert TEXT DEFAULT '', PRIMARY KEY(conv, week));
@@ -216,9 +216,10 @@ function ensureSpendFields(hub: Hub) {
   if (spendReady.has(hub)) return;
   const columns = q(hub, "PRAGMA table_info(team_spend)").map(c => c.name);
   if (!columns.length) return;
-  for (const [name, type] of [["balance_after", "INTEGER"], ["settled_by", "TEXT NOT NULL DEFAULT ''"], ["weekly_at", "INTEGER NOT NULL DEFAULT 0"]]) {
+  for (const [name, type] of [["balance_after", "INTEGER"], ["settled_by", "TEXT NOT NULL DEFAULT ''"], ["weekly_at", "INTEGER NOT NULL DEFAULT 0"], ["request_id", "TEXT"]]) {
     if (!columns.includes(name)) hub.sql.exec("ALTER TABLE team_spend ADD COLUMN " + name + " " + type);
   }
+  hub.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS team_spend_request ON team_spend(conv,who,request_id) WHERE request_id IS NOT NULL");
   spendReady.add(hub);
 }
 export function canSettleSpend(hub: Hub, conv: string, actor?: { id: string; name: string }) {
@@ -270,20 +271,28 @@ export type Redeemed = { ok: true; spend: Spend; balance: number; do: string } |
  * Trades points for a perk. `via` "chat": the caller is the bot in a conversation and gets back what to do.
  * `via` "board": nobody is talking to the bot, so it is told in a background task and does it in the group.
  */
-export function redeem(hub: Hub, conv: string, who: string, key: string, note = "", via: "chat" | "board" = "chat", now = Date.now()): Redeemed {
+export function redeem(hub: Hub, conv: string, who: string, key: string, note = "", via: "chat" | "board" = "chat", now = Date.now(), requestId?: string): Redeemed {
   const person = personOfName(who);
   if (!person) return { ok: false, error: "不知道是谁要兑换" };
+  const text = clip(String(note || "").trim(), 200);
+  ensureSpendFields(hub);
+  if (requestId) {
+    const replay = q(hub, "SELECT * FROM team_spend WHERE conv=? AND who=? AND request_id=?", conv, person, requestId)[0];
+    if (replay) {
+      const spend = spendOf(replay);
+      if ((spend.item !== key && spend.name !== key) || spend.note !== text) return { ok: false, error: "这条请求已经用于一笔兑换，重新打开表单再换" };
+      return { ok: true, spend, balance: balanceOf(hub, conv, person, now).balance, do: "" };
+    }
+  }
   const item = shop(hub, conv).find(i => i.key === key || i.name === key);
   if (!item) return { ok: false, error: "没有这一项，能换的有：" + shop(hub, conv).map(i => i.name + "（" + i.cost + " 分）").join("、") };
-  const text = clip(String(note || "").trim(), 200);
   if (item.key === "title" && (!text || text.length > 12)) return { ok: false, error: "头衔要给一个名字，12 个字以内" };
   const { balance } = balanceOf(hub, conv, person, now);
   if (balance < item.cost) return { ok: false, error: person + " 现在有 " + balance + " 分，「" + item.name + "」要 " + item.cost + " 分，还差 " + (item.cost - balance) + " 分" };
   const until = item.kind === "timed" ? now + (item.days || 7) * DAY : 0;
   const state = item.kind === "timed" ? "done" : "pending", left = balance - item.cost;
-  ensureSpendFields(hub);
-  const row = spendOf(hub.sql.exec("INSERT INTO team_spend(conv, who, item, name, cost, ts, state, note, until, done_at, balance_after, settled_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *",
-    conv, person, item.key, item.name, item.cost, now, state, text, until, state === "done" ? now : 0, left, state === "done" ? "Bot" : "").toArray()[0]);
+  const row = spendOf(hub.sql.exec("INSERT INTO team_spend(conv, who, item, name, cost, ts, state, note, until, done_at, balance_after, settled_by, request_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING *",
+    conv, person, item.key, item.name, item.cost, now, state, text, until, state === "done" ? now : 0, left, state === "done" ? "Bot" : "", requestId || null).toArray()[0]);
   const todo = honour(item, person, text) + " 兑换记录 #" + row.id + "。" + (state === "pending" ? "在群里说明办理结果；待群主确认兑现，办不成可由群主退分。" : "");
   if (via === "board") {
     const p = (hub as any).runTask?.(conv, todo + "（这是他在看板上兑换的，花了 " + item.cost + " 分，还剩 " + left + " 分。你这一轮只有最后那条回复会发到群里，开头先说一句谁用多少分换了什么。）");
