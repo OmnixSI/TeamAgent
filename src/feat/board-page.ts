@@ -1168,7 +1168,7 @@ function team(root) {
     var mecard = h("div", { class: "mecard", "aria-label": "我的" },
       [[p ? p.points_week : 0, "本周分数"], [p ? p.streak : 0, "连续天数"], [p ? p.doing.length + p.waiting : 0, "手上的任务"], [p ? p.points_total : 0, "总分"]].map(function (x) { return h("div", {}, h("b", { text: String(x[0]) }), h("span", { text: x[1] })); }));
     var left = h("div"), right = h("div");
-    if (!j.people.length || !j.people.some(function (x) { return x.done_total; })) left.appendChild(h("div", { class: "card" }, empty("还没有人做完任务", "做完一件，Bot 会在群里夸你；每周日晚上它会发一份团队周报。")));
+    if (!j.people.length || !j.people.some(function (x) { return x.done_total || x.points_total; })) left.appendChild(h("div", { class: "card" }, empty("还没有人做完任务", "做完一件，Bot 会在群里夸你；每周日晚上它会发一份团队周报。")));
     else {
       var lbc = card("", "排行"), list = h("div");
       var pick = seg([["week", "本周"], ["all", "总榜"]], TM.board, function (v) { TM.board = v; store.set("board", v); drawLb(); });
