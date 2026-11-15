@@ -54,18 +54,40 @@ function mkHub() {
 
 // An in-memory stand-in for tasks.ts. getTask deliberately ignores `conv`, so the board's own check is what is tested.
 function fakeTasks() {
-  const list = [], notes = [], calls = [];
+  const list = [], notes = [], calls = [], refs = [], state = { busy: 0 };
+  const live = t => t.status === "open" || t.status === "doing";
+  const blockers = (hub, conv, t) => (t.after || []).map(id => list.find(x => x.id === id && x.conv === conv)).filter(x => x && live(x));
   const T = {
     listTasks: (hub, conv, f = {}) => { calls.push(["list", conv, f]); return list.filter(t => t.conv === conv && (!f.status || f.status.includes(t.status))).slice(0, f.limit || 999); },
     getTask: (hub, conv, id) => list.find(t => t.id === id) || null,
-    addTask: (hub, conv, t) => { calls.push(["add", conv, t]); const x = { id: list.length + 1, conv, title: t.title, detail: t.detail || "", status: "open", owner: t.owner || "", due: t.due || "", source: t.source || "", by: t.by || "", claimed_by: "", result: "", created: Date.now(), updated: Date.now() }; list.push(x); return x; },
+    addTask: (hub, conv, t) => { calls.push(["add", conv, t]); const x = { id: list.length + 1, conv, title: t.title, detail: t.detail || "", status: "open", owner: t.owner || "", due: t.due || "", source: t.source || "", by: t.by || "", claimed_by: "", result: "", created: Date.now(), updated: Date.now(), priority: t.priority || 2, after: t.after || [], parent: t.parent || 0 }; list.push(x); return x; },
     updateTask: (hub, conv, id, patch, who) => { calls.push(["update", conv, id, patch, who]); const t = list.find(t => t.id === id && t.conv === conv); if (!t) return null; Object.assign(t, patch); return t; },
     claimTask: (hub, conv, id, who) => { calls.push(["claim", conv, id, who]); const t = list.find(t => t.id === id && t.conv === conv); if (!t || t.claimed_by || t.status !== "open") return null; t.claimed_by = who; t.status = "doing"; return t; },
     addTaskNote: (hub, conv, id, who, text) => { calls.push(["note", conv, id, who, text]); notes.push({ id, ts: Date.now(), who, text }); return true; },
     taskNotes: (hub, conv, id) => notes.filter(n => n.id === id).map(({ ts, who, text }) => ({ ts, who, text })),
+    blockers,
+    workOrder: (hub, conv) => { calls.push(["order", conv]); const k = t => [blockers(hub, conv, t).length ? 1 : 0, t.status === "doing" ? 0 : 1, t.priority || 2, t.id];
+      return list.filter(t => t.conv === conv && live(t)).sort((a, b) => { const x = k(a), y = k(b); for (let i = 0; i < 4; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; }).map(task => ({ task, blocked_by: blockers(hub, conv, task).map(b => b.id) })); },
+    checkAfter: (hub, conv, self, ids) => {
+      calls.push(["checkAfter", conv, self, ids]);
+      for (const id of ids) { const seen = new Set(), st = [id]; while (st.length) { const x = st.pop(); if (x === self) return { ids: [], error: "#" + id + " 自己就在等 #" + self + " 做完" }; if (seen.has(x)) continue; seen.add(x); st.push(...(list.find(t => t.id === x)?.after || [])); } }
+      return { ids };
+    },
+    botBusy: (hub, conv) => state.busy && list.find(t => t.id === state.busy && t.conv === conv) ? state.busy : 0,
+    taskRefs: (hub, conv, id) => refs.filter(r => r.task === id && r.conv === conv).map(({ conv, ...r }) => r),
+    addTaskRef: (hub, conv, id, r) => { calls.push(["ref", conv, id, r]); if (refs.length >= 3) return null; const x = { id: refs.length + 1, task: id, conv, ts: Date.now(), who: r.who || "", kind: r.kind, title: r.title || "", ref: r.ref || "", text: r.text || "" }; refs.push(x); const { conv: _c, ...o } = x; return o; },
+    removeTaskRef: (hub, conv, id, rid, who) => { calls.push(["unref", conv, id, rid, who]); const i = refs.findIndex(r => r.id === rid && r.task === id && r.conv === conv); if (i < 0) return false; refs.splice(i, 1); return true; },
+    handoff: (hub, conv, id) => {
+      const t = list.find(x => x.id === id && x.conv === conv); if (!t) return null;
+      const par = list.find(x => x.id === t.parent && x.conv === conv);
+      return { task: t, materials: T.taskRefs(hub, conv, id).concat(par ? T.taskRefs(hub, conv, par.id).map(r => ({ ...r, from: par.id })) : []),
+        waits_for: (t.after || []).map(x => list.find(y => y.id === x)).filter(Boolean).map(x => ({ id: x.id, title: x.title, status: x.status, owner: x.claimed_by || x.owner, result: x.result })),
+        blocked_by: blockers(hub, conv, t).map(b => b.id), parent: par ? { id: par.id, title: par.title, status: par.status, result: par.result } : null,
+        children: list.filter(x => x.parent === id && x.conv === conv).map(x => ({ id: x.id, title: x.title, status: x.status, owner: x.claimed_by || x.owner })), notes: [] };
+    },
   };
   Object.assign(taskApi, T);
-  return { list, calls };
+  return { list, calls, refs, state };
 }
 
 const H = "https://bot.example";
@@ -245,11 +267,11 @@ describe("tasks", () => {
   test("add, list, edit, claim, note: through the contract, under the visitor's name", async () => {
     let { r, j } = await post("/x/board/api/tasks", { title: "  写周报 ", detail: "按模板", owner: "小红", due: "2026-11-20" });
     assert.equal(r.status, 200); assert.equal(j.task.title, "写周报");
-    assert.deepEqual(tk.calls.at(-1), ["add", "g:a", { title: "写周报", detail: "按模板", owner: "小红", due: "2026-11-20", source: "看板", by: "小明" }]);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "add"), ["add", "g:a", { title: "写周报", detail: "按模板", owner: "小红", due: "2026-11-20", source: "看板", by: "小明" }]);
     ({ j } = await get("/x/board/api/tasks"));
-    assert.equal(j.tasks.length, 1); assert.deepEqual(tk.calls.at(-1)[2].status, ["open", "doing"]);
+    assert.equal(j.tasks.length, 1); assert.ok(tk.calls.some(c => c[0] === "order" && c[1] === "g:a"));
     ({ j } = await get("/x/board/api/tasks/1"));
-    assert.equal(j.prompt, "用 teamagent 的 claim_task 领取任务 #1，做完用 complete_task 交付");
+    assert.equal(j.prompt, "用 teamagent 的 get_task 读任务 #1 的全部交接材料（原话、报告、前置任务的结果），再用 claim_task 领取；做的过程中用 report_progress 记进展，产出的报告和链接用 attach_material 挂到任务上，做完用 complete_task 交付；自己做不了的部分用 add_task（parent 填 1）拆出来并写清原因");
     ({ j } = await post("/x/board/api/tasks/1/claim", {}));
     assert.equal(j.task.status, "doing"); assert.equal(j.task.claimed_by, "小明");
     assert.equal((await post("/x/board/api/tasks/1/claim", {})).r.status, 409);
@@ -257,7 +279,7 @@ describe("tasks", () => {
     assert.deepEqual(j.notes.map(n => [n.who, n.text]), [["小明", "写了一半"]]);
     ({ j } = await post("/x/board/api/tasks/1", { status: "done", result: "发群里了" }));
     assert.equal(j.task.status, "done");
-    assert.deepEqual(tk.calls.at(-1), ["update", "g:a", 1, { result: "发群里了", status: "done" }, "小明"]);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "update"), ["update", "g:a", 1, { result: "发群里了", status: "done" }, "小明"]);
     ({ j } = await get("/x/board/api/tasks?status=done,dropped"));
     assert.equal(j.tasks.length, 1);
   });
@@ -277,6 +299,122 @@ describe("tasks", () => {
     assert.equal(tk.calls.length, n);
     assert.equal((await get("/x/board/api/tasks", B)).j.tasks.length, 0);
     assert.equal(tk.list[0].status, "open");
+  });
+});
+
+describe("work order, priority, prerequisites and hand-off materials", () => {
+  const seed = async () => {
+    await post("/x/board/api/tasks", { title: "调研竞品" });                         // 1
+    await post("/x/board/api/tasks", { title: "写方案", after: [1] });               // 2, waits for 1
+    await post("/x/board/api/tasks", { title: "订会议室", priority: "high" });       // 3, urgent
+    await post("/x/board/api/tasks", { title: "整理桌面", priority: 3 });            // 4, can wait
+    Object.assign(tk.list[0], { status: "doing", claimed_by: "bot" }); tk.state.busy = 1;
+    tk.list.push({ id: 5, conv: "g:a", title: "找人问价格", detail: "", status: "open", owner: "小红", due: "", source: "", by: "bot", claimed_by: "", result: "", created: 1, updated: 1, priority: 2, after: [], parent: 1 });
+  };
+  test("creating with priority and prerequisites goes through the contract; bad ones are refused", async () => {
+    let { r, j } = await post("/x/board/api/tasks", { title: "a", priority: "high", after: "" });
+    assert.equal(r.status, 200); assert.equal(j.task.priority, 1);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "add")[2], { title: "a", detail: "", owner: "", due: "", source: "看板", by: "小明", priority: 1 });
+    ({ j } = await post("/x/board/api/tasks", { title: "b", after: [1] }));
+    assert.deepEqual(j.task.after, [1]); assert.deepEqual(j.task.blocked_by, [{ id: 1, title: "a", status: "open", who: "" }]);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "add")[2].after, [1]);
+    for (const b of [{ title: "c", priority: "very" }, { title: "c", after: { x: 1 } }, { title: "c", after: [99] }]) {
+      ({ r, j } = await post("/x/board/api/tasks", b));
+      assert.equal(r.status, 400, JSON.stringify(b)); assert.ok(j.error);
+    }
+    assert.match((await post("/x/board/api/tasks", { title: "c", after: [99] })).j.error, /没有编号 99 的任务/);
+    assert.equal(tk.list.length, 2);
+  });
+  test("the list comes in work order with the new fields; the bot's own task is marked", async () => {
+    await seed();
+    const { j } = await get("/x/board/api/tasks");
+    assert.deepEqual(j.tasks.map(t => t.id), [1, 3, 5, 4, 2]);
+    assert.deepEqual(j.tasks.map(t => t.rank), [1, 2, 3, 4, 5]);
+    assert.equal(j.bot_busy, 1);
+    const by = id => j.tasks.find(t => t.id === id);
+    assert.equal(by(1).bot_working, true); assert.equal(by(3).bot_working, false);
+    assert.equal(by(3).priority, 1); assert.equal(by(4).priority, 3);
+    assert.deepEqual(by(2).after, [1]); assert.deepEqual(by(2).blocked_by, [{ id: 1, title: "调研竞品", status: "doing", who: "bot" }]);
+    assert.equal(by(5).parent, 1); assert.equal(by(1).child_count, 1); assert.equal(by(1).material_count, 0);
+    const ov = (await get("/x/board/api/overview")).j;
+    assert.deepEqual(ov.tasks.list.map(t => t.id), [1, 3, 5, 4, 2]); assert.equal(ov.tasks.bot_busy, 1);
+    tk.list[0].status = "done";
+    const after = (await get("/x/board/api/tasks?status=open,doing,done")).j.tasks;
+    assert.deepEqual(after.map(t => t.id), [3, 2, 5, 4, 1]); assert.deepEqual(after.find(t => t.id === 2).blocked_by, []);
+  });
+  test("detail carries the whole hand-off package", async () => {
+    await seed();
+    tk.refs.push({ id: 1, task: 1, conv: "g:a", ts: 5, who: "bot", kind: "quote", title: "群里的原话", ref: "", text: "[11-16 10:00] 小明：帮我调研一下竞品\n<b>不是标签</b>" });
+    tk.refs.push({ id: 2, task: 1, conv: "g:a", ts: 6, who: "bot", kind: "report", title: "竞品报告", ref: "", text: "一、价格\n二、功能" });
+    tk.refs.push({ id: 3, task: 5, conv: "g:a", ts: 7, who: "bot", kind: "file", title: "价目表", ref: "x12", text: "" });
+    let { j } = await get("/x/board/api/tasks/5");
+    assert.deepEqual(j.handoff.materials.map(m => [m.id, m.kind, m.from, m.url]), [[3, "file", 0, "/x/board/box/12"], [1, "quote", 1, ""], [2, "report", 1, ""]]);
+    assert.equal(j.handoff.materials[1].text, "[11-16 10:00] 小明：帮我调研一下竞品\n<b>不是标签</b>");
+    assert.equal(j.handoff.materials[1].label, "原话");
+    assert.deepEqual(j.handoff.parent, { id: 1, title: "调研竞品", status: "doing", result: "" });
+    assert.match(j.prompt, /get_task 读任务 #5 .*parent 填 5/);
+    ({ j } = await get("/x/board/api/tasks/1"));
+    assert.deepEqual(j.handoff.children, [{ id: 5, title: "找人问价格", status: "open", owner: "小红" }]);
+    assert.equal(j.task.material_count, 2); assert.equal(j.task.bot_working, true);
+    ({ j } = await get("/x/board/api/tasks/2"));
+    assert.deepEqual(j.handoff.waits_for, [{ id: 1, title: "调研竞品", status: "doing", owner: "bot", result: "" }]); assert.deepEqual(j.handoff.blocked_by, [1]);
+  });
+  test("priority and prerequisites change; a loop is refused with the sentence from checkAfter", async () => {
+    await seed();
+    let { r, j } = await post("/x/board/api/tasks/4", { priority: "high" });
+    assert.equal(r.status, 200); assert.equal(j.task.priority, 1);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "update"), ["update", "g:a", 4, { priority: 1 }, "小明"]);
+    ({ j } = await post("/x/board/api/tasks/4", { after: [3, 2] }));
+    assert.deepEqual(j.task.after, [3, 2]); assert.deepEqual(j.task.blocked_by.map(b => b.id), [3, 2]);
+    ({ j } = await post("/x/board/api/tasks/4", { after: [] }));
+    assert.deepEqual(j.task.after, []); assert.deepEqual(j.task.blocked_by, []);
+    const n = tk.calls.filter(c => c[0] === "update").length;
+    ({ r, j } = await post("/x/board/api/tasks/1", { after: [2] }));   // 2 already waits for 1
+    assert.equal(r.status, 400); assert.equal(j.error, "#2 自己就在等 #1 做完");
+    assert.equal((await post("/x/board/api/tasks/1", { after: [42] })).r.status, 400);
+    assert.equal((await post("/x/board/api/tasks/1", { priority: 0 })).r.status, 400);
+    assert.equal(tk.calls.filter(c => c[0] === "update").length, n);
+    assert.deepEqual(tk.list[0].after, []);
+  });
+  test("materials: a link, a file number, a pasted report; bad ones refused; removing, but never the original words", async () => {
+    await seed();
+    let { r, j } = await post("/x/board/api/tasks/1/material", { ref: "https://example.com/a?b=1", title: "参考" });
+    assert.equal(r.status, 200); assert.deepEqual([j.material.kind, j.material.url, j.material.who], ["link", "https://example.com/a?b=1", "小明"]);
+    ({ j } = await post("/x/board/api/tasks/1/material", { ref: "G300" }));
+    assert.deepEqual([j.material.kind, j.material.ref, j.material.url], ["file", "g300", "/x/board/img/300"]);
+    const long = "第一段\n" + "报".repeat(39000);
+    ({ r, j } = await post("/x/board/api/tasks/1/material", { kind: "report", title: "调研报告", text: long }));
+    assert.equal(r.status, 200); assert.equal(j.material.text, long); assert.equal(j.materials.length, 3);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "ref"), ["ref", "g:a", 1, { kind: "report", title: "调研报告", ref: "", text: long, who: "小明" }]);
+    assert.equal((await post("/x/board/api/tasks/1/material", { ref: "https://x.example" })).r.status, 409);   // the stand-in holds three
+    for (const b of [{ ref: "javascript:alert(1)" }, { ref: "" }, { kind: "report", text: "  " }, { kind: "quote", text: "假原话" }, { ref: "ftp://x" }])
+      assert.equal((await post("/x/board/api/tasks/1/material", b)).r.status, 400, JSON.stringify(b));
+    ({ r, j } = await post("/x/board/api/tasks/1/material/1/remove", {}));
+    assert.equal(r.status, 200); assert.deepEqual(j.materials.map(m => m.id), [2, 3]);
+    assert.deepEqual(tk.calls.findLast(c => c[0] === "unref"), ["unref", "g:a", 1, 1, "小明"]);
+    assert.equal((await post("/x/board/api/tasks/1/material/1/remove", {})).r.status, 404);
+    tk.refs.push({ id: 9, task: 1, conv: "g:a", ts: 5, who: "bot", kind: "quote", title: "群里的原话", ref: "", text: "原话" });
+    ({ r, j } = await post("/x/board/api/tasks/1/material/9/remove", {}));
+    assert.equal(r.status, 400); assert.match(j.error, /原话/); assert.ok(tk.refs.some(x => x.id === 9));
+    assert.equal((await post("/x/board/api/tasks/1/material", { text: "长".repeat(210 * 1024) })).r.status, 413);
+  });
+  test("another conversation can neither read nor change any of it", async () => {
+    await seed();
+    tk.refs.push({ id: 1, task: 1, conv: "g:a", ts: 5, who: "bot", kind: "report", title: "竞品报告", ref: "", text: "机密" });
+    const mark = tk.calls.length;
+    assert.equal((await get("/x/board/api/tasks/1", B)).r.status, 404);
+    for (const [p, b] of [["/x/board/api/tasks/1", { priority: 1 }], ["/x/board/api/tasks/2", { after: [] }], ["/x/board/api/tasks/1/material", { ref: "https://x.example" }], ["/x/board/api/tasks/1/material/1/remove", {}]])
+      assert.equal((await post(p, b, { token: B })).r.status, 404, p);
+    assert.equal(tk.calls.filter((c, i) => i >= mark && ["update", "ref", "unref", "checkAfter"].includes(c[0])).length, 0);
+    // A's task numbers cannot be used as prerequisites over there either
+    await post("/x/board/api/tasks", { title: "B 的事" }, { token: B });
+    let { r, j } = await post("/x/board/api/tasks", { title: "B 的第二件", after: [1] }, { token: B });
+    assert.equal(r.status, 400); assert.match(j.error, /没有编号 1/);
+    ({ r } = await post("/x/board/api/tasks/6", { after: [2] }, { token: B }));
+    assert.equal(r.status, 400);
+    ({ j } = await get("/x/board/api/tasks", B));
+    assert.deepEqual(j.tasks.map(t => t.title), ["B 的事"]); assert.equal(j.bot_busy, 0); assert.equal(j.tasks[0].bot_working, false);
+    assert.equal(tk.refs.length, 1); assert.deepEqual(tk.list[1].after, [1]); assert.equal(tk.list[0].priority, 2);
   });
 });
 
@@ -349,7 +487,7 @@ describe("teamwork endpoints over the real task module", () => {
     hub.db.exec((await import("../src/feat/teamwork.ts")).SHOP_SCHEMA);
     hub.say = () => {};
     hub.tasksRun = []; hub.runTask = (conv, text) => { hub.tasksRun.push([conv, text]); return Promise.resolve(); };
-    Object.assign(taskApi, { listTasks: T.listTasks, getTask: T.getTask, addTask: T.addTask, updateTask: T.updateTask, claimTask: T.claimTask, addTaskNote: T.addTaskNote, taskNotes: T.taskNotes });
+    for (const k of Object.keys(taskApi)) taskApi[k] = T[k];
   });
   test("size, claim and finish show up in tasks, team, events and the timeline", async () => {
     let { j } = await post("/x/board/api/tasks", { title: "大事", size: "big" });
@@ -369,6 +507,35 @@ describe("teamwork endpoints over the real task module", () => {
     assert.equal(j.points, 30); assert.equal(j.done_by, "小明"); assert.ok(j.steps.some(s => s.kind === "done"));
     ({ j } = await get("/x/board/api/overview"));
     assert.equal(j.team.mvp, "小明");
+  });
+  test("the real module: work order, a refused loop, inherited materials, the bot at work", async () => {
+    await post("/x/board/api/tasks", { title: "调研竞品" });
+    await post("/x/board/api/tasks", { title: "写方案", after: "1" });
+    await post("/x/board/api/tasks", { title: "订会议室", priority: "high" });
+    let { r, j } = await post("/x/board/api/tasks/1", { after: [2] });
+    assert.equal(r.status, 400); assert.equal(j.error, "#2 自己就在等 #1 做完，这样排两件事会互相等");
+    assert.equal((await post("/x/board/api/tasks/3", { after: [3] })).j.error, "任务不能排在自己后面");
+    const T = await import("../src/feat/tasks.ts");
+    T.claimTask(hub, "g:a", 1, "bot", true); hub.set("tasks:bot:running:g:a", "1");
+    T.addTaskRef(hub, "g:a", 1, { kind: "quote", text: "[10:00] 小明：查一下竞品\n<script>x</script>", who: "bot" });
+    T.addTask(hub, "g:a", { title: "找人问价格", owner: "小红", parent: 1, by: "bot" }, true);
+    ({ j } = await post("/x/board/api/tasks/1/material", { kind: "report", title: "竞品报告", text: "一、价格" }));
+    assert.equal(j.material.who, "小明");
+    ({ j } = await get("/x/board/api/tasks"));
+    assert.deepEqual(j.tasks.map(t => t.title), ["调研竞品", "订会议室", "找人问价格", "写方案"]);
+    assert.equal(j.bot_busy, 1); assert.equal(j.tasks[0].bot_working, true); assert.equal(j.tasks[0].child_count, 1); assert.equal(j.tasks[0].material_count, 2);
+    assert.deepEqual(j.tasks[3].blocked_by, [{ id: 1, title: "调研竞品", status: "doing", who: "bot" }]);
+    ({ j } = await get("/x/board/api/tasks/4"));
+    assert.deepEqual(j.handoff.materials.map(m => [m.kind, m.from]), [["quote", 1], ["report", 1]]);
+    assert.equal(j.handoff.materials[0].text, "[10:00] 小明：查一下竞品\n<script>x</script>");
+    assert.equal(j.handoff.parent.title, "调研竞品"); assert.equal(j.task.parent, 1);
+    ({ j } = await post("/x/board/api/tasks/4", { priority: "low", after: [3] }));
+    assert.equal(j.task.priority, 3); assert.deepEqual(j.task.after, [3]);
+    assert.ok(T.taskNotes(hub, "g:a", 4).some(n => n.who === "小明" && /排在 #3 之后/.test(n.text)));
+    ({ j } = await get("/x/board/api/tasks/1", B));
+    assert.equal(j.ok, false);
+    assert.equal((await post("/x/board/api/tasks/1/material", { ref: "https://x.example" }, { token: B })).r.status, 404);
+    assert.equal(T.taskRefs(hub, "g:a", 1).length, 2);
   });
   test("another conversation sees none of it", async () => {
     await post("/x/board/api/tasks", { title: "秘密" });
