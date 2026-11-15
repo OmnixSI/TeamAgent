@@ -401,7 +401,7 @@ test("the tool: the asker's own words are stored verbatim; start, attach, split 
 });
 
 test("the bot works on its own tasks: picks the next one, shows it as under way, runs it, and says what happened when it is not finished", async () => {
-  const hub = mkHub({ tasks_bot_daily: 2 });
+  const hub = mkHub({ tasks_bot_daily: 2, tasks_bot_auto: "on" });
   const runs = [];
   hub.jobs = new Map();
   hub.runTask = async (conv, brief) => { runs.push({ conv, brief }); hub.jobs.set(99, { conv }); try { hub.onRun?.(conv); } finally { hub.jobs.delete(99); } return true; };
