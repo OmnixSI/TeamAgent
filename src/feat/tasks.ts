@@ -123,7 +123,9 @@ export const hooks: {
   done: null | ((hub: Hub, conv: string, task: Task, who: string, quiet: boolean) => void);
   /** Facts worth saying when a task was finished in the chat: the person's tally, streak, new badges. */
   facts: null | ((hub: Hub, conv: string, task: Task) => any);
-} = { done: null, facts: null };
+  /** A task finished, was dropped, or was released: anything attached to it (a bounty) settles or returns here. */
+  status: null | ((hub: Hub, conv: string, task: Task, to: TaskStatus | "release", who: string, quiet: boolean) => void);
+} = { done: null, facts: null, status: null };
 
 /** "2026-11-20", "11-20", "11月20日", "今天/明天/后天" → "YYYY-MM-DD"; anything else → "". */
 export function normDue(s: unknown, now = Date.now()): string {
@@ -245,8 +247,9 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
     if (!ok.error && ok.ids.join(",") !== cur.after.join(",")) { next.after = ok.ids.join(","); lines.push([ok.ids.length ? "排在 " + ok.ids.map(x => "#" + x).join("、") + " 之后" : "不用等别的任务了", "edit"]); }
   }
   const now = Date.now();
-  if (patch.status !== undefined && STATUSES.includes(patch.status) && patch.status !== cur.status) {
-    const to = patch.status;
+  const changed = patch.status !== undefined && STATUSES.includes(patch.status) && patch.status !== cur.status ? patch.status : null;
+  if (changed) {
+    const to = changed;
     set("status", to, "状态：" + LABEL[cur.status] + " → " + LABEL[to], to === "done" ? "done" : to === "dropped" ? "drop" : cur.status === "done" || cur.status === "dropped" ? "reopen" : to === "doing" ? "claim" : "release");
     // Work the bot did itself is nobody's score, whoever asked for it or ticked it off.
     const bots = isBot(cur.claimed_by) || (!cur.claimed_by && isBot(cur.owner));
@@ -269,7 +272,11 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
     else if (next.status === "open" && cur.claimed_by) tell(hub, conv, cur.claimed_by + " 放下了 " + named(after) + "，谁有空可以接");
     else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
   }
-  if (after && next.status === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
+  if (after && changed && hooks.status) {
+    const to = changed === "open" && cur.claimed_by ? "release" : changed;
+    try { hooks.status(hub, conv, after, to, who, quiet); } catch (e: any) { console.log("tasks: status hook failed", e?.message); }
+  }
+  if (after && changed === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
   if (after && (next.status === "done" || next.status === "dropped")) {
     // Whatever was waiting for this one can start; the bot's own waiting tasks get their tries back and are picked up by themselves.
     const free = unblockedBy(hub, conv, after.id);
