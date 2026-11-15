@@ -37,6 +37,9 @@ const I: Record<string, string> = {
   star: '<path d="m12 3.8 2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z"/>',
   bolt: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>',
   team: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9.5" r="2.5"/><path d="M15.5 14.6a4.5 4.5 0 0 1 5 4.9"/>',
+  wall: '<path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4v1.5A3.5 3.5 0 0 0 7.5 11M17 6h3v1.5a3.5 3.5 0 0 1-3.5 3.5M12 14v3.5M8.5 20.5h7M9.5 17.5h5"/>',
+  medal: '<circle cx="12" cy="15" r="5"/><path d="m8.6 11-3.1-7.5h4L12 9.5l2.5-6h4L15.4 11"/>',
+  shop: '<rect x="3.5" y="8.5" width="17" height="4" rx="1"/><path d="M5 12.5v8h14v-8M12 8.5v12M12 8.5c-1.5-3.5-5.5-4-5.5-1.5S10 8.5 12 8.5zm0 0c1.5-3.5 5.5-4 5.5-1.5S14 8.5 12 8.5z"/>',
   globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.5 3.5 5.5 3.5 8.5s-1 6-3.5 8.5c-2.5-2.5-3.5-5.5-3.5-8.5s1-6 3.5-8.5z"/>',
 };
 const ATTR = 'class="ic" viewBox="0 0 24 24" aria-hidden="true"';
@@ -44,7 +47,7 @@ const svg = (name: string) => "<svg " + ATTR + '><use href="#i-' + name + '"/></
 const SPRITE = '<svg class="vh" aria-hidden="true">' + Object.keys(I).map(k => '<symbol id="i-' + k + '" viewBox="0 0 24 24">' + I[k] + "</symbol>").join("") + "</svg>";
 
 // [hash, label, short label for the rail and the tab bar]
-const NAV: [string, string, string][] = [["home", "概览", "概览"], ["tasks", "任务", "任务"], ["team", "战绩", "战绩"], ["feed", "动态", "动态"], ["works", "作品和文件", "作品"],
+const NAV: [string, string, string][] = [["home", "概览", "概览"], ["tasks", "任务", "任务"], ["team", "战绩", "战绩"], ["wall", "功勋墙", "功勋"], ["feed", "动态", "动态"], ["works", "作品和文件", "作品"],
   ["repos", "仓库", "仓库"], ["memory", "记忆", "记忆"], ["watch", "监控和额度", "监控"], ["tools", "工具", "工具"]];
 const TABBAR = ["home", "tasks", "team", "feed"];
 const FAVICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAZklEQVR42u3XuwkAIAwE0CzkQo7g/r32RgIJ+YEXsFK4V6lHJMxYc3ss0oxXqAkTHS4issKfiOxwhvgbIB24x2OPIQAAAIAIgOouAAAAK8DtQQIAgHIA/oQtAOXFpEU1a1FOK+r5AcjYXCnJczmbAAAAAElFTkSuQmCC";
@@ -61,12 +64,12 @@ ${SPRITE}<template id="ic"><svg ${ATTR}><use href=""/></svg></template>
 <nav class="side" aria-label="分区">
 <div class="brand">${svg("tasks")}<span>看板</span></div>
 <div class="links">${NAV.map(navLink).join("")}</div>
-<div class="foot"><a class="me" href="#team"><span class="av" id="av" aria-hidden="true"></span><span class="who"><b id="who"></b><span id="mine" class="mine"></span></span></a>
+<div class="foot"><a class="me" href="#shop" title="我的积分和兑换"><span class="av" id="av" aria-hidden="true"></span><span class="who"><b id="who"></b><span id="mine" class="mine"></span></span></a>
 <button type="button" id="help" class="ib" aria-label="快捷键" aria-haspopup="dialog">${svg("help")}</button><button type="button" id="logout" class="ib" aria-label="退出" title="退出">${svg("logout")}</button></div>
 </nav>
 <div class="content">
 <header class="bar"><h1 id="title">概览</h1><span id="stamp" class="stamp"></span><button type="button" id="refresh" class="ib" aria-label="刷新" title="刷新（R）">${svg("refresh")}</button></header>
-<main id="main">${NAV.map(n => `<section id="s-${n[0]}" class="sec" hidden aria-label="${n[1]}"><div class="body"></div></section>`).join("")}
+<main id="main">${NAV.concat([["shop", "兑换", "兑换"]]).map(n => `<section id="s-${n[0]}" class="sec" hidden aria-label="${n[1]}"><div class="body"></div></section>`).join("")}
 <noscript><p class="empty">看板需要开启 JavaScript。</p></noscript></main>
 </div>
 <nav class="tabbar" aria-label="主要分区">${NAV.filter(n => TABBAR.includes(n[0])).map(navLink).join("")}<button type="button" id="more-btn" aria-expanded="false" aria-controls="more">${svg("more")}<span class="s">更多</span></button></nav>
@@ -613,6 +616,75 @@ pre.tail{font-family:var(--mono);font-size:12px;background:var(--sunk);border-ra
 .ev.done .k{background:var(--ok);color:var(--surface)}
 .ev.done b{color:var(--ok)}
 
+/* ---- wall and shop ---- */
+.cols2{display:grid;grid-template-columns:minmax(0,1fr);gap:0 24px}
+@media (min-width:1100px){.cols2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+a.plain{color:var(--fg)}a.plain:hover{text-decoration:none}a.plain:hover .rec{border-color:var(--line2)}
+.who-n{display:inline-flex;align-items:center;gap:2px;min-width:0}
+.ttl{display:inline-block;font-size:12px;font-weight:600;color:var(--warn);background:var(--warn-soft);border-radius:4px;padding:1px 6px;margin-left:6px;white-space:nowrap;vertical-align:1px}
+.wall{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+.hero{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+@media (min-width:900px){.hero{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}}
+.starcard{display:flex;gap:18px;align-items:center;border:1px solid var(--warn);background:var(--warn-soft)}
+@media (min-width:900px){.starcard{flex-direction:column;justify-content:center;text-align:center;gap:10px}.starcard .big-star{width:84px;height:84px}.starcard .big-star .ic{width:44px;height:44px}.starcard .n{font-size:30px}}
+.starcard .big-star{flex:none;width:64px;height:64px;border-radius:50%;background:var(--warn);color:var(--surface);display:flex;align-items:center;justify-content:center}
+.starcard .big-star .ic{width:34px;height:34px;fill:currentColor;stroke-width:1}
+.starcard .k{font-size:13px;font-weight:650;color:var(--warn)}
+.starcard .n{font-size:24px;font-weight:700;line-height:1.3;margin:2px 0}
+.roll li{display:flex;align-items:center;gap:10px;font-size:14px}
+.roll li .w{flex:1;min-width:0}
+.trophies{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:14px}
+.trophy{position:relative;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--warn);border-radius:var(--r);padding:16px 18px 14px;color:var(--fg);display:block;min-width:0}
+.trophy:hover{text-decoration:none;border-color:var(--warn)}
+.trophy .ic{position:absolute;right:14px;top:14px;color:var(--warn);width:26px;height:26px}
+.trophy h3{font-size:17px;font-weight:700;line-height:1.4;margin:6px 34px 10px 0;overflow-wrap:anywhere}
+.trophy .by{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.trophy .meta{display:block;margin-top:6px}
+.records{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.rec{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px}
+.rec>span:first-child{display:block;font-size:13px;color:var(--mute)}
+.rec b{display:block;font-size:22px;font-weight:650;line-height:1.3;font-variant-numeric:tabular-nums}
+.rec .who{font-size:13px;display:flex;align-items:center;gap:6px;margin-top:4px}
+.cabinet{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:12px}
+@media (max-width:699px){.cabinet{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.medal{flex-direction:column;gap:6px;padding:10px 12px}.medal .m{width:32px;height:32px}.medal .m .ic{width:18px;height:18px}.medal.got{grid-column:1/-1;flex-direction:row}.records{gap:8px}.rec b{font-size:19px}}
+.medal{display:flex;align-items:flex-start;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;min-width:0}
+.medal .m{flex:none;width:40px;height:40px;border-radius:50%;background:var(--acc-soft);color:var(--acc);display:flex;align-items:center;justify-content:center}
+.medal.open{background:none;border-style:dashed;border-color:var(--line2)}
+.medal.open .m{background:var(--sunk);color:var(--mute)}
+.medal b{display:block;font-weight:650}
+.medal .meta{display:block}
+.holders{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:6px;font-size:13px}
+.holders span{display:inline-flex;align-items:center;gap:4px}
+.latest{display:flex;align-items:center;gap:8px;margin-top:12px;padding:8px 10px;border-radius:8px;background:var(--warn-soft);color:var(--fg);font-size:13.5px}
+.latest .ic{color:var(--warn);width:18px;height:18px}
+.latest>span{flex:1;min-width:0}
+.mybal{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:13.5px;color:var(--mute)}
+.mybal b{color:var(--fg)}
+.mybal .go{display:inline-flex;align-items:center;margin-left:auto;white-space:nowrap}.mybal .go .ic{width:16px;height:16px}
+.wallet{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:20px}
+.wallet>div{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px}
+.wallet>div.left{border-color:var(--acc);background:var(--acc-soft)}
+.wallet b{display:block;font-size:26px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.3}
+.wallet span{font-size:13px;color:var(--mute)}
+.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:14px}
+.item{display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-width:0}
+.item .top{display:flex;align-items:baseline;gap:8px}
+.item h3{flex:1;font-size:16px;font-weight:650;margin:0}
+.item .cost{font-size:18px;font-weight:700;color:var(--acc);white-space:nowrap;font-variant-numeric:tabular-nums}
+.item .cost small{font-size:12px;font-weight:400;color:var(--mute)}
+.item p{font-size:13.5px;color:var(--mute);flex:1}
+.item .foot2{display:flex;align-items:center;gap:8px;margin-top:6px}
+.item .foot2 .meta{flex:1}
+.short{font-size:13px;color:var(--mute);text-align:right;white-space:nowrap}
+.short .meter{width:90px;margin-top:4px}
+.item.cant{background:var(--bg)}
+.spl2 .frow{grid-template-columns:minmax(0,1fr) auto}
+.done-box{text-align:center;padding:18px 0 6px}
+.done-box .m{width:56px;height:56px;border-radius:50%;background:var(--ok);color:var(--surface);display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px}
+.done-box .m .ic{width:30px;height:30px;stroke-width:2.4}
+.done-box h2{margin:0 0 6px!important}
+@media (max-width:699px){.wallet b{font-size:22px}.wallet{gap:8px}.wallet>div{padding:10px 12px}.starcard .n{font-size:20px}}
+
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 `);
 
@@ -863,7 +935,7 @@ function taskRow(t) {
 function home(root) {
   return api("overview").then(function (j) {
     var c = j.tasks.counts, list = j.tasks.list;
-    var who = whoCard(j.team), pulse = pulseCard(j.team, c);
+    var who = whoCard(j.team), pulse = pulseCard(j.team, c, j.me, j.latest);
 
     var tk = card("c-tasks", "我的任务", "#tasks", "全部任务");
     var mine = list.filter(isMine).sort(function (a, b) { return (a.status === "doing" ? 0 : 1) - (b.status === "doing" ? 0 : 1) || byDue(a, b); });
@@ -921,6 +993,7 @@ function home(root) {
     swap(root, h("div", { class: "ov" }, who, pulse, tk.el, dy.el, rp.el, pc.el, mo.el, pl.el, sp.el));
   });
 }
+function titled(name, title) { return [name, title ? h("span", { class: "ttl", title: "用积分换的头衔", text: title }) : null]; }
 function starMark(on) { return on ? h("span", { class: "star", title: "本周之星：这周分数最高" }, icon("star"), "本周之星") : null; }
 function sizeTag(sz) { return sz === "big" ? h("span", { class: "sz big", text: "大活" }) : sz === "small" ? h("span", { class: "sz", text: "小事" }) : null; }
 function whoCard(team) {
@@ -929,7 +1002,7 @@ function whoCard(team) {
   if (!ps.length) { c.b.appendChild(empty("还没有人接过任务", "在任务页点“我来做”，这里就会显示谁在忙什么。")); return c.el; }
   var grid = h("div", { class: "people" });
   ps.forEach(function (p) {
-    var col = h("div", { class: "pcol" + (p.doing.length ? "" : " free") }, h("div", { class: "pname" }, avatar(p.name), h("span", { text: p.name + (p.name === me.name ? "（我）" : "") }), starMark(team.mvp === p.name)));
+    var col = h("div", { class: "pcol" + (p.doing.length ? "" : " free") }, h("div", { class: "pname" }, avatar(p.name), h("span", {}, titled(p.name + (p.name === me.name ? "（我）" : ""), p.title)), starMark(team.mvp === p.name)));
     if (!p.doing.length) col.appendChild(h("p", { class: "freet", text: "空闲" + (p.waiting ? "，有 " + p.waiting + " 件等着开始" : "") }));
     p.doing.forEach(function (d) {
       col.appendChild(h("a", { class: "on", href: "#tasks/" + d.id }, h("span", { class: "tt" }, sizeTag(d.size), d.size === "normal" ? null : " ", d.title),
@@ -948,7 +1021,7 @@ function weekBars(by) {
     return h("span", { class: i === td ? "td" : "" }, n ? String(n) : "", b, "一二三四五六日".charAt(i));
   }));
 }
-function pulseCard(team, c) {
+function pulseCard(team, c, mineNow, latest) {
   var k = card("c-pulse", "这周", "#team", "排行");
   if (!team) { k.b.appendChild(empty("战绩暂时读不到")); return k.el; }
   var w = team.week;
@@ -959,6 +1032,9 @@ function pulseCard(team, c) {
   var top = team.people.filter(function (p) { return p.points_week; }).slice(0, 3), max = top.length ? top[0].points_week : 1;
   if (top.length) k.b.appendChild(h("div", { class: "wk" }, top.map(function (p) { return h("div", { class: "spl" }, h("span", { class: "w", text: p.name }), meter(p.points_week / max * 100), h("span", { class: "num meta", text: p.points_week + " 分" })); })));
   else k.b.appendChild(h("p", { class: "meta", text: "这周还没人得分。做完一件，Bot 会在群里夸你。" }));
+  if (mineNow) k.b.appendChild(h("p", { class: "mybal" }, "我本周 ", h("b", { text: mineNow.points_week + " 分" }), " · 可用 ", h("b", { text: mineNow.balance + " 分" }), h("a", { href: "#shop", class: "go" }, "兑换", icon("right"))));
+  if (latest) k.b.appendChild(h("a", { class: "latest", href: latest.kind === "boss" ? "#tasks/" + latest.task : "#wall" }, icon(latest.kind === "boss" ? "wall" : "medal"),
+    h("span", {}, h("b", { text: "最新功勋 " }), latest.who + (latest.kind === "boss" ? " 拿下大活「" + latest.title + "」" : " 拿到徽章「" + latest.title + "」"), " · ", rt(latest.at))));
   k.b.appendChild(h("p", { class: "tot" }, h("span", {}, "进行中 ", h("b", { text: String(c.doing) })), h("span", {}, "没开始 ", h("b", { text: String(c.open) })),
     h("span", { class: c.overdue ? "bad-t" : "" }, "过期 ", h("b", { class: c.overdue ? "bad-t" : "", text: String(c.overdue) }))));
   return k.el;
@@ -1011,7 +1087,7 @@ var TM = { board: store.get("board", "week") };
 function mine() {
   return api("team").then(function (j) {
     var p = null; j.people.forEach(function (x) { if (x.name === me.name) p = x; });
-    var line = p ? "本周 " + p.points_week + " 分" + (p.streak ? " · 连续 " + p.streak + " 天" : "") + " · 手上 " + (p.doing.length + p.waiting) + " 件" : "还没接过任务";
+    var line = p ? "本周 " + p.points_week + " 分 · 可用 " + p.balance + " 分" + (p.streak ? " · 连续 " + p.streak + " 天" : "") + " · 手上 " + (p.doing.length + p.waiting) + " 件" : "还没接过任务";
     $("mine").textContent = line; $("av").title = me.name + "：" + line;
     return j;
   }).then(null, function () { return null; });
@@ -1034,7 +1110,7 @@ function team(root) {
         swap(list, ps.map(function (x, i) {
           var pts = wk ? x.points_week : x.points_total;
           return h("div", { class: "lb-row" + (i === 0 && pts ? " top" : "") }, h("span", { class: "rk", text: String(i + 1) }),
-            h("span", { class: "nm" }, avatar(x.name, true), x.name, j.mvp === x.name ? starMark(true) : null), h("span", { class: "pts" }, String(pts), h("small", { text: " 分" })),
+            h("span", { class: "nm" }, avatar(x.name, true), titled(x.name, x.title), j.mvp === x.name ? starMark(true) : null), h("span", { class: "pts" }, String(pts), h("small", { text: " 分" })),
             meter(pts / max * 100), h("span", { class: "meta", text: "做完 " + (wk ? x.done_week : x.done_total) + " 件 · " + (x.streak ? "连续 " + x.streak + " 天" : "最长连续 " + x.best_streak + " 天") }));
         }));
       }
@@ -1042,7 +1118,7 @@ function team(root) {
       var grid = h("div", { class: "people" });
       grid.style.marginTop = "16px";
       j.people.forEach(function (x) {
-        var c = h("section", { class: "card" }, h("div", { class: "pname" }, avatar(x.name), h("span", { text: x.name }), starMark(j.mvp === x.name)),
+        var c = h("section", { class: "card" }, h("div", { class: "pname" }, avatar(x.name), h("span", {}, titled(x.name, x.title)), starMark(j.mvp === x.name)),
           h("p", { class: "meta", text: "共 " + x.points_total + " 分 · 做完 " + x.done_total + " 件 · 这个月 " + x.done_month + " 件" + (x.fastest_ms ? " · 最快 " + span(x.fastest_ms) : "") }));
         var b = h("div", { class: "badges" });
         x.badges.filter(function (g) { return g.earned; }).concat(x.badges.filter(function (g) { return !g.earned; }).slice(0, 3)).forEach(function (g) {
@@ -1072,8 +1148,124 @@ function team(root) {
     more.addEventListener("click", function () { more.disabled = true; api("events?n=30&before=" + last).then(function (k) { addEvents(k.events); more.hidden = !k.more; more.disabled = false; }, function (e) { more.disabled = false; fail(e); }); });
     sc.b.appendChild(stream); sc.b.appendChild(h("div", { class: "more-row" }, more));
     right.appendChild(sc.el);
-    swap(root, [h("h2", { class: "sub", text: "我的战绩" }), mecard, h("div", { class: "teamw" }, left, right)]);
+    var links = h("div", { class: "row" }, h("a", { class: "btn pri", href: "#shop" }, icon("shop"), "用积分兑换" + (p ? "（可用 " + p.balance + " 分）" : "")), h("a", { class: "btn", href: "#wall" }, icon("wall"), "功勋墙"));
+    links.style.margin = "-4px 0 20px";
+    swap(root, [h("h2", { class: "sub", text: "我的战绩" }), mecard, links, h("div", { class: "teamw" }, left, right)]);
   });
+}
+
+// ---------- 功勋墙 ----------
+function weekName(ws) { var d = new Date(ws), e = new Date(ws + 6 * 86400000); return (d.getMonth() + 1) + "月" + d.getDate() + "日–" + (d.getMonth() === e.getMonth() ? "" : (e.getMonth() + 1) + "月") + e.getDate() + "日"; }
+function wallView(root) {
+  return api("wall").then(function (j) {
+    var tt = {}; j.titles.forEach(function (x) { if (!tt[x.who]) tt[x.who] = x.title; });
+    function who(n, sm) { return h("span", { class: "who-n" }, avatar(n, sm), " ", titled(n, tt[n])); }
+    var held = j.badges.some(function (b) { return b.holders.length; });
+    if (!j.current && !j.stars.length && !j.bosses.length && !held) {
+      swap(root, h("div", { class: "card" }, h("div", { class: "empty" }, h("b", { text: "功勋墙还空着" }),
+        h("span", { text: "做完任务就有分。每周分数最高的人是本周之星，拿下大活、解锁徽章、创下纪录，都会挂在这里。" })), h("a", { class: "btn pri", href: "#tasks" }, "去接一件任务")));
+      return;
+    }
+    var out = [];
+    var star = j.current;
+    var sc = h("section", { class: "card starcard" }, h("span", { class: "big-star", "aria-hidden": "true" }, icon("star")),
+      star ? h("div", {}, h("div", { class: "k", text: "本周之星 · " + weekName(star.week) }), h("div", { class: "n" }, titled(star.who, star.title || tt[star.who])), h("div", { class: "meta", text: "这周 " + star.points + " 分，做完 " + star.done + " 件" }))
+        : h("div", {}, h("div", { class: "k", text: "本周之星" }), h("div", { class: "n", text: "还空着" }), h("div", { class: "meta", text: "这周第一个做完任务的人先上。" })));
+    var roll = card("", "历届本周之星");
+    if (!j.stars.length) roll.b.appendChild(h("p", { class: "meta", text: "每周日晚上记下这周的之星，第一位会出现在这里。" }));
+    else roll.b.appendChild(h("ul", { class: "list roll" }, j.stars.map(function (x) {
+      var kids = [h("span", { class: "star", "aria-hidden": "true" }, icon("star")), h("span", { class: "w" }, who(x.who, true)), h("span", { class: "meta", text: weekName(x.week) + " · " + x.points + " 分" })];
+      // The certificate printed for that week, kept as a picture.
+      if (x.cert) kids.push(h("a", { class: "meta", href: "/x/board/img/" + String(x.cert).replace(/^g/, ""), target: "_blank", rel: "noopener", text: "看奖状" }));
+      return h.apply(null, ["li", {}].concat(kids));
+    })));
+    out.push(h("div", { class: "hero" }, sc, roll.el));
+    var bs = h("div", { class: "sect" }, h("h2", {}, "拿下的大活", h("span", { class: "n", text: String(j.bosses.length) })));
+    if (!j.bosses.length) bs.appendChild(h("div", { class: "card" }, empty("还没有人拿下大活", "大活值 30 分，拿下就挂在这里，带上是谁、用了多久。")));
+    else bs.appendChild(h("div", { class: "trophies" }, j.bosses.map(function (b) {
+      return h("a", { class: "trophy", href: "#tasks/" + b.id }, icon("wall"), h("span", { class: "sz big", text: "大活" }), h("h3", { text: b.title }), h("span", { class: "by" }, who(b.who)),
+        h("span", { class: "meta" }, md(b.done_at) + " 拿下" + (b.took ? "，用了 " + b.took : "")));
+    })));
+    out.push(bs);
+    if (j.records.length) out.push(h("div", { class: "sect" }, h("h2", { text: "纪录" }), h("div", { class: "records" }, j.records.map(function (r) {
+      var el = h("div", { class: "rec" }, h("span", { text: r.what }), h("b", { text: r.value }), h("span", { class: "who" }, avatar(r.who, true), titled(r.who, tt[r.who])));
+      return r.task ? h("a", { href: "#tasks/" + r.task, class: "plain" }, el) : el;
+    }))));
+    var cab = j.badges.slice().sort(function (a, b) { return (b.holders.length ? 1 : 0) - (a.holders.length ? 1 : 0); });
+    out.push(h("div", { class: "sect" }, h("h2", {}, "徽章柜", h("span", { class: "n", text: j.badges.filter(function (b) { return b.holders.length; }).length + " / " + j.badges.length + " 有人拿到" })),
+      h("div", { class: "cabinet" }, cab.map(function (b) {
+        var on = b.holders.length;
+        return h("div", { class: "medal" + (on ? " got" : " open") }, h("span", { class: "m", "aria-hidden": "true" }, icon(on ? "medal" : "star")),
+          h("div", {}, h("b", { text: b.name }), h("span", { class: "meta", text: on ? b.what : "还没人拿到 · " + b.what }),
+            on ? h("div", { class: "holders" }, b.holders.map(function (x) { return h("span", {}, avatar(x.who, true), x.who, h("span", { class: "meta", text: x.at ? md(x.at) + " 起" : "" })); })) : null));
+      }))));
+    if (j.titles.length) out.push(h("div", { class: "sect" }, h("h2", { text: "正在挂着的头衔" }), h("div", { class: "card" }, h("ul", { class: "list" }, j.titles.map(function (x) { return h("li", { class: "row" }, who(x.who, true), h("span", { class: "meta" }, rt(x.until, "", "摘下"))); })))));
+    swap(root, h("div", { class: "wall" }, out));
+  });
+}
+
+// ---------- 兑换 ----------
+var SHOP = null;
+var KINDW = { now: "Bot 马上兑现", timed: "持续几天", weekly: "下期周报兑现", manual: "要人来兑现" };
+var STW = { pending: ["warn", "等兑现"], done: ["ok", "已兑现"], refunded: ["", "已退回"] };
+function shopView(root) {
+  return api("shop").then(function (j) {
+    SHOP = j;
+    var w = j.me;
+    var wallet = h("div", { class: "wallet" }, h("div", {}, h("b", { text: String(w.earned) }), h("span", { text: "一共挣到" })), h("div", {}, h("b", { text: String(w.spent) }), h("span", { text: "已经花掉" })),
+      h("div", { class: "left" }, h("b", { text: String(w.balance) }), h("span", { text: "现在可用" })));
+    var items = h("div", { class: "items" }, j.items.map(function (it) {
+      var can = w.balance >= it.cost, kind = it.kind === "timed" && it.days ? "持续 " + it.days + " 天" : KINDW[it.kind] || "";
+      var act = can ? h("a", { class: "btn pri sm", href: "#shop/" + encodeURIComponent(it.key) }, "兑换")
+        : h("span", { class: "short" }, "还差 " + (it.cost - w.balance) + " 分", meter(w.balance / it.cost * 100));
+      return h("section", { class: "item" + (can ? "" : " cant") }, h("div", { class: "top" }, h("h3", { text: it.name }), h("span", { class: "cost" }, String(it.cost), h("small", { text: " 分" }))),
+        h("p", { text: it.what }), h("div", { class: "foot2" }, h("span", { class: "meta", text: kind + (it.custom ? " · 群里自定的" : "") }), act));
+    }));
+    function spendList(list, showWho) {
+      if (!list.length) return h("div", { class: "card" }, empty(showWho ? "还没有人兑换过" : "你还没兑换过", showWho ? "" : "做完任务攒分，攒够了来这里换。"));
+      return h("div", { class: "flist spl2" }, list.map(function (x) {
+        var st = STW[x.state] || ["", x.state];
+        return h("div", { class: "frow" }, h("span", { class: "fm" }, h("span", { class: "nm" }, showWho ? h("span", { class: "meta", text: x.who + " 换了 " }) : "", x.name, x.note ? "：" + x.note : ""),
+          h("span", { class: "meta" }, x.cost + " 分 · ", rt(x.ts), x.until && x.state !== "refunded" ? [" · ", rt(x.until, "", "到期")] : null)), badge(st[0], st[1]));
+      }));
+    }
+    swap(root, [wallet, h("div", { class: "sect" }, h("h2", { text: "能换的" }), items),
+      h("div", { class: "cols2" }, h("div", { class: "sect" }, h("h2", { text: "我的兑换" }), spendList(j.mine, false)), h("div", { class: "sect" }, h("h2", { text: "大家最近换的" }), spendList(j.recent, true)))]);
+  });
+}
+function shopArg(arg) {
+  if (!arg) { if (DW.key) drawerClose(); return; }
+  var it = null; (SHOP ? SHOP.items : []).forEach(function (x) { if (x.key === arg) it = x; });
+  if (!it) { location.replace("#shop"); return; }
+  var body = drawerOpen("shop", "兑换"), bal = SHOP.me.balance;
+  body.appendChild(h("h2", { id: "dw-title", text: it.name }));
+  body.appendChild(h("p", { class: "meta", text: it.what }));
+  body.appendChild(h("dl", { class: "facts" }, h("dt", { text: "花" }), h("dd", { text: it.cost + " 分" }), h("dt", { text: "换完还剩" }), h("dd", { text: (bal - it.cost) + " 分" }),
+    h("dt", { text: "怎么兑现" }), h("dd", { text: it.kind === "manual" ? "群主或群友来兑现，Bot 会在群里说一声" : it.kind === "weekly" ? "下一期周日战报兑现" : "Bot 会在群里兑现" })));
+  var isTitle = it.key === "title";
+  var note = it.needs || it.custom ? h(isTitle ? "input" : "textarea", { maxlength: isTitle ? "12" : "200", placeholder: it.needs || "附言（可以不写）", "aria-label": it.needs || "附言", required: isTitle || null }) : null;
+  if (note && !isTitle) note.style.minHeight = "4.5rem";
+  var go2 = h("button", { type: "submit", class: "btn pri" }, "确认兑换，花 " + it.cost + " 分"), cancel = h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "再想想");
+  var form = h("form", {}, note ? h("label", { class: "field" }, h("span", { text: isTitle ? "头衔（12 个字以内，必填）" : "你的要求" }), note) : null, h("div", { class: "row" }, go2, cancel));
+  form.style.marginTop = "18px";
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = note ? note.value.trim() : "";
+    if (isTitle && !v) { note.focus(); return; }
+    go2.disabled = true;
+    api("shop/redeem", { item: it.key, note: v }).then(function (r) {
+      var b2 = clear($("dw-body"));
+      b2.appendChild(h("div", { class: "done-box" }, h("span", { class: "m" }, icon("check")), h("h2", { id: "dw-title", text: "换到了：" + r.spend.name }),
+        h("p", { text: "花了 " + r.spend.cost + " 分，还剩 " + r.balance + " 分。" }), h("p", { class: "meta", text: it.kind === "manual" ? "Bot 会在群里说一声，请群主兑现。" : it.kind === "weekly" ? "记下了，下期周日战报兑现。" : "Bot 会在群里兑现。" }),
+        h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: leaveDrawer }, "好的"))));
+      b2.querySelector(".row").style.justifyContent = "center";
+      toast("换到了：" + r.spend.name + "，还剩 " + r.balance + " 分", "win");
+      loaded.shop = 0; loaded.team = 0; loaded.wall = 0; loaded.home = 0;
+      load("shop", true); mine();
+    }, function (e) { go2.disabled = false; fail(e); });
+  });
+  body.appendChild(form);
+  if (note) setTimeout(function () { note.focus(); }, 60);
 }
 
 // ---------- 动态 ----------
@@ -1656,6 +1848,8 @@ var VIEWS = {
   home: { t: "概览", load: home, auto: true },
   tasks: { t: "任务", load: tasksView, arg: tasksArg, auto: true },
   team: { t: "战绩", load: team, auto: true },
+  wall: { t: "功勋墙", load: wallView, auto: true },
+  shop: { t: "兑换", load: shopView, arg: shopArg },
   feed: { t: "动态", load: feed, arg: feedArg },
   works: { t: "作品和文件", load: works },
   repos: { t: "仓库", load: repos, auto: true },
@@ -1663,8 +1857,8 @@ var VIEWS = {
   watch: { t: "监控和额度", load: watch, auto: true },
   tools: { t: "工具", load: toolsView }
 };
-var ORDER = ["home", "tasks", "team", "feed", "works", "repos", "memory", "watch", "tools"];
-var GKEY = { h: "home", t: "tasks", z: "team", f: "feed", w: "works", r: "repos", m: "memory", s: "watch", o: "tools" };
+var ORDER = ["home", "tasks", "team", "wall", "feed", "works", "repos", "memory", "watch", "tools"];
+var GKEY = { h: "home", t: "tasks", z: "team", b: "wall", d: "shop", f: "feed", w: "works", r: "repos", m: "memory", s: "watch", o: "tools" };
 var cur = "", loaded = {}, loading = {}, route = { id: "", arg: "" }, hops = 0;
 function go(h2) { location.hash = "#" + h2; }
 function parse() {
@@ -1689,13 +1883,14 @@ function load(id, quiet) {
 function show() {
   var r = parse(), prev = route;
   route = r;
-  if (!/^tasks\/./.test((location.hash || "").slice(1))) DW.back = false;
+  if (!/^\w+\/./.test((location.hash || "").slice(1))) DW.back = false;
   popClose(false); sheet(false); lbClose();
   if (r.id !== cur) {
-    if (DW.key && !(r.id === "tasks" && r.arg)) drawerClose();
+    if (DW.key && !(r.arg && VIEWS[r.id].arg)) drawerClose();
     cur = r.id;
-    document.querySelectorAll("a[data-tab]").forEach(function (a) { if (a.getAttribute("data-tab") === r.id) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-    var inMore = ["works", "repos", "memory", "watch", "tools"].indexOf(r.id) >= 0; if (inMore) $("more-btn").setAttribute("aria-current", "page"); else $("more-btn").removeAttribute("aria-current");
+    var navId = r.id === "shop" ? "team" : r.id;
+    document.querySelectorAll("a[data-tab]").forEach(function (a) { if (a.getAttribute("data-tab") === navId) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+    var inMore = ["wall", "works", "repos", "memory", "watch", "tools"].indexOf(r.id) >= 0; if (inMore) $("more-btn").setAttribute("aria-current", "page"); else $("more-btn").removeAttribute("aria-current");
     document.querySelectorAll("main > section").forEach(function (s) { s.hidden = s.id !== "s-" + r.id; });
     $("title").textContent = VIEWS[r.id].t;
     document.title = VIEWS[r.id].t + " · 看板";
@@ -1718,7 +1913,7 @@ function tick() {
   if (cur && VIEWS[cur].auto && loaded[cur] && Date.now() - loaded[cur] > 90000 && quiet()) load(cur, true);
 }
 function helpPop(anchor) {
-  var keys = [["G H", "概览"], ["G T", "任务"], ["G Z", "战绩"], ["G F", "动态"], ["G W", "作品和文件"], ["G R", "仓库"], ["G M", "记忆"], ["G S", "监控和额度"], ["G O", "工具"], ["1 9", "按顺序切换分区"], ["N", "新任务"], ["/", "搜索当前分区"], ["R", "刷新"], ["← →", "看图时翻页"], ["Esc", "关掉弹窗"]];
+  var keys = [["G H", "概览"], ["G T", "任务"], ["G Z", "战绩"], ["G B", "功勋墙"], ["G D", "兑换"], ["G F", "动态"], ["G W", "作品和文件"], ["G R", "仓库"], ["G M", "记忆"], ["G S", "监控和额度"], ["G O", "工具"], ["1 9", "按顺序切换分区"], ["N", "新任务"], ["/", "搜索当前分区"], ["R", "刷新"], ["← →", "看图时翻页"], ["Esc", "关掉弹窗"]];
   popOpen(anchor, h("div", { role: "dialog", "aria-label": "快捷键" }, h("dl", { class: "keys" }, keys.map(function (k) { return [h("dt", {}, k[0].split(" ").map(function (x, i) { return [i ? (k[0] === "1 9" ? " – " : " ") : null, h("kbd", { text: x })]; })), h("dd", { text: k[1] })]; }))));
 }
 var gWait = 0;
@@ -1749,7 +1944,7 @@ function logout() {
   api("logout", {}).then(function () { gone("已经退出了。要再进来，点群里 Bot 发的看板链接。"); }, fail);
 }
 function start() {
-  window.addEventListener("hashchange", function () { hops++; var r = parse(); if (r.id === "tasks" && r.arg && !DW.key) DW.back = hops > 0; show(); });
+  window.addEventListener("hashchange", function () { hops++; var r = parse(); if (r.arg && VIEWS[r.id].arg && !DW.key) DW.back = hops > 0; show(); });
   document.addEventListener("keydown", onKey);
   document.addEventListener("click", function (e) {
     var t = e.target;

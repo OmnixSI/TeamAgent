@@ -199,3 +199,40 @@ test("the chat tool: shop, redeem for the asker only, wall, and owner-only settl
   assert.ok(w.bosses.length === 1 && w.badges.some(b => b.startsWith("屠龙")));
   assert.equal((await as("小明").run({ op: "status", mine: true })).people[0].balance, 30);
 });
+
+// ---- the star's certificate and ceremony ----
+import { certificateHtml, awardCertificate, weekly } from "../src/feat/teamwork.ts";
+test("the certificate names the person and their deeds, and nothing in it can break the page", () => {
+  const html = certificateHtml({ who: "小<明>", title: "首席&救火官", group: "做 AI 高手", from: Date.parse("2026-11-09T00:00:00+08:00"), to: Date.parse("2026-11-15T23:59:00+08:00"), done: 3, points: 45, deeds: ["改完<b>登录页</b>", "二", "三", "四", "五"], streak: 3, issued: Date.parse("2026-11-15T21:30:00+08:00"), no: "第 2026-46 号", times: 2 });
+  assert.match(html, /<h1>奖状<\/h1>/); assert.match(html, /小&lt;明&gt;<\/b> 同志/); assert.match(html, /首席&amp;救火官/);
+  assert.match(html, /11 月 9 日至 11 月 15 日/); assert.match(html, /做成 <em>3<\/em> 件事，拿下 <em>45<\/em> 分，连续 <em>3<\/em> 天/);
+  assert.match(html, /改完&lt;b&gt;登录页&lt;\/b&gt;/); assert.doesNotMatch(html, /<li>五<\/li>/, "four deeds at most");
+  assert.match(html, /本周之星/); assert.match(html, /第 2 次获此荣誉/); assert.match(html, /2026 年 11 月 15 日/);
+  assert.doesNotMatch(html, /https?:\/\//, "nothing is fetched from outside");
+});
+
+test("Sunday: the star is recorded, gets a certificate in the group, a bonus and the title; the report hosts the ceremony", async () => {
+  const hub = mkHub(), sent = [];
+  hub.sendImage = async (conv, bytes, note) => { sent.push({ conv, n: bytes.length, note }); return { ok: true, id: "g77" }; };
+  hub.store = { imageRef: async () => null };
+  const a = earn(hub, "小明", "big"), b = earn(hub, "小红");
+  const sunday = Date.parse("2026-11-22T21:31:00+08:00");
+  at(hub, a.id, { done_at: sunday - DAY }); at(hub, b.id, { done_at: sunday - 2 * DAY });
+  const pages = []; const old = deps.render;
+  deps.render = async (_h, html, w, h) => { pages.push({ html, w, h }); return new Uint8Array([1, 2, 3]); };
+  try {
+    await weekly(hub, sunday, G);
+    assert.equal(pages.length, 1); assert.equal(pages[0].w, 1400); assert.match(pages[0].html, /小明<\/b> 同志/); assert.match(pages[0].html, /拿下 <em>30<\/em> 分/);
+    assert.deepEqual(sent, [{ conv: G, n: 3, note: "本周之星奖状：小明（11 月 16 日那一周）" }]);
+    assert.equal(honorWall(hub, G, sunday).stars[0].cert, "g77");
+    const me = teamStats(hub, G, sunday).people.find(p => p.name === "小明");
+    assert.equal(me.points_total, 30 + 20, "the star's bonus"); assert.equal(me.balance, 50); assert.equal(me.title, "本周之星"); assert.equal(me.stars, 1);
+    assert.equal(teamStats(hub, G, sunday).people.find(p => p.name === "小红").title, "");
+    assert.match(hub.ran[0].task, /颁奖仪式/); assert.match(hub.ran[0].task, /图 g77/); assert.match(hub.ran[0].task, /speak/); assert.match(hub.ran[0].task, /20 分奖金/);
+    // the printer down: the report still goes out, with the plain picture instead
+    deps.render = async () => { throw new Error("browser allowance used up"); };
+    const c = earn(hub, "小红"); at(hub, c.id, { done_at: sunday + 6 * DAY });
+    await weekly(hub, sunday + 7 * DAY, G);
+    assert.equal(sent.length, 1); assert.equal(hub.ran.length, 2);
+  } finally { deps.render = old; }
+});

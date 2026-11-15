@@ -198,7 +198,7 @@ Hub 因为握着 QQ 长连接而 24 小时在线，这一项固定占 Durable Ob
 
 登录态存在 Hub 里（`cookie:<站点>`），用 `scripts/login-cookies.mjs` 刷新：在一个没有自动化标记的普通浏览器窗口里手动登录，脚本从本机调试端口读出 cookie 写进 Hub。小红书在大陆以外会被它自己跳到 rednote.com，登录态取 rednote.com 的。
 
-中转部署：`cd relay && npx vercel deploy --prod -e RELAY_KEY=<密钥>`，同一个密钥写进 Worker 的 `RELAY_KEY`。
+中转部署：`cd relay && npx vercel deploy --prod --yes`。密钥 `RELAY_KEY` 是 Vercel 项目的固定环境变量（`npx vercel env ls production` 能看到），同一个密钥写进 Worker 的 `RELAY_KEY`；部署后务必验一下带密钥的请求返回 200，不带的返回 401。
 
 ## 部署
 
