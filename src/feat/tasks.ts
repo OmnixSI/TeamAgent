@@ -18,8 +18,15 @@ export type Task = {
   claimed_by: string;   // who (person or local AI) picked it up, or ""
   result: string;       // what was delivered when done: text, links, file references
   created: number; updated: number;
+  size: TaskSize;       // how big a job it is; a "big" one is the group's boss fight
+  claimed_at: number;   // when someone took it (0 while nobody has)
+  done_at: number;      // when it was finished (0 until then)
+  done_by: string;      // the person credited with finishing it (a local AI's work counts for its person)
 };
-export type TaskNote = { ts: number; who: string; text: string };
+export type TaskSize = "small" | "normal" | "big";
+export const SIZES: TaskSize[] = ["small", "normal", "big"];
+export const SIZE_LABEL: Record<TaskSize, string> = { small: "小事", normal: "普通", big: "大活" };
+export type TaskNote = { ts: number; who: string; text: string; kind?: string };
 
 const STATUSES: TaskStatus[] = ["open", "doing", "done", "dropped"];
 const LABEL: Record<TaskStatus, string> = { open: "没开始", doing: "在做", done: "做完了", dropped: "不做了" };
@@ -42,10 +49,39 @@ const ofRow = (r: any): Task => ({
   id: Number(r.id), conv: String(r.conv), title: String(r.title || ""), detail: String(r.detail || ""), status: (STATUSES.includes(r.status) ? r.status : "open") as TaskStatus,
   owner: String(r.owner || ""), due: String(r.due || ""), source: String(r.source || ""), by: String(r.made_by || ""), claimed_by: String(r.claimed_by || ""),
   result: String(r.result || ""), created: Number(r.created), updated: Number(r.updated),
+  size: (SIZES.includes(r.size) ? r.size : "normal") as TaskSize, claimed_at: Number(r.claimed_at) || 0, done_at: Number(r.done_at) || 0, done_by: String(r.done_by || ""),
 });
+/** Columns added after the first release: a table made before them gets them on first use. */
+const ready = new WeakSet<object>();
+function ensure(hub: Hub) {
+  if (ready.has(hub)) return;
+  ready.add(hub);
+  const add = (table: string, col: string, def: string) => {
+    try {
+      const have = hub.sql.exec("PRAGMA table_info(" + table + ")").toArray().map((c: any) => String(c.name));
+      if (have.length && !have.includes(col)) hub.sql.exec("ALTER TABLE " + table + " ADD COLUMN " + col + " " + def);
+    } catch (e: any) { console.log("tasks: column", col, e?.message); }
+  };
+  add("task", "size", "TEXT DEFAULT 'normal'"); add("task", "claimed_at", "INTEGER DEFAULT 0"); add("task", "done_at", "INTEGER DEFAULT 0"); add("task", "done_by", "TEXT DEFAULT ''");
+  add("task_note", "kind", "TEXT DEFAULT ''");
+}
+/** The person behind a name on a task: someone's local AI works for that someone; the bot and the nightly pass are nobody. */
+export function personOfName(name: string): string {
+  const n = String(name || "").trim().replace(/的本地\s*AI$/i, "").trim();
+  return !n || /^(bot|夜间整理|群友|有人)$/i.test(n) ? "" : n;
+}
 const clean = (s: unknown, n: number) => clip(String(s ?? "").trim(), n);
-const note = (hub: Hub, conv: string, id: number, who: string, text: string, ts = Date.now()) =>
-  hub.sql.exec("INSERT INTO task_note(task,conv,ts,who,text) VALUES(?,?,?,?,?)", id, conv, ts, clean(who, LIMIT.who), clean(text, LIMIT.note));
+/** `kind` says what happened, for timelines: add, claim, progress, done, drop, release, reopen, edit. */
+const note = (hub: Hub, conv: string, id: number, who: string, text: string, ts = Date.now(), kind = "edit") => {
+  ensure(hub);
+  hub.sql.exec("INSERT INTO task_note(task,conv,ts,who,text,kind) VALUES(?,?,?,?,?,?)", id, conv, ts, clean(who, LIMIT.who), clean(text, LIMIT.note), kind);
+};
+/** What the team feature hangs on a finished task (praise, tallies); set from src/feat/teamwork.ts. */
+export const hooks: {
+  done: null | ((hub: Hub, conv: string, task: Task, who: string, quiet: boolean) => void);
+  /** Facts worth saying when a task was finished in the chat: the person's tally, streak, new badges. */
+  facts: null | ((hub: Hub, conv: string, task: Task) => any);
+} = { done: null, facts: null };
 
 /** "2026-11-20", "11-20", "11月20日", "今天/明天/后天" → "YYYY-MM-DD"; anything else → "". */
 export function normDue(s: unknown, now = Date.now()): string {
@@ -70,6 +106,7 @@ export function normDue(s: unknown, now = Date.now()): string {
 
 export function listTasks(hub: Hub, conv: string, f: { status?: TaskStatus[]; owner?: string; limit?: number } = {}): Task[] {
   const where = ["conv=?"], binds: any[] = [conv];
+  ensure(hub);
   const st = (f.status || []).filter(s => STATUSES.includes(s));
   if (st.length) { where.push("status IN (" + st.map(() => "?").join(",") + ")"); binds.push(...st); }
   if (f.owner) { where.push("(owner=? OR claimed_by=?)"); binds.push(f.owner, f.owner); }
@@ -79,6 +116,7 @@ export function listTasks(hub: Hub, conv: string, f: { status?: TaskStatus[]; ow
 }
 
 export function getTask(hub: Hub, conv: string, id: number): Task | null {
+  ensure(hub);
   const r = hub.sql.exec("SELECT * FROM task WHERE conv=? AND id=?", conv, Math.floor(Number(id)) || 0).toArray()[0];
   return r ? ofRow(r) : null;
 }
@@ -87,54 +125,65 @@ export function getTask(hub: Hub, conv: string, id: number): Task | null {
  * One line in the group when something happens to a task outside the chat (on the board, or by someone's
  * local AI). Changes made by talking to the bot pass `quiet`: the bot's own reply already says it.
  */
-function tell(hub: Hub, conv: string, text: string) {
+export function tell(hub: Hub, conv: string, text: string) {
   try {
     if (String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "on") !== "on") return;
     const p = (hub as any).say?.(conv, "【任务】" + text);
     if (p && typeof p.catch === "function") { const q = p.catch((e: any) => console.log("tasks: notice failed", e?.message)); (hub as any).ctx?.waitUntil?.(q); }
   } catch (e: any) { console.log("tasks: notice failed", e?.message); }
 }
-const named = (t: Task) => "#" + t.id + "「" + clip(t.title, 40) + "」";
+export const named = (t: Task) => "#" + t.id + "「" + clip(t.title, 40) + "」";
 
-export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string }, quiet = false): Task | null {
+export function addTask(hub: Hub, conv: string, t: { title: string; detail?: string; owner?: string; due?: string; source?: string; by?: string; size?: TaskSize }, quiet = false): Task | null {
   const title = clean(t?.title, LIMIT.title);
   if (!title) return null;
   const now = Date.now(), by = clean(t.by, LIMIT.who);
-  hub.sql.exec("INSERT INTO task(conv,title,detail,status,owner,due,source,made_by,claimed_by,result,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-    conv, title, clean(t.detail, LIMIT.detail), "open", clean(t.owner, LIMIT.who), normDue(t.due, now), clean(t.source, LIMIT.source), by, "", "", now, now);
+  ensure(hub);
+  hub.sql.exec("INSERT INTO task(conv,title,detail,status,owner,due,source,made_by,claimed_by,result,created,updated,size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    conv, title, clean(t.detail, LIMIT.detail), "open", clean(t.owner, LIMIT.who), normDue(t.due, now), clean(t.source, LIMIT.source), by, "", "", now, now, SIZES.includes(t.size as TaskSize) ? t.size! : "normal");
   const id = Number(hub.sql.exec("SELECT MAX(id) id FROM task WHERE conv=?", conv).toArray()[0]?.id);
-  note(hub, conv, id, by, "记下了这件事" + (t.source ? "：“" + clean(t.source, 80) + "”" : ""), now);
+  note(hub, conv, id, by, "记下了这件事" + (t.source ? "：“" + clean(t.source, 80) + "”" : ""), now, "add");
   const made = getTask(hub, conv, id);
-  if (made && !quiet) tell(hub, conv, (by || "有人") + " 加了 " + named(made) + (made.owner ? "，交给 " + made.owner : "") + (made.due ? "，" + made.due + " 前" : ""));
+  if (made && !quiet) tell(hub, conv, (by || "有人") + " 加了 " + named(made) + (made.size === "big" ? "（大活）" : "") + (made.owner ? "，交给 " + made.owner : "") + (made.due ? "，" + made.due + " 前" : ""));
   return made;
 }
 
 /** Changes fields of a task; `who` is recorded in the task's notes. Returns the task, or null when it does not exist. */
-export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result">>, who = "", quiet = false): Task | null {
+export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pick<Task, "title" | "detail" | "status" | "owner" | "due" | "result" | "size">>, who = "", quiet = false): Task | null {
   const cur = getTask(hub, conv, id);
   if (!cur) return null;
-  const next: Record<string, string> = {}, lines: string[] = [];
-  const set = (k: string, v: string, line: string) => { if (v !== (cur as any)[k]) { next[k] = v; lines.push(line); } };
+  const next: Record<string, string | number> = {}, lines: [string, string][] = [];
+  const set = (k: string, v: string, line: string, kind = "edit") => { if (v !== (cur as any)[k]) { next[k] = v; lines.push([line, kind]); } };
   if (patch.title !== undefined) { const v = clean(patch.title, LIMIT.title); if (v) set("title", v, "标题改成“" + v + "”"); }
   if (patch.detail !== undefined) { const v = clean(patch.detail, LIMIT.detail); set("detail", v, v ? "补充说明：" + clip(v, 200) : "清掉了说明"); }
   if (patch.owner !== undefined) { const v = clean(patch.owner, LIMIT.who); set("owner", v, v ? "交给 " + v : "不再指定谁做"); }
   if (patch.due !== undefined) { const v = normDue(patch.due); set("due", v, v ? "截止日期定为 " + v : "去掉了截止日期"); }
-  if (patch.result !== undefined) { const v = clean(patch.result, LIMIT.result); set("result", v, v ? "结果：" + clip(v, 300) : "清掉了结果"); }
-  if (patch.status !== undefined && STATUSES.includes(patch.status)) set("status", patch.status, "状态：" + LABEL[cur.status] + " → " + LABEL[patch.status]);
-  // Put back to "not started" means nobody holds it any more, so someone else can pick it up.
-  if (patch.status === "open" && cur.status !== "open" && cur.claimed_by) { next.claimed_by = ""; lines.push(cur.claimed_by + " 放下了，可以重新领取"); }
+  if (patch.size !== undefined && SIZES.includes(patch.size)) set("size", patch.size, "定为" + SIZE_LABEL[patch.size]);
+  if (patch.result !== undefined) { const v = clean(patch.result, LIMIT.result); set("result", v, v ? "结果：" + clip(v, 300) : "清掉了结果", "progress"); }
+  const now = Date.now();
+  if (patch.status !== undefined && STATUSES.includes(patch.status) && patch.status !== cur.status) {
+    const to = patch.status;
+    set("status", to, "状态：" + LABEL[cur.status] + " → " + LABEL[to], to === "done" ? "done" : to === "dropped" ? "drop" : cur.status === "done" || cur.status === "dropped" ? "reopen" : to === "doing" ? "claim" : "release");
+    if (to === "done") { next.done_at = now; next.done_by = personOfName(cur.claimed_by) || personOfName(cur.owner) || personOfName(who); if (!cur.claimed_at) next.claimed_at = cur.created; }
+    else if (cur.done_at) { next.done_at = 0; next.done_by = ""; }
+    if (to === "doing" && !cur.claimed_at) next.claimed_at = now;
+    // Put back to "not started" means nobody holds it any more, so someone else can pick it up.
+    if (to === "open" && cur.claimed_by) { next.claimed_by = ""; next.claimed_at = 0; lines.push([cur.claimed_by + " 放下了，可以重新领取", "release"]); }
+  }
   if (!lines.length) return cur;
-  const now = Date.now(), keys = Object.keys(next);
+  const keys = Object.keys(next);
   hub.sql.exec("UPDATE task SET " + keys.map(k => k + "=?").join(",") + ", updated=? WHERE conv=? AND id=?", ...keys.map(k => next[k]), now, conv, cur.id);
-  for (const l of lines) note(hub, conv, cur.id, who, l, now);
+  for (const [l, kind] of lines) note(hub, conv, cur.id, who, l, now, kind);
   const after = getTask(hub, conv, cur.id);
   if (after && !quiet && next.status) {
     const by = who || "有人";
-    if (next.status === "done") tell(hub, conv, named(after) + " 做完了（" + by + "）" + (after.result ? "：" + clip(after.result, 160) : ""));
+    // A finished task is the team feature's moment (praise with the person's tally); the plain line is the fallback.
+    if (next.status === "done") { if (!hooks.done) tell(hub, conv, named(after) + " 做完了（" + by + "）" + (after.result ? "：" + clip(after.result, 160) : "")); }
     else if (next.status === "dropped") tell(hub, conv, named(after) + " 不做了（" + by + "）");
     else if (next.status === "open" && cur.claimed_by) tell(hub, conv, cur.claimed_by + " 放下了 " + named(after) + "，谁有空可以接");
     else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
   }
+  if (after && next.status === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
   return after;
 }
 
@@ -145,25 +194,38 @@ export function claimTask(hub: Hub, conv: string, id: number, who: string, quiet
   if (cur.claimed_by && cur.claimed_by !== w) return null;
   if (cur.claimed_by === w && cur.status === "doing") return cur;
   const now = Date.now();
-  hub.sql.exec("UPDATE task SET claimed_by=?, status='doing', updated=? WHERE conv=? AND id=?", w, now, conv, cur.id);
-  note(hub, conv, cur.id, w, cur.claimed_by ? "接着做" : "认领了，开始做", now);
+  hub.sql.exec("UPDATE task SET claimed_by=?, status='doing', updated=?, claimed_at=? WHERE conv=? AND id=?", w, now, cur.claimed_at || now, conv, cur.id);
+  note(hub, conv, cur.id, w, cur.claimed_by ? "接着做" : "认领了，开始做", now, "claim");
   const after = getTask(hub, conv, cur.id);
   if (after && !quiet) tell(hub, conv, w + " 接了 " + named(after) + "，开干了");
   return after;
+}
+
+/** What an old note (written before notes carried a kind) was about, read off its wording. */
+export function kindOf(text: string): string {
+  if (text.startsWith("记下了这件事")) return "add";
+  if (text.startsWith("认领了") || text === "接着做") return "claim";
+  if (/^状态：.* → 做完了$/.test(text)) return "done";
+  if (/^状态：.* → 不做了$/.test(text)) return "drop";
+  if (text.endsWith("可以重新领取") || /^状态：.* → 没开始$/.test(text)) return "release";
+  if (/^状态：/.test(text)) return "claim";
+  if (/^(标题改成|补充说明|清掉了|交给 |不再指定|截止日期|去掉了截止|定为)/.test(text)) return "edit";
+  return "progress";
 }
 
 export function addTaskNote(hub: Hub, conv: string, id: number, who: string, text: string): boolean {
   const t = clean(text, LIMIT.note);
   if (!t || !getTask(hub, conv, id)) return false;
   const now = Date.now();
-  note(hub, conv, Number(id), who, t, now);
+  note(hub, conv, Number(id), who, t, now, "progress");
   hub.sql.exec("UPDATE task SET updated=? WHERE conv=? AND id=?", now, conv, Number(id));
   return true;
 }
 
 export function taskNotes(hub: Hub, conv: string, id: number): TaskNote[] {
-  return hub.sql.exec("SELECT ts, who, text FROM task_note WHERE conv=? AND task=? ORDER BY ts, id", conv, Math.floor(Number(id)) || 0).toArray()
-    .map((r: any) => ({ ts: Number(r.ts), who: String(r.who || ""), text: String(r.text || "") }));
+  ensure(hub);
+  return hub.sql.exec("SELECT ts, who, text, kind FROM task_note WHERE conv=? AND task=? ORDER BY ts, id", conv, Math.floor(Number(id)) || 0).toArray()
+    .map((r: any) => ({ ts: Number(r.ts), who: String(r.who || ""), text: String(r.text || ""), kind: String(r.kind || "") || kindOf(String(r.text || "")) }));
 }
 
 // ---------- matching ----------
@@ -220,6 +282,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         title: { type: "string" }, detail: { type: "string", description: "补充说明，可空" },
         owner: { type: "string", description: "负责人在群里的名字；add / update 用来指定，list 用来筛" },
         due: { type: "string", description: "截止日期 YYYY-MM-DD；清掉就填空字符串" },
+        size: { type: "string", enum: ["small", "normal", "big"], description: "这件事多大：small 顺手的小事，normal 普通（默认），big 大活（要啃好几天、算这个群的 Boss）" },
         source: { type: "string", description: "add 时：群里原话的一小句" },
         status: { type: "string", description: "list：active / open / doing / done / dropped / all；update：open / doing / done / dropped" },
         mine: { type: "boolean", description: "list：只看提问的人负责或认领的" },
@@ -236,7 +299,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         if (!title) return { ok: false, error: "要说清楚是什么事（title）" };
         const same = similarTask(hub, conv, title);
         if (same) return { ok: true, duplicate: true, note: "清单里已经有这件事了，没有重复记；要补充就 update 或 note 这一条", task: brief(same) };
-        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who }, true)!;
+        const t = addTask(hub, conv, { title, detail: a.detail, owner: a.owner, due: a.due, source: a.source, by: who, size: a.size }, true)!;
         return { ok: true, added: brief(t) };
       }
       if (op === "list") {
@@ -251,13 +314,17 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       if (op === "show") return { ok: true, task: full(t), history: taskNotes(hub, conv, t.id).map(n => ({ at: fmtFull(n.ts), who: n.who, what: n.text })) };
       if (op === "update") {
         const patch: any = {};
-        for (const k of ["title", "detail", "owner", "due"]) if (a[k] !== undefined) patch[k] = a[k];
+        for (const k of ["title", "detail", "owner", "due", "size"]) if (a[k] !== undefined) patch[k] = a[k];
         if (a.status !== undefined) { if (!STATUSES.includes(a.status)) return { ok: false, error: "状态只能是 open / doing / done / dropped" }; patch.status = a.status; }
         if (a.result !== undefined) patch.result = a.result;
         if (patch.due && !normDue(patch.due)) return { ok: false, error: "截止日期看不懂，用 2026-11-20 这样的写法" };
         return { ok: true, task: brief(updateTask(hub, conv, t.id, patch, who, true)!) };
       }
-      if (op === "done") return { ok: true, task: brief(updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who, true)!) };
+      if (op === "done") {
+        const fin = updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who, true)!;
+        const cheer = hooks.facts?.(hub, conv, fin);
+        return { ok: true, task: brief(fin), ...(cheer ? { cheer, say: "做完一件事值得当场夸一句：用你平时的口气，具体说他做成了什么，带上 cheer 里一两个真实的数（这周第几件、连续几天、花了多久、新拿的称号），别说“辛苦了”这种套话，别编 cheer 里没有的数" } : {}) };
+      }
       if (op === "drop") {
         const r = updateTask(hub, conv, t.id, { status: "dropped" }, who, true)!;
         if (clean(a.reason, 300)) addTaskNote(hub, conv, t.id, who, "不做的原因：" + clean(a.reason, 300));
@@ -426,10 +493,11 @@ const feature: Feature = {
   schema: `
     CREATE TABLE IF NOT EXISTS task(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, title TEXT NOT NULL, detail TEXT DEFAULT '',
       status TEXT NOT NULL DEFAULT 'open', owner TEXT DEFAULT '', due TEXT DEFAULT '', source TEXT DEFAULT '', made_by TEXT DEFAULT '',
-      claimed_by TEXT DEFAULT '', result TEXT DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL, reminded TEXT DEFAULT '');
+      claimed_by TEXT DEFAULT '', result TEXT DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL, reminded TEXT DEFAULT '',
+      size TEXT DEFAULT 'normal', claimed_at INTEGER DEFAULT 0, done_at INTEGER DEFAULT 0, done_by TEXT DEFAULT '');
     CREATE INDEX IF NOT EXISTS task_conv ON task(conv, status, updated);
     CREATE INDEX IF NOT EXISTS task_due ON task(due, status);
-    CREATE TABLE IF NOT EXISTS task_note(id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, conv TEXT NOT NULL, ts INTEGER NOT NULL, who TEXT DEFAULT '', text TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS task_note(id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, conv TEXT NOT NULL, ts INTEGER NOT NULL, who TEXT DEFAULT '', text TEXT NOT NULL, kind TEXT DEFAULT '');
     CREATE INDEX IF NOT EXISTS task_note_task ON task_note(conv, task, ts);
   `,
   tunables: {
