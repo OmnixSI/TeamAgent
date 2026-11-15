@@ -6,7 +6,7 @@ import feature, { deps, teamStats, taskEvents, taskTimeline, cheerFacts, cheer, 
 
 const G = "g:1", HOUR = 3600000, DAY = 86400000;
 function mkHub(cfg = {}) {
-  const db = new DatabaseSync(":memory:"); db.exec(tasksFeature.schema);
+  const db = new DatabaseSync(":memory:"); db.exec(tasksFeature.schema); db.exec(feature.schema);
   const said = [], ran = [], kv = new Map(), waits = [];
   return {
     db, said, ran, waits,
@@ -117,4 +117,85 @@ test("the chat tool answers who is doing what and how a task went", async () => 
   assert.equal(tl.ok, true); assert.equal(tl.steps.length, 2);
   assert.equal((await tool.run({ op: "timeline", id: 99 })).ok, false);
   assert.ok((await tool.run({ op: "recent" })).events.length >= 2);
+});
+
+// ---- points for perks, and the wall ----
+import { shop, redeem, settle, balanceOf, spends, titleOf, setItem, dropItem, honorWall, recordStar, SHOP_SCHEMA } from "../src/feat/teamwork.ts";
+const earn = (hub, who, size = "normal") => { const t = addTask(hub, G, { title: who + " 的活 " + Math.random().toString(36).slice(2, 6), owner: who, size }, true); claimTask(hub, G, t.id, who, true); updateTask(hub, G, t.id, { status: "done" }, who, true); return t; };
+
+test("points are spent, not minted: redeeming checks the balance, records the spend, and says what to do", async () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  earn(hub, "小明", "big");                                   // 30
+  assert.deepEqual(balanceOf(hub, G, "小明"), { earned: 30, spent: 0, balance: 30 });
+  assert.match(redeem(hub, G, "小明", "战报封面人物").error, /有 30 分.*要 50 分.*还差 20 分/);
+  assert.match(redeem(hub, G, "小明", "不存在的").error, /没有这一项/);
+  assert.match(redeem(hub, G, "小明", "专属头衔一周", "").error, /12 个字以内/);
+  assert.equal(redeem(hub, G, "bot", "甩锅券").ok, false);
+  const r = redeem(hub, G, "小明", "甩锅券", "昨晚把测试库删了");
+  assert.equal(r.ok, true); assert.equal(r.balance, 15); assert.equal(r.spend.state, "done");
+  assert.match(r.do, /甩锅券.*昨晚把测试库删了.*认下来/);
+  assert.equal(hub.ran.length, 0, "in the chat the bot does it in its own reply");
+  assert.equal(teamStats(hub, G).people[0].balance, 15);
+  assert.equal(redeem(hub, G, "小明", "点一张图").ok, false, "15 left, 20 needed");
+  const t = redeem(hub, G, "小明", "定制表情包", "奶蛙举牌", "board");
+  assert.equal(t.ok, true); await Promise.all(hub.waits);
+  assert.equal(hub.ran.length, 1); assert.match(hub.ran[0].task, /小明 用积分换了一个定制表情包.*看板上兑换.*花了 5 分，还剩 10 分/);
+  assert.equal(settle(hub, G, t.spend.id, "refunded").state, "refunded");
+  assert.equal(balanceOf(hub, G, "小明").balance, 15, "refunded points come back");
+  assert.equal(settle(hub, G, 999, "done"), null);
+});
+
+test("a bought title lasts a week and shows on the person; custom perks wait for a person to honour them", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  earn(hub, "小红", "big"); earn(hub, "小红", "big");          // 60
+  const now = Date.parse("2026-11-18T12:00:00+08:00");
+  const r = redeem(hub, G, "小红", "专属头衔一周", "首席救火官", "chat", now);
+  assert.equal(r.ok, true); assert.match(r.do, /remember/);
+  assert.equal(titleOf(hub, G, "小红", now + 6 * DAY), "首席救火官"); assert.equal(titleOf(hub, G, "小红", now + 8 * DAY), "");
+  assert.equal(teamStats(hub, G, now).people[0].title, "首席救火官");
+  assert.match(setItem(hub, G, "", 10, "", "群主"), /名字/); assert.match(setItem(hub, G, "奶茶", 0, "", "群主"), /1 到 1000/); assert.match(setItem(hub, G, "甩锅券", 5, "", "群主"), /已经有/);
+  const it = setItem(hub, G, "奶茶一杯", 30, "群主请", "群主");
+  assert.equal(it.kind, "manual"); assert.ok(shop(hub, G).some(i => i.name === "奶茶一杯" && i.custom));
+  const tea = redeem(hub, G, "小红", "奶茶一杯", "", "chat", now);
+  assert.equal(tea.spend.state, "pending"); assert.match(tea.do, /请群主兑现/);
+  assert.equal(spends(hub, G, { state: "pending" }).length, 1);
+  assert.equal(settle(hub, G, tea.spend.id, "done").state, "done");
+  assert.equal(dropItem(hub, G, "奶茶一杯"), true); assert.equal(dropItem(hub, G, "甩锅券"), false);
+  assert.equal(shop(hub, "g:2").some(i => i.custom), false);
+});
+
+test("the wall: weekly stars, bosses brought down, who holds which badge, records, titles", () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA);
+  const boss = earn(hub, "小明", "big"); earn(hub, "小红");
+  at(hub, boss.id, { claimed_at: NOW - 5 * HOUR, done_at: NOW - 2 * HOUR });
+  const stats = teamStats(hub, G, NOW);
+  recordStar(hub, G, stats); recordStar(hub, G, stats);
+  redeem(hub, G, "小明", "专属头衔一周", "屠龙勇士", "chat", NOW);
+  const w = honorWall(hub, G, NOW);
+  assert.deepEqual(w.stars.map(s => s.who), ["小明"]); assert.equal(w.stars[0].points, 30);
+  assert.equal(w.bosses.length, 1); assert.equal(w.bosses[0].who, "小明"); assert.equal(w.bosses[0].took_ms, 3 * HOUR);
+  assert.deepEqual(w.badges.find(b => b.key === "boss").holders.map(h => h.who), ["小明"]);
+  assert.deepEqual(w.badges.find(b => b.key === "first").holders.map(h => h.who).sort(), ["小明", "小红"].sort());
+  assert.ok(w.records.some(r => r.what === "最快做完" && r.who === "小明" && r.value === "3 小时"));
+  assert.ok(w.records.some(r => r.what === "单周最高分" && r.value === "30 分"));
+  assert.deepEqual(w.titles.map(t => t.who + t.title), ["小明屠龙勇士"]);
+  assert.equal(honorWall(mkHub(), G, NOW).stars.length, 0, "tables not there yet: an empty wall, not an error");
+});
+
+test("the chat tool: shop, redeem for the asker only, wall, and owner-only settling", async () => {
+  const hub = mkHub(); hub.db.exec(SHOP_SCHEMA); hub.edit.rank = (_c, askers) => askers[0]?.name === "群主" ? "owner" : "member";
+  earn(hub, "小明", "big");
+  const as = name => feature.tools({ hub, conv: G, askers: [{ id: name, name }], host: {} })[0];
+  const s = await as("小明").run({ op: "shop" });
+  assert.equal(s.balance, 30); assert.ok(s.items.length >= 7);
+  const r = await as("小明").run({ op: "redeem", item: "点一张图", note: "奶蛙爬山" });
+  assert.equal(r.ok, true); assert.equal(r.balance_left, 10); assert.match(r.do, /generate_image/);
+  assert.equal((await as("小红").run({ op: "redeem", item: "定制表情包" })).ok, false, "no points of her own");
+  assert.equal((await as("小明").run({ op: "refund", id: r.record })).ok, false);
+  assert.equal((await as("群主").run({ op: "refund", id: r.record })).ok, true);
+  assert.equal((await as("小明").run({ op: "add_item", name: "奶茶", cost: 30 })).ok, false);
+  assert.equal((await as("群主").run({ op: "add_item", name: "奶茶一杯", cost: 30, what: "群主请" })).ok, true);
+  const w = await as("小红").run({ op: "wall" });
+  assert.ok(w.bosses.length === 1 && w.badges.some(b => b.startsWith("屠龙")));
+  assert.equal((await as("小明").run({ op: "status", mine: true })).people[0].balance, 30);
 });
