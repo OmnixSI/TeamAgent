@@ -218,7 +218,7 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
   if (path === "mcp") {
     const token = bearerToken(req.headers.get("authorization")) || cookieToken(req.headers.get("cookie"));
     if (!token) return bad("没找到你的登录信息，重新点一次群里的看板链接", 401);
-    return json({ ok: true, lines: bases(hub).map(base => "claude mcp add --transport http teamagent " + base + "/x/mcp/" + token) });
+    return json({ ok: true, lines: bases(hub).map(base => "claude mcp add --scope user --transport http teamagent " + base + "/x/mcp/" + token) });
   }
   if (path === "box/upload") {
     const d = newDrop(hub, p.conv, { by: p.name, sender: p.uid, note: str(b.note, 200) || "" });
