@@ -33,9 +33,10 @@ import tasks from "./tasks.ts";
 import teamwork from "./teamwork.ts";
 import board from "./board.ts";
 import mcp from "./mcp.ts";
+import dailyAccounts from "./daily-accounts.ts";
 
 export const FEATURES: Feature[] = [backup, transfer, meme, voice, codeagent, publish, preview, repocheck, search, library, watch, data,
-  filebox, skills, webkit, feeds, papers, minutes, subtitle, doctrans, previewlink, staticsite, findimage, uptime, flashcards, steward, toolbox, access, tasks, teamwork, board, mcp];
+  filebox, skills, webkit, feeds, papers, minutes, subtitle, doctrans, previewlink, staticsite, findimage, uptime, flashcards, steward, toolbox, access, tasks, teamwork, board, mcp, dailyAccounts];
 for (const f of FEATURES) Object.assign(TUNABLES, f.tunables || {});
 // Saved links and files are also searchable by meaning, through the same index as the chat.
 setSemantic({ index: indexText, search: searchText });

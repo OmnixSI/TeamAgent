@@ -24,6 +24,7 @@ import { hearSilk, transcribe } from "./sites.ts";
 import { aiTranscribe } from "./feat/search.ts";
 import { route } from "./admin.ts";
 import { FEATURES } from "./feat/index.ts";
+import { dailyAccountsDay, dailyAccountsTask, ensureDailyAccountsSchedule, publishDailyAccounts } from "./feat/daily-accounts.ts";
 import { BJ, SYD, b64, buildOf, clip, fmtDate, fmtFull, nextDaily, sleep, zonedToUtc } from "./util.ts";
 import type { Env } from "./util.ts";
 
@@ -49,6 +50,7 @@ export class Hub extends DurableObject<Env> {
   firstPending = new Map<string, number>();
   anchorUse = new Map<string, number>();
   jobs = new Map<number, Job>();
+  private dailyAccountsRoom = "";
   restartWanted = "";
   restartSince = 0;
   recovered = false;
@@ -250,10 +252,16 @@ export class Hub extends DurableObject<Env> {
   }
   /** Runs a task in the background: the conversation is not held, so the chat goes on while it works. */
   async runTask(conv: string, task: string, resume?: { id: number; messages?: any[] }) {
-    const title = clip(task.replace(/\s+/g, " "), 40);
+    const reportDay = dailyAccountsDay(task);
+    const title = reportDay ? `${reportDay} 账目日报` : clip(task.replace(/\s+/g, " "), 40);
     const id = resume?.id ?? this.startJob(conv, "task", title, task);
     if (resume) this.jobs.set(id, { conv, title, since: Date.now(), cancel: false });
     try {
+      if (reportDay) {
+        const done = await publishDailyAccounts(this, conv, reportDay, () => !!this.jobs.get(id)?.cancel);
+        this.finishJob(id, done ? "done" : "cancelled");
+        return done;
+      }
       const rows = this.window(conv), top = rows.length ? rows[rows.length - 1].seq : 0;
       const res = await runTurn(
         { rows, cursor: top, mentioned: false, memory: this.memoryOf(conv), notes: this.notes(conv), now: Date.now(), task, rules: this.edit.play(conv, "persona"), resume: resume?.messages },
@@ -513,13 +521,20 @@ export class Hub extends DurableObject<Env> {
     try {
       await this.gateway.watch(now);
       if (!this.recovered) { this.recovered = true; this.ctx.waitUntil(this.recoverJobs().catch(e => console.log("recover failed", e?.message))); }
+      const main = this.get("main");
+      if (main && main !== this.dailyAccountsRoom) {
+        try {
+          ensureDailyAccountsSchedule(this, main, now);
+          this.dailyAccountsRoom = main;
+        } catch (e: any) { console.log("daily accounts schedule failed", e?.message); }
+      }
 
       for (const s of this.sql.exec("SELECT * FROM sched WHERE active=1 AND next<=? ORDER BY next LIMIT 3", now).toArray()) {
         const spec = JSON.parse(String(s.spec)), conv = String(s.conv);
         if ([...this.jobs.values()].filter(j => j.conv === conv).length >= JOBS_PER_CONV) continue;
         if (spec.type === "daily") this.sql.exec("UPDATE sched SET next=?, last=? WHERE id=?", nextDaily(spec.time, spec.tz, now, spec.days, spec.dom), now, s.id);
         else this.sql.exec("UPDATE sched SET active=0, last=? WHERE id=?", now, s.id);
-        if (now - Number(s.next) < 6 * 3600000) this.ctx.waitUntil(this.runTask(conv, String(s.task)));
+        if (now - Number(s.next) < 6 * 3600000) this.ctx.waitUntil(this.runTask(conv, dailyAccountsTask(spec, Number(s.next), String(s.task))));
       }
 
       if (this.get("snap:day") !== fmtDate(now, BJ)) { this.set("snap:day", fmtDate(now, BJ)); this.ctx.waitUntil(this.accounts.snapshot().catch(() => {})); }
@@ -533,7 +548,7 @@ export class Hub extends DurableObject<Env> {
       }
 
       // Self-check once a day, mid-morning in Beijing; only new problems are told to the group.
-      const bjDay = fmtDate(now, BJ), main = this.get("main");
+      const bjDay = fmtDate(now, BJ);
       if (main && this.get("health:day") !== bjDay && now >= zonedToUtc(bjDay, "10:30", BJ)) {
         this.set("health:day", bjDay);
         this.ctx.waitUntil(dailyHealth(this).then(fresh => (fresh.length ? this.say(main, "自检发现 " + fresh.length + " 件要处理的事：\n" + fresh.map((c, i) => (i + 1) + ". " + c.text).join("\n")) : false)).catch(e => console.log("health failed", e?.message)));
