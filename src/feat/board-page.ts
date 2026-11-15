@@ -307,11 +307,14 @@ function detail(panel, j, refresh) {
       api("mcp", {}).then(function (r) {
         how.disabled = false;
         out.appendChild(h("p", { class: "meta", text: "在终端里运行一次（别的工具填同样的地址，类型选 HTTP）。命令里带着你的个人令牌，只在这里复制，不要发到群里。" }));
-        r.lines.forEach(function (line) {
-          out.appendChild(h("code", { text: line.replace(/[a-f0-9]{40}/, function (k) { return k.slice(0, 4) + "…" + k.slice(-4); }) }));
-          out.appendChild(h("div", { class: "row" }, copyBtn(line, "复制命令")));
+        (r.tools || [{ name: "", lines: r.lines }]).forEach(function (tool) {
+          if (tool.name) out.appendChild(h("p", { class: "meta", text: tool.name }));
+          tool.lines.forEach(function (line) {
+            out.appendChild(h("code", { text: line.replace(/[a-f0-9]{40}/, function (k) { return k.slice(0, 4) + "…" + k.slice(-4); }) }));
+            out.appendChild(h("div", { class: "row" }, copyBtn(line, "复制命令")));
+          });
         });
-        if (r.lines.length > 1) out.appendChild(h("p", { class: "meta", text: "第二个走香港镜像，大陆网络连不上第一个就用它。" }));
+        if (r.lines.length > 1) out.appendChild(h("p", { class: "meta", text: "每种工具的第二条走香港镜像，大陆网络连不上第一条就用它。" }));
       }, function (e) { how.disabled = false; fail(e); });
     });
     ai.appendChild(how); ai.appendChild(out);

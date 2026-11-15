@@ -299,6 +299,8 @@ describe("changes are guarded", () => {
   test("the MCP line only on request, logout clears the cookie", async () => {
     let { j } = await post("/x/board/api/mcp", {});
     assert.deepEqual(j.lines, ["claude mcp add --scope user --transport http teamagent https://bot.example/x/mcp/" + A]);
+    assert.deepEqual(j.tools.map(t => t.name), ["Claude Code", "Codex"]);
+    assert.deepEqual(j.tools[1].lines, ["codex mcp add teamagent --url https://bot.example/x/mcp/" + A]);
     assert.equal((await call("/x/board/api/mcp", { token: A })).status, 404);   // not readable with a GET
     const r = await call("/x/board/api/logout", { token: A, json: {} });
     assert.match(r.headers.get("set-cookie"), /^tabd=; Path=\/x\/; Max-Age=0/);

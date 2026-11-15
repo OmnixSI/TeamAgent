@@ -74,7 +74,7 @@ const feature: Feature = {
   tools({ hub, conv, askers }): Tool[] {
     return [{
       name: "board_link",
-      description: "给提问的群友一个看板的个人链接（团队看板：任务、群聊动态、记忆、仓库、作品和文件、监控、工具），或者作废他的链接。群友说“给我看板链接”“看板地址”“怎么登录看板”“本地 AI 怎么接任务”时用 op=link；说“把我的看板链接作废”用 op=revoke；op=list 看这个群里谁有有效链接。链接点开即登录，不要让群友输账号密码。返回里 links 是看板地址（有香港镜像时会有两个，大陆网络用镜像那个），mcp 是给本地 AI（Claude Code 等）接任务用的配置，把它们原样发出来。",
+      description: "给提问的群友一个看板的个人链接（团队看板：任务、群聊动态、记忆、仓库、作品和文件、监控、工具），或者作废他的链接。群友说“给我看板链接”“看板地址”“怎么登录看板”“本地 AI 怎么接任务”时用 op=link；说“把我的看板链接作废”用 op=revoke；op=list 看这个群里谁有有效链接。链接点开即登录，不要让群友输账号密码。返回里 links 是看板地址（有香港镜像时会有两个，大陆网络用镜像那个），mcp 是给本地 AI 接任务用的命令，Claude Code 和 Codex 各一行，把两行都原样发出来。",
       parameters: { type: "object", properties: { op: { type: "string", enum: ["link", "revoke", "list"] } }, required: ["op"] },
       run: async (a: any) => {
         const who = askers[askers.length - 1];
@@ -86,7 +86,12 @@ const feature: Feature = {
           ok: true, for: who.name,
           links: b.map(u => u + "/x/board/k/" + token),
           ...(b.length > 1 ? { which: "第一个是直连地址，第二个是香港镜像，大陆网络打不开第一个就用第二个" } : {}),
-          mcp: { what: "本地 AI 接任务：在 Claude Code 里运行下面这一行（别的工具填同样的地址，类型选 HTTP）", command: "claude mcp add --scope user --transport http teamagent " + b[b.length - 1] + "/x/mcp/" + token },
+          mcp: {
+            what: "本地 AI 接任务：用哪个工具就在终端里运行对应的那一行，只用运行一次（别的工具填 address 这个地址，类型选 HTTP）",
+            claude_code: "claude mcp add --scope user --transport http teamagent " + b[b.length - 1] + "/x/mcp/" + token,
+            codex: "codex mcp add teamagent --url " + b[b.length - 1] + "/x/mcp/" + token,
+            address: b[b.length - 1] + "/x/mcp/" + token,
+          },
           note: "链接代表" + who.name + "本人，别转给群外的人；想作废就说“把我的看板链接作废”",
         };
       },
