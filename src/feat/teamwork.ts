@@ -709,6 +709,13 @@ export default feature;
 hooks.done = (hub, conv, task, _who, quiet) => {
   if (quiet) return;
   if (String((hub as any).edit?.cfg?.(conv, "team_praise") ?? "on") !== "on") { tell(hub, conv, named(task) + " 做完了" + (task.result ? "：" + clip(task.result, 160) : "")); return; }
+  // While task news is gathered into one message, only a boss fight gets its own praise on the spot; the rest go into
+  // that message as a plain line with the real numbers.
+  if (String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "digest") === "digest" && task.size !== "big") {
+    const c = cheerFacts(hub, conv, task);
+    tell(hub, conv, c ? plainCheer(c, task) : named(task) + " 做完了");
+    return;
+  }
   const p = cheer(hub, conv, task).catch(e => console.log("teamwork: cheer failed", e?.message));
   (hub as any).ctx?.waitUntil?.(p);
 };

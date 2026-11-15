@@ -201,12 +201,36 @@ export function unblockedBy(hub: Hub, conv: string, id: number): Task[] {
  * One line in the group when something happens to a task outside the chat (on the board, or by someone's
  * local AI). Changes made by talking to the bot pass `quiet`: the bot's own reply already says it.
  */
-export function tell(hub: Hub, conv: string, text: string) {
+export function tell(hub: Hub, conv: string, text: string, now = Date.now()) {
   try {
-    if (String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "on") !== "on") return;
+    const mode = String((hub as any).edit?.cfg?.(conv, "tasks_announce") ?? "digest");
+    if (mode === "off") return;
+    // Gathered: the line waits and goes out with the others in one message (see flushNotices), so a busy hour is not a flood.
+    if (mode !== "on") { ensure(hub); hub.sql.exec("INSERT INTO task_notice(conv, ts, text) VALUES(?,?,?)", conv, now, clip(text, 300)); return; }
     const p = (hub as any).say?.(conv, "【任务】" + text);
     if (p && typeof p.catch === "function") { const q = p.catch((e: any) => console.log("tasks: notice failed", e?.message)); (hub as any).ctx?.waitUntil?.(q); }
   } catch (e: any) { console.log("tasks: notice failed", e?.message); }
+}
+const DIGEST_LINES = 8;
+/**
+ * Sends each group's waiting task notices as one message once the oldest has waited long enough
+ * (`tasks_digest_minutes`); `force` sends them now. More than a handful are counted, not listed.
+ */
+export async function flushNotices(hub: Hub, now = Date.now(), force = false): Promise<string[]> {
+  ensure(hub);
+  const sent: string[] = [];
+  const convs = hub.sql.exec("SELECT conv, MIN(ts) first, COUNT(*) n FROM task_notice GROUP BY conv").toArray() as any[];
+  for (const c of convs) {
+    const conv = String(c.conv), wait = Math.max(1, Number((hub as any).edit?.cfg?.(conv, "tasks_digest_minutes")) || 30) * 60000;
+    if (!force && now - Number(c.first) < wait) continue;
+    const rows = hub.sql.exec("SELECT id, text FROM task_notice WHERE conv=? ORDER BY id", conv).toArray() as any[];
+    hub.sql.exec("DELETE FROM task_notice WHERE conv=? AND id<=?", conv, Number(rows[rows.length - 1].id));
+    const lines = rows.map(r => String(r.text)), shown = lines.length > DIGEST_LINES ? lines.slice(-DIGEST_LINES) : lines;
+    const text = lines.length === 1 ? "【任务】" + lines[0]
+      : "【任务】这阵子的动静（" + lines.length + " 条）：\n" + shown.map(l => "· " + l).join("\n") + (lines.length > shown.length ? "\n更早的 " + (lines.length - shown.length) + " 条在看板上" : "");
+    try { await (hub as any).say?.(conv, text); sent.push(conv); } catch (e: any) { console.log("tasks: digest failed", e?.message); }
+  }
+  return sent;
 }
 export const named = (t: Task) => "#" + t.id + "「" + clip(t.title, 40) + "」";
 
@@ -726,7 +750,8 @@ export function botBrief(hub: Hub, conv: string, id: number): string {
     + "3. 你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 tasks op=split（id=" + t.id + "）拆成一件新任务交给合适的人：owner 填他在群里的名字（不知道给谁就空着），reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么。你剩下的活要等他那件做完才能继续，就加 blocks=true，到时候会自动再轮到你。\n"
     + "4. 中途值得记的进展用 tasks op=note。\n"
     + "5. 收尾：你这部分全做完了就 tasks op=done，result 写交付了什么、在哪。还要等别人的那件就不要 done。\n"
-    + "最后用两三句话在群里交代：做成了什么、成果在哪（给链接）、哪几块拆给了谁、为什么。这几句会直接发到群里，别写成报告。";
+    + "群里别刷屏：成果挂在任务上就算交付，不要再往群里发长图、PDF、文件或整篇报告（原话明确要发群里的除外），中途也不要一步步汇报。\n"
+    + "最后只回一两句话：做成了什么、哪块拆给了谁，细节让人去看板上看这件任务。这一两句会直接发到群里。";
 }
 /** Sets the bot to work on one of its tasks in the background; resolves when that run has ended. */
 export async function workOn(hub: Hub, conv: string, id: number, now = Date.now()): Promise<boolean> {
@@ -775,6 +800,7 @@ function botTick(hub: Hub, now: number) {
 function tick(hub: Hub, now: number) {
   const today = fmtDate(now, BJ);
   try { botTick(hub, now); } catch (e: any) { console.log("tasks: bot tick failed", e?.message); }
+  try { if (hub.sql.exec("SELECT 1 FROM task_notice LIMIT 1").toArray().length) hub.ctx.waitUntil(flushNotices(hub, now).catch(e => console.log("tasks: digest failed", e?.message))); } catch {}
   if (hub.get("tasks:extract:day") !== today && now >= zonedToUtc(today, EXTRACT_AT, BJ) && !busy.has(hub)) {
     hub.set("tasks:extract:day", today);
     busy.add(hub);
@@ -803,12 +829,14 @@ const feature: Feature = {
     CREATE TABLE IF NOT EXISTS task_ref(id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, conv TEXT NOT NULL, ts INTEGER NOT NULL, who TEXT DEFAULT '',
       kind TEXT NOT NULL, title TEXT DEFAULT '', ref TEXT DEFAULT '', text TEXT DEFAULT '');
     CREATE INDEX IF NOT EXISTS task_ref_task ON task_ref(conv, task, ts);
+    CREATE TABLE IF NOT EXISTS task_notice(id INTEGER PRIMARY KEY AUTOINCREMENT, conv TEXT NOT NULL, ts INTEGER NOT NULL, text TEXT NOT NULL);
   `,
   tunables: {
     tasks_nightly: { default: "on", options: ["on", "off"], what: "每天夜里从前一天的聊天里补记任务、标出做完和不做的" },
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
-    tasks_announce: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 接了任务、做完、放下、加了新任务时，在群里说一句" },
+    tasks_announce: { default: "digest", options: ["digest", "on", "off"], what: "看板上、本地 AI 和 Bot 自己对任务的动作（接了、做完、放下、新加）怎么在群里说：digest 攒起来隔一阵合成一条，on 每件事当场说一句，off 不说" },
+    tasks_digest_minutes: { default: 30, min: 5, max: 240, what: "任务动静攒多少分钟合成一条发群里" },
     tasks_bot_auto: { default: "on", options: ["on", "off"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
     tasks_bot_daily: { default: 6, min: 0, max: 20, what: "Bot 一天最多自己开工做几次名下的任务" },
   },
@@ -845,7 +873,7 @@ const feature: Feature = {
     "有人明确说要做某件具体的事，或者把事交给别人，我会自己记下；随口说说的、开玩笑的不记。想让我记，说“记一下……”就行。",
     "说做完了、不做了、做到哪了，我会在清单上改；问“现在有哪些事在做”，我照清单回答。",
     "每天夜里我会把前一天的聊天再过一遍，补上漏记的、标出做完和取消的，每件新记的都对得上群里的原话；一晚最多新记 8 件（可以改），不在群里说。",
-    "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，我会在群里说一句（以【任务】开头）；在群里直接跟我说的不重复提醒。不想要可以把 tasks_announce 关掉。",
+    "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，还有我自己开工，这些动静不再一件一条地发：攒起来每半小时合成一条（以【任务】开头，最多列 8 条，更多的看看板），免得一开发就把群淹了。在群里直接跟我说的不重复提醒。想要每件当场说把 tasks_announce 改成 on，都不要就 off；间隔用 tasks_digest_minutes 改。",
     "到期提醒默认关着；打开后，任务到期那天早上我在群里提一句，每件只提一次。",
     "任务有轻重（急、普通、不急）和先后（这件要等哪几件做完）。清单和看板按该做的顺序排：正在做的、现在能开工的（急的在前）、还在等别的任务的；前面那件做完，后面等着的会被点名可以开始了。",
     "交给我自己的任务我会真的去做，看板上看得到：轮到它时我自己开工（北京时间 8 点到 23 点半，同一个群一次只做一件，一天最多 6 次，可以改），状态变成“在做”，做出来的报告、链接、文件挂在任务上，做完写上结果。一件任务我自己最多试 3 轮，还没做完就停下来在群里说卡在哪。",

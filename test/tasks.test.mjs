@@ -310,7 +310,7 @@ test2("a task finished before finish times were kept gets its last change as the
 const { workOrder, blockers, checkAfter, unblockedBy, addTaskRef, taskRefs, removeTaskRef, handoff, quoteOf, nextBotTask, botBrief, workOn, botBusy, parseIds, normPriority } = await import("../src/feat/tasks.ts");
 
 test("priority and order: what to work on first, what waits, loops refused, the next one is named when its turn comes", () => {
-  const hub = mkHub();
+  const hub = mkHub({ tasks_announce: "on" });
   const a = addTask(hub, G, { title: "搭后端接口", by: "小明" }, true), b = addTask(hub, G, { title: "接前端页面", by: "小明", after: [a.id, 999] }, true);
   const c = addTask(hub, G, { title: "修线上事故", by: "小明", priority: "high" }, true), d = addTask(hub, G, { title: "整理文档", by: "小明", priority: "low" }, true);
   assert.deepEqual(b.after, [a.id], "an id that does not exist is left out"); assert.equal(c.priority, 1); assert.equal(d.priority, 3); assert.equal(a.priority, 2);
@@ -408,7 +408,7 @@ test("the tool: the asker's own words are stored verbatim; start, attach, split 
 });
 
 test("the bot works on its own tasks: picks the next one, shows it as under way, runs it, and says what happened when it is not finished", async () => {
-  const hub = mkHub({ tasks_bot_daily: 2, tasks_bot_auto: "on" });
+  const hub = mkHub({ tasks_bot_daily: 2, tasks_bot_auto: "on", tasks_announce: "on" });
   const runs = [];
   hub.jobs = new Map();
   hub.runTask = async (conv, brief) => { runs.push({ conv, brief }); hub.jobs.set(99, { conv }); try { hub.onRun?.(conv); } finally { hub.jobs.delete(99); } return true; };
@@ -459,4 +459,32 @@ test("the bot works on its own tasks: picks the next one, shows it as under way,
   addTask(off, G, { title: "写方案", owner: "bot" }, true); addTask(off, "t:lab", { title: "写方案", owner: "bot" }, true);
   off.db.prepare("UPDATE task SET created=?").run(at8 - 3600000); off.kv.set("tasks:extract:day", day); off.kv.set("tasks:remind:day", day);
   feature.tick(off, at8); assert.equal(off.waits.length, 0);
+});
+
+test("task news is gathered: nothing is said at once, one message after the wait, a long list is cut to the latest eight", async () => {
+  const { flushNotices } = await import("../src/feat/tasks.ts");
+  const hub = mkHub(), t0 = Date.parse("2026-11-16T10:00:00+08:00");
+  assert.equal(feature.tunables.tasks_announce.default, "digest");
+  const a = addTask(hub, G, { title: "改完登录页", by: "小明" });
+  claimTask(hub, G, a.id, "小红的本地 AI");
+  assert.equal(hub.said.length, 0, "nothing goes out on the spot");
+  hub.db.prepare("UPDATE task_notice SET ts=?").run(t0);
+  assert.deepEqual(await flushNotices(hub, t0 + 10 * 60000), [], "not yet");
+  assert.deepEqual(await flushNotices(hub, t0 + 31 * 60000), [G]);
+  assert.equal(hub.said.length, 1);
+  assert.equal(hub.said[0].text, "【任务】这阵子的动静（2 条）：\n· 小明 加了 #1「改完登录页」\n· 小红的本地 AI 接了 #1「改完登录页」，开干了");
+  assert.deepEqual(await flushNotices(hub, t0 + 99 * 60000), [], "each line goes out once");
+  for (let i = 0; i < 11; i++) addTask(hub, G, { title: "第 " + (i + 1) + " 件杂事", by: "小明" });
+  await flushNotices(hub, Date.now(), true);
+  const lines = hub.said[1].text.split("\n");
+  assert.equal(lines[0], "【任务】这阵子的动静（11 条）："); assert.equal(lines.length, 10); assert.match(lines[1], /第 4 件杂事/); assert.equal(lines[9], "更早的 3 条在看板上");
+  // one line alone is sent as it is; the switch still turns everything off; "on" speaks at once
+  addTask(hub, G, { title: "单独一件", by: "小明" }); await flushNotices(hub, Date.now(), true);
+  assert.match(hub.said[2].text, /^【任务】小明 加了 #\d+「单独一件」$/);
+  const off = mkHub({ tasks_announce: "off" }); addTask(off, G, { title: "不说", by: "小明" }); assert.deepEqual(await flushNotices(off, Date.now(), true), []);
+  const on = mkHub({ tasks_announce: "on" }); addTask(on, G, { title: "当场说", by: "小明" }); assert.equal(on.said.length, 1);
+  // the timer sends what is due
+  const due = mkHub(); addTask(due, G, { title: "到点发", by: "小明" }); due.db.prepare("UPDATE task_notice SET ts=?").run(t0);
+  due.kv.set("tasks:extract:day", "2026-11-16"); due.kv.set("tasks:remind:day", "2026-11-16");
+  feature.tick(due, t0 + 45 * 60000); await Promise.all(due.waits); assert.equal(due.said.length, 1);
 });

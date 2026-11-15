@@ -271,3 +271,16 @@ test("Sunday: the star is recorded, gets a certificate in the group, a bonus and
     assert.equal(sent.length, 1); assert.equal(hub.ran.length, 2);
   } finally { deps.render = old; }
 });
+
+test("while task news is gathered, an ordinary finished task is a plain line in that message, not a praise of its own", async () => {
+  const { flushNotices } = await import("../src/feat/tasks.ts");
+  const hub = mkHub({ tasks_announce: "digest" });
+  const t = addTask(hub, G, { title: "修首页图片加载慢", owner: "小明", by: "小红" }, true);
+  claimTask(hub, G, t.id, "小明", true);
+  updateTask(hub, G, t.id, { status: "done", result: "换成了懒加载" }, "小明");
+  await Promise.all(hub.waits);
+  assert.equal(hub.said.length, 0, "nothing on the spot");
+  await flushNotices(hub, Date.now(), true);
+  assert.equal(hub.said.length, 1);
+  assert.match(hub.said[0], /^【任务】#\d+「修首页图片加载慢」 做完了，小明 拿下：.*\+10 分，这周第 1 件/);
+});
