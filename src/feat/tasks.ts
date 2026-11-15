@@ -248,7 +248,9 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
   if (patch.status !== undefined && STATUSES.includes(patch.status) && patch.status !== cur.status) {
     const to = patch.status;
     set("status", to, "状态：" + LABEL[cur.status] + " → " + LABEL[to], to === "done" ? "done" : to === "dropped" ? "drop" : cur.status === "done" || cur.status === "dropped" ? "reopen" : to === "doing" ? "claim" : "release");
-    if (to === "done") { next.done_at = now; next.done_by = personOfName(cur.claimed_by) || personOfName(cur.owner) || personOfName(who); if (!cur.claimed_at) next.claimed_at = cur.created; }
+    // Work the bot did itself is nobody's score, whoever asked for it or ticked it off.
+    const bots = isBot(cur.claimed_by) || (!cur.claimed_by && isBot(cur.owner));
+    if (to === "done") { next.done_at = now; next.done_by = bots ? "" : personOfName(cur.claimed_by) || personOfName(cur.owner) || personOfName(who); if (!cur.claimed_at) next.claimed_at = cur.created; }
     else if (cur.done_at) { next.done_at = 0; next.done_by = ""; }
     if (to === "doing" && !cur.claimed_at) next.claimed_at = now;
     // Put back to "not started" means nobody holds it any more, so someone else can pick it up.
@@ -435,7 +437,7 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       + "记之前先 list 看一眼有没有同一件事，有就别重复记，改那一条（update / note）；add 自己也会挡掉标题几乎一样的。\n"
       + "有人说做完了（“登录页改好了”“报告发群里了”）就 done，result 写交了什么（文字、链接、文件编号）；说不做了、取消了就 drop；说做到一半、卡住了就 note。有人说“这个我来”就 claim。\n"
       + "有人问“我们现在有哪些事在做”“我还欠什么”“先做哪个”，用 list 照清单回答，不要凭印象；list 已经按该做的顺序排好（在做的、能开工的按优先级、还在等前置的排最后）。\n"
-      + "交给你自己做的事（owner 是 bot）不是记一笔就完了，清单上要看得出你在干：开工前 start，做出来的东西（调研报告、方案全文、网页链接、PR、文件编号）用 attach 挂到任务上，做完 done。看板和群友的本地 AI 只看得到挂在任务上的东西，只发在群里不算交接。\n"
+      + "交给你自己做的事（owner 是 bot）不是记一笔就完了，清单上要看得出你在干：开工前 start，做出来的东西（调研报告、方案全文、网页链接、PR、文件编号）用 attach 挂到任务上，做完 done。看板和群友的本地 AI 只看得到挂在任务上的东西，只发在群里不算交接。调研、方案、结论这类成文的产出一定用 kind=report 把全文放进 text：只挂图片或 PDF 的编号，别人的 AI 读不了。\n"
       + "你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 split 从原任务里拆成一件新任务交给合适的人，reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么；你剩下的活要等他做完才能继续就填 blocks=true。在群里说清楚哪部分你做了、哪部分拆给了谁。\n"
       + "先后和轻重：一件事要等另一件做完才能做，填 after（前置任务的编号）；急的填 priority=high，不急的填 low。别人口头说“先做 A 再做 B”“这个最急”也照这个记。\n"
       + "op：add（title 必填，一句话说清要交付什么；owner 填负责人在群里的名字，交给你自己就填 bot；due 填 YYYY-MM-DD，也认“明天”“11月20日”；source 填原话里的一小句，提出这件事的人最近说的原话会自动整段存进任务，不用你抄）、"
@@ -523,9 +525,10 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
         const same = similarTask(hub, conv, title);
         if (same && same.id !== t.id) return { ok: true, duplicate: true, note: "清单里已经有这件事了，没有重复拆", task: brief(same) };
         const detail = [clean(a.detail, 700), "拆出来的原因：" + reason].filter(Boolean).join("\n");
-        const child = addTask(hub, conv, { title, detail, owner: a.owner, due: a.due, source: t.source, by: who, size: a.size, priority: a.priority ?? t.priority, parent: t.id }, true)!;
-        addTaskNote(hub, conv, t.id, who, "拆出 #" + child.id + "「" + clip(child.title, 40) + "」" + (child.owner ? "交给 " + child.owner : "，还没定谁做") + "：" + reason);
-        if (a.blocks) updateTask(hub, conv, t.id, { after: [...t.after, child.id] }, who, true);
+        // The bot is the one splitting, also when someone's request is what it is working on.
+        const child = addTask(hub, conv, { title, detail, owner: a.owner, due: a.due, source: t.source, by: BOT, size: a.size, priority: a.priority ?? t.priority, parent: t.id }, true)!;
+        addTaskNote(hub, conv, t.id, BOT, "拆出 #" + child.id + "「" + clip(child.title, 40) + "」" + (child.owner ? "交给 " + child.owner : "，还没定谁做") + "：" + reason);
+        if (a.blocks) updateTask(hub, conv, t.id, { after: [...t.after, child.id] }, BOT, true);
         return { ok: true, split: brief(child), from: brief(getTask(hub, conv, t.id)!), ...(a.blocks ? { note: "原任务会等 #" + child.id + " 做完再继续，到时候自动轮到" } : {}), say: "在群里说清楚这部分为什么拆给" + (child.owner || "别人") + "，别悄悄挂上去" };
       }
       if (op === "update") {
@@ -541,8 +544,11 @@ function tools({ hub, conv, askers }: Ctx): Tool[] {
       }
       if (op === "done") {
         const fin = updateTask(hub, conv, t.id, { status: "done", ...(a.result !== undefined ? { result: a.result } : {}) }, who, true)!;
-        const cheer = hooks.facts?.(hub, conv, fin), free = unblockedBy(hub, conv, fin.id);
-        return { ok: true, task: brief(fin), ...(free.length ? { now_can_start: free.map(x => ({ id: x.id, title: clip(x.title, 40), who: x.claimed_by || x.owner })), tell: "顺口说一句这几件现在可以开始了" } : {}), ...(cheer ? { cheer, say: "做完一件事值得当场夸一句：用你平时的口气，具体说他做成了什么，带上 cheer 里一两个真实的数（这周第几件、连续几天、花了多久、新拿的称号），别说“辛苦了”这种套话，别编 cheer 里没有的数" } : {}) };
+        const cheer = fin.done_by ? hooks.facts?.(hub, conv, fin) : null, free = unblockedBy(hub, conv, fin.id);
+        const bare = isBot(fin.claimed_by) && !taskRefs(hub, conv, fin.id).some(r => r.kind === "report" || r.kind === "link");
+        return { ok: true, task: brief(fin),
+          ...(bare ? { missing: "这件任务上还没有挂成文的产出。有报告、方案、结论就现在补挂：attach kind=report，全文放 text（图片和 PDF 别人的 AI 读不了）；有网页或 PR 就 attach kind=link" } : {}),
+          ...(fin.done_by ? {} : { note: "这是你自己做的活，不给任何人记分，别说算在谁头上" }), ...(free.length ? { now_can_start: free.map(x => ({ id: x.id, title: clip(x.title, 40), who: x.claimed_by || x.owner })), tell: "顺口说一句这几件现在可以开始了" } : {}), ...(cheer ? { cheer, say: "做完一件事值得当场夸一句：用你平时的口气，具体说他做成了什么，带上 cheer 里一两个真实的数（这周第几件、连续几天、花了多久、新拿的称号），别说“辛苦了”这种套话，别编 cheer 里没有的数" } : {}) };
       }
       if (op === "drop") {
         const r = updateTask(hub, conv, t.id, { status: "dropped" }, who, true)!;
@@ -716,7 +722,7 @@ export function botBrief(hub: Hub, conv: string, id: number): string {
     + "\n怎么做：\n"
     + "0. 先对一下上面的聊天和进展：这件事如果你其实已经做完、成果也发过了，不要重做，把成果用 tasks op=attach 挂上，直接 op=done。\n"
     + "1. 现在就动手，用你的工具把能做的部分做完：调研就真的去搜、去读；写方案就写成文档发出来；改代码就用编码代理开 PR。不要只说打算怎么做。\n"
-    + "2. 做出来的东西挂到任务上：tasks op=attach（kind=report 放报告或方案全文，kind=link 放网页或 PR 链接，kind=file 放文件、图片编号）。看板和群友的本地 AI 靠这个接手，只发在群里不算。\n"
+    + "2. 做出来的东西挂到任务上：tasks op=attach（kind=report 放报告或方案全文，kind=link 放网页或 PR 链接，kind=file 放文件、图片编号）。看板和群友的本地 AI 靠这个接手，只发在群里不算。成文的东西一定要有一份 kind=report 的全文，只挂图片或 PDF 别人的 AI 读不了。\n"
     + "3. 你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 tasks op=split（id=" + t.id + "）拆成一件新任务交给合适的人：owner 填他在群里的名字（不知道给谁就空着），reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么。你剩下的活要等他那件做完才能继续，就加 blocks=true，到时候会自动再轮到你。\n"
     + "4. 中途值得记的进展用 tasks op=note。\n"
     + "5. 收尾：你这部分全做完了就 tasks op=done，result 写交付了什么、在哪。还要等别人的那件就不要 done。\n"

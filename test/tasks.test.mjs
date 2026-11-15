@@ -397,6 +397,13 @@ test("the tool: the asker's own words are stored verbatim; start, attach, split 
   assert.match((await t.run({ op: "update", id: sp.split.id, after: [id] })).error, /互相等/);
   const done = await t.run({ op: "done", id: sp.split.id, result: "拆" });
   assert.deepEqual(done.now_can_start.map(x => x.id), [id]);
+  assert.equal(getTask(hub, G, sp.split.id).by, "bot", "the bot did the splitting");
+  // the bot's own finished work is nobody's score, and it is told when nothing readable is attached
+  const own = (await t.run({ op: "add", title: "查一下域名什么时候到期", owner: "bot" })).added.id;
+  await t.run({ op: "start", id: own });
+  const fin = await t.run({ op: "done", id: own, result: "明年三月" });
+  assert.equal(getTask(hub, G, own).done_by, ""); assert.match(fin.missing, /kind=report/); assert.match(fin.note, /不给任何人记分/); assert.equal(fin.cheer, undefined);
+  assert.equal(getTask(hub, G, sp.split.id).done_by, "小明");
   assert.equal(hub.said.length, 0, "what is said to the bot in the chat is not announced a second time");
 });
 
