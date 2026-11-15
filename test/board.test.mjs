@@ -18,6 +18,8 @@ import repocheck from "../src/feat/repocheck.ts";
 import { Plan } from "../src/budget.ts";
 import { Store } from "../src/store.ts";
 import { Accounts } from "../src/accounts.ts";
+import { RULES as CONTRIB_RULES } from "../src/feat/contrib.ts";
+CONTRIB_RULES.claim.points = 0;   // these tests are about task scoring alone; picking a task up is scored in contrib.test.mjs
 
 const HUB_SQL = `CREATE TABLE IF NOT EXISTS msg(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, conv TEXT NOT NULL, role TEXT NOT NULL, sender TEXT, name TEXT, text TEXT NOT NULL, ts INTEGER NOT NULL, mentioned INTEGER DEFAULT 0, meta TEXT);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
