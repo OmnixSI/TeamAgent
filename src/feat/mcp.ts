@@ -22,12 +22,14 @@ const PV = "io.modelcontextprotocol/protocolVersion";
 const BODY_MAX = 1024 * 1024;
 const SERVER = { name: "teamagent", title: "TeamAgent 群任务", version: "1.0.0" };
 const INSTRUCTIONS = "TeamAgent is the QQ group bot of a small team of friends. This server gives you the group's task list (任务) and read access to what the bot keeps. "
-  + "Typical flow: list_tasks → get_task → claim_task (领任务) → work on it locally → report_progress (进展) → complete_task (交付, with the result and links); release_task if you give up. "
+  + "Typical flow: list_tasks (already in working order) → get_task (the whole hand-off package: the original words from the chat, attached reports and links, what it waits for) → claim_task (领任务) → work on it locally → report_progress (进展) → attach_material for a report or links you produced → complete_task (交付); release_task if you give up. "
+  + "A part you cannot do goes back to the group as its own task: add_task with parent set to the task you are on and the reason in detail. "
   + "Claiming, completing and releasing a task are announced in the group chat automatically, so do not repeat them; notify_group posts one extra short line and is only for progress or results worth telling the group. Everything you do is recorded as \"<person>的本地 AI\". Reply to the person in Chinese.";
 
 export type Deps = {
   listTasks: typeof tasks.listTasks; getTask: typeof tasks.getTask; addTask: typeof tasks.addTask; updateTask: typeof tasks.updateTask;
   claimTask: typeof tasks.claimTask; addTaskNote: typeof tasks.addTaskNote; taskNotes: typeof tasks.taskNotes;
+  handoff: typeof tasks.handoff; workOrder: typeof tasks.workOrder; checkAfter: typeof tasks.checkAfter; addTaskRef: typeof tasks.addTaskRef;
   checkAccess: (hub: Hub, token: string) => Promise<Person | null>;
 };
 const DEPS: Deps = { ...tasks, checkAccess: (hub, token) => checkAccess(hub, token) };
@@ -62,7 +64,9 @@ function count(hub: Hub, kind: string, who: Person, limit: number) {
 
 // ---------- tools ----------
 const STATUS: TaskStatus[] = ["open", "doing", "done", "dropped"];
-const brief = (t: Task) => ({ id: t.id, title: t.title, status: t.status, owner: t.owner || undefined, due: t.due || undefined, claimed_by: t.claimed_by || undefined, updated: when(t.updated) });
+const PRIORITY: Record<number, string> = { 1: "high", 3: "low" };
+const brief = (t: Task) => ({ id: t.id, title: t.title, status: t.status, owner: t.owner || undefined, due: t.due || undefined, claimed_by: t.claimed_by || undefined,
+  priority: PRIORITY[t.priority] || undefined, after: t.after?.length ? t.after : undefined, split_from: t.parent || undefined, updated: when(t.updated) });
 const full = (t: Task) => ({ ...brief(t), detail: t.detail || undefined, source: t.source || undefined, by: t.by || undefined, result: t.result || undefined, created: when(t.created) });
 const mine = (t: Task, c: Call) => !!t.claimed_by && (t.claimed_by === c.actor || t.claimed_by === c.who.name);
 const need = (c: Call, id: number) => c.d.getTask(c.hub, c.conv, id) || no("没有 #" + id + " 这个任务。用 list_tasks 看看现有的任务。");
@@ -83,7 +87,8 @@ export const TOOLS: Tool[] = [
     name: "list_tasks", title: "看任务", annotations: READ,
     description: "List the group's tasks (群里的任务清单). Default shows the open ones (open = 待办, nobody working on it; doing = 进行中, someone claimed it). "
       + "status: active (open + doing, default), open, doing, done (做完的), dropped (取消的) or all. owner: only tasks meant for this person (群昵称). mine: true for tasks meant for or claimed by the person you work for. "
-      + "Returns id, title, status, owner, due date, who claimed it and when it last changed; use get_task for the details.",
+      + "Unfinished tasks come back in the order to work on them: under way, then startable now (priority high first), then those still waiting for another task (waiting_for lists the unfinished tasks it needs first). "
+      + "Returns id, title, status, owner, due date, priority (only when high or low), who claimed it and when it last changed; use get_task for the details.",
     inputSchema: schema({
       status: str("Which tasks", { enum: ["active", "open", "doing", "done", "dropped", "all"] }),
       owner: str("Only tasks meant for this group member (their nickname)"),
@@ -96,17 +101,32 @@ export const TOOLS: Tool[] = [
       const limit = Math.min(Math.max(Number(a.limit) || 30, 1), 100);
       let list = c.d.listTasks(c.hub, c.conv, { status, ...(a.owner ? { owner: String(a.owner) } : {}), limit: a.mine ? 500 : limit });
       if (a.mine) list = list.filter(t => t.owner === c.who.name || mine(t, c)).slice(0, limit);
-      return { you_work_for: c.who.name, count: list.length, tasks: list.map(brief), ...(list.length ? {} : { note: "没有符合条件的任务" }) };
+      const order = new Map(c.d.workOrder(c.hub, c.conv).map((r, i) => [r.task.id, { i, wait: r.blocked_by }]));
+      if (list.length && list.every(t => order.has(t.id))) list = list.sort((x, y) => order.get(x.id)!.i - order.get(y.id)!.i);
+      return { you_work_for: c.who.name, count: list.length, tasks: list.map(t => ({ ...brief(t), ...(order.get(t.id)?.wait.length ? { waiting_for: order.get(t.id)!.wait } : {}) })), ...(list.length ? {} : { note: "没有符合条件的任务" }) };
     },
   },
   {
     name: "get_task", title: "看一个任务", annotations: READ,
-    description: "One task in full: detail (要求), where it came from, who created it, who claimed it, the delivered result, and its notes (进展记录, newest last).",
+    description: "One task with everything needed to take it over: detail (要求), original_words (原话: what the people who asked said in the chat, verbatim), materials (reports with their full text, links, file numbers; from_task marks a piece inherited from the task this one was split from), "
+      + "waits_for (tasks that must be finished first, with their state and results), split_from / split_into, who created and claimed it, the delivered result, and its notes (进展记录, newest last). Read this before you start working.",
     inputSchema: schema({ id: TASK_ID }, ["id"]),
     run(a, c) {
-      const t = need(c, a.id);
-      const notes: TaskNote[] = c.d.taskNotes(c.hub, c.conv, t.id);
-      return { ...full(t), notes: notes.slice(-40).map(n => ({ when: when(n.ts), who: n.who, text: n.text })) };
+      const t = need(c, a.id), h = c.d.handoff(c.hub, c.conv, t.id);
+      const notes: TaskNote[] = h?.notes || c.d.taskNotes(c.hub, c.conv, t.id);
+      let room = 150000;   // characters of attached text in one answer
+      const piece = (m: any) => { const text = clip(String(m.text || ""), Math.max(0, room)); room -= text.length; return { kind: m.kind, title: m.title, url_or_number: m.ref || undefined, text: text || undefined, cut: text.length < String(m.text || "").length || undefined, from_task: m.from || undefined, attached_by: m.who || undefined, when: when(m.ts) }; };
+      const quotes = (h?.materials || []).filter(m => m.kind === "quote"), rest = (h?.materials || []).filter(m => m.kind !== "quote");
+      return {
+        ...full(t),
+        original_words: quotes.length ? quotes.map(m => (m.from ? "（来自 #" + m.from + "）\n" : "") + m.text).join("\n\n") : undefined,
+        materials: rest.length ? rest.map(piece) : undefined,
+        waits_for: h?.waits_for.length ? h.waits_for.map(w => ({ id: w.id, title: w.title, status: w.status, who: w.owner || undefined, result: w.result || undefined })) : undefined,
+        blocked_by: h?.blocked_by.length ? h.blocked_by : undefined,
+        split_from: h?.parent ? { id: h.parent.id, title: h.parent.title, status: h.parent.status, result: h.parent.result || undefined } : undefined,
+        split_into: h?.children.length ? h.children.map(x => ({ id: x.id, title: x.title, status: x.status, who: x.owner || undefined })) : undefined,
+        notes: notes.slice(-40).map(n => ({ when: when(n.ts), who: n.who, text: n.text })),
+      };
     },
   },
   {
@@ -121,7 +141,9 @@ export const TOOLS: Tool[] = [
       if (t.claimed_by && !mine(t, c)) no("任务 #" + t.id + " 已经被" + t.claimed_by + "领了。可以用 report_progress 给它留言，或者换一个任务。");
       const got = c.d.claimTask(c.hub, c.conv, t.id, c.actor);
       if (!got) { const now = c.d.getTask(c.hub, c.conv, t.id); no(now?.claimed_by ? "任务 #" + t.id + " 刚被" + now.claimed_by + "领走了。" : "任务 #" + t.id + " 现在领不了。"); }
-      return { ok: true, task: full(got!), next: "做的过程中用 report_progress 记进展，做完用 complete_task 交付" };
+      const wait = c.d.handoff(c.hub, c.conv, t.id)?.blocked_by || [];
+      return { ok: true, task: full(got!), ...(wait.length ? { warning: "这件排在 " + wait.map(x => "#" + x).join("、") + " 之后，它们还没做完；先用 get_task 看清楚要不要等" } : {}),
+        next: "先 get_task 把原话和材料读完；做的过程中用 report_progress 记进展，产出的报告和链接用 attach_material 挂上，做完用 complete_task 交付" };
     },
   },
   {
@@ -159,6 +181,25 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "attach_material", title: "挂材料", annotations: WRITE,
+    description: "Attach what you produced, or what the next person needs, to a task (挂材料): a report or plan as text (kind report, the full text in text), a link such as a pull request or a page (kind link, url), or a file / picture number from the bot such as x12 or g300 (kind file, url holds the number). "
+      + "The board shows it on the task and get_task returns it, so whoever takes the task over, a person or another AI, starts from it. Any task can get material, including one someone else claimed.",
+    inputSchema: schema({
+      id: TASK_ID, kind: str("What it is", { enum: ["report", "link", "file"] }), title: str("A short name for it"),
+      text: str("report: the full text, at most 40000 characters"), url: str("link: the URL; file: the file or picture number"),
+    }, ["id", "kind"]),
+    run(a, c) {
+      const t = need(c, a.id), kind = String(a.kind), text = String(a.text || "").trim(), url = String(a.url || "").trim();
+      if (!["report", "link", "file"].includes(kind)) no("kind 只能是 report / link / file。");
+      if (kind === "report" ? !text : !url) no(kind === "report" ? "报告的正文是空的（text）。" : "要给链接或编号（url）。");
+      if (text.length > 40000) no("正文太长了（" + text.length + " 字），控制在 4 万字以内，更长的放成文件或网页再给链接。");
+      if (kind === "link" && !/^https?:\/\//i.test(url)) no("链接要以 http:// 或 https:// 开头。");
+      const r = c.d.addTaskRef(c.hub, c.conv, t.id, { kind: kind as any, title: String(a.title || ""), ref: url, text, who: c.actor });
+      if (!r) no("没挂上：这件任务挂的材料已经到上限了。");
+      return { ok: true, task: t.id, attached: { kind: r!.kind, title: r!.title, url_or_number: r!.ref || undefined, chars: r!.text.length } };
+    },
+  },
+  {
     name: "release_task", title: "退回任务", annotations: WRITE,
     description: "Give a claimed task back (退回) so someone else can take it: status returns to open. Only for tasks claimed by the person you work for. reason is kept as a note.",
     inputSchema: schema({ id: TASK_ID, reason: str("Why it is given back (optional)") }, ["id"]),
@@ -176,10 +217,14 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "add_task", title: "加任务", annotations: WRITE,
-    description: "Add a task to the group's list (加任务), for example a follow-up found while working. owner is who should do it (a member's nickname, \"bot\", or empty); due is YYYY-MM-DD.",
+    description: "Add a task to the group's list (加任务), for example a follow-up found while working, or a part of your task that you cannot do (set parent to your task and say why in detail). owner is who should do it (a member's nickname, \"bot\", or empty); due is YYYY-MM-DD; "
+      + "priority is high / normal / low; after lists the task numbers that must be finished before this one can start.",
     inputSchema: schema({
-      title: str("Short title, at most 200 characters"), detail: str("What exactly should be done (optional)"),
+      title: str("Short title, at most 200 characters"), detail: str("What exactly should be done; for a split-off part: why it is split off and what is already done (optional)"),
       owner: str("Who should do it (optional)"), due: str("Due date YYYY-MM-DD (optional)"),
+      priority: str("How urgent (optional)", { enum: ["high", "normal", "low"] }),
+      after: { type: "array", items: { type: "integer" }, description: "Task numbers that must be finished first (optional)" },
+      parent: int("The task this one is split off from (optional)"),
     }, ["title"]),
     run(a, c) {
       const title = String(a.title).trim(), due = String(a.due || "").trim();
@@ -187,8 +232,12 @@ export const TOOLS: Tool[] = [
       if (title.length > 200) no("标题太长，控制在 200 字以内，细节写进 detail。");
       if (String(a.detail || "").length > 4000) no("detail 太长，控制在 4000 字以内。");
       if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) no("due 要写成 2026-11-20 这样的日期。");
-      const t = c.d.addTask(c.hub, c.conv, { title, detail: String(a.detail || ""), owner: String(a.owner || ""), due, source: "本地 AI", by: c.actor });
+      const dep = c.d.checkAfter(c.hub, c.conv, 0, (Array.isArray(a.after) ? a.after : []).map(Number).filter((n: number) => n > 0));
+      if (dep.error) no(dep.error + "。");
+      const parent = a.parent ? need(c, a.parent) : null;
+      const t = c.d.addTask(c.hub, c.conv, { title, detail: String(a.detail || ""), owner: String(a.owner || ""), due, source: parent?.source || "本地 AI", by: c.actor, priority: a.priority, after: dep.ids, parent: parent?.id });
       if (!t) no("任务没加上，稍后再试。");
+      if (parent) c.d.addTaskNote(c.hub, c.conv, parent.id, c.actor, "拆出 #" + t!.id + "「" + clip(t!.title, 40) + "」" + (t!.owner ? "交给 " + t!.owner : "，还没定谁做"));
       return { ok: true, task: full(t!) };
     },
   },
@@ -320,8 +369,8 @@ async function callTool(p: any, c: Call) {
     const d = s.properties[k];
     if (!d) return say("不认识参数 " + k + "，能用的有：" + (Object.keys(s.properties).join("、") || "无") + "。");
     if (v === null || v === undefined) continue;
-    const t = d.type, bad = t === "integer" ? !Number.isInteger(v) : t === "array" ? !Array.isArray(v) || v.some((x: any) => typeof x !== "string") : typeof v !== t;
-    if (bad) return say("参数 " + k + " 应该是" + ({ string: "文字", integer: "整数", boolean: "true 或 false", array: "文字列表" } as any)[t] + "。");
+    const t = d.type, bad = t === "integer" ? !Number.isInteger(v) : t === "array" ? !Array.isArray(v) || v.some((x: any) => (d.items?.type === "integer" ? !Number.isInteger(x) : typeof x !== "string")) : typeof v !== t;
+    if (bad) return say("参数 " + k + " 应该是" + ({ string: "文字", integer: "整数", boolean: "true 或 false", array: d.items?.type === "integer" ? "整数列表" : "文字列表" } as any)[t] + "。");
     if (d.enum && !d.enum.includes(v)) return say("参数 " + k + " 只能是 " + d.enum.join(" / ") + "。");
   }
   const limit = cfg(c.hub, c.conv, "mcp_calls_daily");

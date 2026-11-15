@@ -26,6 +26,7 @@ export type Task = {
   after: number[];      // tasks that have to be finished before this one can start
   parent: number;       // the task this one was split off from (0 for none)
   runs: number;         // how many times the bot has set out to work on it by itself
+  last_run: number;     // when it last did
 };
 export type TaskPriority = 1 | 2 | 3;
 export const PRIORITY_LABEL: Record<number, string> = { 1: "急", 2: "普通", 3: "不急" };
@@ -73,7 +74,7 @@ const ofRow = (r: any): Task => ({
   owner: String(r.owner || ""), due: String(r.due || ""), source: String(r.source || ""), by: String(r.made_by || ""), claimed_by: String(r.claimed_by || ""),
   result: String(r.result || ""), created: Number(r.created), updated: Number(r.updated),
   size: (SIZES.includes(r.size) ? r.size : "normal") as TaskSize, claimed_at: Number(r.claimed_at) || 0, done_at: Number(r.done_at) || 0, done_by: String(r.done_by || ""),
-  priority: ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priority) : 2) as TaskPriority, after: parseIds(r.after), parent: Number(r.parent) || 0, runs: Number(r.runs) || 0,
+  priority: ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priority) : 2) as TaskPriority, after: parseIds(r.after), parent: Number(r.parent) || 0, runs: Number(r.runs) || 0, last_run: Number(r.last_run) || 0,
 });
 /** "25,26", "#25 #26" or [25, 26] → [25, 26]. */
 export function parseIds(v: unknown): number[] {
@@ -380,8 +381,8 @@ export function handoff(hub: Hub, conv: string, id: number): Handoff | null {
 export function botBusy(hub: Hub, conv: string): number {
   const id = Number(hub.get("tasks:bot:running:" + conv) || 0);
   if (!id) return 0;
-  const t = getTask(hub, conv, id);
-  return t && t.status === "doing" ? id : 0;
+  const t = getTask(hub, conv, id), jobs = (hub as any).jobs as Map<number, { conv: string }> | undefined;
+  return t && t.status === "doing" && (!jobs || [...jobs.values()].some(j => j.conv === conv)) ? id : 0;
 }
 /** The words a task came from, as they were said: the last few messages of the people asking, with time and name. */
 export function quoteOf(hub: Hub, conv: string, askerIds: string[], now = Date.now()): string {
@@ -691,8 +692,83 @@ export async function remind(hub: Hub, now: number) {
   return sent;
 }
 
+// ---------- the bot doing the tasks that are its own ----------
+const BOT_RUNS = 3;                 // tries per task before it stops and asks for a person
+const RETRY_MS = 30 * 60000;        // between two tries at the same task
+const SETTLE_MS = 2 * 60000;        // a task just made may be under way in the chat turn that made it
+const WORK_FROM = "08:00", WORK_TO = "23:30";   // Beijing: results are posted to the group, so not at night
+
+/** The bot's next task in this conversation: its own, not waiting for anything, not tried too often or too recently. */
+export function nextBotTask(hub: Hub, conv: string, now = Date.now()): Task | null {
+  return workOrder(hub, conv).filter(r => !r.blocked_by.length).map(r => r.task)
+    .find(t => (isBot(t.owner) || isBot(t.claimed_by)) && (!t.claimed_by || isBot(t.claimed_by)) && t.runs < BOT_RUNS && now - t.created >= SETTLE_MS && now - t.last_run >= RETRY_MS) || null;
+}
+/** What the bot is told when it sets out on one of its tasks: the whole hand-off package and how to work. */
+export function botBrief(hub: Hub, conv: string, id: number): string {
+  const h = handoff(hub, conv, id)!, t = h.task;
+  const mat = h.materials.map(m => "〔" + REF_LABEL[m.kind] + (m.from ? "，来自 #" + m.from : "") + "〕" + m.title + (m.ref ? " " + m.ref : "") + (m.text ? "\n" + clip(m.text, m.kind === "quote" ? 3000 : 5000) : "")).join("\n\n");
+  const pre = h.waits_for.map(w => "#" + w.id + "「" + w.title + "」" + LABEL[w.status] + (w.result ? "，结果：" + clip(w.result, 600) : "")).join("\n");
+  const log = h.notes.filter(n => n.kind === "progress" || n.kind === "attach").slice(-8).map(n => fmtFull(n.ts) + " " + n.who + "：" + clip(n.text, 300)).join("\n");
+  return "做任务 #" + t.id + "「" + t.title + "」。这是群里交给你的活，现在轮到它了" + (t.runs > 1 ? "（第 " + t.runs + " 轮，接着上次的做）" : "") + "。\n"
+    + (t.detail ? "要求：" + t.detail + "\n" : "") + (t.source ? "来由：" + t.source + "\n" : "")
+    + (h.parent ? "它是从 #" + h.parent.id + "「" + h.parent.title + "」拆出来的。\n" : "")
+    + (mat ? "\n挂在任务上的材料：\n" + mat + "\n" : "") + (pre ? "\n前置任务：\n" + pre + "\n" : "") + (log ? "\n之前的进展：\n" + log + "\n" : "")
+    + "\n怎么做：\n"
+    + "0. 先对一下上面的聊天和进展：这件事如果你其实已经做完、成果也发过了，不要重做，把成果用 tasks op=attach 挂上，直接 op=done。\n"
+    + "1. 现在就动手，用你的工具把能做的部分做完：调研就真的去搜、去读；写方案就写成文档发出来；改代码就用编码代理开 PR。不要只说打算怎么做。\n"
+    + "2. 做出来的东西挂到任务上：tasks op=attach（kind=report 放报告或方案全文，kind=link 放网页或 PR 链接，kind=file 放文件、图片编号）。看板和群友的本地 AI 靠这个接手，只发在群里不算。\n"
+    + "3. 你做不了的部分照实说，不要硬做也不要假装做了：要人拍板的、要线下办的、要别人的账号或权限的、超出你工具能力的。每一块用 tasks op=split（id=" + t.id + "）拆成一件新任务交给合适的人：owner 填他在群里的名字（不知道给谁就空着），reason 写你为什么做不了，detail 写你已经做到哪、他接手要知道什么。你剩下的活要等他那件做完才能继续，就加 blocks=true，到时候会自动再轮到你。\n"
+    + "4. 中途值得记的进展用 tasks op=note。\n"
+    + "5. 收尾：你这部分全做完了就 tasks op=done，result 写交付了什么、在哪。还要等别人的那件就不要 done。\n"
+    + "最后用两三句话在群里交代：做成了什么、成果在哪（给链接）、哪几块拆给了谁、为什么。这几句会直接发到群里，别写成报告。";
+}
+/** Sets the bot to work on one of its tasks in the background; resolves when that run has ended. */
+export async function workOn(hub: Hub, conv: string, id: number, now = Date.now()): Promise<boolean> {
+  const t = getTask(hub, conv, id);
+  if (!active(t) || (t.claimed_by && !isBot(t.claimed_by)) || blockers(hub, conv, t).length) return false;
+  const fresh = t.status !== "doing";
+  hub.sql.exec("UPDATE task SET runs=COALESCE(runs,0)+1, last_run=? WHERE conv=? AND id=?", now, conv, t.id);
+  if (!t.owner) updateTask(hub, conv, t.id, { owner: BOT }, BOT, true);
+  claimTask(hub, conv, t.id, BOT, true);
+  hub.set("tasks:bot:running:" + conv, String(t.id));
+  if (fresh) tell(hub, conv, "Bot 接了 " + named(t) + "，开干了，进展在看板上");
+  try { await (hub as any).runTask(conv, botBrief(hub, conv, t.id)); }
+  catch (e: any) { console.log("tasks: bot run failed", e?.message); }
+  finally { hub.set("tasks:bot:running:" + conv, ""); }
+  // The run was told to finish the task itself; say on the task what happened when it did not.
+  const after = getTask(hub, conv, t.id);
+  if (active(after)) {
+    const wait = blockers(hub, conv, after);
+    if (wait.length) note(hub, conv, after.id, BOT, "这一轮做到这里，剩下的等 " + wait.map(x => "#" + x.id).join("、") + " 做完再继续", Date.now(), "progress");
+    else if (after.runs >= BOT_RUNS) {
+      note(hub, conv, after.id, BOT, "自己试了 " + BOT_RUNS + " 轮还没做完，先停下，等人看一眼卡在哪", Date.now(), "progress");
+      tell(hub, conv, named(after) + " 我自己试了 " + BOT_RUNS + " 轮还没做完，先停在这，需要有人看一眼卡在哪");
+    } else note(hub, conv, after.id, BOT, "这一轮没做完，过半小时接着做", Date.now(), "progress");
+  }
+  return true;
+}
+/** Starts at most one of the bot's own tasks per conversation at a time, in working hours, within the day's allowance. */
+function botTick(hub: Hub, now: number) {
+  const today = fmtDate(now, BJ);
+  if (now < zonedToUtc(today, WORK_FROM, BJ) || now >= zonedToUtc(today, WORK_TO, BJ)) return;
+  ensure(hub);
+  const convs = hub.sql.exec("SELECT DISTINCT conv FROM task WHERE status IN ('open','doing') AND (lower(owner)='bot' OR lower(claimed_by)='bot')").toArray().map((r: any) => String(r.conv));
+  for (const conv of convs) {
+    if (conv.startsWith("t:") || String(hub.edit.cfg(conv, "tasks_bot_auto")) !== "on") continue;
+    const jobs = (hub as any).jobs as Map<number, { conv: string }> | undefined;
+    if ((jobs && [...jobs.values()].some(j => j.conv === conv)) || (hub as any).running?.has?.(conv)) continue;   // one thing at a time per group
+    const t = nextBotTask(hub, conv, now);
+    if (!t) continue;
+    const k = "tasks:bot:day:" + conv, [day, n] = String(hub.get(k) || "").split("|"), used = day === today ? Number(n) || 0 : 0;
+    if (used >= Number(hub.edit.cfg(conv, "tasks_bot_daily"))) continue;
+    hub.set(k, today + "|" + (used + 1));
+    hub.ctx.waitUntil(workOn(hub, conv, t.id, now).catch(e => console.log("tasks: bot work failed", e?.message)));
+  }
+}
+
 function tick(hub: Hub, now: number) {
   const today = fmtDate(now, BJ);
+  try { botTick(hub, now); } catch (e: any) { console.log("tasks: bot tick failed", e?.message); }
   if (hub.get("tasks:extract:day") !== today && now >= zonedToUtc(today, EXTRACT_AT, BJ) && !busy.has(hub)) {
     hub.set("tasks:extract:day", today);
     busy.add(hub);
@@ -727,12 +803,21 @@ const feature: Feature = {
     tasks_nightly_max: { default: 8, min: 0, max: 30, what: "夜间整理一晚最多新记几件任务" },
     tasks_remind: { default: "off", options: ["off", "on"], what: "任务到期那天早上在群里提醒一句" },
     tasks_announce: { default: "on", options: ["on", "off"], what: "有人在看板上或用本地 AI 接了任务、做完、放下、加了新任务时，在群里说一句" },
+    tasks_bot_auto: { default: "off", options: ["off", "on"], what: "交给 Bot 自己的任务，轮到了它自己开工去做（北京时间 8 点到 23 点半之间）" },
+    tasks_bot_daily: { default: 6, min: 0, max: 20, what: "Bot 一天最多自己开工做几次名下的任务" },
   },
   tools,
   tick,
   async admin(hub, req, url, body) {
     if (url.pathname !== "/admin/tasks") return null;
     if (req.method === "POST") {
+      // POST {"work":"t:room"} (optionally "id"): the bot works on its next own task there right now, whatever the hour; answers when the run has ended.
+      if (body?.work) {
+        const c = String(body.work), t = body.id ? getTask(hub, c, Number(body.id)) : nextBotTask(hub, c, Date.now() + SETTLE_MS + RETRY_MS);
+        if (!t) return json({ ok: false, error: "这个会话里没有轮到 Bot 做的任务" }, 404);
+        const ran = await workOn(hub, c, t.id);
+        return json({ ok: ran, handoff: handoff(hub, c, t.id) });
+      }
       const conv = String(body?.extract || "");
       if (!conv) return json({ error: "extract 要填群的会话编号" }, 400);
       return json(await extractDay(hub, conv, String(body.day || yesterday(Date.now())), body.dry !== false));
@@ -750,6 +835,10 @@ const feature: Feature = {
     "每天夜里我会把前一天的聊天再过一遍，补上漏记的、标出做完和取消的，每件新记的都对得上群里的原话；一晚最多新记 8 件（可以改），不在群里说。",
     "有人在看板上或用本地 AI 加了任务、接了任务、做完、放下，我会在群里说一句（以【任务】开头）；在群里直接跟我说的不重复提醒。不想要可以把 tasks_announce 关掉。",
     "到期提醒默认关着；打开后，任务到期那天早上我在群里提一句，每件只提一次。",
+    "任务有轻重（急、普通、不急）和先后（这件要等哪几件做完）。清单和看板按该做的顺序排：正在做的、现在能开工的（急的在前）、还在等别的任务的；前面那件做完，后面等着的会被点名可以开始了。",
+    "交给我自己的任务我会真的去做，看板上看得到：轮到它时我自己开工（北京时间 8 点到 23 点半，同一个群一次只做一件，一天最多 6 次，可以改），状态变成“在做”，做出来的报告、链接、文件挂在任务上，做完写上结果。一件任务我自己最多试 3 轮，还没做完就停下来在群里说卡在哪。",
+    "我做不了的部分不硬做：要人拍板的、要线下办的、要别人账号或权限的，我从原任务里拆成新任务交给合适的人，写明为什么我做不了、我已经做到哪。原任务要等那件做完的，会排在它后面，做完后自动再轮到我。",
+    "每件任务带着交接要用的东西：提出这件事的人当时在群里说的原话（整段照存）、调研报告或方案的全文、链接和文件。看板的任务页和群友本地 AI 的 get_task 拿到的是同一份。",
   ],
 };
 export default feature;

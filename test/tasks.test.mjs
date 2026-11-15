@@ -305,3 +305,151 @@ test2("a task finished before finish times were kept gets its last change as the
   const hub = { sql: { exec(q, ...b) { const st = db.prepare(q); const rows = /^\s*(SELECT|PRAGMA)/i.test(q) ? st.all(...b) : (st.run(...b), []); return { toArray: () => rows.map(r => ({ ...r })) }; } } };
   assert2.equal(TK.listTasks(hub, "g:1", { status: ["done"] })[0].done_at, 5000);
 });
+
+// ---------- order, priority, hand-off materials, splitting, the bot's own work ----------
+const { workOrder, blockers, checkAfter, unblockedBy, addTaskRef, taskRefs, removeTaskRef, handoff, quoteOf, nextBotTask, botBrief, workOn, botBusy, parseIds, normPriority } = await import("../src/feat/tasks.ts");
+
+test("priority and order: what to work on first, what waits, loops refused, the next one is named when its turn comes", () => {
+  const hub = mkHub();
+  const a = addTask(hub, G, { title: "搭后端接口", by: "小明" }, true), b = addTask(hub, G, { title: "接前端页面", by: "小明", after: [a.id, 999] }, true);
+  const c = addTask(hub, G, { title: "修线上事故", by: "小明", priority: "high" }, true), d = addTask(hub, G, { title: "整理文档", by: "小明", priority: "low" }, true);
+  assert.deepEqual(b.after, [a.id], "an id that does not exist is left out"); assert.equal(c.priority, 1); assert.equal(d.priority, 3); assert.equal(a.priority, 2);
+  assert.deepEqual(parseIds("#3, 4 和 4"), [3, 4]); assert.equal(normPriority("急"), 1); assert.equal(normPriority("whatever"), 0);
+  assert.deepEqual(workOrder(hub, G).map(r => [r.task.title, r.blocked_by]), [["修线上事故", []], ["搭后端接口", []], ["整理文档", []], ["接前端页面", [a.id]]]);
+  claimTask(hub, G, d.id, "小红", true);
+  assert.equal(workOrder(hub, G)[0].task.title, "整理文档", "what is under way comes first");
+  assert.deepEqual(blockers(hub, G, getTask(hub, G, b.id)).map(t => t.id), [a.id]);
+  assert.match(checkAfter(hub, G, a.id, [b.id]).error, /互相等/); assert.match(checkAfter(hub, G, a.id, [a.id]).error, /自己后面/); assert.match(checkAfter(hub, G, a.id, [77]).error, /没有编号 77/);
+  assert.deepEqual(updateTask(hub, G, a.id, { after: [b.id] }, "小明", true).after, [], "a loop is not stored");
+  assert.equal(updateTask(hub, G, c.id, { priority: "low", after: [a.id] }, "小明", true).priority, 3);
+  assert.match(taskNotes(hub, G, c.id).map(n => n.text).join("|"), /优先级改成“不急”\|排在 #1 之后/);
+  hub.said.length = 0;
+  updateTask(hub, G, a.id, { status: "done" }, "小明");
+  assert.deepEqual(unblockedBy(hub, G, a.id).map(t => t.id).sort(), [b.id, c.id]);
+  assert.ok(hub.said.some(s => /#1 做完之后，.*接前端页面.*可以开始了/.test(s.text)), JSON.stringify(hub.said));
+  assert.ok(taskNotes(hub, G, b.id).some(n => n.kind === "ready" && /#1 做完了，这件可以开始了/.test(n.text)));
+  assert.deepEqual(workOrder(hub, G).find(r => r.task.id === b.id).blocked_by, []);
+});
+
+test("materials: original words, reports, links; no duplicates; a split-off task inherits its parent's; the hand-off package", () => {
+  const hub = mkHub();
+  const a = addTask(hub, G, { title: "写奖励方案", owner: "bot", by: "小明", source: "方案交给你了" }, true);
+  const q = addTaskRef(hub, G, a.id, { kind: "quote", text: "[11-15 周日 21:40] 小明：方案再改改就开始执行，这个活交给你了", who: "小明" });
+  assert.equal(q.title, "群里的原话");
+  const r = addTaskRef(hub, G, a.id, { kind: "report", title: "调研报告", text: "第一章 现状\n第二章 方案", who: "bot" });
+  assert.equal(addTaskRef(hub, G, a.id, { kind: "report", title: "调研报告", text: "第一章 现状\n第二章 方案" }).id, r.id, "the same piece twice is one piece");
+  addTaskRef(hub, G, a.id, { kind: "link", title: "网页版", ref: "https://w.example/p/abc/", who: "bot" });
+  assert.equal(addTaskRef(hub, G, a.id, { kind: "link" }), null); assert.equal(addTaskRef(hub, G, 999, { kind: "link", ref: "https://x" }), null); assert.equal(addTaskRef(hub, G, a.id, { kind: "nope", ref: "x" }), null);
+  assert.deepEqual(taskRefs(hub, G, a.id).map(x => x.kind), ["quote", "report", "link"]);
+  assert.ok(taskNotes(hub, G, a.id).some(n => n.kind === "attach" && /挂上了报告《调研报告》/.test(n.text)));
+  assert.ok(!taskNotes(hub, G, a.id).some(n => /原话/.test(n.text) && n.kind === "attach"), "the original words are not announced as an attachment");
+  const child = addTask(hub, G, { title: "拍板排行榜拆不拆", owner: "小明", by: "bot", parent: a.id }, true), pre = addTask(hub, G, { title: "先定预算", by: "小明" }, true);
+  updateTask(hub, G, a.id, { after: [pre.id] }, "bot", true);
+  const h = handoff(hub, G, child.id);
+  assert.deepEqual(h.materials.map(m => [m.kind, m.from]), [["quote", a.id], ["report", a.id], ["link", a.id]]);
+  assert.deepEqual(h.parent, { id: a.id, title: "写奖励方案", status: "open", result: "" });
+  const top = handoff(hub, G, a.id);
+  assert.deepEqual(top.children, [{ id: child.id, title: "拍板排行榜拆不拆", status: "open", owner: "小明" }]);
+  assert.deepEqual(top.waits_for.map(w => w.id), [pre.id]); assert.deepEqual(top.blocked_by, [pre.id]); assert.ok(top.notes.length);
+  assert.equal(handoff(hub, G, 999), null);
+  assert.equal(removeTaskRef(hub, G, a.id, r.id, "小明"), true); assert.equal(removeTaskRef(hub, G, a.id, r.id), false);
+  assert.deepEqual(taskRefs(hub, G, a.id).map(x => x.kind), ["quote", "link"]);
+  assert.deepEqual(taskRefs(hub, "g:2", a.id), [], "another group cannot read them");
+});
+
+test("the tool: the asker's own words are stored verbatim; start, attach, split with a reason, order in list and show", async () => {
+  const hub = mkHub(), now = Date.now();
+  hub.recent = (conv, n) => hub.db.prepare("SELECT * FROM (SELECT * FROM msg WHERE conv=? ORDER BY seq DESC LIMIT ?) ORDER BY seq").all(conv, n);
+  say(hub, G, "小红", "今天吃什么", now - 5 * 60000);
+  say(hub, G, "小明", "这个兑换系统还可以怎么设计，多调研几轮", now - 4 * 60000);
+  say(hub, G, "小明", "写个方案，这个活交给你了，能力不够的拆到任务里", now - 60000);
+  say(hub, G, "小明", "很久以前说的话", now - 3 * 3600000);
+  assert.equal(quoteOf(hub, G, []), "");
+  const t = tool(hub, [{ id: "u小明", name: "小明" }]);
+  const made = await t.run({ op: "add", title: "设计奖励与兑换方案", owner: "bot", priority: "high", source: "这个活交给你了" });
+  assert.equal(made.added.priority, "急"); assert.match(made.next, /先 start/);
+  const id = made.added.id, q = taskRefs(hub, G, id);
+  assert.equal(q.length, 1); assert.equal(q[0].kind, "quote");
+  assert.match(q[0].text, /小明：这个兑换系统还可以怎么设计，多调研几轮\n\[.*\] 小明：写个方案，这个活交给你了，能力不够的拆到任务里$/);
+  assert.doesNotMatch(q[0].text, /今天吃什么|很久以前/);
+  assert.equal((await t.run({ op: "add", title: "排在没有的任务后面", after: [404] })).ok, false);
+  const started = await t.run({ op: "start", id });
+  assert.equal(started.task.claimed_by, "bot"); assert.equal(started.task.status, "在做");
+  const other = (await t.run({ op: "add", title: "给客户回电话", owner: "小红" })).added.id;
+  claimTask(hub, G, other, "小红", true);
+  assert.match((await t.run({ op: "start", id: other })).error, /小红 已经在做/);
+  const att = await t.run({ op: "attach", id, kind: "report", title: "方案 v1", text: "一、积分怎么挣……" });
+  assert.equal(att.attached.kind, "报告"); assert.equal((await t.run({ op: "attach", id })).ok, false);
+  assert.equal((await t.run({ op: "attach", id, ref: "https://w.example/p/x/" })).attached.kind, "链接");
+  assert.equal((await t.run({ op: "split", id, title: "拍板：排行榜拆不拆" })).ok, false, "a split needs its reason");
+  const sp = await t.run({ op: "split", id, title: "拍板：排行榜拆不拆", owner: "小明", reason: "这是群规，得群主定", detail: "方案里两种都写了", blocks: true });
+  assert.equal(sp.split.owner, "小明"); assert.equal(sp.split.split_from, id); assert.equal(sp.split.priority, "急", "a split-off part keeps its parent's priority");
+  assert.deepEqual(sp.from.after, [sp.split.id]); assert.match(sp.note, /原任务会等/);
+  assert.match(getTask(hub, G, sp.split.id).detail, /方案里两种都写了\n拆出来的原因：这是群规，得群主定/);
+  assert.ok(taskNotes(hub, G, id).some(n => /拆出 #\d+「拍板：排行榜拆不拆」交给 小明：这是群规，得群主定/.test(n.text)));
+  const shown = await t.run({ op: "show", id });
+  assert.deepEqual(shown.materials.map(m => m.kind), ["原话", "报告", "链接"]); assert.equal(shown.split_into[0].who, "小明"); assert.equal(shown.waiting_for[0].id, sp.split.id);
+  assert.equal((await t.run({ op: "show", id: sp.split.id })).materials[0].from_task, id);
+  const list = await t.run({ op: "list" });
+  assert.equal(list.tasks.at(-1).id, id, "what waits for another task is listed last"); assert.equal(list.tasks.at(-1).waiting_for[0].id, sp.split.id);
+  assert.match((await t.run({ op: "start", id })).error, /要等 #\d+ 做完/);
+  assert.equal((await t.run({ op: "update", id, priority: "soon" })).ok, false);
+  assert.match((await t.run({ op: "update", id: sp.split.id, after: [id] })).error, /互相等/);
+  const done = await t.run({ op: "done", id: sp.split.id, result: "拆" });
+  assert.deepEqual(done.now_can_start.map(x => x.id), [id]);
+  assert.equal(hub.said.length, 0, "what is said to the bot in the chat is not announced a second time");
+});
+
+test("the bot works on its own tasks: picks the next one, shows it as under way, runs it, and says what happened when it is not finished", async () => {
+  const hub = mkHub({ tasks_bot_daily: 2 });
+  const runs = [];
+  hub.jobs = new Map();
+  hub.runTask = async (conv, brief) => { runs.push({ conv, brief }); hub.jobs.set(99, { conv }); try { hub.onRun?.(conv); } finally { hub.jobs.delete(99); } return true; };
+  const old = Date.now() - 10 * 60000;
+  const mine = addTask(hub, G, { title: "写奖励方案", owner: "bot", by: "小明", source: "交给你了", detail: "十章" }, true);
+  const urgent = addTask(hub, G, { title: "修日报", owner: "Bot", by: "小明", priority: "high" }, true);
+  const hers = addTask(hub, G, { title: "给客户回电话", owner: "小红", by: "小红", priority: "high" }, true);
+  const waiting = addTask(hub, G, { title: "按拍板结果改方案", owner: "bot", by: "bot", after: [hers.id] }, true);
+  assert.equal(nextBotTask(hub, G), null, "a task made a moment ago may be under way in the chat turn that made it");
+  hub.db.prepare("UPDATE task SET created=?").run(old);
+  assert.equal(nextBotTask(hub, G).id, urgent.id, "urgent first; other people's and waiting tasks are not the bot's to start");
+  addTaskRef(hub, G, urgent.id, { kind: "quote", text: "[11-15 周日 21:40] 小明：日报又没发，修一下" });
+  hub.onRun = conv => { assert.equal(botBusy(hub, conv), urgent.id); updateTask(hub, conv, urgent.id, { status: "done", result: "修好了" }, "bot", true); };
+  assert.equal(await workOn(hub, G, urgent.id), true);
+  assert.match(runs[0].brief, /^做任务 #2「修日报」/); assert.match(runs[0].brief, /小明：日报又没发，修一下/); assert.match(runs[0].brief, /op=split（id=2）/);
+  assert.deepEqual(hub.said.map(s => s.text), ["【任务】Bot 接了 #2「修日报」，开干了，进展在看板上"]);
+  assert.equal(getTask(hub, G, urgent.id).status, "done"); assert.equal(botBusy(hub, G), 0);
+  // a run that ends without finishing: noted, retried later, and after three tries the group is asked for help
+  hub.onRun = null; hub.said.length = 0;
+  for (let i = 1; i <= 3; i++) {
+    assert.equal(nextBotTask(hub, G, Date.now() + i * 31 * 60000)?.id, mine.id);
+    await workOn(hub, G, mine.id, Date.now() + i * 31 * 60000);
+    assert.equal(getTask(hub, G, mine.id).runs, i);
+  }
+  assert.equal(getTask(hub, G, mine.id).status, "doing"); assert.equal(getTask(hub, G, mine.id).claimed_by, "bot");
+  assert.match(runs.at(-1).brief, /第 3 轮/);
+  const log = taskNotes(hub, G, mine.id).map(n => n.text);
+  assert.equal(log.filter(x => x === "这一轮没做完，过半小时接着做").length, 2); assert.ok(log.some(x => /试了 3 轮还没做完/.test(x)));
+  assert.ok(hub.said.some(s => /#1「写奖励方案」 我自己试了 3 轮还没做完/.test(s.text)));
+  assert.equal(nextBotTask(hub, G, Date.now() + 9 * 3600000), null, "it does not try a fourth time by itself");
+  // a task that ends up waiting for a person is left alone until that person is done, then gets its tries back
+  assert.equal(await workOn(hub, G, waiting.id), false);
+  updateTask(hub, G, mine.id, { after: [hers.id] }, "bot", true);
+  updateTask(hub, G, hers.id, { status: "done" }, "小红", true);
+  assert.equal(getTask(hub, G, mine.id).runs, 0);
+  assert.deepEqual(new Set([nextBotTask(hub, G, Date.now() + 9 * 3600000).id]), new Set([mine.id]), "what is under way comes before what has not started");
+  // the tick: working hours only, real groups only, nothing while a job runs there, and within the day's allowance
+  const day = "2026-11-16", at8 = Date.parse(day + "T09:00:00+08:00");
+  hub.db.prepare("UPDATE task SET created=?, last_run=0, runs=0").run(at8 - 3600000);
+  hub.kv.set("tasks:extract:day", day); hub.kv.set("tasks:remind:day", day);
+  runs.length = 0; hub.waits.length = 0;
+  feature.tick(hub, Date.parse(day + "T03:00:00+08:00")); assert.equal(hub.waits.length, 0, "not at night");
+  hub.jobs.set(1, { conv: G }); feature.tick(hub, at8); assert.equal(hub.waits.length, 0, "one thing at a time");
+  hub.jobs.clear(); feature.tick(hub, at8); await Promise.all(hub.waits); assert.equal(runs.length, 1);
+  hub.db.prepare("UPDATE task SET last_run=0").run(); feature.tick(hub, at8 + 60000); await Promise.all(hub.waits); assert.equal(runs.length, 2);
+  hub.db.prepare("UPDATE task SET last_run=0, runs=0").run(); feature.tick(hub, at8 + 120000); await Promise.all(hub.waits); assert.equal(runs.length, 2, "the day's allowance is used up");
+  const off = mkHub({ tasks_bot_auto: "off" }); off.runTask = async () => { throw new Error("must not run"); };
+  addTask(off, G, { title: "写方案", owner: "bot" }, true); addTask(off, "t:lab", { title: "写方案", owner: "bot" }, true);
+  off.db.prepare("UPDATE task SET created=?").run(at8 - 3600000); off.kv.set("tasks:extract:day", day); off.kv.set("tasks:remind:day", day);
+  feature.tick(off, at8); assert.equal(off.waits.length, 0);
+});
