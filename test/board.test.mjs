@@ -306,3 +306,76 @@ describe("changes are guarded", () => {
     assert.match(r.headers.get("set-cookie"), /^tabd=; Path=\/x\/; Max-Age=0/);
   });
 });
+
+describe("overview, teamwork and visual history (added with the page redesign)", () => {
+  test("overview gathers the sections for the visitor's conversation only", async () => {
+    hub.sql.exec("INSERT INTO day(conv,date,summary) VALUES('g:a','2026-11-14','昨天的事'),('g:a','2026-11-13','前天'),('g:a','2026-11-12','更早'),('g:b','2026-11-14','别的群')");
+    await post("/x/board/api/tasks", { title: "我的事", owner: "小明", due: "2000-01-01" });
+    await post("/x/board/api/tasks", { title: "别人的事", owner: "小红" });
+    await post("/x/board/api/tasks", { title: "别的群" }, { token: B });
+    await hub.store.putImage("g:a", new Uint8Array([1]), "image/png", "图");
+    await hub.store.putImage("g:b", new Uint8Array([1]), "image/png", "别人的图");
+    const { r, j } = await get("/x/board/api/overview");
+    assert.equal(r.status, 200);
+    assert.deepEqual(j.days.map(d => d.date), ["2026-11-14", "2026-11-13"]);
+    assert.deepEqual(j.tasks.list.map(t => t.title), ["我的事", "别人的事"]);
+    assert.equal(j.tasks.counts.open, 2); assert.equal(j.tasks.counts.mine, 1); assert.equal(j.tasks.counts.overdue, 1);
+    assert.deepEqual(j.images.map(i => i.note), ["图"]); assert.equal(j.images[0].mime, "image/png");
+    assert.ok(Array.isArray(j.repos) && Array.isArray(j.uptime));
+    assert.ok(j.plan.items.length > 3);
+    assert.equal((await call("/x/board/api/overview")).status, 401);
+  });
+  test("repository history and monitor days are extra fields; old fields stay", async () => {
+    const D = 86400000, now = Date.now();
+    const sum = ok => JSON.stringify({ v: 1, repo: "TeamAgent", sha: "abc1234def", src: "table", builds: false, steps: [{ id: "root:test", k: "test", s: ok ? "pass" : "fail", t: 1 }] });
+    for (const [ago, ok] of [[4, 1], [3, 1], [2, 0], [1, 0]]) hub.sql.exec("INSERT INTO repocheck(repo,ts,sha,ok,summary) VALUES(?,?,?,?,?)", "TeamAgent", now - ago * D, "abc", ok, sum(ok));
+    const { j } = await get("/x/board/api/repos");
+    const ta = j.repos.find(r => r.repo === "TeamAgent");
+    assert.equal(ta.result, "没通过"); assert.ok(ta.steps && ta.checked);
+    assert.equal(ta.ok, 0); assert.equal(ta.failing_since, now - 2 * D); assert.equal(ta.last_pass, now - 3 * D);
+    assert.deepEqual(ta.history.map(x => x.ok), [1, 1, 0, 0]);
+    hub.sql.exec("INSERT INTO uptime(conv,name,url,state,active,created) VALUES('g:a','官网','https://a.example','down',1,?)", now - 10 * D);
+    hub.sql.exec("INSERT INTO uptimeinc(target,start,end,error) VALUES(1,?,NULL,'超时')", now - 3600000);
+    const m = (await get("/x/board/api/monitors")).j.uptime[0];
+    assert.equal(m.days.length, 7); assert.ok(m.days[6].pct < 100); assert.equal(m.days[0].pct, 100);
+    assert.ok("uptime_7d" in m && "ms" in m);
+  });
+});
+
+describe("teamwork endpoints over the real task module", () => {
+  beforeEach(async () => {   // the outer beforeEach puts the fake back for every other test
+    const T = await import("../src/feat/tasks.ts");
+    hub.db.exec(T.default.schema);
+    hub.say = () => {};
+    Object.assign(taskApi, { listTasks: T.listTasks, getTask: T.getTask, addTask: T.addTask, updateTask: T.updateTask, claimTask: T.claimTask, addTaskNote: T.addTaskNote, taskNotes: T.taskNotes });
+  });
+  test("size, claim and finish show up in tasks, team, events and the timeline", async () => {
+    let { j } = await post("/x/board/api/tasks", { title: "大事", size: "big" });
+    assert.equal(j.task.size, "big");
+    assert.equal((await post("/x/board/api/tasks/1", { size: "huge" })).r.status, 400);
+    await post("/x/board/api/tasks/1/claim", {});
+    ({ j } = await post("/x/board/api/tasks/1", { status: "done" }));
+    assert.equal(j.task.done_by, "小明"); assert.equal(j.task.points, 30); assert.ok(j.task.done_at > 0 && j.task.claimed_at > 0);
+    ({ j } = await get("/x/board/api/team"));
+    assert.equal(j.name, "小明"); assert.equal(j.mvp, "小明"); assert.equal(j.week.points, 30);
+    assert.equal(j.people[0].badges.find(b => b.key === "boss").earned, true);
+    ({ j } = await get("/x/board/api/events"));
+    assert.deepEqual(j.events.map(e => e.kind).slice(0, 2), ["done", "claim"]); assert.equal(j.more, false);
+    ({ j } = await get("/x/board/api/events?n=1"));
+    assert.equal(j.events.length, 1); assert.equal(j.more, true);
+    ({ j } = await get("/x/board/api/tasks/1/timeline"));
+    assert.equal(j.points, 30); assert.equal(j.done_by, "小明"); assert.ok(j.steps.some(s => s.kind === "done"));
+    ({ j } = await get("/x/board/api/overview"));
+    assert.equal(j.team.mvp, "小明");
+  });
+  test("another conversation sees none of it", async () => {
+    await post("/x/board/api/tasks", { title: "秘密" });
+    await post("/x/board/api/tasks/1/claim", {});
+    assert.equal((await get("/x/board/api/tasks/1/timeline", B)).r.status, 404);
+    let { j } = await get("/x/board/api/team", B);
+    assert.equal(j.people.length, 0); assert.equal(j.totals.doing, 0);
+    ({ j } = await get("/x/board/api/events", B));
+    assert.equal(j.events.length, 0);
+    assert.equal((await call("/x/board/api/team")).status, 401);
+  });
+});
