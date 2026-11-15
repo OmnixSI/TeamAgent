@@ -346,7 +346,9 @@ describe("teamwork endpoints over the real task module", () => {
   beforeEach(async () => {   // the outer beforeEach puts the fake back for every other test
     const T = await import("../src/feat/tasks.ts");
     hub.db.exec(T.default.schema);
+    hub.db.exec((await import("../src/feat/teamwork.ts")).SHOP_SCHEMA);
     hub.say = () => {};
+    hub.tasksRun = []; hub.runTask = (conv, text) => { hub.tasksRun.push([conv, text]); return Promise.resolve(); };
     Object.assign(taskApi, { listTasks: T.listTasks, getTask: T.getTask, addTask: T.addTask, updateTask: T.updateTask, claimTask: T.claimTask, addTaskNote: T.addTaskNote, taskNotes: T.taskNotes });
   });
   test("size, claim and finish show up in tasks, team, events and the timeline", async () => {
@@ -377,5 +379,41 @@ describe("teamwork endpoints over the real task module", () => {
     ({ j } = await get("/x/board/api/events", B));
     assert.equal(j.events.length, 0);
     assert.equal((await call("/x/board/api/team")).status, 401);
+  });
+  test("wall and shop: points are spent only from the visitor's own balance", async () => {
+    await post("/x/board/api/tasks", { title: "屠龙", size: "big" });
+    await post("/x/board/api/tasks/1/claim", {});
+    await post("/x/board/api/tasks/1", { status: "done" });
+    let { r, j } = await get("/x/board/api/shop");
+    assert.equal(j.me.balance, 30); assert.ok(j.items.some(i => i.key === "title" && i.needs)); assert.deepEqual(j.mine, []);
+    ({ r, j } = await post("/x/board/api/shop/redeem", { item: "title", note: "屠龙勇士", who: "小红", by: "小红" }));
+    assert.equal(r.status, 200); assert.equal(j.spend.who, "小明"); assert.equal(j.spend.note, "屠龙勇士"); assert.equal(j.balance, 5); assert.ok(!("do" in j));
+    assert.equal(hub.tasksRun.length, 1); assert.equal(hub.tasksRun[0][0], "g:a");
+    ({ j } = await get("/x/board/api/shop"));
+    assert.equal(j.me.spent, 25); assert.deepEqual(j.mine.map(x => x.item), ["title"]); assert.equal(j.recent.length, 1);
+    ({ r, j } = await post("/x/board/api/shop/redeem", { item: "draw", note: "画只猫" }));
+    assert.equal(r.status, 400); assert.match(j.error, /还差 15 分/);
+    assert.equal((await post("/x/board/api/shop/redeem", { item: "title", note: "这个头衔实在是太长了超过十二个字" })).r.status, 400);
+    assert.equal((await post("/x/board/api/shop/redeem", { item: "nope" })).r.status, 400);
+    assert.equal((await post("/x/board/api/shop/redeem", {})).r.status, 400);
+    assert.equal((await post("/x/board/api/shop/redeem", { item: "meme" }, { headers: { origin: "https://evil.example" } })).r.status, 403);
+    assert.equal((await post("/x/board/api/shop/redeem", { item: "meme" }, { headers: { "content-type": "text/plain" } })).r.status, 415);
+    assert.equal(hub.tasksRun.length, 1);
+    ({ j } = await get("/x/board/api/team"));
+    assert.equal(j.people.find(x => x.name === "小明").title, "屠龙勇士");
+    ({ j } = await get("/x/board/api/wall"));
+    assert.equal(j.current.who, "小明"); assert.deepEqual(j.bosses.map(b => b.title), ["屠龙"]); assert.equal(typeof j.bosses[0].took, "string");
+    assert.equal(j.titles[0].title, "屠龙勇士"); assert.ok(j.badges.find(b => b.key === "boss").holders.some(x => x.who === "小明"));
+    ({ j } = await get("/x/board/api/overview"));
+    assert.equal(j.me.balance, 5); assert.equal(j.latest.kind, "boss"); assert.equal(j.team.people[0].title, "屠龙勇士");
+    // another group sees none of it and spends nothing of ours
+    ({ j } = await get("/x/board/api/shop", B));
+    assert.equal(j.me.balance, 0); assert.deepEqual(j.recent, []);
+    ({ r, j } = await post("/x/board/api/shop/redeem", { item: "meme", who: "小明" }, { token: B }));
+    assert.equal(r.status, 400);
+    ({ j } = await get("/x/board/api/wall", B));
+    assert.deepEqual(j.bosses, []); assert.equal(j.current, null); assert.deepEqual(j.titles, []);
+    assert.equal((await call("/x/board/api/shop/redeem", { json: { item: "meme" } })).status, 401);
+    assert.equal((await call("/x/board/api/wall")).status, 401);
   });
 });

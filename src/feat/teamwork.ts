@@ -417,7 +417,7 @@ ul{margin:10px 0 0 2em;padding:0 0 0 1.2em;font-size:27px;line-height:1.6;color:
 .close{font-size:32px;text-indent:2em;margin:6px 0 0}
 .foot{position:absolute;right:236px;bottom:74px;text-align:center;font-size:28px;line-height:1.7}.foot .org{font-weight:700;font-size:30px}
 .seal{position:absolute;right:104px;bottom:50px;width:186px;height:186px;opacity:.82;transform:rotate(-8deg)}
-.mascot{position:absolute;left:112px;bottom:56px;display:flex;align-items:flex-end;gap:14px;font-size:22px;color:#8a6a35}.mascot img{width:150px;height:150px;object-fit:contain}
+.mascot{position:absolute;left:104px;top:44px;width:132px;height:132px;object-fit:contain;mix-blend-mode:multiply}
 </style></head><body><div class="paper"><i class="corner c1"></i><i class="corner c2"></i><i class="corner c3"></i><i class="corner c4"></i><div class="inner">
 <div class="no">${esc(c.no)}</div>
 <h1>奖状</h1><div class="rule"></div>
@@ -426,7 +426,7 @@ ul{margin:10px 0 0 2em;padding:0 0 0 1.2em;font-size:27px;line-height:1.6;color:
 ${deeds ? "<ul>" + deeds + "</ul>" : ""}
 <div class="award">成绩突出，被评为<br><b>本周之星</b></div>
 <p class="close">特发此状，以资鼓励。${c.times > 1 ? "（第 " + c.times + " 次获此荣誉）" : ""}</p>
-${c.mascot ? `<div class="mascot"><img src="${c.mascot}" alt=""><span>颁奖人：Bot</span></div>` : ""}
+${c.mascot ? `<img class="mascot" src="${c.mascot}" alt="">` : ""}
 <div class="foot"><div class="org">「${esc(c.group)}」群</div><div>${cnDate(c.issued)}</div></div>${seal}
 </div></div></body></html>`;
 }

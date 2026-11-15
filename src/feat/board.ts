@@ -17,7 +17,7 @@ import { PRICE } from "../meter.ts";
 import { ABILITIES, exampleParts } from "./toolbox.ts";
 import { CSS, APP_JS, PAGE } from "./board-page.ts";
 import { BJ, fmtDate } from "../util.ts";
-import { teamStats, taskEvents, taskTimeline, pointsOf, span } from "./teamwork.ts";
+import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, balanceOf, spends, redeem } from "./teamwork.ts";
 
 const BASE = "/x/board";
 const DAY = 86400000;
@@ -217,6 +217,20 @@ export function repoHistory(hub: Hub, repo: string) {
 }
 const reposOut = (hub: Hub) => latestAll(hub, listRepos(hub)).map((r: any) => ({ ...r, ...repoHistory(hub, String(r.repo)) }));
 
+/** The newest boss kill or badge, for the overview's one line; null when there is none in the last two weeks. */
+function latestHonor(hub: Hub, conv: string, now: number) {
+  const w = honorWall(hub, conv, now), cut = now - 14 * DAY;
+  const boss = w.bosses[0], badge = w.badges.flatMap(b => b.holders.map(x => ({ who: x.who, at: x.at, name: b.name, what: b.what }))).sort((a, b) => b.at - a.at)[0];
+  const pick = boss && (!badge || boss.done_at >= badge.at) ? { kind: "boss", who: boss.who, at: boss.done_at, title: boss.title, task: boss.id } : badge ? { kind: "badge", who: badge.who, at: badge.at, title: badge.name, what: badge.what } : null;
+  return pick && pick.at > cut ? pick : null;
+}
+function wall(hub: Hub, p: Person) {
+  const now = Date.now(), s = teamStats(hub, p.conv, now), w = honorWall(hub, p.conv, now), star = s.people.find(x => x.name === s.mvp);
+  return { ok: true, ...w, bosses: w.bosses.map(b => ({ ...b, took: span(b.took_ms) })), current: star ? { who: star.name, points: star.points_week, done: star.done_week, title: star.title, week: s.week.start } : null };
+}
+function shopOut(hub: Hub, p: Person) {
+  return { ok: true, name: p.name, items: shop(hub, p.conv), me: balanceOf(hub, p.conv, p.name), mine: spends(hub, p.conv, { who: p.name, limit: 30 }), recent: spends(hub, p.conv, { limit: 20 }) };
+}
 const params = (s: string) => ({ searchParams: new URLSearchParams(s) }) as URL;
 function part<T>(f: () => T, fallback: T): T { try { return f(); } catch { return fallback; } }   // one missing table must not blank the whole overview
 
@@ -240,7 +254,9 @@ function overview(hub: Hub, p: Person) {
     images: part(() => images(hub, p, params("n=8")).images, []),
     uptime: m.map(u => ({ name: u.name, url: u.url, state: u.state, since: u.since, last: u.last, error: u.error, active: u.active, uptime_7d: u.uptime_7d })),
     plan: pl ? pl.plan : null, spend: pl ? pl.spend : null,
-    team: part(() => { const s = teamStats(hub, p.conv, now); return { week: s.week, mvp: s.mvp, people: s.people.map(x => ({ name: x.name, doing: x.doing, waiting: x.waiting, done_week: x.done_week, points_week: x.points_week, streak: x.streak })) }; }, null),
+    team: part(() => { const s = teamStats(hub, p.conv, now); return { week: s.week, mvp: s.mvp, people: s.people.map(x => ({ name: x.name, doing: x.doing, waiting: x.waiting, done_week: x.done_week, points_week: x.points_week, streak: x.streak, balance: x.balance, title: x.title })) }; }, null),
+    me: part(() => { const s = teamStats(hub, p.conv, now).people.find(x => x.name === p.name); return { points_week: s?.points_week || 0, balance: s?.balance || 0, title: s?.title || "" }; }, null),
+    latest: part(() => latestHonor(hub, p.conv, now), null),
   };
 }
 
@@ -275,6 +291,12 @@ async function post(hub: Hub, req: Request, u: URL, p: Person, path: string): Pr
   if (path === "box/upload") {
     const d = newDrop(hub, p.conv, { by: p.name, sender: p.uid, note: str(b.note, 200) || "" });
     return d ? json({ ok: true, url: "/x/drop/" + d.token, expires: d.exp }) : bad("文件箱满了，先删掉一些再传", 507);
+  }
+  if (path === "shop/redeem") {   // always the visitor's own points: the name comes from the sign-in, never from the body
+    const item = str(b.item, 40);
+    if (!item) return bad("选一项再兑换");
+    const r = redeem(hub, p.conv, p.name, item, str(b.note, 200) || "", "board");
+    return r.ok ? json({ ok: true, spend: r.spend, balance: r.balance }) : bad(r.error, 400);
   }
   if (path === "tasks") {
     const patch = taskPatch(b);
@@ -376,6 +398,8 @@ export async function serve(hub: Hub, req: Request, u: URL): Promise<Response | 
   if (api === "memory") return json(memory(hub, p));
   if (api === "repos") return json({ ok: true, repos: reposOut(hub) });
   if (api === "overview") return json(overview(hub, p));
+  if (api === "wall") return json(wall(hub, p));
+  if (api === "shop") return json(shopOut(hub, p));
   if (api === "team") return json({ ok: true, name: p.name, ...teamStats(hub, p.conv) });
   if (api === "events") {
     const before = num(u.searchParams.get("before"), 0, 0, 2 ** 52), n = num(u.searchParams.get("n"), 50, 1, 200);
