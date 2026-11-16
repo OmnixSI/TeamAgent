@@ -1,6 +1,6 @@
 # TeamAgent
 
-「做 AI 高手」QQ 群里的常驻 Bot。整套跑在 Cloudflare Workers 上（Worker `teamagent`，一个 Durable Object），不依赖任何本机进程。先读 [README.md](README.md)。
+「做 AI 高手」QQ 群里的常驻 Bot。整套跑在 Cloudflare Workers 上（Worker `teamagent`，一个 Durable Object），不依赖任何本机进程。先读 [README.md](README.md)，技术细节按块拆在 [docs/](docs/)：[架构](docs/architecture.md)、[模型、提示词和记忆](docs/model-and-memory.md)、[存储和额度](docs/storage-and-budget.md)、[云电脑、技能和浏览器](docs/compute.md)、[网络](docs/network.md)、[功能清单](docs/features.md)、[团队协作](docs/teamwork.md)、[运维](docs/operations.md)。改了哪一块的做法，在同一次提交里把对应那篇改对。
 
 旧版（v1，本机执行器 + D1 + 开发台网页）已停用，代码留在标签 `v1-archive` 里，不要照它的文档和结构做事。
 
