@@ -1,9 +1,12 @@
 # TeamAgent
 
+[English](README.en.md) | 简体中文
+
 「做 AI 高手」QQ 群里的常驻 Bot。它在群里聊天、查资料、画图、处理文件，也管团队的任务清单、看板和积分。整套跑在 Cloudflare 上，不需要任何本机进程。
 
 - 线上地址：https://teamagent.inkboard-server.workers.dev （`/health` 看是否在线）
 - 团队看板：`/x/board`（每人用自己的个人链接进，在群里对 Bot 说“给我看板链接”）
+- 网页界面支持中文 / English 切换，默认跟随系统（v2.0.0 起）。
 - Worker 名 `teamagent`。旧版（v1）的代码在标签 `v1-archive`，已停用。
 
 ## 它能做什么
