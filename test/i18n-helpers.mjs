@@ -39,15 +39,16 @@ export function untranslated(js, dict, keep = []) {
   return [...new Set(stringLiterals(js).filter(s => hasCjk(s) && !known.has(s)))];
 }
 
-/** Entries must carry the same {slots} as their key, and a pair is [one, other] for a count n. */
-export function dictProblems(dict) {
+/** Entries must carry the same {slots} as their key, and a pair is [one, other] for a count n.
+ *  `loose` lists keys whose English may use other slots than the key (a date, where the page also passes the month name). */
+export function dictProblems(dict, { loose = [] } = {}) {
   const slots = s => [...s.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort().join(",");
   const bad = [];
   for (const [k, v] of Object.entries(dict)) {
     const forms = typeof v === "string" ? [v] : v;
     if (!Array.isArray(forms) || forms.length > 2 || !forms.every(f => typeof f === "string" && f.trim())) { bad.push(`${k}: not a string or [one, other]`); continue; }
     if (Array.isArray(v) && !slots(k).split(",").includes("n")) bad.push(`${k}: a pair needs {n} in the key`);
-    for (const f of forms) if (slots(f) !== slots(k)) bad.push(`${k}: slots differ in "${f}"`);
+    if (!loose.includes(k)) for (const f of forms) if (slots(f) !== slots(k)) bad.push(`${k}: slots differ in "${f}"`);
     if (forms.some(f => hasCjk(f))) bad.push(`${k}: Chinese left in the English entry`);
   }
   return bad;

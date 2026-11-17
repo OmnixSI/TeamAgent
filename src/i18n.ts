@@ -26,15 +26,17 @@ var LANG = (function () {
   function fill(s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return own.call(p, k) ? String(p[k]) : m; }) : s; }
   function pick(e, p) { return typeof e === "string" ? e : p && +p.n === 1 ? e[0] : e[1]; }
   function t(zh, p) { return fill(cur() === "en" && own.call(EN, zh) ? pick(EN[zh], p) : zh, p); }
-  // A sentence that came from the server: the entry itself, or an entry with {slots} whose values the sentence carries.
+  // A sentence that came from the server: the entry itself, or an entry with {slots} whose values the sentence carries
+  // (a value that is itself a known word, such as a step's result, is translated too).
   function templates() {
     var k, list = [];
     for (k in EN) if (own.call(EN, k) && k.indexOf("{") >= 0) {
       var names = [], parts = k.split(/\{(\w+)\}/), src = "";
       parts.forEach(function (x, i) { if (i % 2) { names.push(x); src += "(.+?)"; } else src += x.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&"); });
-      list.push({ key: k, names: names, re: new RegExp("^" + src + "$") });
+      list.push({ key: k, names: names, re: new RegExp("^" + src + "$"), len: k.replace(/\{\w+\}/g, "").length });
     }
-    return list;
+    // the entry with the most fixed text first, so "过期 {n} 天" is tried before "{n} 天"
+    return list.sort(function (a, b) { return b.len - a.len; });
   }
   function tr(s) {
     if (cur() !== "en" || typeof s !== "string" || !s) return s;
@@ -42,7 +44,7 @@ var LANG = (function () {
     var i, m, p, j, list = tpl || (tpl = templates());
     for (i = 0; i < list.length; i++) {
       m = list[i].re.exec(s);
-      if (m) { p = {}; for (j = 0; j < list[i].names.length; j++) p[list[i].names[j]] = m[j + 1]; return t(list[i].key, p); }
+      if (m) { p = {}; for (j = 0; j < list[i].names.length; j++) p[list[i].names[j]] = tr(m[j + 1]); return t(list[i].key, p); }
     }
     return s;
   }

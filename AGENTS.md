@@ -7,6 +7,7 @@
 ## 改代码之前
 
 - 一轮对话的逻辑在 `src/core.ts`，Bot 的行为规矩在 `src/persona.ts`，内置工具在 `src/tools.ts`。加新能力优先写成功能模块：`src/feat/<名字>.ts` 一个文件（接口在 `src/feat/types.ts`，在 `src/feat/index.ts` 登记），不动共享文件；云电脑里的固定配方写成技能 `src/skills/<名字>.ts`。工具返回真实结果，模型只能照结果说话。
+- 群友打开的网页（看板、工具箱、文件箱、预览、学习卡）的文字走 `src/i18n.ts`：中文原文写在 `tx("…")` 里，英文补进该页的 `*-i18n.ts`；说明在 [功能清单](docs/features.md#界面语言)。
 - `src/self.ts` 是 Bot 对自己的描述，群友问“你怎么实现的”时它照这个答。改了架构、存储、流程，在同一次提交里把这里的文字改对。
 - 群友能在群里让 Bot 改的东西（参数、做法说明、名字、授权）在 `src/config.ts` 和 `src/selfedit.ts`；其余都是代码，只能在这里改。Bot 写的代码改进提议在 `GET /admin/changes`，接手工作时先看一眼。
 

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import M, { serve, taskApi, files, CSP } from "../src/feat/board.ts";
 import { APP_JS } from "../src/feat/board-page.ts";
+import { BOARD_EN } from "../src/feat/board-i18n.ts";
 import access, { issueAccess } from "../src/feat/access.ts";
 import filebox from "../src/feat/filebox.ts";
 import transfer from "../src/feat/transfer.ts";
@@ -151,7 +152,7 @@ describe("page and static parts", () => {
   test("browser code parses and avoids absolute URLs and raw HTML", () => {
     new Function(APP_JS);
     assert.doesNotMatch(APP_JS, /innerHTML|insertAdjacentHTML|document\.write|eval\(/);
-    assert.doesNotMatch(APP_JS, /https?:\/\//);
+    assert.doesNotMatch(APP_JS.replace(JSON.stringify(BOARD_EN), ""), /https?:\/\//);   // the English dictionary quotes the sentence about http:// links; the code has no URL
     assert.ok(files()["app.js"].body === APP_JS);
   });
 });

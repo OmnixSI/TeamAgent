@@ -74,6 +74,15 @@ test("txs: sentences from the server match an entry or a template with slots", (
   assert.equal(browser({ languages: ["zh-CN"] }).txs("共 5 项"), "共 5 项");
 });
 
+test("txs: the entry with the most fixed text wins, and slot values that are known words are translated too", () => {
+  const dict = { "{n} 天": "{n} d", "过期 {n} 天": "{n} d overdue", "上次（{when}）{a}": "Last ({when}): {a}", "通过": "Passed", "{x} 检查": "{x} check" };
+  const en = (() => { const c = { navigator: { languages: ["en-US"] }, window: { localStorage: { getItem: () => null }, addEventListener() {} }, Object, String, RegExp, Array }; vm.createContext(c); vm.runInContext(withDict(RUNTIME, dict) + "\nthis.txs = txs;", c); return c; })();
+  assert.equal(en.txs("过期 3 天"), "3 d overdue");
+  assert.equal(en.txs("3 天"), "3 d");
+  assert.equal(en.txs("上次（01-01）通过"), "Last (01-01): Passed");
+  assert.equal(en.txs("teamagent 检查"), "teamagent check");
+});
+
 test("set: remembered, and switches at once; follow-system clears the choice", () => {
   const b = browser({ languages: ["en-US"] });
   let n = 0;
