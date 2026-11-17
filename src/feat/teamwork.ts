@@ -338,6 +338,7 @@ export function postBounty(hub: Hub, conv: string, taskId: number, by: string, a
 }
 /** Settles or refunds every held bounty on a task: done pays the taker (unless it was the poster), drop and release return it. */
 export function settleBounties(hub: Hub, conv: string, task: Task, to: TaskStatus | "release", now = Date.now()): Bounty[] {
+  if (to !== "done" && to !== "dropped" && to !== "release") return [];
   const held = bounties(hub, conv, { task: task.id, status: "held", limit: 200 });
   if (!held.length) return [];
   const who = personOfName(task.done_by) || personOfName(task.claimed_by) || personOfName(task.owner);
@@ -607,8 +608,8 @@ export async function awardCertificate(hub: Hub, conv: string, stats: TeamStats,
 /** What the bot is asked to do on Sunday night; it runs as a normal background task, so it can use its tools. */
 export function weeklyTask(stats: TeamStats, done: Task[], covers: string[] = [], cert = ""): string {
   const facts = {
-    本周做完: stats.week.done, 本周总分: stats.week.points, 本周计入余额: stats.week.points_capped, 还在做: stats.totals.doing, 没开始: stats.totals.open, 已过期: stats.totals.overdue, 本周之星: stats.mvp || "（没有人得分）",
-    每个人: stats.people.filter(p => p.done_week || p.doing.length).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week, 本周计入余额: p.points_week_capped, 贡献账本累计: p.ledger, 本周还可打赏: p.tip_left, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name) })),
+    本周做完: stats.week.done, 本周总分: stats.week.points_capped, 还在做: stats.totals.doing, 没开始: stats.totals.open, 已过期: stats.totals.overdue, 本周之星: stats.mvp || "（没有人得分）",
+    每个人: stats.people.filter(p => p.done_week || p.doing.length).map(p => ({ 名字: p.name, 本周做完: p.done_week, 本周得分: p.points_week_capped, 贡献账本累计: p.ledger, 本周还可打赏: p.tip_left, 连续天数: p.streak, 正在做: p.doing.map(d => d.title), 称号: p.badges.filter(b => b.earned).map(b => b.name) })),
     本周做完的事: done.map(t => ({ 事: t.title, 谁: creditOf(t), 大小: SIZE_LABEL[t.size], 用时: t.claimed_at ? span(t.done_at - t.claimed_at) : "" })),
   };
   return "发本周的团队战报。下面是这一周任务清单的真实数据，只能用这些数，不许编：\n" + JSON.stringify(facts) +

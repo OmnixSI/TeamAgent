@@ -233,6 +233,9 @@ test("weekly task points are capped at 60; the excess is ledger only and the sta
   assert.equal(p.points_total, WEEKLY_CAP);
   assert.equal(p.balance, WEEKLY_CAP);
   assert.equal(teamStats(hub, G, NOW).week.points_capped, WEEKLY_CAP);
+  const reportFacts = JSON.parse(weeklyTask(teamStats(hub, G, NOW), []).split("\n")[1]);
+  assert.equal(reportFacts.本周总分, WEEKLY_CAP);
+  assert.equal(reportFacts.每个人.find(x => x.名字 === "小明").本周得分, WEEKLY_CAP);
   hub.db.prepare("INSERT INTO team_star(conv,week,who,points,done) VALUES(?,?,?,?,?)").run(G, weekStart(NOW), "小明", 210, 7);
   p = teamStats(hub, G, NOW).people.find(x => x.name === "小明");
   assert.equal(p.points_total, WEEKLY_CAP + 20, "the star's 20 is added on top");
@@ -298,6 +301,20 @@ test("bounty points are escrowed at posting, paid to the taker, refunded for the
   updateTask(hub, G, rel.id, { status: "open" }, "小红", true);
   assert.equal(bounties(hub, G, { task: rel.id })[0].status, "refunded");
   assert.equal(balanceOf(hub, G, "小明", NOW).balance, 20);
+});
+
+test("a board-style move to doing keeps the bounty escrowed until the task is released", () => {
+  const hub = mkHub({ team_praise: "off" });
+  const earned = addTask(hub, G, { title: "大活", size: "big" }, "小明");
+  updateTask(hub, G, earned.id, { status: "done" }, "小明", true);
+  const task = addTask(hub, G, { title: "看板悬赏" }, "小明");
+  assert.equal(postBounty(hub, G, task.id, "小明", 10).ok, true);
+  updateTask(hub, G, task.id, { status: "doing" }, "小红", true);
+  assert.equal(bounties(hub, G, { task: task.id })[0].status, "held");
+  assert.equal(balanceOf(hub, G, "小明").balance, 20);
+  updateTask(hub, G, task.id, { status: "open" }, "小红", true);
+  assert.equal(bounties(hub, G, { task: task.id })[0].status, "refunded");
+  assert.equal(balanceOf(hub, G, "小明").balance, 30);
 });
 
 test("bounty income does not count against the taker's weekly cap", () => {

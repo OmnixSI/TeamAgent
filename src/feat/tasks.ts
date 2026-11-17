@@ -273,7 +273,7 @@ export function updateTask(hub: Hub, conv: string, id: number, patch: Partial<Pi
     else if (next.status === "doing") tell(hub, conv, by + " 开始做 " + named(after));
   }
   if (after && changed && hooks.status) {
-    const to = changed === "open" && cur.claimed_by ? "release" : changed;
+    const to = changed === "open" && cur.status === "doing" ? "release" : changed;
     try { hooks.status(hub, conv, after, to, who, quiet); } catch (e: any) { console.log("tasks: status hook failed", e?.message); }
   }
   if (after && changed === "done" && hooks.done) { try { hooks.done(hub, conv, after, who, quiet); } catch (e: any) { console.log("tasks: done hook failed", e?.message); } }
