@@ -6,6 +6,8 @@ import type { Hub } from "../hub.ts";
 import type { Tool } from "../core.ts";
 import { dsChat } from "../llm.ts";
 import { BJ, clip, fmtDate, zonedToUtc } from "../util.ts";
+import { RUNTIME, withDict } from "../i18n.ts";
+import type { Dict } from "../i18n.ts";
 
 export const LIMITS = {
   makeDefault: 20, makeMax: 60, quizDefault: 5, quizMax: 10, decksPerConv: 30, chunk: 9000, chunks: 4, materialMin: 80,
@@ -181,6 +183,38 @@ export function ankiText(deckName: string, cards: { front: string; back: string;
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>)[c]);
 const jsonInHtml = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 
+/** English for the study page's own words (the cards are the learner's and stay as written). */
+export const PAGE_EN: Dict = {
+  "界面语言": "Language",
+  "跟随系统": "Follow system",
+  "记忆卡片": "Flashcards",
+  "点一下卡片翻面": "Tap the card to flip it",
+  "看提示": "Show hint",
+  "重来": "Again",
+  "困难": "Hard",
+  "记得": "Good",
+  "简单": "Easy",
+  "再学几张新卡": "Study a few more new cards",
+  "清除进度": "Clear progress",
+  "问题": "Question",
+  "答案": "Answer",
+  "出处：{quote}": "Source: {quote}",
+  "提示：{hint}": "Hint: {hint}",
+  "{n} 分钟": "{n} min",
+  "明天": "1 day",
+  "{n} 天": ["{n} day", "{n} days"],
+  "{n} 个月": ["{n} month", "{n} months"],
+  "1 年": "1 year",
+  "今天的卡片学完了。": "You're done with today's cards.",
+  "这套卡片还没有开始学。": "You haven't started this deck yet.",
+  "下一张{when}后到期。": "The next card is due in {when}.",
+  "还有 {n} 张新卡，今天的新卡额度用完了。": ["{n} new card is still waiting; today's new-card limit is used up.", "{n} new cards are still waiting; today's new-card limit is used up."],
+  "共 {total}，已学 {seen}": "{total} in all, {seen} studied",
+  "{n} 张": ["{n} card", "{n} cards"],
+  "还剩 {n} 张": ["{n} card left", "{n} cards left"],
+  "清掉这个浏览器里这套卡的学习进度？": "Clear this deck's study progress in this browser?",
+};
+
 // Plain ES5 on purpose: it runs on any phone browser and, in the tests, against a hand-made document.
 const PAGE_JS = String.raw`(function () {
 var D = JSON.parse(document.getElementById('deck').textContent);
@@ -202,13 +236,13 @@ function next(st, g, now) {
   return { e: clampE(e + (g === 'hard' ? -0.15 : g === 'easy' ? 0.15 : 0)), i: iv, r: r + 1, l: l, d: d0(now) + iv * DAY, f: f };
 }
 function label(due, now) {
-  if (due - now < 3600000) return Math.max(1, Math.round((due - now) / 60000)) + ' 分钟';
+  if (due - now < 3600000) return tx('{n} 分钟', { n: Math.max(1, Math.round((due - now) / 60000)) });
   var d = Math.round((due - d0(now)) / DAY);
   if (d < 1) d = 1;
-  if (d === 1) return '明天';
-  if (d < 30) return d + ' 天';
-  if (d < 365) return Math.round(d / 30) + ' 个月';
-  return '1 年';
+  if (d === 1) return tx('明天');
+  if (d < 30) return tx('{n} 天', { n: d });
+  if (d < 365) return tx('{n} 个月', { n: Math.round(d / 30) });
+  return tx('1 年');
 }
 var byId = {}, queue = [], cur = null, flipped = false, hinted = false, total = 0;
 for (var k = 0; k < D.cards.length; k++) byId[D.cards[k].id] = D.cards[k];
@@ -234,29 +268,29 @@ function show() {
     $('study').hidden = true; $('done').hidden = false;
     var seen = 0, soon = 0, nd = 0;
     for (var id in S.c) { seen++; if (S.c[id].d > now && (!soon || S.c[id].d < soon)) soon = S.c[id].d; }
-    var t = seen ? '今天的卡片学完了。' : '这套卡片还没有开始学。';
-    if (soon) t += '下一张' + label(soon, now) + '后到期。';
-    if (S.unseen > 0) t += '还有 ' + S.unseen + ' 张新卡，今天的新卡额度用完了。';
-    $('doneText').textContent = t; $('more').hidden = !(S.unseen > 0);
-    $('stat').textContent = '共 ' + D.cards.length + ' 张，已学 ' + seen + ' 张';
+    var t = [seen ? tx('今天的卡片学完了。') : tx('这套卡片还没有开始学。')];
+    if (soon) t.push(tx('下一张{when}后到期。', { when: label(soon, now) }));
+    if (S.unseen > 0) t.push(tx('还有 {n} 张新卡，今天的新卡额度用完了。', { n: S.unseen }));
+    $('doneText').textContent = t.join(LANG.cur() === 'en' ? ' ' : ''); $('more').hidden = !(S.unseen > 0);
+    $('stat').textContent = tx('共 {total}，已学 {seen}', { total: tx('{n} 张', { n: D.cards.length }), seen: tx('{n} 张', { n: seen }) });
     $('bar').style.width = '100%';
     return;
   }
   $('study').hidden = false; $('done').hidden = true;
   cur = byId[queue[0]];
-  $('side').textContent = '问题'; $('text').textContent = cur.front; $('note').textContent = '';
+  $('side').textContent = tx('问题'); $('text').textContent = cur.front; $('note').textContent = '';
   $('hint').hidden = !cur.hint; $('hintText').textContent = '';
   $('grades').hidden = true; $('flip').hidden = false;
-  $('stat').textContent = '还剩 ' + queue.length + ' 张';
+  $('stat').textContent = tx('还剩 {n} 张', { n: queue.length });
   $('bar').style.width = Math.round((1 - queue.length / Math.max(total, queue.length)) * 100) + '%';
 }
 function flip() {
   if (!cur) return;
   flipped = !flipped;
   var now = Date.now();
-  $('side').textContent = flipped ? '答案' : '问题';
+  $('side').textContent = flipped ? tx('答案') : tx('问题');
   $('text').textContent = flipped ? cur.back : cur.front;
-  $('note').textContent = flipped && cur.quote ? '出处：' + cur.quote : '';
+  $('note').textContent = flipped && cur.quote ? tx('出处：{quote}', { quote: cur.quote }) : '';
   $('grades').hidden = !flipped; $('flip').hidden = flipped; $('hint').hidden = flipped || !cur.hint;
   if (flipped) {
     var st = S.c[cur.id], g = ['again', 'hard', 'good', 'easy'];
@@ -274,12 +308,13 @@ function grade(g) {
   show();
 }
 $('card').addEventListener('click', flip);
-$('hint').addEventListener('click', function () { if (cur && !flipped) { hinted = true; $('hintText').textContent = '提示：' + cur.hint; $('hint').hidden = true; } });
+function showHint() { if (cur && !flipped) { hinted = true; $('hintText').textContent = tx('提示：{hint}', { hint: cur.hint }); $('hint').hidden = true; } }
+$('hint').addEventListener('click', showHint);
 var names = ['again', 'hard', 'good', 'easy'];
 for (var n = 0; n < names.length; n++) (function (g) { $('g-' + g).addEventListener('click', function () { grade(g); }); })(names[n]);
 $('more').addEventListener('click', function () { S.x += D.newCap; save(); build(); show(); });
 $('reset').addEventListener('click', function () {
-  if (typeof confirm === 'function' && !confirm('清掉这个浏览器里这套卡的学习进度？')) return;
+  if (typeof confirm === 'function' && !confirm(tx('清掉这个浏览器里这套卡的学习进度？'))) return;
   S = { c: {}, n: { d: -1, k: 0 }, x: 0 }; save(); build(); show();
 });
 document.addEventListener('keydown', function (ev) {
@@ -287,6 +322,16 @@ document.addEventListener('keydown', function (ev) {
   if (i >= 0 && flipped) grade(names[i]);
 });
 $('title').textContent = D.name;
+var langSel = $('lang');
+langSel.value = LANG.pref(); langSel.onchange = function () { LANG.set(langSel.value); };
+function titled() { document.title = D.name + ' - ' + tx('记忆卡片'); }
+// A language change repaints what is on screen: the card keeps its side and its hint.
+LANG.on(function () {
+  var f = flipped, h = hinted;
+  langSel.value = LANG.pref(); titled(); show();
+  if (queue.length) { if (f) flip(); else if (h) showHint(); }
+});
+LANG.apply(); titled();
 build(); show();
 })();`;
 
@@ -308,7 +353,9 @@ button{font:inherit;color:var(--fg);background:transparent;border:1px solid var(
 #grades button{min-height:58px;padding:6px 2px;background:var(--card);font-size:16px}#grades small{display:block;font-size:12px;color:var(--mute)}
 #grades[hidden],[hidden]{display:none}
 #done p{margin:24px 0;font-size:17px}footer{margin-top:28px;display:flex;gap:10px}
-#reset{color:var(--mute);font-size:14px}`;
+#reset{color:var(--mute);font-size:14px}
+footer select{margin-left:auto;font:inherit;font-size:14px;color:var(--mute);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 10px;min-height:44px}
+footer select:focus-visible{outline:2px solid var(--hl);outline-offset:2px}`;
 
 export function studyPage(deck: { id: number; name: string }, cards: { id: number; front: string; back: string; hint?: string; quote?: string }[], newCap: number) {
   const data = { v: 1, deck: deck.id, name: deck.name, newCap, cards: cards.map(c => ({ id: c.id, front: c.front, back: c.back, hint: c.hint || "", quote: c.quote || "" })) };
@@ -317,14 +364,15 @@ export function studyPage(deck: { id: number; name: string }, cards: { id: numbe
 <div class="track"><div id="bar"></div></div>
 <section id="study">
 <button id="card" class="card" type="button"><div id="side">问题</div><div id="text"></div><div id="note"></div><div id="hintText"></div></button>
-<div class="row"><span id="flip">点一下卡片翻面</span><button id="hint" type="button">看提示</button></div>
-<div id="grades" hidden><button id="g-again" type="button">重来<small id="t-again"></small></button><button id="g-hard" type="button">困难<small id="t-hard"></small></button><button id="g-good" type="button">记得<small id="t-good"></small></button><button id="g-easy" type="button">简单<small id="t-easy"></small></button></div>
+<div class="row"><span id="flip" data-i>点一下卡片翻面</span><button id="hint" type="button" data-i>看提示</button></div>
+<div id="grades" hidden><button id="g-again" type="button"><span data-i>重来</span><small id="t-again"></small></button><button id="g-hard" type="button"><span data-i>困难</span><small id="t-hard"></small></button><button id="g-good" type="button"><span data-i>记得</span><small id="t-good"></small></button><button id="g-easy" type="button"><span data-i>简单</span><small id="t-easy"></small></button></div>
 </section>
-<section id="done" hidden><p id="doneText"></p><button id="more" type="button" hidden>再学几张新卡</button></section>
-<footer><button id="reset" type="button">清除进度</button></footer>
+<section id="done" hidden><p id="doneText"></p><button id="more" type="button" data-i hidden>再学几张新卡</button></section>
+<footer><button id="reset" type="button" data-i>清除进度</button><select id="lang" data-ia="aria-label" aria-label="界面语言"><option value="auto" data-i>跟随系统</option><option value="zh">中文</option><option value="en">English</option></select></footer>
 </main>
 <script type="application/json" id="deck">${jsonInHtml(data)}</script>
-<script>${PAGE_JS}</script></body></html>`;
+<script>${withDict(RUNTIME, PAGE_EN)}
+${PAGE_JS}</script></body></html>`;
 }
 
 // ---------- database ----------

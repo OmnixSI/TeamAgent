@@ -57,7 +57,7 @@ const creditOf = (t: Task) => t.done_by || personOfName(t.claimed_by) || personO
 const holderOf = (t: Task) => personOfName(t.claimed_by) || personOfName(t.owner);
 
 export type Badge = { key: string; name: string; what: string; earned: boolean; at?: number };
-const BADGES: { key: string; name: string; what: string; test(done: Task[], streak: number): number | boolean }[] = [
+export const BADGES: { key: string; name: string; what: string; test(done: Task[], streak: number): number | boolean }[] = [
   { key: "first", name: "开张", what: "做完第一件事", test: d => d[0]?.done_at || false },
   { key: "five", name: "五连胜", what: "累计做完 5 件", test: d => d[4]?.done_at || false },
   { key: "ten", name: "十全", what: "累计做完 10 件", test: d => d[9]?.done_at || false },
@@ -197,7 +197,7 @@ export function taskTimeline(hub: Hub, conv: string, id: number, now = Date.now(
 // ---------- trading points for perks ----------
 export type Item = { key: string; name: string; cost: number; what: string; kind: "now" | "timed" | "weekly" | "manual"; days?: number; needs?: string; custom?: boolean };
 /** What points buy. "now": the bot does it on the spot. "timed": lasts some days. "weekly": honoured in the next weekly report. "manual": a person has to honour it. */
-const ITEMS: Item[] = [
+export const ITEMS: Item[] = [
   { key: "meme", name: "定制表情包", cost: 5, kind: "now", what: "指定一张图或一个人，Bot 做成梗图并存进表情库", needs: "用哪张图、配什么字" },
   { key: "roast", name: "点一段语音", cost: 10, kind: "now", what: "让 Bot 用你选的方言夸你一段，或者损你点名的人一段", needs: "夸谁损谁、用什么方言" },
   { key: "blame", name: "甩锅券", cost: 15, kind: "now", what: "Bot 当众替你背一次锅，认错要诚恳", needs: "什么锅" },

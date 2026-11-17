@@ -11,6 +11,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync
 import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import vm from "node:vm";
+import { assertCovered, untranslated } from "./i18n-helpers.mjs";
+import { RUNTIME, withDict } from "../src/i18n.ts";
 
 const B = await import("../src/feat/filebox.ts");
 const T = await import("../src/feat/transfer.ts");
@@ -370,8 +373,9 @@ describe("upload page and drop tokens", () => {
     const d = B.newDrop(hub, "g:a", { by: "小明" });
     const script = (await (await get(hub, "/x/drop/" + d.token)).text()).split("<script>")[1].split("</script>")[0];
     const el = () => ({ hidden: false, className: "", textContent: "", value: "", style: {}, children: [], appendChild(c) { this.children.push(c); }, addEventListener() {} });
-    const els = { by: { ...el(), value: " 阿强 " }, pick: el(), list: el(), msg: el(), again: el(), zone: el() };
+    const els = { by: { ...el(), value: " 阿强 " }, pick: el(), list: el(), msg: el(), again: el(), zone: el(), lim: el(), lang: el() };
     const document = {
+      documentElement: {}, querySelectorAll: () => [],
       getElementById: id => els[id],
       createElement() {
         const kids = { span1: el(), span2: el(), bar: el(), s: el() };
@@ -390,7 +394,7 @@ describe("upload page and drop tokens", () => {
         this.onload();
       }
     }
-    new Function("document", "XMLHttpRequest", "fetch", script)(document, XMLHttpRequest, fetch);
+    new Function("document", "XMLHttpRequest", "fetch", "navigator", script)(document, XMLHttpRequest, fetch, { languages: ["zh-CN"] });
     const files = [new File([enc("第一个文件")], "一.txt", { type: "text/plain" }), new File([new Uint8Array(3000)], "二.bin")];
     els.pick.onchange.call({ files, value: "x" });
     for (let i = 0; i < 200 && !els.msg.textContent; i++) await new Promise(r => setTimeout(r, 5));
@@ -443,6 +447,151 @@ describe("upload page and drop tokens", () => {
   test("a full box refuses a new upload page", () => {
     hub.sql.exec("INSERT INTO xfer(key,size,parts,done,at) VALUES(?,?,?,?,?)", "box/q/full", B.LIMITS.total, 1, 1, Date.now());
     assert.equal(B.newDrop(hub, "g:a"), null);
+  });
+});
+
+describe("upload page languages", () => {
+  let hub;
+  beforeEach(() => { hub = fakeHub(); });
+  const html = async (path, h) => (await get(hub, path, h)).text();
+  const scriptOf = h => h.split("<script>")[1].split("</script>")[0];
+  /** Text and attribute keys the HTML itself marks for translation (data-i, data-ia). */
+  const marked = h => [
+    ...[...h.matchAll(/<(\w+)[^>]*\sdata-i(?=[\s>=])[^>]*>([^<]*)</g)].map(m => m[2].replace(/&amp;/g, "&")),
+    ...[...h.matchAll(/data-ia="aria-label"\s+aria-label="([^"]*)"/g)].map(m => m[1]),
+  ];
+  const plain = v => JSON.parse(JSON.stringify(v));
+
+  /** The upload page run against a fake DOM, as a browser that lists these languages (and may hold a stored choice). */
+  async function open({ languages = ["zh-CN"], stored } = {}) {
+    const d = B.newDrop(hub, "g:a", { by: "小明" });
+    const h = await html("/x/drop/" + d.token);
+    const el = () => ({ hidden: false, className: "", textContent: "", value: "", style: {}, children: [], appendChild(c) { this.children.push(c); }, addEventListener() {} });
+    const els = { by: { ...el(), value: "阿强" }, pick: el(), list: el(), msg: el(), again: el(), zone: el(), lim: el(), lang: el() };
+    const store = new Map(stored ? [["ta.lang", stored]] : []);
+    const documentElement = {};
+    const document = {
+      documentElement, querySelectorAll: () => [], getElementById: id => els[id],
+      createElement() {
+        const kids = { span1: el(), span2: el(), bar: el(), s: el() };
+        return { ...el(), kids, set innerHTML(_v) {}, querySelector: q => (q === "i" ? kids.bar : q === ".s" ? kids.s : kids.span1), querySelectorAll: () => [kids.span1, kids.span2] };
+      },
+    };
+    const window = { localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) }, addEventListener() {} };
+    const abs = u => "https://bot.example" + u;
+    const fetch = (u, init = {}) => route(hub, new Request(abs(u), init));
+    class XMLHttpRequest {
+      upload = {};
+      open(m, u) { this.m = m; this.u = u; }
+      async send(blob) {
+        const r = await route(hub, new Request(abs(this.u), { method: this.m, body: blob, headers: { "content-length": String(blob.size) } }));
+        this.status = r.status; this.responseText = await r.text(); this.onload();
+      }
+    }
+    new Function("document", "window", "XMLHttpRequest", "fetch", "navigator", scriptOf(h))(document, window, XMLHttpRequest, fetch, { languages });
+    const upload = async files => {
+      els.pick.onchange.call({ files, value: "x" });
+      for (let i = 0; i < 200 && !els.msg.textContent; i++) await new Promise(r => setTimeout(r, 5));
+    };
+    return { d, h, els, store, documentElement, upload };
+  }
+
+  test("the page is Chinese when nothing was asked for, and carries a language picker", async () => {
+    const d = B.newDrop(hub, "g:a", { note: "把会议录音传上来", by: "小明", files: 3 });
+    const h = await html("/x/drop/" + d.token);
+    assert.match(h, /<h1 data-i>传文件给 Bot<\/h1>/);
+    assert.match(h, /<p class=sub id=lim>还能传 3 个文件，一共 [\d.]+ [GM]B，单个最大 2\.00 GB；链接 .+（北京时间）前有效，文件保存 7 天。<\/p>/);
+    const sel = /<select id=lang data-ia="aria-label" aria-label="界面语言">(.*?)<\/select>/.exec(h)[1];
+    assert.deepEqual([...sel.matchAll(/<option value=(\w+)[^>]*>([^<]*)</g)].map(m => [m[1], m[2]]), [["auto", "跟随系统"], ["zh", "中文"], ["en", "English"]]);
+    assert.ok(!/src="http|href="http|@import/.test(h), "still no external resources");
+    assert.ok(!h.includes("<script src"), "the script stays inline, as the CSP expects");
+    assert.equal(h.split("<script>").length, 2, "one script");
+    assert.match((await get(hub, "/x/drop/" + d.token)).headers.get("content-security-policy"), /script-src 'unsafe-inline'/);
+  });
+
+  test("every marked text and every string in the page script has an English entry, and no entry is dead", async () => {
+    const d = B.newDrop(hub, "g:a", { by: "小明" });
+    const up = await html("/x/drop/" + d.token), gone = await html("/x/drop/" + "0".repeat(32));
+    // a file that is gone, and a read allowance that is used up
+    const put = await B.boxPut(hub, "g:a", "a.txt", enc("hi"));
+    const link = new URL(put.link).pathname;
+    const noFile = await html("/x/box/" + T.issue(hub, { mode: "get", prefix: B.prefixOf("g:a"), name: "nothere" }, 3600) + "/a.txt");
+    assert.match(noFile, /<h1 data-i>文件不在了<\/h1>/);
+    hub.plan.fits = () => false;
+    const quota = await html(link);
+    const texts = [up, gone, noFile, quota].flatMap(marked);
+    assert.deepEqual(untranslated(texts.map(t => JSON.stringify(t)).join(";"), B.PAGE_EN), [], "marked text without an English entry");
+    assert.ok(/<title data-i>/.test(gone) && /<title data-i>/.test(quota));
+    // the page script after the runtime (which carries the dictionary itself, so would make every key look used)
+    const own = scriptOf(up).slice(scriptOf(up).indexOf("LANG.apply();"));
+    const js = own + ";" + texts.map(t => JSON.stringify(t)).join(";");
+    // sentences that only come back inside the server's JSON; the next test fetches the real ones
+    const server = ["上传链接已经过期，让 Bot 再给一个", "只能从上传页面提交", "没有这个文件", "请求格式不对", "文件大小不对", "这个链接最多传 {n} 个文件，已经传满了",
+      "单个文件最大 {size}", "这个链接一共能传 {total}，还剩 {left}", "文件箱放不下了，还剩 {left}", "还没传完", "没有这个接口",
+      "收到的大小和文件不一样，可能没传完整", "文件箱满了（总共 {total}），先删掉一些", "文件分段不对，没法存"];
+    const cfg = JSON.parse(/var C=(\{.*?\}),items/.exec(scriptOf(up))[1]);   // the page's data (a name, a time) is not interface text
+    assertCovered(js, B.PAGE_EN, { server, keep: ["中文", cfg.by, cfg.until] });
+    assert.ok(![...Object.keys(B.PAGE_EN), ...Object.values(B.PAGE_EN).flat()].some(x => x.includes("<")), "nothing in the dictionary can end the script");
+  });
+
+  test("the sentences the server sends come out in English, with their numbers", async () => {
+    const ctx = { navigator: { languages: ["en-US"] }, Object, String, RegExp, Array };
+    vm.createContext(ctx);
+    vm.runInContext(withDict(RUNTIME, B.PAGE_EN) + "\nthis.txs = txs;", ctx);
+    const txs = ctx.txs, heard = {};
+    const d = B.newDrop(hub, "g:a", { files: 2, mb: 1 });
+    const start = (body, h = {}) => post(hub, "/x/drop/" + d.token + "/start", body, h).then(r => r.json());
+    const say = async (key, p) => { heard[key] = (await p).error; return heard[key]; };
+    await start({ name: "a.bin", size: 600000 });
+    assert.equal(txs(await say("bytes", start({ name: "b.bin", size: 600000 }))), "This link takes 1.0 MB in all; 438 KB left");
+    await start({ name: "b.bin", size: 400000 });
+    assert.equal(txs(await say("full", start({ name: "c.bin", size: 1 }))), "This link takes 2 files at most, and it is full.");
+    assert.equal(txs(await say("site", start({ name: "z", size: 1 }, { "sec-fetch-site": "cross-site" }))), "Uploads can only be sent from the upload page.");
+    assert.equal(txs(await say("size", start({ name: "z", size: -1 }))), "The file size is not valid");
+    assert.equal(txs(await say("status", get(hub, "/x/drop/" + d.token + "/status?f=9").then(r => r.json()))), "No such file");
+    assert.equal(txs(await say("verb", post(hub, "/x/drop/" + d.token + "/status", {}).then(r => r.json()))), "No such endpoint");
+    const one = B.newDrop(hub, "g:a", { files: 1 });
+    await post(hub, "/x/drop/" + one.token + "/start", { name: "a.bin", size: 5 });
+    const over = await post(hub, "/x/drop/" + one.token + "/start", { name: "b.bin", size: 5 }).then(r => r.json());
+    assert.equal(txs(over.error), "This link takes 1 file at most, and it is full.", "one file reads as singular");
+    assert.equal(txs("单个文件最大 2.00 GB"), "A file can be 2.00 GB at most");
+    assert.equal(txs("服务器拒绝了这个文件（403）"), "The server refused this file (403)");
+    assert.equal(txs("第 2/6 段试了 6 次都没传上去，网络可能断了，点重试接着传"), "Part 2 of 6 failed after 6 tries. The network may be down; tap retry to carry on.");
+    assert.equal(txs("storage cap reached"), "storage cap reached", "the transfer route's own English passes through");
+    for (const [k, v] of Object.entries(heard)) assert.ok(v && !/[一-鿿]/.test(txs(v)), k + " still shows Chinese in English: " + txs(v));
+  });
+
+  test("an English browser gets English; the choice switches at once, is remembered, and follows the system again on request", async () => {
+    const p = await open({ languages: ["en-AU", "zh-CN"] });
+    assert.match(p.els.lim.textContent, /^You can still upload 10 files, [\d.]+ [GM]B in all and up to 2\.00 GB each\. This link works until .+; files are kept for 7 days\.$/);
+    assert.ok(!/[一-鿿]/.test(p.els.lim.textContent));
+    assert.equal(p.els.lang.value, "auto");
+    await p.upload([new File([enc("hello")], "一.txt", { type: "text/plain" })]);
+    assert.equal(p.els.msg.textContent, "Done, the Bot has them. Go back to the group and tell it what to do with them.");
+    assert.match(p.els.list.children[0].kids.s.textContent, /^Handed to the Bot as x\d+$/);
+    // switch to Chinese: the page and what it already said change, nothing is fetched again
+    p.els.lang.value = "zh"; p.els.lang.onchange();
+    assert.match(p.els.lim.textContent, /^还能传 10 个文件，一共 [\d.]+ [GM]B，单个最大 2\.00 GB；链接 .+（北京时间）前有效，文件保存 7 天。$/);
+    assert.equal(p.els.msg.textContent, "传好了，Bot 已经收到。可以回群里说一声要它做什么。");
+    assert.match(p.els.list.children[0].kids.s.textContent, /^已交给 Bot，编号 x\d+$/);
+    assert.equal(p.store.get("ta.lang"), "zh", "remembered");
+    assert.equal(p.documentElement.lang, "zh-CN");
+    p.els.lang.value = "auto"; p.els.lang.onchange();
+    assert.equal(p.store.has("ta.lang"), false);
+    assert.equal(p.documentElement.lang, "en", "back to the system language");
+    assert.match(p.els.lim.textContent, /^You can still upload/);
+  });
+
+  test("a stored choice beats the browser's language, and a too-large file says so in the right language", async () => {
+    const p = await open({ languages: ["en-US"], stored: "zh" });
+    assert.match(p.els.lim.textContent, /^还能传/);
+    const q = await open({ languages: ["zh-CN"], stored: "en" });
+    assert.match(q.els.lim.textContent, /^You can still upload/);
+    const big = { name: "big.bin", size: B.LIMITS.file + 1, type: "" };
+    q.els.pick.onchange.call({ files: [big], value: "" });
+    assert.equal(q.els.list.children[0].kids.s.textContent, "Too large: 2.00 GB per file at most");
+    q.els.lang.value = "zh"; q.els.lang.onchange();
+    assert.equal(q.els.list.children[0].kids.s.textContent, "太大了，单个文件最多 2.00 GB");
   });
 });
 

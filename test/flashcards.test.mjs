@@ -5,8 +5,9 @@ import vm from "node:vm";
 import { DatabaseSync } from "node:sqlite";
 import feature, {
   deps, schedule, bjMidnight, dueText, norm, similarity, duplicateOf, grounded, cloze, parseCards, vet, chunkText, ankiText, studyPage,
-  findDeck, dueCards, dueCount, runReminders, DAY, LIMITS,
+  findDeck, dueCards, dueCount, runReminders, DAY, LIMITS, PAGE_EN,
 } from "../src/feat/flashcards.ts";
+import { assertCovered } from "./i18n-helpers.mjs";
 
 const MIN = 60000, H = 3600000;
 const T0 = Date.parse("2026-11-15T02:00:00Z");   // 10:00 Beijing, Sunday
@@ -456,7 +457,7 @@ describe("study page", () => {
   ];
   let clock, store;
 
-  function boot(html, storage) {
+  function boot(html, storage, browser, lstore = {}) {
     const els = {};
     const hiddenAtStart = {};
     for (const m of html.matchAll(/<(\w+)([^>]*?)\sid="([\w-]+)"([^>]*)>/g)) hiddenAtStart[m[3]] = /\shidden(\s|>|=|$)/.test(m[2] + m[4] + ">");
@@ -467,11 +468,16 @@ describe("study page", () => {
     }
     els.deck.textContent = /<script type="application\/json" id="deck">([\s\S]*?)<\/script>/.exec(html)[1];
     const docListeners = {};
-    const document = { getElementById: id => els[id], addEventListener: (t, fn) => (docListeners[t] ||= []).push(fn) };
+    const documentElement = {};
+    const document = { documentElement, querySelectorAll: () => [], getElementById: id => els[id], addEventListener: (t, fn) => (docListeners[t] ||= []).push(fn) };
     const localStorage = { getItem: k => (k in storage ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v); } };
     const script = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
-    vm.runInNewContext(script, { document, localStorage, location: { pathname: "/p/site1/" }, Date: { now: () => clock }, confirm: () => true });
-    return { els, key: ev => (docListeners.keydown || []).forEach(fn => fn({ key: ev })) };
+    const lang = { localStorage: { getItem: k => (k in lstore ? lstore[k] : null), setItem: (k, v) => { lstore[k] = String(v); }, removeItem: k => { delete lstore[k]; } }, addEventListener() {} };
+    // no navigator and no stored choice: the page is Chinese, as these tests were written for
+    const ctx = { document, localStorage, location: { pathname: "/p/site1/" }, Date: { now: () => clock }, confirm: () => true };
+    if (browser) Object.assign(ctx, { navigator: { languages: browser }, window: lang });
+    vm.runInNewContext(script, ctx);
+    return { els, documentElement, document, lstore, key: ev => (docListeners.keydown || []).forEach(fn => fn({ key: ev })) };
   }
   const html = () => studyPage({ id: 3, name: "网络 <基础>" }, PAGE_CARDS, 2);
   beforeEach(() => { clock = T0; store = {}; });
@@ -541,6 +547,70 @@ describe("study page", () => {
     p.els.reset.click();
     assert.equal(p.els.text.textContent, "问题一");
     assert.deepEqual(JSON.parse(store["fc1:/p/site1/"]).c, {});
+  });
+  test("the page's interface words all have English, none are left over, and the markup carries a language picker", () => {
+    const h = html();
+    const script = /<script>([\s\S]*?)<\/script>/.exec(h)[1];
+    const own = script.slice(script.indexOf("var D = JSON.parse"));   // after the runtime, which holds the dictionary itself
+    const marked = [...h.matchAll(/<\w+[^>]*\sdata-i(?=[\s>=])[^>]*>([^<]*)</g)].map(m => m[1]);
+    const label = /data-ia="aria-label" aria-label="([^"]*)"/.exec(h)[1];
+    assert.deepEqual([...marked].sort(), ["重来", "困难", "记得", "简单", "点一下卡片翻面", "看提示", "再学几张新卡", "清除进度", "跟随系统"].sort());
+    assertCovered(own + ";" + [...marked, label].map(x => JSON.stringify(x)).join(";"), PAGE_EN);
+    assert.match(h, /<select id="lang"[^>]*><option value="auto" data-i>跟随系统<\/option><option value="zh">中文<\/option><option value="en">English<\/option><\/select>/);
+    assert.equal(h.split("<script>").length, 2, "one plain script (the deck data is a separate JSON block)");
+    assert.ok(![...Object.keys(PAGE_EN), ...Object.values(PAGE_EN).flat()].some(x => x.includes("<")), "nothing in the dictionary can end the script");
+  });
+  test("an English browser gets an English page; the cards stay as written", () => {
+    const p = boot(html(), store, ["en-US"]);
+    assert.equal(p.documentElement.lang, "en");
+    assert.equal(p.document.title, "网络 <基础> - Flashcards");
+    assert.equal(p.els.side.textContent, "Question"); assert.equal(p.els.text.textContent, "问题一");
+    assert.equal(p.els.stat.textContent, "2 cards left");
+    assert.equal(p.els.lang.value, "auto");
+    p.els.card.click();
+    assert.equal(p.els.side.textContent, "Answer"); assert.equal(p.els.note.textContent, "Source: 原文一");
+    assert.deepEqual(["again", "hard", "good", "easy"].map(g => p.els["t-" + g].textContent), ["10 min", "1 day", "1 day", "4 days"]);
+  });
+  test("the hint, the finished screen and the confirm question read in English", () => {
+    const p = boot(html(), store, ["en-GB"]);
+    p.els.hint.click();
+    assert.equal(p.els.hintText.textContent, "Hint: 提示一");
+    p.els.card.click(); p.els["g-good"].click(); p.els.card.click(); p.els["g-good"].click();
+    assert.equal(p.els.done.hidden, false);
+    assert.match(p.els.doneText.textContent, /^You're done with today's cards\. The next card is due in 1 day\. 1 new card is still waiting; today's new-card limit is used up\.$/);
+    assert.equal(p.els.stat.textContent, "3 cards in all, 2 cards studied");
+    const one = [{ id: 1, front: "q", back: "a", hint: "", quote: "" }];
+    const q = boot(studyPage({ id: 1, name: "x" }, one, 5), {}, ["en-US"]);
+    assert.equal(q.els.stat.textContent, "1 card left");
+    q.els.card.click(); q.els["g-good"].click();
+    assert.equal(q.els.stat.textContent, "1 card in all, 1 card studied");
+    assert.equal(q.els.doneText.textContent, "You're done with today's cards. The next card is due in 1 day.");
+  });
+  test("switching language repaints at once, keeps the card, its side and its hint, and is remembered", () => {
+    const lstore = {};
+    const p = boot(html(), store, ["en-US"], lstore);
+    p.els.hint.click(); assert.equal(p.els.hintText.textContent, "Hint: 提示一");
+    p.els.lang.value = "zh"; p.els.lang.onchange();
+    assert.equal(p.els.hintText.textContent, "提示：提示一"); assert.equal(p.els.hint.hidden, true);
+    assert.equal(p.els.side.textContent, "问题"); assert.equal(p.els.text.textContent, "问题一");
+    assert.equal(p.els.stat.textContent, "还剩 2 张");
+    assert.equal(p.document.title, "网络 <基础> - 记忆卡片"); assert.equal(p.documentElement.lang, "zh-CN");
+    assert.equal(lstore["ta.lang"], "zh");
+    p.els.lang.value = "en"; p.els.lang.onchange();
+    p.els.card.click();
+    assert.equal(p.els.side.textContent, "Answer");
+    assert.deepEqual(["again", "hard", "good", "easy"].map(g => p.els["t-" + g].textContent), ["10 min", "1 day", "1 day", "4 days"]);
+    p.els.lang.value = "zh"; p.els.lang.onchange();
+    assert.equal(p.els.side.textContent, "答案"); assert.equal(p.els.text.textContent, "答案一"); assert.equal(p.els.grades.hidden, false);
+    assert.deepEqual(["again", "hard", "good", "easy"].map(g => p.els["t-" + g].textContent), ["10 分钟", "明天", "明天", "4 天"]);
+    p.els["g-good"].click();   // grading still works after switching
+    assert.equal(p.els.text.textContent, "问题二");
+    p.els.lang.value = "auto"; p.els.lang.onchange();
+    assert.equal("ta.lang" in lstore, false); assert.equal(p.els.side.textContent, "Question");
+  });
+  test("a stored choice beats the browser's language", () => {
+    assert.equal(boot(html(), store, ["en-US"], { "ta.lang": "zh" }).els.stat.textContent, "还剩 2 张");
+    assert.equal(boot(html(), store, ["zh-CN"], { "ta.lang": "en" }).els.stat.textContent, "2 cards left");
   });
   test("works when storage is unavailable", () => {
     const els = boot(html(), new Proxy({}, { get() { throw new Error("blocked"); }, has() { throw new Error("blocked"); } })).els;

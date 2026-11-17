@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import feature, { issueAccess, checkAccess, revokeAccess, listAccess, cookieToken, bearerToken, personOf, bases } from "../src/feat/access.ts";
+import feature, { issueAccess, checkAccess, revokeAccess, listAccess, cookieToken, bearerToken, personOf, bases, PAGE_EN } from "../src/feat/access.ts";
+import { assertCovered } from "./i18n-helpers.mjs";
+import { runStaticPage } from "./i18n-page-helpers.mjs";
 
 function mkHub(env = {}) {
   const db = new DatabaseSync(":memory:");
@@ -70,4 +72,24 @@ test("the owner can mint an MCP address for a member who already has a link, wit
   assert.ok(await checkAccess(hub, first));
   const list = await (await call("GET", {})).json();
   assert.equal(list.people.length, 5); assert.ok(!JSON.stringify(list).includes(token));
+});
+
+test("the page a dead link lands on: Chinese by default, English for an English browser or a stored choice, nothing left out", async () => {
+  const hub = mkHub(), u = "https://x/x/board/k/" + "1".repeat(40);
+  const res = await feature.open(hub, new Request(u), new URL(u));
+  assert.equal(res.status, 403);
+  assert.match(res.headers.get("content-type"), /text\/html/);
+  const html = await res.text();
+  assert.match(html, /<title data-i>看板<\/title>/);
+  assert.match(html, /<p data-i>这个看板链接已经失效了。在群里对 Bot 说“给我看板链接”再要一个。<\/p>/);
+  assert.ok(!res.headers.get("content-security-policy"), "no CSP here, so the inline script runs; none was added");
+  const zh = runStaticPage(html, { languages: ["zh-CN"] });
+  assert.deepEqual(zh.texts, zh.marked, "a Chinese browser sees the page as written");
+  assert.equal(zh.lang, "zh-CN");
+  const en = runStaticPage(html, { languages: ["en-GB"] });
+  assert.deepEqual(en.texts, ["Board", "This board link is no longer valid. Ask the Bot in the group for a new one by saying “give me the board link”."]);
+  assert.equal(en.lang, "en");
+  assert.deepEqual(runStaticPage(html, { languages: ["en-GB"], stored: "zh" }).texts, zh.marked, "a stored choice beats the system language");
+  assert.equal(runStaticPage(html, { languages: ["zh-CN"], stored: "en" }).texts[0], "Board");
+  assertCovered(JSON.stringify(zh.marked), PAGE_EN);
 });

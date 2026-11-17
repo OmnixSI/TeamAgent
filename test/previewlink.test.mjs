@@ -21,6 +21,8 @@ registerHooks({
   },
 });
 const L = await import("../src/feat/previewlink.ts");
+import { assertCovered } from "./i18n-helpers.mjs";
+import { runStaticPage } from "./i18n-page-helpers.mjs";
 const P = await import("../src/feat/preview.ts");
 
 const T = "0123456789abcdef0123456789abcdef";
@@ -175,6 +177,21 @@ describe("serving", () => {
     assert.equal(old.status, 410);
     assert.equal(old.headers.get("set-cookie"), null, "an old link does not drop the cookie of the open one");
     assert.equal(hub.proxied.length, 0);
+  });
+  test("the page of a closed link: Chinese by default, English for an English browser, nothing left out", async () => {
+    const hub = withLink(fakeHub(), now, now + 600000);
+    const r = await serve(hub, "/x/live/" + T, {}, now + 600000);
+    assert.equal(r.status, 410);
+    assert.ok(!r.headers.get("content-security-policy"), "no CSP here, so the inline script runs; none was added");
+    const html = await r.text();
+    assert.match(html, /<title data-i>预览链接<\/title>/);
+    assert.match(html, /<p data-i [^>]*>这个预览链接已经关闭或过期了。想再看，就在群里让 Bot 重新开一个。<\/p>/);
+    const zh = runStaticPage(html, { languages: ["zh-CN"] });
+    assert.deepEqual(zh.texts, zh.marked, "a Chinese browser sees the page as written");
+    const en = runStaticPage(html, { languages: ["en-US"] });
+    assert.deepEqual(en.texts, ["Preview link", "This preview link has closed or expired. To see the app again, ask the Bot in the group to open a new one."]);
+    assert.deepEqual(runStaticPage(html, { languages: ["en-US"], stored: "zh" }).texts, zh.marked, "a stored choice beats the system language");
+    assertCovered(JSON.stringify(zh.marked), L.PAGE_EN);
   });
   test("an unknown token or a token of another kind is refused", async () => {
     const hub = withLink(fakeHub(), now, now + 600000);

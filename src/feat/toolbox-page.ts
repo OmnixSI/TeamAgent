@@ -2,6 +2,9 @@
 // visitor's browser; nothing calls the bot. Each part is plain JavaScript kept in a String.raw literal, so
 // the browser code must not contain backticks or "${". Pure logic hangs off TB.lib so the offline tests
 // can evaluate the same text under Node without a DOM.
+// Every sentence the visitor reads goes through tx("中文原文", {slots}): the Chinese is the key into the
+// English dictionary (toolbox-i18n.ts) that toolbox.ts puts into app.js next to the language runtime (../i18n.ts).
+import { RUNTIME } from "../i18n.ts";
 
 export const CSS = String.raw`
 :root{--bg:#fbfbf9;--fg:#1d1d1b;--mute:#6b6b66;--line:#dcdcd6;--soft:#f0f0eb;--acc:#2d6a5a;--acc-fg:#fff;--bad:#a33a2a;--ok:#2d6a5a;--add:#e3f1e8;--del:#f8e3df;--addx:#bfe3cb;--delx:#f0c0b6;--mark:#f3e3a6;
@@ -12,9 +15,12 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
 a{color:var(--acc)}
 .wrap{max-width:46rem;margin:0 auto;padding:0 16px 64px}
-header.top{max-width:46rem;margin:0 auto;padding:20px 16px 4px;display:flex;align-items:baseline;gap:12px}
+header.top{max-width:46rem;margin:0 auto;padding:20px 16px 4px;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
 header.top a{color:var(--fg);text-decoration:none;font-weight:600;font-size:18px}
-header.top span{color:var(--mute);font-size:14px}
+header.top span{flex:1 1 12rem;order:1;color:var(--mute);font-size:14px}
+select.lang{order:2;margin-left:auto;align-self:center;font-size:14px;padding:3px 8px;min-height:32px;color:var(--mute);cursor:pointer}
+select.lang:hover{border-color:var(--mute);color:var(--fg)}
+@media (max-width:560px){header.top span{order:3;flex-basis:100%}}
 h2{font-size:15px;font-weight:600;margin:36px 0 8px;color:var(--mute);letter-spacing:.02em}
 #view h2{font-size:22px;color:var(--fg);margin:8px 0 16px;letter-spacing:0}
 h2:focus{outline:none}
@@ -99,6 +105,41 @@ const TB = self.TB = self.TB || { lib: {}, tools: {} };
 const CONF = /*CONF*/{ parts: {}, index: {}, rx: "", pdflib: {} }/*END*/;
 TB.conf = CONF;
 const L = TB.lib;
+/*I18N*/
+TB.LANG = LANG;
+L.gap = () => LANG.cur() === "en" ? " " : "";   // between two sentences: Chinese runs them together, English needs a space
+
+// ---------- words that can be said again ----------
+// A tool on screen is not built anew when the language changes (that would drop what was typed, the chosen files and the
+// results): its words are swapped where they stand. For that, every sentence tx() hands out is remembered together with how to say it
+// again. A sentence put together from several (a status line with a note) goes through TB.live(() => ...) to be remembered as a whole.
+const said = new Map();
+function remember(s, again) {
+  if (typeof s === "string" && s) { said.delete(s); said.set(s, again); if (said.size > 20000) said.delete(said.keys().next().value); }
+  return s;
+}
+function redo(s) { const again = said.get(s); return again ? remember(again(), again) : null; }   // null: not one of ours
+// a {slot} value that is itself a remembered sentence is said again too
+const fresh = p => { if (!p) return p; const q = {}; for (const k in p) { const v = p[k]; q[k] = typeof v === "string" && said.has(v) ? said.get(v)() : v; } return q; };
+tx = (zh, p) => remember(LANG.t(zh, p), () => LANG.t(zh, fresh(p)));
+TB.tx = tx;
+TB.live = again => remember(again(), again);
+TB.re = s => { const r = typeof s === "string" ? redo(s) : null; return r === null ? s : r; };   // a sentence kept in a variable, in today's language
+
+// What a tool computed or the reader typed is never reworded: a result block, highlighted text, the cells of a table of values, the lines of a diff.
+const DATA_TAG = /^(PRE|TEXTAREA|MARK)$/, DATA_CLASS = /(^|\s)(hl|mono)(\s|$)/, ATTRS = ["placeholder", "aria-label", "title", "alt"];
+const hooks = [];
+TB.onlang = f => { hooks.push(f); };   // a tool whose output is a pure function of its inputs redraws that output here
+TB.forget = () => { said.clear(); hooks.length = 0; };
+function reword(el, data, inDiff) {
+  if (el.nodeType === 3) { if (!data) { const s = redo(el.data); if (s !== null) el.data = s; } return; }
+  if (el.nodeType !== 1) return;
+  ATTRS.forEach(a => { const v = el.getAttribute(a); if (v) { const s = redo(v); if (s !== null) el.setAttribute(a, s); } });
+  const cls = String(el.className || ""), diff = /(^|\s)diff(\s|$)/.test(cls);
+  const mine = data || DATA_TAG.test(el.tagName) || DATA_CLASS.test(cls) || (inDiff && !/(^|\s)gap(\s|$)/.test(cls));
+  [].forEach.call(el.childNodes, k => reword(k, mine, diff));
+}
+TB.relabel = root => { reword(root, false, false); hooks.forEach(f => f()); };
 
 // ---------- store-only zip ----------
 let CRC = null;
@@ -121,12 +162,12 @@ function uniqueNames(names) {
 }
 // files: [{ name, data: Uint8Array, date?: Date }] -> the zip as a list of byte chunks (wrap in a Blob).
 function zipStore(files) {
-  if (files.length > 65535) throw new Error("文件太多，一个压缩包最多放 65535 个");
+  if (files.length > 65535) throw new Error(tx("文件太多，一个压缩包最多放 65535 个"));
   const names = uniqueNames(files.map(f => f.name)), enc = new TextEncoder(), out = [], central = [];
   let offset = 0;
   files.forEach((f, i) => {
     const name = enc.encode(names[i]), data = f.data, d = f.date || new Date();
-    if (offset + 30 + name.length + data.length > 0xFFFFFFFF) throw new Error("压缩包超过 4 GB 了，分几次打包");
+    if (offset + 30 + name.length + data.length > 0xFFFFFFFF) throw new Error(tx("压缩包超过 4 GB 了，分几次打包"));
     const crc = crc32(data), y = d.getFullYear();
     const time = y < 1980 ? 0 : (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
     const date = y < 1980 ? 33 : ((y - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
@@ -191,10 +232,10 @@ TB.copy = async (text, btn) => {
     try { ok = document.execCommand("copy"); } catch (e2) {}
     t.remove();
   }
-  if (btn) { const was = btn.dataset.label || btn.textContent; btn.dataset.label = was; btn.textContent = ok ? "已复制" : "没复制上"; setTimeout(() => { btn.textContent = was; }, 1500); }
+  if (btn) { const was = btn.dataset.label || btn.textContent; btn.dataset.label = was; btn.textContent = ok ? tx("已复制") : tx("没复制上"); setTimeout(() => { btn.textContent = was; }, 1500); }
   return ok;
 };
-TB.copyBtn = (get, label) => h("button", { type: "button", class: "sm", onclick: e => TB.copy(typeof get === "function" ? get() : get, e.currentTarget) }, label || "复制");
+TB.copyBtn = (get, label) => h("button", { type: "button", class: "sm", onclick: e => TB.copy(typeof get === "function" ? get() : get, e.currentTarget) }, label || tx("复制"));
 TB.status = () => h("p", { class: "status", role: "status", "aria-live": "polite" });
 TB.say = (el, text, bad) => { el.textContent = text || ""; el.classList.toggle("err", !!bad); };
 TB.field = (label, control, hint) => h("label", { class: "field" }, h("span", null, label), control, hint ? h("small", null, hint) : null);
@@ -206,8 +247,8 @@ TB.debounce = (fn, ms) => { let t; return function () { clearTimeout(t); const a
 // A file chooser that is a real button, accepts drops, and reports files through onfiles.
 TB.picker = (opts) => {
   const input = h("input", { type: "file", class: "vh", accept: opts.accept || null, multiple: !!opts.multiple, tabindex: "-1", "aria-hidden": "true" });
-  const btn = h("button", { type: "button", class: "pri", onclick: () => input.click() }, opts.label || "选择文件");
-  const box = h("div", { class: "drop" }, btn, h("span", null, opts.hint || "也可以把文件拖到这里"), input);
+  const btn = h("button", { type: "button", class: "pri", onclick: () => input.click() }, opts.label || tx("选择文件"));
+  const box = h("div", { class: "drop" }, btn, h("span", null, opts.hint || tx("也可以把文件拖到这里")), input);
   const give = list => { const files = [].slice.call(list || []); if (files.length) opts.onfiles(opts.multiple ? files : files.slice(0, 1)); };
   input.addEventListener("change", () => { give(input.files); input.value = ""; });
   box.addEventListener("dragover", e => { e.preventDefault(); box.classList.add("over"); });
@@ -225,9 +266,9 @@ TB.order = (describe, onchange) => {
       const name = typeof label === "string" ? label : label.name;
       ul.append(h("li", null,
         h("span", { class: "nm" }, (i + 1) + ". ", label.node || name),
-        h("button", { type: "button", class: "sm", disabled: i === 0, "aria-label": "上移 " + name, "data-k": "u" + i, onclick: () => move(i, -1, "u") }, "上移"),
-        h("button", { type: "button", class: "sm", disabled: i === self.items.length - 1, "aria-label": "下移 " + name, "data-k": "d" + i, onclick: () => move(i, 1, "d") }, "下移"),
-        h("button", { type: "button", class: "sm", "aria-label": "移除 " + name, "data-k": "x" + i, onclick: () => { self.items.splice(i, 1); draw("x" + Math.min(i, self.items.length - 1)); } }, "移除")));
+        h("button", { type: "button", class: "sm", disabled: i === 0, "aria-label": tx("上移 {name}", { name }), "data-k": "u" + i, onclick: () => move(i, -1, "u") }, tx("上移")),
+        h("button", { type: "button", class: "sm", disabled: i === self.items.length - 1, "aria-label": tx("下移 {name}", { name }), "data-k": "d" + i, onclick: () => move(i, 1, "d") }, tx("下移")),
+        h("button", { type: "button", class: "sm", "aria-label": tx("移除 {name}", { name }), "data-k": "x" + i, onclick: () => { self.items.splice(i, 1); draw("x" + Math.min(i, self.items.length - 1)); } }, tx("移除"))));
     });
     if (focus) {
       let b = ul.querySelector('[data-k="' + focus + '"]');
@@ -247,19 +288,20 @@ const loading = {};
 TB.load = part => loading[part] || (loading[part] = new Promise((ok, bad) => {
   const s = h("script", { src: CONF.parts[part] });
   s.onload = ok;
-  s.onerror = () => { delete loading[part]; bad(new Error("这部分没加载下来，检查网络后刷新")); };
+  s.onerror = () => { delete loading[part]; bad(new Error(tx("这部分没加载下来，检查网络后刷新"))); };
   document.head.append(s);
 }));
 
 // ---------- routing: #tool-id opens a tool, anything else shows the list ----------
-let seq = 0, lastLink = null;
-function route() {
+let seq = 0, lastLink = null, shown = null;   // shown: the tool that is built and on screen
+function route(relang) {   // relang: the language changed; the tool on screen keeps its inputs, files and results, only its words change
   const id = decodeURIComponent(location.hash.slice(1));
   const meta = CONF.index[id], home = $("#home"), view = $("#view");
   if (!meta) {
     const wasView = !view.hidden;
+    shown = null; TB.forget();
     view.hidden = true; home.hidden = false; $("#vb").replaceChildren();
-    document.title = "工具箱";
+    document.title = tx("工具箱");
     const target = id && document.getElementById(id);
     if (target) target.scrollIntoView();
     else if (wasView && lastLink) { const a = document.querySelector('a[href="#' + lastLink + '"]'); if (a) { a.focus(); a.scrollIntoView({ block: "center" }); } }
@@ -267,29 +309,50 @@ function route() {
   }
   lastLink = id;
   home.hidden = true; view.hidden = false;
-  const title = $("#vt"), body = $("#vb"), token = ++seq;
-  title.textContent = meta[0]; document.title = meta[0] + " · 工具箱";
-  body.replaceChildren(h("p", { class: "muted" }, "载入中…"));
-  window.scrollTo(0, 0);
+  const title = $("#vt"), body = $("#vb");
+  title.textContent = tx(meta[0]); document.title = tx("{tool} · 工具箱", { tool: tx(meta[0]) });
+  if (relang && shown === id) { TB.relabel(body); return; }
+  const token = ++seq;
+  shown = null; TB.forget();
+  body.replaceChildren(h("p", { class: "muted" }, tx("载入中…")));
+  if (!relang) window.scrollTo(0, 0);
   Promise.all([].concat(meta[1]).map(TB.load)).then(() => {
     if (token !== seq) return;
     body.replaceChildren();
     TB.tools[id](body);
-    title.focus();
+    shown = id;
+    if (!relang) title.focus();
   }, e => { if (token === seq) body.replaceChildren(h("p", { class: "err" }, e.message)); });
 }
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => route());
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest("button[data-copy]");
   if (b) TB.copy(b.getAttribute("data-copy"), b);
 });
+
+// ---------- language: the picker in the header, the catalogue's example sentences, a redraw on change ----------
+// "这篇讲了什么 （贴上链接）": the part in brackets at the end is a note, not copied. English notes use plain brackets.
+const exampleParts = e => { const m = /^(.*?)\s*[（(]([^（）()]+)[）)]$/.exec(e); return m ? [m[1], m[2]] : [e, ""]; };
+function examples() {
+  document.querySelectorAll("li[data-ex]").forEach(li => {
+    const p = exampleParts(tx(li.getAttribute("data-ex"))), q = li.querySelector("q"), b = li.querySelector("button[data-copy]");
+    q.replaceChildren(p[0], ...(p[1] ? [" ", h("small", null, p[1])] : []));
+    b.setAttribute("data-copy", p[0]); b.setAttribute("aria-label", tx("复制：{say}", { say: p[0] })); b.textContent = tx("复制");
+    delete b.dataset.label;
+  });
+}
+const langSel = $("#lang");
+langSel.value = LANG.pref(); langSel.hidden = false;
+langSel.addEventListener("change", () => LANG.set(langSel.value));
+LANG.on(() => { langSel.value = LANG.pref(); examples(); route(true); });
+LANG.apply(); examples();
 route();
 })();
-`;
+`.replace("/*I18N*/", () => RUNTIME);
 
 export const TEXT_JS = String.raw`(function () {
 "use strict";
-const TB = self.TB, L = TB.lib;
+const TB = self.TB, L = TB.lib, tx = TB.tx;
 
 // ---------- JSON ----------
 // Validates with JSON.parse but re-prints the original tokens, so long numbers (ids) keep every digit.
@@ -320,7 +383,7 @@ function sortKeys(v) {
 }
 function jsonFormat(src, indent, sort) {
   const s = String(src).replace(/^﻿/, "");
-  if (!s.trim()) return { ok: false, error: "没有内容" };
+  if (!s.trim()) return { ok: false, error: tx("没有内容") };
   const ind = indent === "t" ? "\t" : " ".repeat(Number(indent) || 0);
   let v;
   try { v = JSON.parse(s); } catch (e) {
@@ -329,10 +392,10 @@ function jsonFormat(src, indent, sort) {
     if (m) { line = +m[1]; col = +m[2]; }
     else if ((m = /position (\d+)/.exec(msg))) { const before = s.slice(0, +m[1]); line = before.split("\n").length; col = +m[1] - before.lastIndexOf("\n"); }
     let hint = "";
-    if (/^\s*[{\[][\s\S]*'/.test(s) && !/"/.test(s)) hint = "JSON 里的字符串要用双引号。";
-    else if (/,\s*[}\]]/.test(s)) hint = "最后一项后面多了逗号。";
-    else if (/\/\/|\/\*/.test(s)) hint = "JSON 不允许写注释。";
-    return { ok: false, error: (line ? "第 " + line + " 行第 " + col + " 列附近有错。" : "格式不对。") + hint, detail: msg, line, col };
+    if (/^\s*[{\[][\s\S]*'/.test(s) && !/"/.test(s)) hint = tx("JSON 里的字符串要用双引号。");
+    else if (/,\s*[}\]]/.test(s)) hint = tx("最后一项后面多了逗号。");
+    else if (/\/\/|\/\*/.test(s)) hint = tx("JSON 不允许写注释。");
+    return { ok: false, error: TB.live(() => (line ? tx("第 {line} 行第 {col} 列附近有错。", { line, col }) : tx("格式不对。")) + (hint ? L.gap() + TB.re(hint) : "")), detail: msg, line, col };
   }
   const big = /(^|[^\w."])-?\d{16,}/.test(s.replace(/"(?:[^"\\]|\\.)*"/g, '""'));
   if (sort) return { ok: true, out: JSON.stringify(sortKeys(v), null, ind), lossy: big };
@@ -350,8 +413,8 @@ function b64encode(bytes, urlSafe) {
 }
 function b64decode(s) {
   s = String(s).replace(/^data:[^,]*,/, "").replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
-  if (/[^A-Za-z0-9+/]/.test(s)) throw new Error("里面有不属于 Base64 的字符");
-  if (s.length % 4 === 1) throw new Error("长度不对，可能少复制了一截");
+  if (/[^A-Za-z0-9+/]/.test(s)) throw new Error(tx("里面有不属于 Base64 的字符"));
+  if (s.length % 4 === 1) throw new Error(tx("长度不对，可能少复制了一截"));
   const bin = atob(s + "=".repeat((4 - s.length % 4) % 4)), out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
@@ -405,35 +468,35 @@ function parseTime(input, tz, now) {
   if (!s) return null;
   if (/^-?\d+(\.\d+)?$/.test(s)) {
     const x = Number(s), a = Math.abs(x);
-    if (a < 1e11) return { ms: Math.round(x * 1000), kind: "秒级时间戳" };
-    if (a < 1e14) return { ms: Math.round(x), kind: "毫秒级时间戳" };
-    if (a < 1e17) return { ms: Math.round(x / 1000), kind: "微秒级时间戳" };
-    return { ms: Math.round(x / 1e6), kind: "纳秒级时间戳" };
+    if (a < 1e11) return { ms: Math.round(x * 1000), kind: tx("秒级时间戳") };
+    if (a < 1e14) return { ms: Math.round(x), kind: tx("毫秒级时间戳") };
+    if (a < 1e17) return { ms: Math.round(x / 1000), kind: tx("微秒级时间戳") };
+    return { ms: Math.round(x / 1e6), kind: tx("纳秒级时间戳") };
   }
   if (/\d[T ]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
     const t = Date.parse(s.replace(" ", "T").replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
-    if (!isNaN(t)) return { ms: t, kind: "带时区的时间" };
+    if (!isNaN(t)) return { ms: t, kind: tx("带时区的时间") };
   }
   let n = s.replace(/[年月]/g, "-").replace(/日|号/g, " ").replace(/[时点]/g, ":").replace(/分/g, ":").replace(/秒/g, "").replace(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})/, "$1-$2-$3").replace(/T/i, " ").replace(/\s+/g, " ").replace(/:$/, "").replace(/: /, ":").trim().replace(/:$/, "");
   let m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(n);
   if (m) { const p = partsAt(now == null ? Date.now() : now, tz); n = p.y + "-" + p.mo + "-" + p.d + " " + n; }
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?: (\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2})(?:\.(\d{1,3}))?)?)?$/.exec(n);
-  if (!m) return { error: "看不懂这个时间。可以写 1731650000、2026-11-15 14:30 或 14:30" };
+  if (!m) return { error: tx("看不懂这个时间。可以写 1731650000、2026-11-15 14:30 或 14:30") };
   const v = m.slice(1).map(x => x === undefined ? 0 : Number(x));
-  if (v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > 31 || v[3] > 23 || v[4] > 59 || v[5] > 59) return { error: "日期或时间超出范围" };
+  if (v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > 31 || v[3] > 23 || v[4] > 59 || v[5] > 59) return { error: tx("日期或时间超出范围") };
   const chk = new Date(Date.UTC(v[0], v[1] - 1, v[2]));
-  if (chk.getUTCDate() !== v[2]) return { error: v[1] + " 月没有 " + v[2] + " 号" };
+  if (chk.getUTCDate() !== v[2]) return { error: tx("{m} 月没有 {d} 号", { m: v[1], d: v[2] }) };
   const ms = (m[7] || "").padEnd(3, "0");
-  return { ms: fromLocal(v[0], v[1], v[2], v[3], v[4], v[5], Number(ms), tz), kind: "当地时间" };
+  return { ms: fromLocal(v[0], v[1], v[2], v[3], v[4], v[5], Number(ms), tz), kind: tx("当地时间") };
 }
 function rel(ms, now) {
-  const d = Math.round((ms - now) / 1000), a = Math.abs(d), tail = d < 0 ? "前" : "后";
-  if (a < 45) return "就是现在";
-  if (a < 3600) return Math.round(a / 60) + " 分钟" + tail;
-  if (a < 86400 * 2) return Math.round(a / 3600) + " 小时" + tail;
-  if (a < 86400 * 60) return Math.round(a / 86400) + " 天" + tail;
-  if (a < 86400 * 730) return Math.round(a / 86400 / 30.44) + " 个月" + tail;
-  return (a / 86400 / 365.25).toFixed(1) + " 年" + tail;
+  const d = Math.round((ms - now) / 1000), a = Math.abs(d), past = d < 0;
+  if (a < 45) return tx("就是现在");
+  if (a < 3600) return tx(past ? "{n} 分钟前" : "{n} 分钟后", { n: Math.round(a / 60) });
+  if (a < 86400 * 2) return tx(past ? "{n} 小时前" : "{n} 小时后", { n: Math.round(a / 3600) });
+  if (a < 86400 * 60) return tx(past ? "{n} 天前" : "{n} 天后", { n: Math.round(a / 86400) });
+  if (a < 86400 * 730) return tx(past ? "{n} 个月前" : "{n} 个月后", { n: Math.round(a / 86400 / 30.44) });
+  return tx(past ? "{n} 年前" : "{n} 年后", { n: (a / 86400 / 365.25).toFixed(1) });
 }
 // 24 rows, one per Beijing hour of the given Beijing date, with the same instant elsewhere.
 function tzTable(dateStr, zones) {
@@ -557,15 +620,15 @@ function randInt(n, r) { const lim = Math.floor(0x100000000 / n) * n; let x; do 
 const SETS = { lower: "abcdefghijklmnopqrstuvwxyz", upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", digits: "0123456789", symbols: "!@#$%^&*-_=+?" };
 function password(len, use, noAmbiguous, r) {
   const sets = Object.keys(SETS).filter(k => use[k]).map(k => noAmbiguous ? SETS[k].replace(/[Il1O0o]/g, "") : SETS[k]);
-  if (!sets.length) throw new Error("至少选一种字符");
-  if (len < sets.length) throw new Error("长度太短");
+  if (!sets.length) throw new Error(tx("至少选一种字符"));
+  if (len < sets.length) throw new Error(tx("长度太短"));
   const pool = sets.join("");
   for (let tries = 0; tries < 200; tries++) {
     let s = "";
     for (let i = 0; i < len; i++) s += pool[randInt(pool.length, r)];
     if (sets.every(set => [].some.call(s, c => set.indexOf(c) >= 0))) return { value: s, bits: Math.floor(len * Math.log2(pool.length)) };
   }
-  throw new Error("生成失败，再点一次");
+  throw new Error(tx("生成失败，再点一次"));
 }
 function uuidFrom(bytes, version, ms) {
   const b = bytes.slice(0, 16);
@@ -617,73 +680,74 @@ const h = TB.h, T = TB.tools;
 const out = () => h("pre", { class: "out", tabindex: "0" });
 
 T.json = body => {
-  const ta = TB.area({ "aria-label": "JSON 内容", placeholder: '{"粘贴":"到这里"}' }), st = TB.status(), res = out();
-  const ind = TB.select([["2", "缩进 2 格"], ["4", "缩进 4 格"], ["t", "Tab 缩进"]], "2"), sort = TB.check("按键名排序");
+  const ta = TB.area({ "aria-label": tx("JSON 内容"), placeholder: tx('{"粘贴":"到这里"}') }), st = TB.status(), res = out();
+  const ind = TB.select([["2", tx("缩进 2 格")], ["4", tx("缩进 4 格")], ["t", tx("Tab 缩进")]], "2"), sort = TB.check(tx("按键名排序"));
   const run = (compact) => {
     const r = jsonFormat(ta.value, compact ? 0 : ind.value, sort[1].checked);
     res.textContent = r.ok ? r.out : "";
-    TB.say(st, r.ok ? (r.lossy ? "按键名排序时超过 16 位的长数字会丢精度，要保留原样就别勾排序。" : "格式正确。") : r.error, !r.ok);
+    TB.say(st, r.ok ? (r.lossy ? tx("按键名排序时超过 16 位的长数字会丢精度，要保留原样就别勾排序。") : tx("格式正确。")) : r.error, !r.ok);
     if (!r.ok && r.line) { const lines = ta.value.split("\n"); let pos = 0; for (let i = 0; i < r.line - 1; i++) pos += lines[i].length + 1; ta.focus(); ta.setSelectionRange(pos, pos + (lines[r.line - 1] || "").length); }
   };
-  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: () => run(false) }, "格式化"), h("button", { type: "button", onclick: () => run(true) }, "压成一行"), ind, sort[0], TB.copyBtn(() => res.textContent, "复制结果")), st, res);
+  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: () => run(false) }, tx("格式化")), h("button", { type: "button", onclick: () => run(true) }, tx("压成一行")), ind, sort[0], TB.copyBtn(() => res.textContent, tx("复制结果"))), st, res);
 };
 
 T.base64 = body => {
-  const ta = TB.area({ "aria-label": "要转换的内容", class: "prose" }), st = TB.status(), res = out(), extra = h("div");
-  const safe = TB.check("网址安全格式（- 和 _，不补 =）");
+  const ta = TB.area({ "aria-label": tx("要转换的内容"), class: "prose" }), st = TB.status(), res = out(), extra = h("div");
+  const safe = TB.check(tx("网址安全格式（- 和 _，不补 =）"));
   const show = (text) => { res.textContent = text; extra.replaceChildren(); };
-  const enc = () => { show(b64encode(utf8(ta.value), safe[1].checked)); TB.say(st, "按 UTF-8 编码。"); };
+  const enc = () => { show(b64encode(utf8(ta.value), safe[1].checked)); TB.say(st, tx("按 UTF-8 编码。")); };
   const dec = () => {
     let bytes;
     try { bytes = b64decode(ta.value); } catch (e) { show(""); return TB.say(st, e.message, true); }
-    try { show(fromUtf8(bytes)); TB.say(st, "解出 " + bytes.length + " 字节文字。"); }
+    try { show(fromUtf8(bytes)); TB.say(st, tx("解出 {n} 字节文字。", { n: bytes.length })); }
     catch (e) {
       const kind = sniff(bytes), blob = new Blob([bytes], { type: kind[0] });
       show(Array.from(bytes.subarray(0, 48), v => v.toString(16).padStart(2, "0")).join(" ") + (bytes.length > 48 ? " …" : ""));
-      TB.say(st, "解出来是 " + L.size(bytes.length) + " 的二进制数据，不是文字。");
-      extra.append(h("div", { class: "row" }, h("button", { type: "button", onclick: () => TB.save(blob, "解码." + kind[1]) }, "下载成文件（." + kind[1] + "）")));
-      if (/^image\//.test(kind[0])) extra.append(h("img", { src: URL.createObjectURL(blob), alt: "解出的图片", class: "swatch" }));
+      TB.say(st, tx("解出来是 {size} 的二进制数据，不是文字。", { size: L.size(bytes.length) }));
+      extra.append(h("div", { class: "row" }, h("button", { type: "button", onclick: () => TB.save(blob, tx("解码.{ext}", { ext: kind[1] })) }, tx("下载成文件（.{ext}）", { ext: kind[1] }))));
+      if (/^image\//.test(kind[0])) extra.append(h("img", { src: URL.createObjectURL(blob), alt: tx("解出的图片"), class: "swatch" }));
     }
   };
-  const pick = TB.picker({ label: "把文件转成 Base64", hint: "文件只在这台设备上读", onfiles: async fs => { const b = new Uint8Array(await fs[0].arrayBuffer()); show(b64encode(b, safe[1].checked)); TB.say(st, fs[0].name + "，" + L.size(b.length)); } });
-  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: enc }, "编码"), h("button", { type: "button", onclick: dec }, "解码"), safe[0], TB.copyBtn(() => res.textContent, "复制结果")), st, res, extra, h("h2", null, "文件"), pick);
+  const pick = TB.picker({ label: tx("把文件转成 Base64"), hint: tx("文件只在这台设备上读"), onfiles: async fs => { const b = new Uint8Array(await fs[0].arrayBuffer()); show(b64encode(b, safe[1].checked)); TB.say(st, tx("{name}，{size}", { name: fs[0].name, size: L.size(b.length) })); } });
+  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: enc }, tx("编码")), h("button", { type: "button", onclick: dec }, tx("解码")), safe[0], TB.copyBtn(() => res.textContent, tx("复制结果"))), st, res, extra, h("h2", null, tx("文件")), pick);
 };
 
 T.url = body => {
-  const ta = TB.area({ "aria-label": "网址或文字", class: "prose" }), st = TB.status(), res = out(), tbl = h("div");
-  const whole = TB.check("整条网址（保留 :/?&= 这些符号）"), plus = TB.check("把 + 当空格（表单格式）");
+  const ta = TB.area({ "aria-label": tx("网址或文字"), class: "prose" }), st = TB.status(), res = out(), tbl = h("div");
+  const whole = TB.check(tx("整条网址（保留 :/?&= 这些符号）")), plus = TB.check(tx("把 + 当空格（表单格式）"));
   const params = () => {
     tbl.replaceChildren();
     const p = urlParams(ta.value);
-    if (p && p.params.length) tbl.append(h("h2", null, "参数"), h("table", { class: "kv" }, h("tbody", null, p.params.map(kv => h("tr", null, h("th", { class: "mono" }, kv[0]), h("td", { class: "mono" }, kv[1]))))));
+    if (p && p.params.length) tbl.append(h("h2", null, tx("参数")), h("table", { class: "kv" }, h("tbody", null, p.params.map(kv => h("tr", null, h("th", { class: "mono" }, kv[0]), h("td", { class: "mono" }, kv[1]))))));
   };
   const enc = () => { res.textContent = whole[1].checked ? encodeURI(ta.value) : encodeURIComponent(ta.value); TB.say(st, ""); params(); };
   const dec = () => {
     try { res.textContent = decodeURIComponent(plus[1].checked ? ta.value.replace(/\+/g, " ") : ta.value); TB.say(st, ""); }
-    catch (e) { res.textContent = ""; TB.say(st, "里面有不完整的 % 编码，解不开。", true); }
+    catch (e) { res.textContent = ""; TB.say(st, tx("里面有不完整的 % 编码，解不开。"), true); }
     params();
   };
-  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: dec }, "解码"), h("button", { type: "button", onclick: enc }, "编码"), whole[0], plus[0], TB.copyBtn(() => res.textContent, "复制结果")), st, res, tbl);
+  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: dec }, tx("解码")), h("button", { type: "button", onclick: enc }, tx("编码")), whole[0], plus[0], TB.copyBtn(() => res.textContent, tx("复制结果"))), st, res, tbl);
 };
 
 T.time = body => {
   const inp = h("input", { type: "text", inputmode: "text", autocomplete: "off", "aria-describedby": "time-hint", class: "mono" });
   inp.style.width = "100%";
-  const zone = TB.select(ZONES.map(z => [z[1], "按" + z[0] + "时间理解"]), "Asia/Shanghai"), st = TB.status(), res = h("div");
+  const zone = TB.select(ZONES.map(z => [z[1], tx("按{zone}时间理解", { zone: tx(z[0]) })]), "Asia/Shanghai"), st = TB.status(), res = h("div");
   const draw = () => {
     res.replaceChildren();
     const now = Date.now(), r = parseTime(inp.value, zone.value, now);
     if (!r) return TB.say(st, "");
     if (r.error) return TB.say(st, r.error, true);
-    TB.say(st, "当成" + r.kind + "，" + rel(r.ms, now) + "。");
-    const rows = ZONES.map(z => { const p = partsAt(r.ms, z[1]); return [z[0], fmt(r.ms, z[1]) + "  " + WD[p.wd] + "  " + offLabel(offsetMin(r.ms, z[1]))]; });
-    rows.push(["Unix 秒", String(Math.floor(r.ms / 1000))], ["Unix 毫秒", String(r.ms)], ["ISO 8601", new Date(r.ms).toISOString()]);
+    TB.say(st, tx("当成{kind}，{rel}。", { kind: r.kind, rel: rel(r.ms, now) }));
+    const rows = ZONES.map(z => { const p = partsAt(r.ms, z[1]); return [tx(z[0]), fmt(r.ms, z[1]) + "  " + tx(WD[p.wd]) + "  " + offLabel(offsetMin(r.ms, z[1]))]; });
+    rows.push([tx("Unix 秒"), String(Math.floor(r.ms / 1000))], [tx("Unix 毫秒"), String(r.ms)], ["ISO 8601", new Date(r.ms).toISOString()]);
     res.append(h("table", { class: "kv" }, h("tbody", null, rows.map(x => h("tr", null, h("th", null, x[0]), h("td", { class: "mono" }, x[1]), h("td", null, TB.copyBtn(x[1].split("  ")[0])))))));
   };
   inp.addEventListener("input", TB.debounce(draw, 150));
   zone.addEventListener("change", draw);
-  body.append(TB.field("时间戳或日期", inp), h("p", { id: "time-hint", class: "hint" }, "例：1731650000、1731650000123、2026-11-15 14:30、14:30、2026-11-15T06:30:00Z"),
-    h("div", { class: "row" }, zone, h("button", { type: "button", onclick: () => { inp.value = String(Math.floor(Date.now() / 1000)); draw(); } }, "现在")), st, res);
+  TB.onlang(draw);
+  body.append(TB.field(tx("时间戳或日期"), inp), h("p", { id: "time-hint", class: "hint" }, tx("例：1731650000、1731650000123、2026-11-15 14:30、14:30、2026-11-15T06:30:00Z")),
+    h("div", { class: "row" }, zone, h("button", { type: "button", onclick: () => { inp.value = String(Math.floor(Date.now() / 1000)); draw(); } }, tx("现在"))), st, res);
   inp.value = String(Math.floor(Date.now() / 1000)); draw();
 };
 
@@ -696,45 +760,48 @@ T.tz = body => {
     if (!rows.length) return;
     const mid = rows[12].ms, diff = (offsetMin(mid, "Australia/Sydney") - offsetMin(mid, "Asia/Shanghai")) / 60;
     const shift = nextShift(mid, "Australia/Sydney", 370);
-    note.textContent = "这天悉尼比北京快 " + diff + " 小时（悉尼 " + offLabel(offsetMin(mid, "Australia/Sydney")) + (offsetMin(mid, "Australia/Sydney") === 660 ? "，夏令时" : "") + "）。" +
-      (shift ? "悉尼 " + fmt(shift.ms, "Australia/Sydney").slice(0, 10) + " 起改成 " + offLabel(shift.after) + "，届时快 " + (shift.after - 480) / 60 + " 小时。" : "");
+    const syd = offsetMin(mid, "Australia/Sydney");
+    note.textContent = tx("这天悉尼比北京快 {n} 小时（悉尼 {off}{dst}）。", { n: diff, off: offLabel(syd), dst: syd === 660 ? tx("，夏令时") : "" }) +
+      (shift ? L.gap() + tx("悉尼 {date} 起改成 {off}，届时快 {n} 小时。", { date: fmt(shift.ms, "Australia/Sydney").slice(0, 10), off: offLabel(shift.after), n: (shift.after - 480) / 60 }) : "");
     const curH = Math.floor(Date.now() / 3600000);
-    const day = d => d ? (d > 0 ? " 次日" : " 前一天") : "";
+    const day = d => d ? " " + tx(d > 0 ? "次日" : "前一天") : "";
     wrap.replaceChildren(h("table", { class: "kv" },
-      h("thead", null, h("tr", null, ZONES.map(z => h("th", { scope: "col" }, z[0])))),
+      h("thead", null, h("tr", null, ZONES.map(z => h("th", { scope: "col" }, tx(z[0]))))),
       h("tbody", null, rows.map(r => h("tr", { class: Math.floor(r.ms / 3600000) === curH ? "now" : null, "aria-current": Math.floor(r.ms / 3600000) === curH ? "time" : null },
         r.cells.map((c, i) => h(i ? "td" : "th", { class: "mono" }, c.hm + day(c.day))))))));
   };
   date.addEventListener("change", draw);
-  body.append(h("div", { class: "row" }, TB.field("北京日期", date), h("button", { type: "button", onclick: () => { date.value = p0.y + "-" + pad(p0.mo) + "-" + pad(p0.d); draw(); } }, "今天")), note, wrap);
+  TB.onlang(draw);
+  body.append(h("div", { class: "row" }, TB.field(tx("北京日期"), date), h("button", { type: "button", onclick: () => { date.value = p0.y + "-" + pad(p0.mo) + "-" + pad(p0.d); draw(); } }, tx("今天"))), note, wrap);
   draw();
 };
 
 T.count = body => {
-  const ta = TB.area({ "aria-label": "要统计的文字", class: "prose", placeholder: "粘贴文字" }), grid = h("div", { class: "stats", "aria-live": "polite" });
+  const ta = TB.area({ "aria-label": tx("要统计的文字"), class: "prose", placeholder: tx("粘贴文字") }), grid = h("div", { class: "stats", "aria-live": "polite" });
   const draw = () => {
     const c = countText(ta.value);
-    const items = [["字数", c.total, "汉字算一个，英文按词"], ["汉字", c.han], ["英文和数字词", c.words], ["字符", c.chars], ["不含空白", c.noSpace], ["标点", c.punct], ["行", c.lines], ["段落", c.paras], ["UTF-8 字节", c.bytes], ["阅读约", Math.max(c.total ? 1 : 0, Math.round(c.minutes)) + " 分钟"]];
+    const items = [[tx("字数"), c.total, tx("汉字算一个，英文按词")], [tx("汉字"), c.han], [tx("英文和数字词"), c.words], [tx("字符"), c.chars], [tx("不含空白"), c.noSpace], [tx("标点"), c.punct], [tx("行"), c.lines], [tx("段落"), c.paras], [tx("UTF-8 字节"), c.bytes], [tx("阅读约"), tx("{n} 分钟", { n: Math.max(c.total ? 1 : 0, Math.round(c.minutes)) })]];
     grid.replaceChildren.apply(grid, items.map(x => h("div", { title: x[2] || null }, h("b", null, String(x[1])), h("span", null, x[0]))));
   };
   ta.addEventListener("input", TB.debounce(draw, 100));
-  body.append(ta, grid, h("p", { class: "hint" }, "字数的算法和 Word 一致：每个汉字算一个字，英文和数字按空格分开的词算。"));
+  TB.onlang(draw);
+  body.append(ta, grid, h("p", { class: "hint" }, tx("字数的算法和 Word 一致：每个汉字算一个字，英文和数字按空格分开的词算。")));
   draw();
 };
 
 T.diff = body => {
-  const a = TB.area({ "aria-label": "原文" }), b = TB.area({ "aria-label": "改后" }), st = TB.status(), res = h("div");
-  const ws = TB.check("忽略空格差别"), only = TB.check("只看改动附近", true);
+  const a = TB.area({ "aria-label": tx("原文") }), b = TB.area({ "aria-label": tx("改后") }), st = TB.status(), res = h("div");
+  const ws = TB.check(tx("忽略空格差别")), only = TB.check(tx("只看改动附近"), true);
   const run = () => {
     const r = diffLines(a.value, b.value, ws[1].checked);
     res.replaceChildren();
-    if (!r) return TB.say(st, "两段差别太大，逐行对比算不过来。", true);
-    if (!r.added && !r.removed) return TB.say(st, "两段完全一样" + (ws[1].checked ? "（忽略空格）" : "") + "。");
-    TB.say(st, "删了 " + r.removed + " 行，加了 " + r.added + " 行。");
-    const box = h("div", { class: "diff", tabindex: "0", "aria-label": "对比结果" }), keep = new Array(r.rows.length).fill(!only[1].checked);
+    if (!r) return TB.say(st, tx("两段差别太大，逐行对比算不过来。"), true);
+    if (!r.added && !r.removed) return TB.say(st, tx(ws[1].checked ? "两段完全一样（忽略空格）。" : "两段完全一样。"));
+    TB.say(st, tx("删了 {del} 行，加了 {add} 行。", { del: r.removed, add: r.added }));
+    const box = h("div", { class: "diff", tabindex: "0", "aria-label": tx("对比结果") }), keep = new Array(r.rows.length).fill(!only[1].checked);
     if (only[1].checked) r.rows.forEach((x, i) => { if (x.t !== "=") for (let j = Math.max(0, i - 3); j <= Math.min(r.rows.length - 1, i + 3); j++) keep[j] = true; });
     let gap = 0;
-    const flush = () => { if (gap) box.append(h("div", { class: "gap" }, "… 相同的 " + gap + " 行")); gap = 0; };
+    const flush = () => { if (gap) box.append(h("div", { class: "gap" }, tx("… 相同的 {n} 行", { n: gap }))); gap = 0; };
     r.rows.forEach((x, i) => {
       if (!keep[i]) { gap++; return; }
       flush();
@@ -747,16 +814,16 @@ T.diff = body => {
     flush();
     res.append(box);
   };
-  body.append(h("div", { class: "grid two" }, TB.field("原文", a), TB.field("改后", b)), h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: run }, "对比"), ws[0], only[0]), st, res);
+  body.append(h("div", { class: "grid two" }, TB.field(tx("原文"), a), TB.field(tx("改后"), b)), h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: run }, tx("对比")), ws[0], only[0]), st, res);
 };
 
 T.regex = body => {
   const pat = h("input", { type: "text", class: "mono", autocomplete: "off", autocapitalize: "off", spellcheck: "false" });
   pat.style.width = "100%";
-  const flags = ["g", "i", "m", "s", "u"].map(f => TB.check(f === "g" ? "g 全部" : f === "i" ? "i 不分大小写" : f === "m" ? "m 多行" : f === "s" ? "s 点号含换行" : "u Unicode", f === "g" || f === "u"));
-  const text = TB.area({ "aria-label": "测试文字" }), rep = h("input", { type: "text", class: "mono", autocomplete: "off", placeholder: "替换成（可用 $1、$<名字>）" });
+  const flags = ["g", "i", "m", "s", "u"].map(f => TB.check(f === "g" ? tx("g 全部") : f === "i" ? tx("i 不分大小写") : f === "m" ? tx("m 多行") : f === "s" ? tx("s 点号含换行") : "u Unicode", f === "g" || f === "u"));
+  const text = TB.area({ "aria-label": tx("测试文字") }), rep = h("input", { type: "text", class: "mono", autocomplete: "off", placeholder: tx("替换成（可用 $1、$<名字>）") });
   rep.style.width = "100%";
-  const st = TB.status(), hl = h("div", { class: "hl", "aria-label": "匹配结果" }), groups = h("div"), repOut = out();
+  const st = TB.status(), hl = h("div", { class: "hl", "aria-label": tx("匹配结果") }), groups = h("div"), repOut = out();
   let worker = null, timer = 0;
   const flagStr = () => ["g", "i", "m", "s", "u"].filter((f, i) => flags[i][1].checked).join("");
   const run = () => {
@@ -764,12 +831,12 @@ T.regex = body => {
     clearTimeout(timer);
     if (!pat.value) { hl.textContent = text.value; groups.replaceChildren(); repOut.textContent = ""; return TB.say(st, ""); }
     worker = new Worker(TB.conf.rx);
-    timer = setTimeout(() => { worker.terminate(); worker = null; TB.say(st, "算了 1.5 秒还没完，这个表达式回溯太多，换个写法。", true); }, 1500);
+    timer = setTimeout(() => { worker.terminate(); worker = null; TB.say(st, tx("算了 1.5 秒还没完，这个表达式回溯太多，换个写法。"), true); }, 1500);
     worker.onmessage = e => {
       clearTimeout(timer); worker.terminate(); worker = null;
       const r = e.data;
-      if (!r.ok) { hl.textContent = text.value; groups.replaceChildren(); return TB.say(st, r.error, true); }
-      TB.say(st, r.matches.length ? "匹配到 " + r.matches.length + (r.more ? "+ " : " ") + "处。" : "没有匹配。");
+      if (!r.ok) { hl.textContent = text.value; groups.replaceChildren(); return TB.say(st, r.msg === undefined ? r.error : tx("表达式写错了：{msg}", { msg: r.msg }), true); }
+      TB.say(st, r.matches.length ? tx("匹配到 {n}{plus} 处。", { n: r.matches.length, plus: r.more ? "+" : "" }) : tx("没有匹配。"));
       const s = text.value, frag = [];
       let at = 0;
       r.matches.forEach(m => { if (m.i >= at) { frag.push(s.slice(at, m.i), h("mark", null, m.t || "")); at = m.i + m.t.length; } });
@@ -777,7 +844,7 @@ T.regex = body => {
       hl.replaceChildren.apply(hl, frag);
       groups.replaceChildren();
       const withGroups = r.matches.filter(m => m.g.length);
-      if (withGroups.length) groups.append(h("table", { class: "kv" }, h("tbody", null, withGroups.slice(0, 50).map((m, i) => h("tr", null, h("th", null, "第 " + (i + 1) + " 处"), h("td", { class: "mono" }, m.g.map((g, j) => "$" + (j + 1) + " = " + (g === undefined ? "（没匹配）" : JSON.stringify(g))).join("\n") + (m.n ? "\n" + Object.keys(m.n).map(k => k + " = " + JSON.stringify(m.n[k])).join("\n") : "")))))));
+      if (withGroups.length) groups.append(h("table", { class: "kv" }, h("tbody", null, withGroups.slice(0, 50).map((m, i) => h("tr", null, h("th", null, tx("第 {n} 处", { n: i + 1 })), h("td", { class: "mono" }, m.g.map((g, j) => "$" + (j + 1) + " = " + (g === undefined ? tx("（没匹配）") : JSON.stringify(g))).join("\n") + (m.n ? "\n" + Object.keys(m.n).map(k => k + " = " + JSON.stringify(m.n[k])).join("\n") : "")))))));
       repOut.textContent = rep.value ? r.replaced : "";
     };
     worker.postMessage([pat.value, flagStr(), text.value, rep.value || null]);
@@ -785,13 +852,14 @@ T.regex = body => {
   const later = TB.debounce(run, 250);
   [pat, text, rep].forEach(el => el.addEventListener("input", later));
   flags.forEach(f => f[1].addEventListener("change", run));
-  body.append(TB.field("正则表达式（不用写两边的 /）", pat), h("div", { class: "row" }, flags.map(f => f[0])), TB.field("测试文字", text), st, hl, groups, TB.field("替换", rep), repOut);
+  TB.onlang(run);
+  body.append(TB.field(tx("正则表达式（不用写两边的 /）"), pat), h("div", { class: "row" }, flags.map(f => f[0])), TB.field(tx("测试文字"), text), st, hl, groups, TB.field(tx("替换"), rep), repOut);
 };
 
 T.uuid = body => {
   const n = h("input", { type: "number", min: "1", max: "500", value: "5", inputmode: "numeric" });
   n.style.width = "6rem";
-  const ver = TB.select([["4", "v4 随机"], ["7", "v7 按时间排序"]], "4"), up = TB.check("大写"), bare = TB.check("去掉横线"), res = out();
+  const ver = TB.select([["4", tx("v4 随机")], ["7", tx("v7 按时间排序")]], "4"), up = TB.check(tx("大写")), bare = TB.check(tx("去掉横线")), res = out();
   const gen = () => {
     const k = Math.max(1, Math.min(500, Math.floor(Number(n.value) || 1))), lines = [];
     for (let i = 0; i < k; i++) {
@@ -801,81 +869,83 @@ T.uuid = body => {
     }
     res.textContent = lines.join("\n");
   };
-  body.append(h("div", { class: "row" }, TB.field("个数", n), TB.field("版本", ver), up[0], bare[0]), h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: gen }, "生成"), TB.copyBtn(() => res.textContent, "全部复制")), res);
+  body.append(h("div", { class: "row" }, TB.field(tx("个数"), n), TB.field(tx("版本"), ver), up[0], bare[0]), h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: gen }, tx("生成")), TB.copyBtn(() => res.textContent, tx("全部复制"))), res);
   gen();
 };
 
 T.password = body => {
   const len = h("input", { type: "range", min: "6", max: "64", value: "16" }), lenOut = h("output", null, "16");
-  const sets = [["lower", "小写"], ["upper", "大写"], ["digits", "数字"], ["symbols", "符号"]].map(x => [x[0]].concat(TB.check(x[1], x[0] !== "symbols")));
-  const amb = TB.check("去掉易混的 I l 1 O 0 o", true), res = h("pre", { class: "out", "aria-live": "polite" }), st = TB.status();
+  const sets = [["lower", tx("小写")], ["upper", tx("大写")], ["digits", tx("数字")], ["symbols", tx("符号")]].map(x => [x[0]].concat(TB.check(x[1], x[0] !== "symbols")));
+  const amb = TB.check(tx("去掉易混的 I l 1 O 0 o"), true), res = h("pre", { class: "out", "aria-live": "polite" }), st = TB.status();
   const gen = () => {
     lenOut.textContent = len.value;
     const use = {}; sets.forEach(x => { use[x[0]] = x[2].checked; });
-    try { const r = password(Number(len.value), use, amb[1].checked); res.textContent = r.value; TB.say(st, "强度约 " + r.bits + " 位" + (r.bits >= 80 ? "，够用。" : r.bits >= 60 ? "，一般网站够用。" : "，偏弱，加长一点。")); }
+    try { const r = password(Number(len.value), use, amb[1].checked); res.textContent = r.value; TB.say(st, tx(r.bits >= 80 ? "强度约 {bits} 位，够用。" : r.bits >= 60 ? "强度约 {bits} 位，一般网站够用。" : "强度约 {bits} 位，偏弱，加长一点。", { bits: r.bits })); }
     catch (e) { res.textContent = ""; TB.say(st, e.message, true); }
   };
   len.addEventListener("input", gen);
   sets.forEach(x => x[2].addEventListener("change", gen)); amb[1].addEventListener("change", gen);
-  body.append(h("div", { class: "row" }, h("label", { class: "check" }, "长度 ", len), lenOut), h("div", { class: "row" }, sets.map(x => x[1]), amb[0]), res, st,
-    h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: gen }, "换一个"), TB.copyBtn(() => res.textContent)), h("p", { class: "hint" }, "用浏览器的安全随机数生成，不保存、不上传。"));
+  body.append(h("div", { class: "row" }, h("label", { class: "check" }, tx("长度"), " ", len), lenOut), h("div", { class: "row" }, sets.map(x => x[1]), amb[0]), res, st,
+    h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: gen }, tx("换一个")), TB.copyBtn(() => res.textContent)), h("p", { class: "hint" }, tx("用浏览器的安全随机数生成，不保存、不上传。")));
   gen();
 };
 
 T.hash = body => {
-  const ta = TB.area({ "aria-label": "文字", class: "prose", placeholder: "输入文字，或者在下面选文件" }), alg = TB.select([["SHA-256", "SHA-256"], ["SHA-1", "SHA-1"], ["SHA-384", "SHA-384"], ["SHA-512", "SHA-512"]], "SHA-256");
-  const expect = h("input", { type: "text", class: "mono", placeholder: "可选：粘贴对方给的值来核对", autocomplete: "off" });
+  const ta = TB.area({ "aria-label": tx("文字"), class: "prose", placeholder: tx("输入文字，或者在下面选文件") }), alg = TB.select([["SHA-256", "SHA-256"], ["SHA-1", "SHA-1"], ["SHA-384", "SHA-384"], ["SHA-512", "SHA-512"]], "SHA-256");
+  const expect = h("input", { type: "text", class: "mono", placeholder: tx("可选：粘贴对方给的值来核对"), autocomplete: "off" });
   expect.style.width = "100%";
   const st = TB.status(), res = h("div");
   let last = null;
   const show = async (bytes, what) => {
-    TB.say(st, "计算中…");
+    TB.say(st, tx("计算中…"));
     const d = await digest(alg.value, bytes);
     last = [bytes, what];
     const want = expect.value.trim().toLowerCase().replace(/\s+/g, "");
     res.replaceChildren(h("table", { class: "kv" }, h("tbody", null,
-      h("tr", null, h("th", null, "十六进制"), h("td", { class: "mono" }, d.hex), h("td", null, TB.copyBtn(d.hex))),
+      h("tr", null, h("th", null, tx("十六进制")), h("td", { class: "mono" }, d.hex), h("td", null, TB.copyBtn(d.hex))),
       h("tr", null, h("th", null, "Base64"), h("td", { class: "mono" }, d.b64), h("td", null, TB.copyBtn(d.b64))))));
-    TB.say(st, what + "。" + (want ? (want === d.hex || want === d.b64.toLowerCase() ? "和填的值一致。" : "和填的值不一致。") : ""), !!want && want !== d.hex && want !== d.b64.toLowerCase());
+    const match = want === d.hex || want === d.b64.toLowerCase();
+    TB.say(st, TB.live(() => tx("{what}。", { what: TB.re(what) }) + (want ? L.gap() + (match ? tx("和填的值一致。") : tx("和填的值不一致。")) : "")), !!want && !match);
   };
-  const pick = TB.picker({ label: "选文件", hint: "文件不会上传，大文件要等一会儿", onfiles: async fs => {
+  const pick = TB.picker({ label: tx("选文件"), hint: tx("文件不会上传，大文件要等一会儿"), onfiles: async fs => {
     const f = fs[0];
-    if (f.size > 1024 * 1048576) return TB.say(st, "超过 1 GB 的文件在浏览器里算不动。", true);
-    TB.say(st, "读取中…"); show(new Uint8Array(await f.arrayBuffer()), f.name + "，" + L.size(f.size));
+    if (f.size > 1024 * 1048576) return TB.say(st, tx("超过 1 GB 的文件在浏览器里算不动。"), true);
+    TB.say(st, tx("读取中…")); show(new Uint8Array(await f.arrayBuffer()), tx("{name}，{size}", { name: f.name, size: L.size(f.size) }));
   } });
   alg.addEventListener("change", () => { if (last) show(last[0], last[1]); });
   expect.addEventListener("input", () => { if (last) show(last[0], last[1]); });
-  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: () => show(utf8(ta.value), "按 UTF-8 文字计算") }, "算文字"), alg), pick, TB.field("核对", expect), st, res);
+  body.append(ta, h("div", { class: "row" }, h("button", { type: "button", class: "pri", onclick: () => show(utf8(ta.value), tx("按 UTF-8 文字计算")) }, tx("算文字")), alg), pick, TB.field(tx("核对"), expect), st, res);
 };
 
 T.color = body => {
   const mk = (label, v) => {
-    const t = h("input", { type: "text", value: v, class: "mono", autocomplete: "off", spellcheck: "false" }), c = h("input", { type: "color", value: v, "aria-label": label + "取色" });
+    const t = h("input", { type: "text", value: v, class: "mono", autocomplete: "off", spellcheck: "false" }), c = h("input", { type: "color", value: v, "aria-label": tx("{label}取色", { label }) });
     t.style.width = "12rem";
     c.addEventListener("input", () => { t.value = c.value; draw(); });
     t.addEventListener("input", draw);
     return { t, c, el: h("div", { class: "row" }, TB.field(label, t), c) };
   };
-  const fg = mk("颜色（HEX、rgb() 或 hsl() 都行）", "#2d6a5a"), bg = mk("对比的背景色", "#ffffff"), conv = h("div"), sw = h("div", { class: "swatch" }), st = TB.status();
+  const fg = mk(tx("颜色（HEX、rgb() 或 hsl() 都行）"), "#2d6a5a"), bg = mk(tx("对比的背景色"), "#ffffff"), conv = h("div"), sw = h("div", { class: "swatch" }), st = TB.status();
   function draw() {
     const a = parseColor(fg.t.value), b = parseColor(bg.t.value);
     conv.replaceChildren();
-    if (!a) return TB.say(st, "第一个颜色看不懂。", true);
+    if (!a) return TB.say(st, tx("第一个颜色看不懂。"), true);
     TB.say(st, "");
     fg.c.value = hex(a); if (b) bg.c.value = hex(b);
     const hs = rgbToHsl(a), vals = [["HEX", hex(a)], ["RGB", "rgb(" + a.r + ", " + a.g + ", " + a.b + ")"], ["HSL", "hsl(" + Math.round(hs.h) % 360 + ", " + Math.round(hs.s) + "%, " + Math.round(hs.l) + "%)"]];
     conv.append(h("table", { class: "kv" }, h("tbody", null, vals.map(v => h("tr", null, h("th", null, v[0]), h("td", { class: "mono" }, v[1]), h("td", null, TB.copyBtn(v[1])))))));
-    if (!b) return TB.say(st, "背景色看不懂。", true);
-    const r = contrast(a, b), ok = (x) => h("span", { class: r >= x ? "pass" : "fail" }, r >= x ? "通过" : "不够");
+    if (!b) return TB.say(st, tx("背景色看不懂。"), true);
+    const r = contrast(a, b), ok = (x) => h("span", { class: r >= x ? "pass" : "fail" }, r >= x ? tx("通过") : tx("不够"));
     sw.style.color = hex(a); sw.style.background = hex(b);
-    sw.replaceChildren("示例文字 Aa 123", h("small", null, "小字号的正文看起来是这样"));
+    sw.replaceChildren(tx("示例文字 Aa 123"), h("small", null, tx("小字号的正文看起来是这样")));
     conv.append(h("table", { class: "kv" }, h("tbody", null,
-      h("tr", null, h("th", null, "对比度"), h("td", { class: "mono" }, (Math.floor(r * 100) / 100).toFixed(2) + " : 1")),
-      h("tr", null, h("th", null, "正文 AA（4.5）"), h("td", null, ok(4.5))),
-      h("tr", null, h("th", null, "大字 AA（3）"), h("td", null, ok(3))),
-      h("tr", null, h("th", null, "正文 AAA（7）"), h("td", null, ok(7))))));
+      h("tr", null, h("th", null, tx("对比度")), h("td", { class: "mono" }, (Math.floor(r * 100) / 100).toFixed(2) + " : 1")),
+      h("tr", null, h("th", null, tx("正文 AA（4.5）")), h("td", null, ok(4.5))),
+      h("tr", null, h("th", null, tx("大字 AA（3）")), h("td", null, ok(3))),
+      h("tr", null, h("th", null, tx("正文 AAA（7）")), h("td", null, ok(7))))));
   }
   body.append(fg.el, bg.el, st, sw, conv);
+  TB.onlang(draw);
   draw();
 };
 })();
@@ -886,7 +956,7 @@ export const RX_JS = String.raw`(function () {
 // Runs in a Worker so a runaway pattern can be stopped from the page.
 function rxRun(p, f, s, rep) {
   let re;
-  try { re = new RegExp(p, f.replace("g", "") + "g"); } catch (e) { return { ok: false, error: "表达式写错了：" + e.message }; }
+  try { re = new RegExp(p, f.replace("g", "") + "g"); } catch (e) { return { ok: false, error: "表达式写错了：" + e.message, msg: e.message }; }
   const out = [];
   let m, more = false;
   while ((m = re.exec(s))) {
@@ -905,7 +975,7 @@ else if (self.TB) self.TB.lib.rx = rxRun;
 
 export const IMAGE_JS = String.raw`(function () {
 "use strict";
-const TB = self.TB, L = TB.lib;
+const TB = self.TB, L = TB.lib, tx = TB.tx;
 
 // Reads orientation and whether GPS tags exist from a JPEG's Exif block. null when not a JPEG.
 function exifInfo(u8) {
@@ -978,7 +1048,7 @@ async function decode(file) {
   return new Promise((ok, bad) => {
     const img = new Image(), u = URL.createObjectURL(file);
     img.onload = () => { URL.revokeObjectURL(u); ok(img); };
-    img.onerror = () => { URL.revokeObjectURL(u); bad(new Error("浏览器打不开这个格式")); };
+    img.onerror = () => { URL.revokeObjectURL(u); bad(new Error(tx("浏览器打不开这个格式"))); };
     img.src = u;
   });
 }
@@ -1008,7 +1078,7 @@ TB.encode = async (file, o) => {
   if (src.close) src.close();
   const blob = await new Promise(ok => cv.toBlob(ok, type, o.quality));
   cv.width = cv.height = 0;
-  if (!blob) throw new Error("浏览器没能导出这张图");
+  if (!blob) throw new Error(tx("浏览器没能导出这张图"));
   return { blob, w, h: hh, p, type, gotType: blob.type };
 };
 
@@ -1022,35 +1092,36 @@ function imageTool(id) {
   const k = KIND[id];
   return body => {
     let files = [], results = [];
-    const type = TB.select([["keep", "保持原格式"], ["image/jpeg", "JPEG"], ["image/webp", "WebP"], ["image/png", "PNG"]], k.type);
+    const type = TB.select([["keep", tx("保持原格式")], ["image/jpeg", "JPEG"], ["image/webp", "WebP"], ["image/png", "PNG"]], k.type);
     const q = h("input", { type: "range", min: "0.4", max: "1", step: "0.02", value: String(k.quality) }), qOut = h("output", null, Math.round(k.quality * 100));
     q.addEventListener("input", () => { qOut.textContent = Math.round(q.value * 100); });
-    const side = TB.select([["0", "不缩小"], ["3840", "3840"], ["2560", "2560"], ["1920", "1920"], ["1600", "1600"], ["1280", "1280"], ["1080", "1080"], ["800", "800"], ["c", "自定义"]], k.side);
-    const custom = h("input", { type: "number", min: "16", max: "16000", value: "1200", inputmode: "numeric", "aria-label": "自定义最长边像素", hidden: true });
+    const side = TB.select([["0", tx("不缩小")], ["3840", "3840"], ["2560", "2560"], ["1920", "1920"], ["1600", "1600"], ["1280", "1280"], ["1080", "1080"], ["800", "800"], ["c", tx("自定义")]], k.side);
+    const custom = h("input", { type: "number", min: "16", max: "16000", value: "1200", inputmode: "numeric", "aria-label": tx("自定义最长边像素"), hidden: true });
     custom.style.width = "6rem";
     side.addEventListener("change", () => { custom.hidden = side.value !== "c"; });
-    const ratio = TB.select([["1:1", "1:1 方图"], ["4:3", "4:3"], ["3:4", "3:4"], ["3:2", "3:2"], ["2:3", "2:3"], ["16:9", "16:9"], ["9:16", "9:16"], ["c", "自定义"]], "1:1");
-    const rw = h("input", { type: "number", min: "1", value: "5", "aria-label": "宽", inputmode: "numeric" }), rh = h("input", { type: "number", min: "1", value: "4", "aria-label": "高", inputmode: "numeric" });
+    const ratio = TB.select([["1:1", tx("1:1 方图")], ["4:3", "4:3"], ["3:4", "3:4"], ["3:2", "3:2"], ["2:3", "2:3"], ["16:9", "16:9"], ["9:16", "9:16"], ["c", tx("自定义")]], "1:1");
+    const rw = h("input", { type: "number", min: "1", value: "5", "aria-label": tx("宽"), inputmode: "numeric" }), rh = h("input", { type: "number", min: "1", value: "4", "aria-label": tx("高"), inputmode: "numeric" });
     rw.style.width = rh.style.width = "4.5rem";
     const rc = h("span", { hidden: true }, rw, " : ", rh);
     ratio.addEventListener("change", () => { rc.hidden = ratio.value !== "c"; });
-    const anchor = TB.select([["center", "居中"], ["start", "靠上 / 靠左"], ["end", "靠下 / 靠右"]], "center");
-    const ctl = { type: TB.field("格式", type), quality: h("label", { class: "check" }, "质量 ", q, qOut), side: h("span", { class: "row" }, TB.field("最长边（像素）", side), custom), ratio: h("span", { class: "row" }, TB.field("比例", ratio), rc), anchor: TB.field("保留", anchor) };
-    const list = h("ul", { class: "list" }), st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, k.btn), zip = h("button", { type: "button", hidden: true }, "全部打包下载");
-    const pick = TB.picker({ label: "选图片", multiple: true, accept: "image/*", hint: "可以一次选多张；图片不会离开这台设备", onfiles: fs => { files = fs; results = []; zip.hidden = true; drawList(); go.disabled = false; TB.say(st, fs.length + " 张，点“" + k.btn + "”开始。"); if (id === "img-clean") scanGps(); } });
+    const anchor = TB.select([["center", tx("居中")], ["start", tx("靠上 / 靠左")], ["end", tx("靠下 / 靠右")]], "center");
+    const ctl = { type: TB.field(tx("格式"), type), quality: h("label", { class: "check" }, tx("质量"), " ", q, qOut), side: h("span", { class: "row" }, TB.field(tx("最长边（像素）"), side), custom), ratio: h("span", { class: "row" }, TB.field(tx("比例"), ratio), rc), anchor: TB.field(tx("保留"), anchor) };
+    const list = h("ul", { class: "list" }), st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, tx(k.btn)), zip = h("button", { type: "button", hidden: true }, tx("全部打包下载"));
+    const pick = TB.picker({ label: tx("选图片"), multiple: true, accept: "image/*", hint: tx("可以一次选多张；图片不会离开这台设备"), onfiles: fs => { files = fs; results = []; zip.hidden = true; drawList(); go.disabled = false; TB.say(st, tx("{n} 张，点“{btn}”开始。", { n: fs.length, btn: tx(k.btn) })); if (id === "img-clean") scanGps(); } });
     const drawList = () => {
       list.replaceChildren.apply(list, files.map((f, i) => {
         const r = results[i];
         const name = r && r.blob ? r.name : f.name;
         const info = [L.size(f.size)];
-        if (r && r.blob) info.push("→ " + L.size(r.blob.size) + (r.blob.size < f.size ? "（小了 " + Math.round((1 - r.blob.size / f.size) * 100) + "%）" : "（比原图大）"), r.w + "×" + r.h + (r.p.dw !== r.w || r.p.dh !== r.h ? " → " + r.p.dw + "×" + r.p.dh : ""));
-        if (r && r.note) info.push(r.note);
-        if (r && r.error) info.push(r.error);
-        if (f.gps !== undefined) info.push(f.gps === null ? "不是 JPEG，看不出有没有定位" : f.gps ? "原图带定位信息" : "原图没有定位信息");
+        if (r && r.blob) info.push("→ " + L.size(r.blob.size) + (r.blob.size < f.size ? tx("（小了 {pct}%）", { pct: Math.round((1 - r.blob.size / f.size) * 100) }) : tx("（比原图大）")), r.w + "×" + r.h + (r.p.dw !== r.w || r.p.dh !== r.h ? " → " + r.p.dw + "×" + r.p.dh : ""));
+        if (r && r.note) info.push(TB.re(r.note));
+        if (r && r.error) info.push(TB.re(r.error));
+        if (f.gps !== undefined) info.push(f.gps === null ? tx("不是 JPEG，看不出有没有定位") : f.gps ? tx("原图带定位信息") : tx("原图没有定位信息"));
         return h("li", null, r && r.url ? h("img", { src: r.url, alt: "" }) : null, h("span", { class: "nm" }, name, h("small", { class: r && r.error ? "err" : null }, info.join(" · "))),
-          r && r.blob ? h("button", { type: "button", class: "sm", "aria-label": "下载 " + name, onclick: () => TB.save(r.blob, r.name) }, "下载") : null);
+          r && r.blob ? h("button", { type: "button", class: "sm", "aria-label": tx("下载 {name}", { name }), onclick: () => TB.save(r.blob, r.name) }, tx("下载")) : null);
       }));
     };
+    TB.onlang(drawList);
     const scanGps = async () => { for (const f of files) { const x = await TB.exifOf(f).catch(() => null); f.gps = x ? x.gps : null; } drawList(); };
     const opts = () => {
       const ms = side.value === "c" ? Math.max(16, Number(custom.value) || 0) : Number(side.value);
@@ -1064,33 +1135,33 @@ function imageTool(id) {
       results = [];
       const o = opts();
       for (let i = 0; i < files.length; i++) {
-        TB.say(st, "处理第 " + (i + 1) + " / " + files.length + " 张…");
+        TB.say(st, tx("处理第 {i} / {n} 张…", { i: i + 1, n: files.length }));
         try {
           const r = await TB.encode(files[i], o), ext = L.img.EXT[r.gotType] || "img";
           r.name = L.base(files[i].name) + "." + ext;
           r.url = URL.createObjectURL(r.blob);
-          if (r.gotType !== r.type) r.note = "这个浏览器导不出 " + (L.img.EXT[r.type] || r.type).toUpperCase() + "，存成了 " + ext.toUpperCase();
-          else if (r.p.capped) r.note = "图太大，按浏览器上限缩到了 " + r.p.dw + "×" + r.p.dh;
-          if (id === "img-clean") r.note = (r.note ? r.note + " · " : "") + "已去掉拍摄信息和定位";
+          if (r.gotType !== r.type) r.note = tx("这个浏览器导不出 {want}，存成了 {got}", { want: (L.img.EXT[r.type] || r.type).toUpperCase(), got: ext.toUpperCase() });
+          else if (r.p.capped) r.note = tx("图太大，按浏览器上限缩到了 {w}×{h}", { w: r.p.dw, h: r.p.dh });
+          if (id === "img-clean") { const prev = r.note; r.note = TB.live(() => (prev ? TB.re(prev) + " · " : "") + tx("已去掉拍摄信息和定位")); }
           results[i] = r;
-        } catch (e) { results[i] = { error: e.message || "处理失败" }; }
+        } catch (e) { results[i] = { error: e.message || tx("处理失败") }; }
         drawList();
       }
       const done = results.filter(r => r && r.blob);
-      TB.say(st, done.length === files.length ? "好了。" : "有 " + (files.length - done.length) + " 张没处理成。", done.length !== files.length);
+      TB.say(st, done.length === files.length ? tx("好了。") : tx("有 {n} 张没处理成。", { n: files.length - done.length }), done.length !== files.length);
       zip.hidden = done.length < 2; go.disabled = false;
     });
     zip.addEventListener("click", async () => {
-      zip.disabled = true; TB.say(st, "打包中…");
+      zip.disabled = true; TB.say(st, tx("打包中…"));
       const items = [];
       for (const r of results) if (r && r.blob) items.push({ name: r.name, data: new Uint8Array(await r.blob.arrayBuffer()) });
-      TB.save(TB.zipBlob(items), "图片.zip"); zip.disabled = false; TB.say(st, "已打包 " + items.length + " 张。");
+      TB.save(TB.zipBlob(items), tx("图片.zip")); zip.disabled = false; TB.say(st, tx("已打包 {n} 张。", { n: items.length }));
     });
     const intro = {
-      "img-compress": "调低质量、限制最长边来缩小文件。照片用 JPEG 或 WebP 最省；PNG 只能靠缩小尺寸。",
-      "img-convert": "在 JPEG、PNG、WebP 之间转换。透明背景转 JPEG 会变成白底。",
-      "img-crop": "按固定比例裁掉多余部分，可以选保留中间还是两端。",
-      "img-clean": "把照片重新画一遍再导出，只留下像素：拍摄时间、相机型号、GPS 定位都不会带走。发到网上之前用。",
+      "img-compress": tx("调低质量、限制最长边来缩小文件。照片用 JPEG 或 WebP 最省；PNG 只能靠缩小尺寸。"),
+      "img-convert": tx("在 JPEG、PNG、WebP 之间转换。透明背景转 JPEG 会变成白底。"),
+      "img-crop": tx("按固定比例裁掉多余部分，可以选保留中间还是两端。"),
+      "img-clean": tx("把照片重新画一遍再导出，只留下像素：拍摄时间、相机型号、GPS 定位都不会带走。发到网上之前用。"),
     }[id];
     body.append(h("p", null, intro), pick, h("div", { class: "row" }, k.show.map(s => ctl[s])), h("div", { class: "row" }, go, zip), st, list);
   };
@@ -1101,20 +1172,20 @@ Object.keys(KIND).forEach(id => { T[id] = imageTool(id); });
 
 export const PDF_JS = String.raw`(function () {
 "use strict";
-const TB = self.TB, L = TB.lib;
+const TB = self.TB, L = TB.lib, tx = TB.tx;
 
 // "1-3, 5, 8-" -> [[1,3],[5,5],[8,total]]; a range written backwards ("5-3") keeps that order.
 function parseRanges(input, total) {
   const s = String(input).replace(/[，、；;]/g, ",").replace(/[～~—–－至到]/g, "-").replace(/\s+/g, "");
-  if (!s) throw new Error("先写要哪些页，比如 1-3,5,8-");
+  if (!s) throw new Error(tx("先写要哪些页，比如 1-3,5,8-"));
   const out = [];
   for (const part of s.split(",").filter(Boolean)) {
     let m = /^(\d+)$/.exec(part), a, b;
     if (m) a = b = +m[1];
     else if ((m = /^(\d*)-(\d*)$/.exec(part)) && (m[1] || m[2])) { a = m[1] ? +m[1] : 1; b = m[2] ? +m[2] : total; }
-    else throw new Error("看不懂“" + part + "”，页码写成 3 或 2-5 这样");
-    if (a < 1 || b < 1) throw new Error("页码从 1 开始");
-    if (a > total || b > total) throw new Error("这个文件只有 " + total + " 页，“" + part + "”超出了");
+    else throw new Error(tx("看不懂“{part}”，页码写成 3 或 2-5 这样", { part }));
+    if (a < 1 || b < 1) throw new Error(tx("页码从 1 开始"));
+    if (a > total || b > total) throw new Error(tx("这个文件只有 {total} 页，“{part}”超出了", { total, part }));
     out.push([a, b]);
   }
   return out;
@@ -1137,11 +1208,11 @@ const h = TB.h, T = TB.tools;
 let libP = null;
 function lib(st) {
   if (self.PDFLib) return Promise.resolve(self.PDFLib);
-  if (st) TB.say(st, "第一次用，正在载入 PDF 组件（约 500 KB）…");
+  if (st) TB.say(st, tx("第一次用，正在载入 PDF 组件（约 500 KB）…"));
   return libP || (libP = new Promise((ok, bad) => {
     const c = TB.conf.pdflib, s = h("script", { src: c.src, integrity: c.sri, crossorigin: "anonymous", referrerpolicy: "no-referrer" });
-    s.onload = () => self.PDFLib ? ok(self.PDFLib) : bad(new Error("PDF 组件载入异常"));
-    s.onerror = () => { libP = null; s.remove(); bad(new Error("PDF 组件没载入成功，检查网络后再试")); };
+    s.onload = () => self.PDFLib ? ok(self.PDFLib) : bad(new Error(tx("PDF 组件载入异常")));
+    s.onerror = () => { libP = null; s.remove(); bad(new Error(tx("PDF 组件没载入成功，检查网络后再试"))); };
     document.head.append(s);
   }));
 }
@@ -1149,46 +1220,46 @@ async function open(file) {
   const P = await lib(), bytes = await file.arrayBuffer();
   try { return await P.PDFDocument.load(bytes, { updateMetadata: false }); }
   catch (e) {
-    if (/encrypt/i.test(String(e && e.message))) throw new Error("“" + file.name + "”有密码保护，先去掉密码再来");
-    throw new Error("“" + file.name + "”读不出来，可能不是 PDF 或文件坏了");
+    if (/encrypt/i.test(String(e && e.message))) throw new Error(tx("“{name}”有密码保护，先去掉密码再来", { name: file.name }));
+    throw new Error(tx("“{name}”读不出来，可能不是 PDF 或文件坏了", { name: file.name }));
   }
 }
 const pdfBlob = bytes => new Blob([bytes], { type: "application/pdf" });
 const busy = (btn, st, fn) => async () => {
   btn.disabled = true;
-  try { await fn(); } catch (e) { TB.say(st, e.message || "出错了", true); }
+  try { await fn(); } catch (e) { TB.say(st, e.message || tx("出错了"), true); }
   btn.disabled = false;
 };
 
 T["pdf-merge"] = body => {
-  const st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, "合并");
-  const ord = TB.order(f => f.name + "（" + L.size(f.size) + "）", items => { go.disabled = items.length < 2; });
-  const pick = TB.picker({ label: "选 PDF", multiple: true, accept: "application/pdf,.pdf", hint: "可以分几次添加，按列表顺序合并", onfiles: fs => { ord.set(ord.items.concat(fs)); TB.say(st, ""); } });
+  const st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, tx("合并"));
+  const ord = TB.order(f => tx("{name}（{size}）", { name: f.name, size: L.size(f.size) }), items => { go.disabled = items.length < 2; });
+  const pick = TB.picker({ label: tx("选 PDF"), multiple: true, accept: "application/pdf,.pdf", hint: tx("可以分几次添加，按列表顺序合并"), onfiles: fs => { ord.set(ord.items.concat(fs)); TB.say(st, ""); } });
   go.addEventListener("click", busy(go, st, async () => {
     const P = await lib(st), outDoc = await P.PDFDocument.create();
     let n = 0;
     for (const f of ord.items) {
-      TB.say(st, "读 " + f.name + "…");
+      TB.say(st, tx("读 {name}…", { name: f.name }));
       const src = await open(f), pages = await outDoc.copyPages(src, src.getPageIndices());
       pages.forEach(p => outDoc.addPage(p)); n += pages.length;
     }
-    TB.say(st, "生成中…");
+    TB.say(st, tx("生成中…"));
     const bytes = await outDoc.save();
-    TB.save(pdfBlob(bytes), "合并.pdf");
-    TB.say(st, "合成了 " + n + " 页，" + L.size(bytes.length) + "。");
+    TB.save(pdfBlob(bytes), tx("合并.pdf"));
+    TB.say(st, tx("合成了 {n} 页，{size}。", { n, size: L.size(bytes.length) }));
   }));
   body.append(pick, ord.el, h("div", { class: "row" }, go), st);
 };
 
 T["pdf-split"] = body => {
   let file = null, doc = null;
-  const st = TB.status(), info = h("p", { class: "muted" }), go = h("button", { type: "button", class: "pri", disabled: true }, "拆分");
+  const st = TB.status(), info = h("p", { class: "muted" }), go = h("button", { type: "button", class: "pri", disabled: true }, tx("拆分"));
   const ranges = h("input", { type: "text", class: "mono", value: "1-3, 4-", autocomplete: "off", "aria-describedby": "split-hint" });
   ranges.style.width = "100%";
-  const mode = TB.select([["each", "每段存一个文件"], ["one", "这些页合成一个文件"], ["pages", "每一页存一个文件"]], "each");
-  const pick = TB.picker({ label: "选 PDF", accept: "application/pdf,.pdf", onfiles: async fs => {
+  const mode = TB.select([["each", tx("每段存一个文件")], ["one", tx("这些页合成一个文件")], ["pages", tx("每一页存一个文件")]], "each");
+  const pick = TB.picker({ label: tx("选 PDF"), accept: "application/pdf,.pdf", onfiles: async fs => {
     file = fs[0]; doc = null; go.disabled = true;
-    try { doc = await open(file); info.textContent = file.name + "，共 " + doc.getPageCount() + " 页"; go.disabled = false; TB.say(st, ""); }
+    try { doc = await open(file); info.textContent = tx("{name}，共 {n} 页", { name: file.name, n: doc.getPageCount() }); go.disabled = false; TB.say(st, ""); }
     catch (e) { info.textContent = ""; TB.say(st, e.message, true); }
   } });
   pick.querySelector("button").addEventListener("click", () => lib(st).then(() => TB.say(st, "")).catch(e => TB.say(st, e.message, true)), { once: true });
@@ -1198,70 +1269,71 @@ T["pdf-split"] = body => {
     const sets = mode.value === "one" ? [groups.reduce((a, r) => a.concat(expand(r)), [])] : groups.map(expand);
     const outs = [];
     for (let i = 0; i < sets.length; i++) {
-      TB.say(st, "生成第 " + (i + 1) + " / " + sets.length + " 个…");
+      TB.say(st, tx("生成第 {i} / {n} 个…", { i: i + 1, n: sets.length }));
       const d = await P.PDFDocument.create(), pages = await d.copyPages(doc, sets[i].map(p => p - 1));
       pages.forEach(p => d.addPage(p));
-      const label = mode.value === "one" ? "选页" : sets[i].length === 1 ? "第" + sets[i][0] + "页" : "第" + sets[i][0] + "-" + sets[i][sets[i].length - 1] + "页";
+      const label = mode.value === "one" ? tx("选页") : sets[i].length === 1 ? tx("第{a}页", { a: sets[i][0] }) : tx("第{a}-{b}页", { a: sets[i][0], b: sets[i][sets[i].length - 1] });
       outs.push({ name: base + "-" + label + ".pdf", data: await d.save() });
     }
     if (outs.length === 1) TB.save(pdfBlob(outs[0].data), outs[0].name);
-    else TB.save(TB.zipBlob(outs), base + "-拆分.zip");
-    TB.say(st, outs.length === 1 ? "好了。" : "拆成 " + outs.length + " 个文件，打包成了 zip。");
+    else TB.save(TB.zipBlob(outs), base + tx("-拆分.zip"));
+    TB.say(st, outs.length === 1 ? tx("好了。") : tx("拆成 {n} 个文件，打包成了 zip。", { n: outs.length }));
   }));
-  body.append(pick, info, TB.field("要哪些页", ranges), h("p", { id: "split-hint", class: "hint" }, "用逗号分开，例如 1-3, 5, 8-（8- 是第 8 页到最后）；写 5-3 会倒过来。"), h("div", { class: "row" }, mode, go), st);
+  body.append(pick, info, TB.field(tx("要哪些页"), ranges), h("p", { id: "split-hint", class: "hint" }, tx("用逗号分开，例如 1-3, 5, 8-（8- 是第 8 页到最后）；写 5-3 会倒过来。")), h("div", { class: "row" }, mode, go), st);
 };
 
 T["pdf-pages"] = body => {
   let file = null, doc = null, pages = [];
-  const st = TB.status(), info = h("p", { class: "muted" }), list = h("ul", { class: "list" }), go = h("button", { type: "button", class: "pri", disabled: true }, "保存新 PDF");
+  const st = TB.status(), info = h("p", { class: "muted" }), list = h("ul", { class: "list" }), go = h("button", { type: "button", class: "pri", disabled: true }, tx("保存新 PDF"));
   const tools = h("div", { class: "row", hidden: true },
-    h("button", { type: "button", onclick: () => { pages.forEach(p => { p.rot = (p.rot + 90) % 360; }); draw(); } }, "全部转 90°"),
-    h("button", { type: "button", onclick: () => { pages.reverse(); draw(); } }, "倒序"),
-    h("button", { type: "button", onclick: () => { pages = fresh(); draw(); } }, "还原"));
+    h("button", { type: "button", onclick: () => { pages.forEach(p => { p.rot = (p.rot + 90) % 360; }); draw(); } }, tx("全部转 90°")),
+    h("button", { type: "button", onclick: () => { pages.reverse(); draw(); } }, tx("倒序")),
+    h("button", { type: "button", onclick: () => { pages = fresh(); draw(); } }, tx("还原")));
   const fresh = () => Array.from({ length: doc.getPageCount() }, (_, i) => ({ i, rot: 0, base: doc.getPage(i).getRotation().angle }));
   const move = (k, d, kind) => { pages.splice(k + d, 0, pages.splice(k, 1)[0]); draw(kind + (k + d)); };
   const draw = (focus) => {
     list.replaceChildren.apply(list, pages.map((p, k) => {
-      const name = "原第 " + (p.i + 1) + " 页";
-      return h("li", null, h("span", { class: "nm" }, (k + 1) + ". " + name, p.rot ? h("small", null, "顺时针转 " + p.rot + "°") : null),
-        h("button", { type: "button", class: "sm", "aria-label": "顺时针转 90 度 " + name, "data-k": "r" + k, onclick: () => { p.rot = (p.rot + 90) % 360; draw("r" + k); } }, "转 90°"),
-        h("button", { type: "button", class: "sm", disabled: k === 0, "aria-label": "上移 " + name, "data-k": "u" + k, onclick: () => move(k, -1, "u") }, "上移"),
-        h("button", { type: "button", class: "sm", disabled: k === pages.length - 1, "aria-label": "下移 " + name, "data-k": "d" + k, onclick: () => move(k, 1, "d") }, "下移"),
-        h("button", { type: "button", class: "sm", "aria-label": "删除 " + name, "data-k": "x" + k, onclick: () => { pages.splice(k, 1); draw("x" + Math.min(k, pages.length - 1)); } }, "删除"));
+      const name = tx("原第 {n} 页", { n: p.i + 1 });
+      return h("li", null, h("span", { class: "nm" }, (k + 1) + ". " + name, p.rot ? h("small", null, tx("顺时针转 {deg}°", { deg: p.rot })) : null),
+        h("button", { type: "button", class: "sm", "aria-label": tx("顺时针转 90 度 {name}", { name }), "data-k": "r" + k, onclick: () => { p.rot = (p.rot + 90) % 360; draw("r" + k); } }, tx("转 90°")),
+        h("button", { type: "button", class: "sm", disabled: k === 0, "aria-label": tx("上移 {name}", { name }), "data-k": "u" + k, onclick: () => move(k, -1, "u") }, tx("上移")),
+        h("button", { type: "button", class: "sm", disabled: k === pages.length - 1, "aria-label": tx("下移 {name}", { name }), "data-k": "d" + k, onclick: () => move(k, 1, "d") }, tx("下移")),
+        h("button", { type: "button", class: "sm", "aria-label": tx("删除 {name}", { name }), "data-k": "x" + k, onclick: () => { pages.splice(k, 1); draw("x" + Math.min(k, pages.length - 1)); } }, tx("删除")));
     }));
     go.disabled = !pages.length;
-    info.textContent = file ? file.name + "，原来 " + doc.getPageCount() + " 页，现在 " + pages.length + " 页" : "";
+    info.textContent = file ? tx("{name}，原来 {a} 页，现在 {b} 页", { name: file.name, a: doc.getPageCount(), b: pages.length }) : "";
     if (focus) { let b = list.querySelector('[data-k="' + focus + '"]'); if (b && b.disabled) b = list.querySelector('[data-k="' + (focus[0] === "u" ? "d" : "u") + focus.slice(1) + '"]'); if (b) b.focus(); else if (!pages.length) pick.querySelector("button").focus(); }
   };
-  const pick = TB.picker({ label: "选 PDF", accept: "application/pdf,.pdf", onfiles: async fs => {
+  TB.onlang(() => draw());
+  const pick = TB.picker({ label: tx("选 PDF"), accept: "application/pdf,.pdf", onfiles: async fs => {
     try {
-      TB.say(st, "读取中…");
+      TB.say(st, tx("读取中…"));
       file = fs[0]; doc = await open(file);
       pages = fresh();
-      tools.hidden = false; draw(); TB.say(st, pages.length > 300 ? "页数很多，列表会很长。" : "");
+      tools.hidden = false; draw(); TB.say(st, pages.length > 300 ? tx("页数很多，列表会很长。") : "");
     } catch (e) { TB.say(st, e.message, true); }
   } });
   go.addEventListener("click", busy(go, st, async () => {
     const P = await lib(st), d = await P.PDFDocument.create(), copied = await d.copyPages(doc, pages.map(p => p.i));
     copied.forEach((pg, k) => { const p = pages[k]; if (p.rot) pg.setRotation(P.degrees((p.base + p.rot) % 360)); d.addPage(pg); });
     const bytes = await d.save();
-    TB.save(pdfBlob(bytes), L.base(file.name) + "-调整.pdf");
-    TB.say(st, "好了，" + pages.length + " 页。");
+    TB.save(pdfBlob(bytes), L.base(file.name) + tx("-调整.pdf"));
+    TB.say(st, tx("好了，{n} 页。", { n: pages.length }));
   }));
-  body.append(h("p", { class: "hint" }, "这里不显示页面缩略图，按原来的页码操作。"), pick, info, tools, list, h("div", { class: "row" }, go), st);
+  body.append(h("p", { class: "hint" }, tx("这里不显示页面缩略图，按原来的页码操作。")), pick, info, tools, list, h("div", { class: "row" }, go), st);
 };
 
 T["img-pdf"] = body => {
-  const st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, "生成 PDF");
-  const size = TB.select([["a4auto", "A4，横图自动横放"], ["a4", "A4 竖版"], ["image", "和图片一样大"]], "a4auto");
-  const margin = TB.select([["0", "不留边"], ["10", "窄边 10 毫米"], ["20", "宽边 20 毫米"]], "10");
-  const ord = TB.order(f => f.name + "（" + L.size(f.size) + "）", items => { go.disabled = !items.length; });
-  const pick = TB.picker({ label: "选图片", multiple: true, accept: "image/*", hint: "一张图一页，按列表顺序", onfiles: fs => { ord.set(ord.items.concat(fs)); lib().catch(() => {}); } });
+  const st = TB.status(), go = h("button", { type: "button", class: "pri", disabled: true }, tx("生成 PDF"));
+  const size = TB.select([["a4auto", tx("A4，横图自动横放")], ["a4", tx("A4 竖版")], ["image", tx("和图片一样大")]], "a4auto");
+  const margin = TB.select([["0", tx("不留边")], ["10", tx("窄边 10 毫米")], ["20", tx("宽边 20 毫米")]], "10");
+  const ord = TB.order(f => tx("{name}（{size}）", { name: f.name, size: L.size(f.size) }), items => { go.disabled = !items.length; });
+  const pick = TB.picker({ label: tx("选图片"), multiple: true, accept: "image/*", hint: tx("一张图一页，按列表顺序"), onfiles: fs => { ord.set(ord.items.concat(fs)); lib().catch(() => {}); } });
   go.addEventListener("click", busy(go, st, async () => {
     const P = await lib(st), d = await P.PDFDocument.create();
     for (let i = 0; i < ord.items.length; i++) {
       const f = ord.items[i];
-      TB.say(st, "放第 " + (i + 1) + " / " + ord.items.length + " 张…");
+      TB.say(st, tx("放第 {i} / {n} 张…", { i: i + 1, n: ord.items.length }));
       const head = await TB.exifOf(f).catch(() => null);
       let img;
       if (f.type === "image/jpeg" && head && head.orientation === 1) img = await d.embedJpg(await f.arrayBuffer());
@@ -1271,17 +1343,17 @@ T["img-pdf"] = body => {
       d.addPage([p.pw, p.ph]).drawImage(img, { x: p.x, y: p.y, width: p.w, height: p.h });
     }
     const bytes = await d.save();
-    TB.save(pdfBlob(bytes), "图片.pdf");
-    TB.say(st, "好了，" + ord.items.length + " 页，" + L.size(bytes.length) + "。");
+    TB.save(pdfBlob(bytes), tx("图片.pdf"));
+    TB.say(st, tx("好了，{n} 页，{size}。", { n: ord.items.length, size: L.size(bytes.length) }));
   }));
-  body.append(pick, ord.el, h("div", { class: "row" }, TB.field("页面", size), TB.field("边距", margin)), h("div", { class: "row" }, go), st);
+  body.append(pick, ord.el, h("div", { class: "row" }, TB.field(tx("页面"), size), TB.field(tx("边距"), margin)), h("div", { class: "row" }, go), st);
 };
 })();
 `;
 
 export const QR_JS = String.raw`(function () {
 "use strict";
-const TB = self.TB, L = TB.lib;
+const TB = self.TB, L = TB.lib, tx = TB.tx;
 
 // ---------- QR code encoder (ISO/IEC 18004: numeric, alphanumeric and byte modes, versions 1-40) ----------
 const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
@@ -1467,39 +1539,40 @@ if (typeof document === "undefined") return;
 const h = TB.h, T = TB.tools;
 
 T["qr-make"] = body => {
-  const ta = TB.area({ "aria-label": "二维码内容", class: "prose", placeholder: "网址、文字、Wi-Fi 信息……" });
+  const ta = TB.area({ "aria-label": tx("二维码内容"), class: "prose", placeholder: tx("网址、文字、Wi-Fi 信息……") });
   ta.style.minHeight = "5rem";
-  const lv = TB.select([["L", "容错低（码最小）"], ["M", "容错中"], ["Q", "容错较高"], ["H", "容错高（可以盖住一角）"]], "M");
-  const cv = h("canvas", { role: "img", "aria-label": "生成的二维码" }), st = TB.status(), side = h("div");
+  const lv = TB.select([["L", tx("容错低（码最小）")], ["M", tx("容错中")], ["Q", tx("容错较高")], ["H", tx("容错高（可以盖住一角）")]], "M");
+  const cv = h("canvas", { role: "img", "aria-label": tx("生成的二维码") }), st = TB.status(), side = h("div");
   let q = null;
   const draw = () => {
     q = ta.value ? encode(ta.value, lv.value) : null;
     side.hidden = !q;
     if (!ta.value) { cv.width = cv.height = 0; return TB.say(st, ""); }
-    if (!q) { cv.width = cv.height = 0; return TB.say(st, "太长了，换低一点的容错或者缩短内容（现在 " + new TextEncoder().encode(ta.value).length + " 字节）。", true); }
+    if (!q) { cv.width = cv.height = 0; return TB.say(st, tx("太长了，换低一点的容错或者缩短内容（现在 {n} 字节）。", { n: new TextEncoder().encode(ta.value).length }), true); }
     const margin = 4, scale = Math.max(4, Math.floor(600 / (q.size + margin * 2))), px = (q.size + margin * 2) * scale;
     cv.width = cv.height = px;
     const g = cv.getContext("2d");
     g.fillStyle = "#fff"; g.fillRect(0, 0, px, px); g.fillStyle = "#000";
     for (let y = 0; y < q.size; y++) for (let x = 0; x < q.size; x++) if (q.modules[y][x]) g.fillRect((x + margin) * scale, (y + margin) * scale, scale, scale);
-    TB.say(st, "版本 " + q.version + "，" + q.size + "×" + q.size + " 格，用了 " + q.dataBytes + " / " + q.capacity + " 字节。");
+    TB.say(st, tx("版本 {v}，{size}×{size} 格，用了 {bytes} / {cap} 字节。", { v: q.version, size: q.size, bytes: q.dataBytes, cap: q.capacity }));
   };
   ta.addEventListener("input", TB.debounce(draw, 120));
   lv.addEventListener("change", draw);
+  TB.onlang(draw);
   side.append(h("div", { class: "row" },
-    h("button", { type: "button", onclick: () => cv.toBlob(b => TB.save(b, "二维码.png"), "image/png") }, "下载 PNG"),
-    h("button", { type: "button", onclick: () => TB.save(new Blob([toSvg(q, 4)], { type: "image/svg+xml" }), "二维码.svg") }, "下载 SVG")));
-  body.append(ta, h("div", { class: "row" }, TB.field("容错", lv)), st, h("div", { class: "qr" }, cv, side));
+    h("button", { type: "button", onclick: () => cv.toBlob(b => TB.save(b, tx("二维码.png")), "image/png") }, tx("下载 PNG")),
+    h("button", { type: "button", onclick: () => TB.save(new Blob([toSvg(q, 4)], { type: "image/svg+xml" }), tx("二维码.svg")) }, tx("下载 SVG"))));
+  body.append(ta, h("div", { class: "row" }, TB.field(tx("容错"), lv)), st, h("div", { class: "qr" }, cv, side));
   draw();
 };
 
 T["qr-read"] = body => {
   const st = TB.status(), res = h("div");
   if (!("BarcodeDetector" in self)) {
-    body.append(h("p", null, "这个浏览器不支持识别二维码。安卓上的 Chrome、电脑上的 Chrome 和 Edge 可以；iPhone 上可以直接用相机或微信扫。"));
+    body.append(h("p", null, tx("这个浏览器不支持识别二维码。安卓上的 Chrome、电脑上的 Chrome 和 Edge 可以；iPhone 上可以直接用相机或微信扫。")));
     return;
   }
-  const pick = TB.picker({ label: "选图片或拍照", accept: "image/*", multiple: true, hint: "截图也行", onfiles: async fs => {
+  const pick = TB.picker({ label: tx("选图片或拍照"), accept: "image/*", multiple: true, hint: tx("截图也行"), onfiles: async fs => {
     res.replaceChildren();
     let found = 0;
     const det = new BarcodeDetector({ formats: ["qr_code"] });
@@ -1507,19 +1580,19 @@ T["qr-read"] = body => {
       try {
         const bmp = await TB.decodeImage(f), codes = await det.detect(bmp);
         if (bmp.close) bmp.close();
-        if (!codes.length) { res.append(h("p", { class: "muted" }, f.name + "：没找到二维码")); continue; }
+        if (!codes.length) { res.append(h("p", { class: "muted" }, tx("{name}：没找到二维码", { name: f.name }))); continue; }
         codes.forEach(c => {
           found++;
           const v = c.rawValue, isUrl = /^https?:\/\/\S+$/i.test(v);
           res.append(h("div", { class: "ab" }, h("p", null, f.name), h("pre", { class: "out" }, v),
-            h("div", { class: "row" }, TB.copyBtn(v), isUrl ? h("a", { href: v, rel: "noopener noreferrer", target: "_blank" }, "打开链接") : null)));
+            h("div", { class: "row" }, TB.copyBtn(v), isUrl ? h("a", { href: v, rel: "noopener noreferrer", target: "_blank" }, tx("打开链接")) : null)));
         });
-      } catch (e) { res.append(h("p", { class: "err" }, f.name + "：" + (e.message || "读不出来"))); }
+      } catch (e) { res.append(h("p", { class: "err" }, tx("{name}：{msg}", { name: f.name, msg: e.message || tx("读不出来") }))); }
     }
-    TB.say(st, found ? "找到 " + found + " 个。" : "");
+    TB.say(st, found ? tx("找到 {n} 个。", { n: found }) : "");
   } });
   body.append(pick, st, res);
 };
-TB.decodeImage = f => self.createImageBitmap ? createImageBitmap(f) : Promise.reject(new Error("浏览器不支持"));
+TB.decodeImage = f => self.createImageBitmap ? createImageBitmap(f) : Promise.reject(new Error(tx("浏览器不支持")));
 })();
 `;

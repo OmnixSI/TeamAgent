@@ -9,6 +9,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 const M = await import("../src/feat/toolbox.ts");
+const { RUNTIME } = await import("../src/i18n.ts");
 const feature = M.default;
 const files = M.files();
 const J = x => JSON.parse(JSON.stringify(x));   // values from the VM realm, made comparable
@@ -89,7 +90,11 @@ describe("routes", () => {
     assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>/);
     assert.doesNotMatch(html, /\sstyle=|\son[a-z]+=/i);
     const all = Object.values(files).map(f => f.body).join("\n");
-    assert.doesNotMatch(all, /\bfetch\(|XMLHttpRequest|sendBeacon|WebSocket|\/admin|localStorage/);
+    assert.doesNotMatch(all, /\bfetch\(|XMLHttpRequest|sendBeacon|WebSocket|\/admin/);
+    // The one thing kept on the device is the reader's language choice, and only the language runtime in app.js touches storage.
+    const count = s => (s.match(/localStorage/g) || []).length;
+    assert.deepEqual(Object.entries(files).filter(([, f]) => count(f.body)).map(([k]) => k), ["app.js"]);
+    assert.equal(count(files["app.js"].body), count(RUNTIME));
     assert.doesNotMatch(all, /OmnixSI|TeamAgent|peiwan|WhalePartner|NextThought|inkboard/i);
     assert.doesNotMatch(all, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, "no emoji");
     for (const f of Object.values(files)) assert.ok(Buffer.byteLength(f.body) < 64 * 1024, "each part stays small");

@@ -16,6 +16,8 @@ import { describeSource } from "./staticsite.ts";
 import { PRICE } from "../meter.ts";
 import { ABILITIES, exampleParts } from "./toolbox.ts";
 import { CSS, APP_JS, PAGE } from "./board-page.ts";
+import { BOARD_EN } from "./board-i18n.ts";
+import { RUNTIME, withDict } from "../i18n.ts";
 import { dailyAccountsStatus } from "./daily-accounts.ts";
 import { BJ, fmtDate } from "../util.ts";
 import { teamStats, taskEvents, taskTimeline, pointsOf, span, honorWall, shop, balanceOf, spends, redeem, canSettleSpend, settle } from "./teamwork.ts";
@@ -64,7 +66,7 @@ const json = (v: any, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(v), { status, headers: { ...SEC, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", Vary: "Cookie, Authorization", ...extra } });
 const bad = (error: string, status = 400) => json({ ok: false, error }, status);
 const NO_PERSON = "这个看板只给群友看。在群里对 Bot 说“给我看板链接”，点它发来的链接就能进来。";
-const noPersonPage = () => new Response(`<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=color-scheme content='light dark'><title>看板</title><body style='font:16px/1.7 system-ui;margin:15vh auto;max-width:28em;padding:0 20px'><p>${NO_PERSON}`,
+const noPersonPage = () => new Response(`<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><meta name=color-scheme content='light dark'><title data-i>看板</title><body style='font:16px/1.7 system-ui;margin:15vh auto;max-width:28em;padding:0 20px'><p data-i>${NO_PERSON}</p><script>${withDict(RUNTIME, { "看板": "Board", [NO_PERSON]: BOARD_EN[NO_PERSON] })}\nLANG.apply();</script>`,
   { status: 401, headers: { ...SEC, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 
 function serveAsset(req: Request, u: URL, name: string, isPage: boolean): Response {

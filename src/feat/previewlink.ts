@@ -18,6 +18,8 @@ import { runComputer } from "../computer.ts";
 import preview, { gh, RECIPES, pickRecipe, parsePull, refspecOf, validRef, prepareCommands, stopCommand, issueToken, checkToken, revokeToken, newToken } from "./preview.ts";
 import type { Recipe, Target } from "./preview.ts";
 import { advice } from "./steward.ts";
+import { RUNTIME, withDict } from "../i18n.ts";
+import type { Dict } from "../i18n.ts";
 
 export const COOKIE = "__Host-tapv";
 const KEY = "previewlink:open";
@@ -164,9 +166,15 @@ export async function tick(hub: Hub, now: number, opts: { stop?: Stop } = {}) {
 
 // ---------- serving ----------
 
+/** English for the page a closed preview link lands on. */
+export const PAGE_EN: Dict = {
+  "预览链接": "Preview link",
+  "这个预览链接已经关闭或过期了。想再看，就在群里让 Bot 重新开一个。": "This preview link has closed or expired. To see the app again, ask the Bot in the group to open a new one.",
+};
+// One sentence, so no language picker: the page follows the reader's choice from the other pages, else the system language.
 const page = (status: number, text: string, extra: Record<string, string> = {}) => new Response(
-  "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>预览链接</title>" +
-  "<p style='font:16px/1.6 system-ui,sans-serif;margin:2em'>" + text + "</p>",
+  "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title data-i>预览链接</title>" +
+  "<p data-i style='font:16px/1.6 system-ui,sans-serif;margin:2em'>" + text + "</p><script>" + withDict(RUNTIME, PAGE_EN) + "\nLANG.apply();</script>",
   { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...extra } });
 const ended = (clear: boolean) => page(410, "这个预览链接已经关闭或过期了。想再看，就在群里让 Bot 重新开一个。", clear ? { "set-cookie": clearCookie() } : {});
 
