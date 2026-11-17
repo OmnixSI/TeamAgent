@@ -106,8 +106,40 @@ const CONF = /*CONF*/{ parts: {}, index: {}, rx: "", pdflib: {} }/*END*/;
 TB.conf = CONF;
 const L = TB.lib;
 /*I18N*/
-TB.LANG = LANG; TB.tx = tx;
+TB.LANG = LANG;
 L.gap = () => LANG.cur() === "en" ? " " : "";   // between two sentences: Chinese runs them together, English needs a space
+
+// ---------- words that can be said again ----------
+// A tool on screen is not built anew when the language changes (that would drop what was typed, the chosen files and the
+// results): its words are swapped where they stand. For that, every sentence tx() hands out is remembered together with how to say it
+// again. A sentence put together from several (a status line with a note) goes through TB.live(() => ...) to be remembered as a whole.
+const said = new Map();
+function remember(s, again) {
+  if (typeof s === "string" && s) { said.delete(s); said.set(s, again); if (said.size > 20000) said.delete(said.keys().next().value); }
+  return s;
+}
+function redo(s) { const again = said.get(s); return again ? remember(again(), again) : null; }   // null: not one of ours
+// a {slot} value that is itself a remembered sentence is said again too
+const fresh = p => { if (!p) return p; const q = {}; for (const k in p) { const v = p[k]; q[k] = typeof v === "string" && said.has(v) ? said.get(v)() : v; } return q; };
+tx = (zh, p) => remember(LANG.t(zh, p), () => LANG.t(zh, fresh(p)));
+TB.tx = tx;
+TB.live = again => remember(again(), again);
+TB.re = s => { const r = typeof s === "string" ? redo(s) : null; return r === null ? s : r; };   // a sentence kept in a variable, in today's language
+
+// What a tool computed or the reader typed is never reworded: a result block, highlighted text, the cells of a table of values, the lines of a diff.
+const DATA_TAG = /^(PRE|TEXTAREA|MARK)$/, DATA_CLASS = /(^|\s)(hl|mono)(\s|$)/, ATTRS = ["placeholder", "aria-label", "title", "alt"];
+const hooks = [];
+TB.onlang = f => { hooks.push(f); };   // a tool whose output is a pure function of its inputs redraws that output here
+TB.forget = () => { said.clear(); hooks.length = 0; };
+function reword(el, data, inDiff) {
+  if (el.nodeType === 3) { if (!data) { const s = redo(el.data); if (s !== null) el.data = s; } return; }
+  if (el.nodeType !== 1) return;
+  ATTRS.forEach(a => { const v = el.getAttribute(a); if (v) { const s = redo(v); if (s !== null) el.setAttribute(a, s); } });
+  const cls = String(el.className || ""), diff = /(^|\s)diff(\s|$)/.test(cls);
+  const mine = data || DATA_TAG.test(el.tagName) || DATA_CLASS.test(cls) || (inDiff && !/(^|\s)gap(\s|$)/.test(cls));
+  [].forEach.call(el.childNodes, k => reword(k, mine, diff));
+}
+TB.relabel = root => { reword(root, false, false); hooks.forEach(f => f()); };
 
 // ---------- store-only zip ----------
 let CRC = null;
@@ -261,12 +293,13 @@ TB.load = part => loading[part] || (loading[part] = new Promise((ok, bad) => {
 }));
 
 // ---------- routing: #tool-id opens a tool, anything else shows the list ----------
-let seq = 0, lastLink = null;
-function route(relang) {   // relang: redraw after a language change, without jumping to the top or taking the focus
+let seq = 0, lastLink = null, shown = null;   // shown: the tool that is built and on screen
+function route(relang) {   // relang: the language changed; the tool on screen keeps its inputs, files and results, only its words change
   const id = decodeURIComponent(location.hash.slice(1));
   const meta = CONF.index[id], home = $("#home"), view = $("#view");
   if (!meta) {
     const wasView = !view.hidden;
+    shown = null; TB.forget();
     view.hidden = true; home.hidden = false; $("#vb").replaceChildren();
     document.title = tx("工具箱");
     const target = id && document.getElementById(id);
@@ -276,14 +309,18 @@ function route(relang) {   // relang: redraw after a language change, without ju
   }
   lastLink = id;
   home.hidden = true; view.hidden = false;
-  const title = $("#vt"), body = $("#vb"), token = ++seq;
+  const title = $("#vt"), body = $("#vb");
   title.textContent = tx(meta[0]); document.title = tx("{tool} · 工具箱", { tool: tx(meta[0]) });
+  if (relang && shown === id) { TB.relabel(body); return; }
+  const token = ++seq;
+  shown = null; TB.forget();
   body.replaceChildren(h("p", { class: "muted" }, tx("载入中…")));
   if (!relang) window.scrollTo(0, 0);
   Promise.all([].concat(meta[1]).map(TB.load)).then(() => {
     if (token !== seq) return;
     body.replaceChildren();
     TB.tools[id](body);
+    shown = id;
     if (!relang) title.focus();
   }, e => { if (token === seq) body.replaceChildren(h("p", { class: "err" }, e.message)); });
 }
@@ -358,7 +395,7 @@ function jsonFormat(src, indent, sort) {
     if (/^\s*[{\[][\s\S]*'/.test(s) && !/"/.test(s)) hint = tx("JSON 里的字符串要用双引号。");
     else if (/,\s*[}\]]/.test(s)) hint = tx("最后一项后面多了逗号。");
     else if (/\/\/|\/\*/.test(s)) hint = tx("JSON 不允许写注释。");
-    return { ok: false, error: (line ? tx("第 {line} 行第 {col} 列附近有错。", { line, col }) : tx("格式不对。")) + (hint ? L.gap() + hint : ""), detail: msg, line, col };
+    return { ok: false, error: TB.live(() => (line ? tx("第 {line} 行第 {col} 列附近有错。", { line, col }) : tx("格式不对。")) + (hint ? L.gap() + TB.re(hint) : "")), detail: msg, line, col };
   }
   const big = /(^|[^\w."])-?\d{16,}/.test(s.replace(/"(?:[^"\\]|\\.)*"/g, '""'));
   if (sort) return { ok: true, out: JSON.stringify(sortKeys(v), null, ind), lossy: big };
@@ -708,6 +745,7 @@ T.time = body => {
   };
   inp.addEventListener("input", TB.debounce(draw, 150));
   zone.addEventListener("change", draw);
+  TB.onlang(draw);
   body.append(TB.field(tx("时间戳或日期"), inp), h("p", { id: "time-hint", class: "hint" }, tx("例：1731650000、1731650000123、2026-11-15 14:30、14:30、2026-11-15T06:30:00Z")),
     h("div", { class: "row" }, zone, h("button", { type: "button", onclick: () => { inp.value = String(Math.floor(Date.now() / 1000)); draw(); } }, tx("现在"))), st, res);
   inp.value = String(Math.floor(Date.now() / 1000)); draw();
@@ -733,6 +771,7 @@ T.tz = body => {
         r.cells.map((c, i) => h(i ? "td" : "th", { class: "mono" }, c.hm + day(c.day))))))));
   };
   date.addEventListener("change", draw);
+  TB.onlang(draw);
   body.append(h("div", { class: "row" }, TB.field(tx("北京日期"), date), h("button", { type: "button", onclick: () => { date.value = p0.y + "-" + pad(p0.mo) + "-" + pad(p0.d); draw(); } }, tx("今天"))), note, wrap);
   draw();
 };
@@ -745,6 +784,7 @@ T.count = body => {
     grid.replaceChildren.apply(grid, items.map(x => h("div", { title: x[2] || null }, h("b", null, String(x[1])), h("span", null, x[0]))));
   };
   ta.addEventListener("input", TB.debounce(draw, 100));
+  TB.onlang(draw);
   body.append(ta, grid, h("p", { class: "hint" }, tx("字数的算法和 Word 一致：每个汉字算一个字，英文和数字按空格分开的词算。")));
   draw();
 };
@@ -812,6 +852,7 @@ T.regex = body => {
   const later = TB.debounce(run, 250);
   [pat, text, rep].forEach(el => el.addEventListener("input", later));
   flags.forEach(f => f[1].addEventListener("change", run));
+  TB.onlang(run);
   body.append(TB.field(tx("正则表达式（不用写两边的 /）"), pat), h("div", { class: "row" }, flags.map(f => f[0])), TB.field(tx("测试文字"), text), st, hl, groups, TB.field(tx("替换"), rep), repOut);
 };
 
@@ -863,7 +904,8 @@ T.hash = body => {
     res.replaceChildren(h("table", { class: "kv" }, h("tbody", null,
       h("tr", null, h("th", null, tx("十六进制")), h("td", { class: "mono" }, d.hex), h("td", null, TB.copyBtn(d.hex))),
       h("tr", null, h("th", null, "Base64"), h("td", { class: "mono" }, d.b64), h("td", null, TB.copyBtn(d.b64))))));
-    TB.say(st, tx("{what}。", { what }) + (want ? L.gap() + (want === d.hex || want === d.b64.toLowerCase() ? tx("和填的值一致。") : tx("和填的值不一致。")) : ""), !!want && want !== d.hex && want !== d.b64.toLowerCase());
+    const match = want === d.hex || want === d.b64.toLowerCase();
+    TB.say(st, TB.live(() => tx("{what}。", { what: TB.re(what) }) + (want ? L.gap() + (match ? tx("和填的值一致。") : tx("和填的值不一致。")) : "")), !!want && !match);
   };
   const pick = TB.picker({ label: tx("选文件"), hint: tx("文件不会上传，大文件要等一会儿"), onfiles: async fs => {
     const f = fs[0];
@@ -903,6 +945,7 @@ T.color = body => {
       h("tr", null, h("th", null, tx("正文 AAA（7）")), h("td", null, ok(7))))));
   }
   body.append(fg.el, bg.el, st, sw, conv);
+  TB.onlang(draw);
   draw();
 };
 })();
@@ -1071,13 +1114,14 @@ function imageTool(id) {
         const name = r && r.blob ? r.name : f.name;
         const info = [L.size(f.size)];
         if (r && r.blob) info.push("→ " + L.size(r.blob.size) + (r.blob.size < f.size ? tx("（小了 {pct}%）", { pct: Math.round((1 - r.blob.size / f.size) * 100) }) : tx("（比原图大）")), r.w + "×" + r.h + (r.p.dw !== r.w || r.p.dh !== r.h ? " → " + r.p.dw + "×" + r.p.dh : ""));
-        if (r && r.note) info.push(r.note);
-        if (r && r.error) info.push(r.error);
+        if (r && r.note) info.push(TB.re(r.note));
+        if (r && r.error) info.push(TB.re(r.error));
         if (f.gps !== undefined) info.push(f.gps === null ? tx("不是 JPEG，看不出有没有定位") : f.gps ? tx("原图带定位信息") : tx("原图没有定位信息"));
         return h("li", null, r && r.url ? h("img", { src: r.url, alt: "" }) : null, h("span", { class: "nm" }, name, h("small", { class: r && r.error ? "err" : null }, info.join(" · "))),
           r && r.blob ? h("button", { type: "button", class: "sm", "aria-label": tx("下载 {name}", { name }), onclick: () => TB.save(r.blob, r.name) }, tx("下载")) : null);
       }));
     };
+    TB.onlang(drawList);
     const scanGps = async () => { for (const f of files) { const x = await TB.exifOf(f).catch(() => null); f.gps = x ? x.gps : null; } drawList(); };
     const opts = () => {
       const ms = side.value === "c" ? Math.max(16, Number(custom.value) || 0) : Number(side.value);
@@ -1098,7 +1142,7 @@ function imageTool(id) {
           r.url = URL.createObjectURL(r.blob);
           if (r.gotType !== r.type) r.note = tx("这个浏览器导不出 {want}，存成了 {got}", { want: (L.img.EXT[r.type] || r.type).toUpperCase(), got: ext.toUpperCase() });
           else if (r.p.capped) r.note = tx("图太大，按浏览器上限缩到了 {w}×{h}", { w: r.p.dw, h: r.p.dh });
-          if (id === "img-clean") r.note = (r.note ? r.note + " · " : "") + tx("已去掉拍摄信息和定位");
+          if (id === "img-clean") { const prev = r.note; r.note = TB.live(() => (prev ? TB.re(prev) + " · " : "") + tx("已去掉拍摄信息和定位")); }
           results[i] = r;
         } catch (e) { results[i] = { error: e.message || tx("处理失败") }; }
         drawList();
@@ -1260,6 +1304,7 @@ T["pdf-pages"] = body => {
     info.textContent = file ? tx("{name}，原来 {a} 页，现在 {b} 页", { name: file.name, a: doc.getPageCount(), b: pages.length }) : "";
     if (focus) { let b = list.querySelector('[data-k="' + focus + '"]'); if (b && b.disabled) b = list.querySelector('[data-k="' + (focus[0] === "u" ? "d" : "u") + focus.slice(1) + '"]'); if (b) b.focus(); else if (!pages.length) pick.querySelector("button").focus(); }
   };
+  TB.onlang(() => draw());
   const pick = TB.picker({ label: tx("选 PDF"), accept: "application/pdf,.pdf", onfiles: async fs => {
     try {
       TB.say(st, tx("读取中…"));
@@ -1513,6 +1558,7 @@ T["qr-make"] = body => {
   };
   ta.addEventListener("input", TB.debounce(draw, 120));
   lv.addEventListener("change", draw);
+  TB.onlang(draw);
   side.append(h("div", { class: "row" },
     h("button", { type: "button", onclick: () => cv.toBlob(b => TB.save(b, tx("二维码.png")), "image/png") }, tx("下载 PNG")),
     h("button", { type: "button", onclick: () => TB.save(new Blob([toSvg(q, 4)], { type: "image/svg+xml" }), tx("二维码.svg")) }, tx("下载 SVG"))));
