@@ -6,6 +6,8 @@
 import type { Feature } from "./types.ts";
 import type { Hub } from "../hub.ts";
 import { CSS, APP_JS, TEXT_JS, RX_JS, IMAGE_JS, PDF_JS, QR_JS } from "./toolbox-page.ts";
+import { withDict } from "../i18n.ts";
+import { TOOLBOX_EN } from "./toolbox-i18n.ts";
 
 const DEFAULT_URL = "https://teamagent.inkboard-server.workers.dev";
 const BASE = "/x/toolbox";
@@ -81,10 +83,13 @@ export const ABILITIES: { title: string; what: string; examples: string[]; tools
   { title: "额度", what: "这个月云服务额度还剩多少，什么事因为额度被推迟了。", examples: ["这个月云电脑额度还够吗"], tools: ["budget", "usage"] },
 ];
 
-// "这篇讲了什么 （贴上链接）": the part in full-width brackets at the end is a note, not copied.
-export const exampleParts = (e: string): [string, string] => { const m = /^(.*?)\s*（([^（）]+)）$/.exec(e); return m ? [m[1], m[2]] : [e, ""]; };
+// "这篇讲了什么 （贴上链接）": the part in brackets at the end is a note, not copied. The English examples
+// write it in plain brackets; the page script (toolbox-page.ts) reads both the same way.
+export const exampleParts = (e: string): [string, string] => { const m = /^(.*?)\s*[（(]([^（）()]+)[）)]$/.exec(e); return m ? [m[1], m[2]] : [e, ""]; };
 
 // ---------- assembling the page ----------
+// The page is written in Chinese. Elements marked data-i hold a sentence that the page script swaps for its
+// English entry (toolbox-i18n.ts) when the reader's language is English; the examples are redrawn by the script.
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 // 53-bit string hash (cyrb53) for ETags and version tags; no crypto needed for a cache key.
 function tag(s: string) {
@@ -114,32 +119,32 @@ function build() {
     pdflib: PDFLIB,
   };
   // "</" cannot appear in the config, but escape it anyway since the text ends up inside a script file.
-  files["app.js"] = asset(APP_JS.replace(/\/\*CONF\*\/[\s\S]*?\/\*END\*\//, JSON.stringify(conf).replace(/</g, "\\u003c")), "text/javascript; charset=utf-8");
+  files["app.js"] = asset(withDict(APP_JS.replace(/\/\*CONF\*\/[\s\S]*?\/\*END\*\//, JSON.stringify(conf).replace(/</g, "\\u003c")), TOOLBOX_EN), "text/javascript; charset=utf-8");
   files[""] = asset(page(files), "text/html; charset=utf-8");
   return files;
 }
 
 function page(files: Record<string, Asset>) {
-  const tools = GROUPS.map(g => `<h2>${esc(g.name)}</h2><ul class="tools">${g.items.map(i =>
-    `<li><a href="#${i.id}"><b>${esc(i.title)}</b><span>${esc(i.hint)}</span></a></li>`).join("")}</ul>`).join("");
-  const abilities = ABILITIES.map(a => `<div class="ab"><h3>${esc(a.title)}</h3><p>${esc(a.what)}</p><ul class="ex">${a.examples.map(e => {
+  const tools = GROUPS.map(g => `<h2 data-i>${esc(g.name)}</h2><ul class="tools">${g.items.map(i =>
+    `<li><a href="#${i.id}"><b data-i>${esc(i.title)}</b><span data-i>${esc(i.hint)}</span></a></li>`).join("")}</ul>`).join("");
+  const abilities = ABILITIES.map(a => `<div class="ab"><h3 data-i>${esc(a.title)}</h3><p data-i>${esc(a.what)}</p><ul class="ex">${a.examples.map(e => {
     const [say, note] = exampleParts(e);
-    return `<li><q>${esc(say)}${note ? ` <small>${esc(note)}</small>` : ""}</q><button type="button" class="sm" data-copy="${esc(say)}" aria-label="复制：${esc(say)}">复制</button></li>`;
+    return `<li data-ex="${esc(e)}"><q>${esc(say)}${note ? ` <small>${esc(note)}</small>` : ""}</q><button type="button" class="sm" data-copy="${esc(say)}" aria-label="复制：${esc(say)}">复制</button></li>`;
   }).join("")}</ul></div>`).join("");
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex"><title>工具箱</title><link rel="icon" href="data:,"><link rel="stylesheet" href="${url("app.css", files["app.css"])}">
 <script src="${url("app.js", files["app.js"])}" defer></script></head>
-<body><header class="top"><a href="#">工具箱</a><span>在你自己的浏览器里算，文件不上传</span></header>
+<body><header class="top"><a href="#" data-i>工具箱</a><select id="lang" class="lang" hidden data-ia="aria-label" aria-label="界面语言"><option value="auto" data-i>跟随系统</option><option value="zh">中文</option><option value="en">English</option></select><span data-i>在你自己的浏览器里算，文件不上传</span></header>
 <main class="wrap">
 <section id="home">${tools}
-<h2 id="bot">机器人能做什么</h2>
-<p class="muted">在群里 @ 它，把下面的话换成你的内容发出去。</p>
+<h2 id="bot" data-i>机器人能做什么</h2>
+<p class="muted" data-i>在群里 @ 它，把下面的话换成你的内容发出去。</p>
 ${abilities}
-<p class="foot">PDF 工具第一次用时会从 cdnjs 载入开源库 pdf-lib 1.17.1（带校验），其余代码都来自这个页面。在 QQ 里打开时下载可能没反应，点右上角用浏览器打开。</p>
+<p class="foot" data-i>PDF 工具第一次用时会从 cdnjs 载入开源库 pdf-lib 1.17.1（带校验），其余代码都来自这个页面。在 QQ 里打开时下载可能没反应，点右上角用浏览器打开。</p>
 </section>
-<section id="view" hidden><a href="#" class="back">← 全部工具</a><h2 id="vt" tabindex="-1"></h2><div id="vb"></div></section>
-<noscript><p>这些工具需要开启 JavaScript。</p></noscript>
+<section id="view" hidden><a href="#" class="back" data-i>← 全部工具</a><h2 id="vt" tabindex="-1"></h2><div id="vb"></div></section>
+<noscript><p>这些工具需要开启 JavaScript。<br>These tools need JavaScript.</p></noscript>
 </main></body></html>`;
 }
 
