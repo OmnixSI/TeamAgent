@@ -3,7 +3,7 @@
 // the browser code must not contain backticks or "${". Data only ever reaches the DOM as text nodes.
 // Layout: a left sidebar (desktop), an icon rail (tablet) or a bottom tab bar (phone); one <section> per hash.
 
-import { RUNTIME, withDict } from "../i18n.ts";
+import { RUNTIME, DRAFT, withDict } from "../i18n.ts";
 import { BOARD_EN } from "./board-i18n.ts";
 
 // ---------- icons (24 px grid, stroked with currentColor; cloned by the script from a <template>) ----------
@@ -754,6 +754,7 @@ a.plain{color:var(--fg)}a.plain:hover{text-decoration:none}a.plain:hover .rec{bo
 export const APP_JS = withDict(squeezeJs(String.raw`(function () {
 "use strict";
 /*I18N*/
+/*DRAFT*/
 var API = "/x/board/api/";
 var me = { name: "", people: [] };
 function $(id) { return document.getElementById(id); }
@@ -946,20 +947,24 @@ function menuKeys(menu) {
   });
   return menu;
 }
-var DW = { key: "", from: null, back: false };
+// open: the forms of the open panel that start closed, by data-draft name (a button opens them); draft: what was typed, waiting for the panel to be drawn again
+var DW = { key: "", from: null, back: false, open: {}, draft: null };
 function drawerOpen(key, kicker) {
   var d = $("drawer");
   if (d.hidden) DW.from = document.activeElement;
-  DW.key = key; $("dw-kicker").textContent = kicker || "";
+  DW.key = key; DW.open = {}; $("dw-kicker").textContent = kicker || "";
   d.hidden = false; document.body.classList.add("lock");
   requestAnimationFrame(function () { d.classList.add("on"); });
   var body = clear($("dw-body")); body.scrollTop = 0;
   setTimeout(function () { if (!d.contains(document.activeElement)) $("dw-x").focus(); }, 30);
   return body;
 }
+// A redraw of the open panel (the language changed) keeps what was typed into its forms: take it before, put it back once the panel is drawn.
+function drawerKeep() { var d = DW.key ? DRAFT.take($("dw-body")) : null; return d ? { key: DW.key, d: d, until: Date.now() + 15000 } : null; }
+function drawerRestore() { var k = DW.draft; DW.draft = null; if (k && k.key === DW.key && Date.now() < k.until) DRAFT.put($("dw-body"), k.d, DW.open); }
 function drawerClose() {
   var d = $("drawer"); if (d.hidden) return false;
-  d.hidden = true; d.classList.remove("on"); DW.key = ""; document.body.classList.remove("lock");
+  d.hidden = true; d.classList.remove("on"); DW.key = ""; DW.open = {}; DW.draft = null; document.body.classList.remove("lock");
   if (DW.from && DW.from.focus && document.contains(DW.from)) DW.from.focus();
   return true;
 }
@@ -1328,10 +1333,10 @@ function shopArg(arg) {
   body.appendChild(h("dl", { class: "facts" }, h("dt", { text: tx("花") }), h("dd", { text: tx("{n} 分", { n: it.cost }) }), h("dt", { text: tx("换完还剩") }), h("dd", { text: tx("{n} 分", { n: bal - it.cost }) }),
     h("dt", { text: tx("怎么兑现") }), h("dd", { text: it.kind === "manual" ? tx("群主或群友来兑现，Bot 会在群里说一声") : it.kind === "weekly" ? tx("下一期周日战报兑现") : tx("Bot 会在群里兑现") })));
   var isTitle = it.key === "title";
-  var note = it.needs || it.custom ? h(isTitle ? "input" : "textarea", { maxlength: isTitle ? "12" : "200", placeholder: txs(it.needs) || tx("附言（可以不写）"), "aria-label": txs(it.needs) || tx("附言"), required: isTitle || null }) : null;
+  var note = it.needs || it.custom ? h(isTitle ? "input" : "textarea", { maxlength: isTitle ? "12" : "200", placeholder: txs(it.needs) || tx("附言（可以不写）"), "aria-label": txs(it.needs) || tx("附言"), required: isTitle || null, "data-f": "note" }) : null;
   if (note && !isTitle) note.style.minHeight = "4.5rem";
   var go2 = h("button", { type: "submit", class: "btn pri" }, tx("确认兑换，花 {n} 分", { n: it.cost })), cancel = h("button", { type: "button", class: "btn", onclick: leaveDrawer }, tx("再想想"));
-  var form = h("form", {}, note ? h("label", { class: "field" }, h("span", { text: isTitle ? tx("头衔（12 个字以内，必填）") : tx("你的要求") }), note) : null, h("div", { class: "row" }, go2, cancel));
+  var form = h("form", { "data-draft": "shop" }, note ? h("label", { class: "field" }, h("span", { text: isTitle ? tx("头衔（12 个字以内，必填）") : tx("你的要求") }), note) : null, h("div", { class: "row" }, go2, cancel));
   form.style.marginTop = "18px";
   var last = null;
   form.addEventListener("submit", function (e) {
@@ -1355,6 +1360,7 @@ function shopArg(arg) {
   });
   body.appendChild(form);
   if (note) setTimeout(function () { note.focus(); }, 60);
+  drawerRestore();
 }
 
 function redemptionsView(root) {
@@ -1602,21 +1608,21 @@ function tasksArg(arg) {
 }
 function taskForm(t, submitText, onSubmit) {
   var f = {
-    title: h("input", { maxlength: "200", required: true, value: t ? t.title : "", placeholder: tx("要做什么"), autocomplete: "off" }),
-    detail: h("textarea", { maxlength: "4000", placeholder: tx("说明、链接、验收标准") }),
-    owner: h("input", { maxlength: "40", list: "people", value: t ? t.owner : "", placeholder: tx("名字，或者 bot"), autocomplete: "off" }),
-    due: h("input", { type: "date", value: t ? t.due : "" }),
-    size: h("select", {}, h("option", { value: "small", text: tx("小事（5 分）") }), h("option", { value: "normal", text: tx("普通（10 分）") }), h("option", { value: "big", text: tx("大活（30 分）") })),
-    priority: h("select", {}, h("option", { value: "1", text: tx("急，先做") }), h("option", { value: "2", text: tx("普通") }), h("option", { value: "3", text: tx("不急") }))
+    title: h("input", { maxlength: "200", required: true, value: t ? t.title : "", placeholder: tx("要做什么"), autocomplete: "off", "data-f": "title" }),
+    detail: h("textarea", { maxlength: "4000", placeholder: tx("说明、链接、验收标准"), "data-f": "detail" }),
+    owner: h("input", { maxlength: "40", list: "people", value: t ? t.owner : "", placeholder: tx("名字，或者 bot"), autocomplete: "off", "data-f": "owner" }),
+    due: h("input", { type: "date", value: t ? t.due : "", "data-f": "due" }),
+    size: h("select", { "data-f": "size" }, h("option", { value: "small", text: tx("小事（5 分）") }), h("option", { value: "normal", text: tx("普通（10 分）") }), h("option", { value: "big", text: tx("大活（30 分）") })),
+    priority: h("select", { "data-f": "priority" }, h("option", { value: "1", text: tx("急，先做") }), h("option", { value: "2", text: tx("普通") }), h("option", { value: "3", text: tx("不急") }))
   };
   f.size.value = t && t.size ? t.size : "normal";
   f.priority.value = String(t && t.priority || 2);
   var pick = afterPicker(t && t.id || 0, t && t.after || []);
   f.detail.value = t ? t.detail : "";
-  if (t && t.id) { f.result = h("textarea", { maxlength: "4000", placeholder: tx("交付了什么：文字、链接、文件编号") }); f.result.value = t.result || ""; }
+  if (t && t.id) { f.result = h("textarea", { maxlength: "4000", placeholder: tx("交付了什么：文字、链接、文件编号"), "data-f": "result" }); f.result.value = t.result || ""; }
   var dl = h("datalist", { id: "people" }); people().concat(["bot"]).forEach(function (n) { dl.appendChild(h("option", { value: n })); });
   var save = h("button", { type: "submit", class: "btn pri" }, submitText), cancel = h("button", { type: "button", class: "btn", onclick: function () { onSubmit(null); } }, tx("取消"));
-  var form = h("form", { class: "tform" },
+  var form = h("form", { class: "tform", "data-draft": t && t.id ? "edit" : "new" },
     h("label", { class: "field" }, h("span", { text: tx("标题") }), f.title),
     h("label", { class: "field" }, h("span", { text: tx("说明") }), f.detail),
     h("div", { class: "two" }, h("label", { class: "field" }, h("span", { text: tx("谁来做") }), f.owner), h("label", { class: "field" }, h("span", { text: tx("截止") }), f.due)),
@@ -1641,7 +1647,7 @@ function afterPicker(selfId, sel) {
   var keep = sel.filter(function (id) { return !cand.some(function (x) { return x.id === id; }); });
   var list = h("div", { class: "picks", role: "group", "aria-label": tx("要先做完的任务") });
   cand.forEach(function (x) {
-    var c = h("input", { type: "checkbox", value: String(x.id) }); c.checked = sel.indexOf(x.id) >= 0; boxes.push(c);
+    var c = h("input", { type: "checkbox", value: String(x.id), "data-f": "after-" + x.id }); c.checked = sel.indexOf(x.id) >= 0; boxes.push(c);
     list.appendChild(h("label", { class: "pick" }, c, h("span", { class: "pt" }, h("span", { class: "tid", text: "#" + x.id }), priTag(x), x.title,
       h("span", { class: "meta", text: " · " + (x.status === "doing" ? tx("{who} 在做", { who: whoName(x.claimed_by) }) : x.owner ? tx("交给 {who}", { who: whoName(x.owner) }) : tx("没人负责")) }))));
   });
@@ -1661,6 +1667,7 @@ function newTask(keep) {
       go("tasks/new"); setTimeout(function () { if (DW.key === "new") newTask(v); }, 50);
     });
   }));
+  drawerRestore();
 }
 function openTask(id) {
   var t0 = byId(id), body = drawerOpen("t" + id, tx("任务 #{id}", { id: id }));
@@ -1733,14 +1740,16 @@ function matItem(m, onRemove) {
   return li;
 }
 function addMaterial(t, done) {
-  var mode = "link", box = h("form", { class: "addm" });
-  var title = h("input", { maxlength: "120", placeholder: tx("标题（可以不写）"), autocomplete: "off", "aria-label": tx("标题") });
-  var ref = h("input", { maxlength: "600", placeholder: tx("网址，或者文件编号 x12、g300"), autocomplete: "off", inputmode: "url", "aria-label": tx("链接或文件编号") });
-  var text = h("textarea", { maxlength: "40000", placeholder: tx("把报告全文贴在这里"), "aria-label": tx("报告全文") });
+  var mode = "link", box = h("form", { class: "addm", "data-draft": "mat" });
+  var title = h("input", { maxlength: "120", placeholder: tx("标题（可以不写）"), autocomplete: "off", "aria-label": tx("标题"), "data-f": "title" });
+  var ref = h("input", { maxlength: "600", placeholder: tx("网址，或者文件编号 x12、g300"), autocomplete: "off", inputmode: "url", "aria-label": tx("链接或文件编号"), "data-f": "ref" });
+  var text = h("textarea", { maxlength: "40000", placeholder: tx("把报告全文贴在这里"), "aria-label": tx("报告全文"), "data-f": "text" });
   var save = h("button", { type: "submit", class: "btn pri sm" }, tx("挂上")), cancel = h("button", { type: "button", class: "btn sm", onclick: function () { done(false); } }, tx("取消"));
   var body = h("div");
-  function draw() { clear(body); body.appendChild(title); title.style.marginBottom = "8px"; body.appendChild(mode === "link" ? ref : text); setTimeout(function () { (mode === "link" ? ref : text).focus(); }, 30); }
-  box.appendChild(seg([["link", tx("链接或文件")], ["report", tx("贴一份报告")]], mode, function (v) { mode = v; draw(); }));
+  function draw() { box.setAttribute("data-mode", mode); clear(body); body.appendChild(title); title.style.marginBottom = "8px"; body.appendChild(mode === "link" ? ref : text); setTimeout(function () { (mode === "link" ? ref : text).focus(); }, 30); }
+  var modes = seg([["link", tx("链接或文件")], ["report", tx("贴一份报告")]], mode, function (v) { mode = v; draw(); });
+  box.__mode = function (v) { [].forEach.call(modes.querySelectorAll("button"), function (b, i) { if (["link", "report"][i] === v) b.click(); }); };
+  box.appendChild(modes);
   box.appendChild(body); box.appendChild(h("div", { class: "row" }, save, cancel)); box.lastChild.style.marginTop = "10px";
   draw();
   box.addEventListener("submit", function (e) {
@@ -1753,6 +1762,7 @@ function addMaterial(t, done) {
   return box;
 }
 function taskPanel(j) {
+  DW.open = {};
   var t = upsert(j.task), body = clear($("dw-body")), notes = j.notes || [], tl = j.tl, ho = j.handoff || { materials: [], waits_for: [], blocked_by: [], parent: null, children: [] };
   function redraw() { if (DW.key === "t" + t.id) fetchTask(t.id).then(function (k) { if (DW.key === "t" + t.id) taskPanel(k); }, function () { redrawLocal(); }); }
   function redrawLocal() { taskPanel({ task: t, notes: notes, prompt: j.prompt, tl: tl, handoff: ho }); }
@@ -1806,6 +1816,7 @@ function taskPanel(j) {
     h("dt", { text: tx("更新") }), h("dd", {}, rt(t.updated))));
   if (t.result) { info.appendChild(h("h3", { text: tx("交付") })); info.appendChild(h("p", { class: "pre", text: t.result })); }
   body.appendChild(info);
+  DW.open.edit = function () { edit.click(); };
   edit.addEventListener("click", function () {
     edit.disabled = true;
     var form = taskForm(t, tx("保存"), function (v) {
@@ -1830,6 +1841,7 @@ function taskPanel(j) {
   else body.appendChild(h("p", { class: "meta", text: tx("还没有报告、链接或文件。") }));
   var mrow = h("div", { class: "row" }), addB = h("button", { type: "button", class: "btn sm" }, icon("plus"), tx("挂一份材料"));
   addB.addEventListener("click", function () { var f = addMaterial(t, function (ok) { if (ok) redraw(); else f.replaceWith(mrow); }); mrow.replaceWith(f); });
+  DW.open.mat = function () { addB.click(); };
   mrow.appendChild(addB); body.appendChild(mrow);
 
   if (ho.waits_for.length || liveT) {
@@ -1843,9 +1855,10 @@ function taskPanel(j) {
     else deps.appendChild(h("p", { class: "meta", text: tx("不用等别的任务，现在就能开始。") }));
     if (liveT) {
       var chg = h("button", { type: "button", class: "btn sm" }, ho.waits_for.length ? tx("改一下") : tx("排到别的任务后面"));
+      DW.open.after = function () { chg.click(); };
       chg.addEventListener("click", function () {
         var pk = afterPicker(t.id, t.after || []), ok = h("button", { type: "submit", class: "btn pri sm" }, tx("保存"));
-        var f = h("form", {}, pk.el, h("div", { class: "row" }, ok, h("button", { type: "button", class: "btn sm", onclick: function () { f.replaceWith(chgRow); } }, tx("取消"))));
+        var f = h("form", { "data-draft": "after" }, pk.el, h("div", { class: "row" }, ok, h("button", { type: "button", class: "btn sm", onclick: function () { f.replaceWith(chgRow); } }, tx("取消"))));
         f.lastChild.style.marginTop = "8px";
         f.addEventListener("submit", function (e) {
           e.preventDefault(); ok.disabled = true;
@@ -1880,9 +1893,9 @@ function taskPanel(j) {
     steps.forEach(function (n) { nl.appendChild(h("li", { class: "k-" + n.kind + (n._p ? " pending" : "") }, h("span", { class: "meta" }, (n.who ? whoName(n.who) : "") + " " + (n.word ? txs(n.word) : "") + " · ", rt(n.ts)), h("span", { class: "pre", text: txs(n.text) }))); });
   }
   drawNotes(); body.appendChild(nl);
-  var note = h("textarea", { maxlength: "2000", placeholder: tx("进展、问题、链接"), "aria-label": tx("写进展") }), addN = h("button", { type: "submit", class: "btn sm" }, tx("记一笔"));
+  var note = h("textarea", { maxlength: "2000", placeholder: tx("进展、问题、链接"), "aria-label": tx("写进展"), "data-f": "text" }), addN = h("button", { type: "submit", class: "btn sm" }, tx("记一笔"));
   note.style.minHeight = "4rem";
-  var nf = h("form", {}, note, h("div", { class: "row" }, addN));
+  var nf = h("form", { "data-draft": "note" }, note, h("div", { class: "row" }, addN));
   nf.lastChild.style.marginTop = "8px";
   nf.addEventListener("submit", function (e) {
     e.preventDefault();
@@ -1919,6 +1932,7 @@ function taskPanel(j) {
     ai.appendChild(how); ai.appendChild(out);
     body.appendChild(ai);
   }
+  drawerRestore();
 }
 
 // ---------- 记忆 ----------
@@ -2263,9 +2277,9 @@ function relang() {
   $("title").textContent = tx(VIEWS[cur].t);
   document.title = tx(VIEWS[cur].t) + " · " + tx("看板");
   document.querySelectorAll("main > section").forEach(function (s) { if (s.id !== "s-" + cur) { clear(s.querySelector(".body")); loaded[s.id.slice(2)] = 0; } });
-  var y = window.pageYOffset, r = route;
+  var y = window.pageYOffset, r = route, kept = drawerKeep();
   loaded[cur] = 0;
-  load(cur, true).then(function () { window.scrollTo(0, y); if (route === r && VIEWS[cur].arg) VIEWS[cur].arg(r.arg); });
+  load(cur, true).then(function () { window.scrollTo(0, y); if (route === r && VIEWS[cur].arg) { DW.draft = kept; VIEWS[cur].arg(r.arg); } });
   stamp();
 }
 function helpPop(anchor) {
@@ -2340,4 +2354,4 @@ function start() {
 }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })();
-`.replace("/*I18N*/", () => RUNTIME)), BOARD_EN);
+`.replace("/*I18N*/", () => RUNTIME).replace("/*DRAFT*/", () => DRAFT)), BOARD_EN);

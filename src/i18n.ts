@@ -97,3 +97,52 @@ export function withDict(js: string, dict: Dict): string {
 export function slotsOf(s: string): string[] {
   return [...s.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort();
 }
+
+// What the reader has typed into the forms of an open panel survives that panel being drawn again (another tab switching the
+// language redraws it). A form that takes input carries data-draft="<name>", its controls data-f="<field>". take(root) reads
+// them (null when the panel holds no such form); put(root, taken, open) writes them back into the redrawn panel, first calling
+// open[name]() for a form that starts closed, and sets the form's own mode (data-mode, form.__mode(m)) when it has one.
+// ES5 text for a page script, like RUNTIME.
+export const DRAFT = String.raw`
+var DRAFT = {
+  take: function (root) {
+    var forms = {}, n = 0, on = document.activeElement, focus = null;
+    [].forEach.call(root.querySelectorAll("form[data-draft]"), function (f) {
+      var v = {};
+      [].forEach.call(f.querySelectorAll("[data-f]"), function (c) { v[c.getAttribute("data-f")] = c.type === "checkbox" ? c.checked : c.value; });
+      forms[f.getAttribute("data-draft")] = { v: v, mode: f.getAttribute("data-mode") };
+      n++;
+    });
+    if (!n) return null;
+    if (on && on.getAttribute && on.getAttribute("data-f") && root.contains(on)) {
+      var form = on.closest("form[data-draft]");
+      if (form) focus = { form: form.getAttribute("data-draft"), field: on.getAttribute("data-f"), s: on.selectionStart, e: on.selectionEnd };
+    }
+    return { forms: forms, focus: focus, scroll: root.scrollTop };
+  },
+  put: function (root, taken, open) {
+    if (!taken) return;
+    var pick = function (name) { return root.querySelector('form[data-draft="' + name + '"]'); };
+    Object.keys(taken.forms).forEach(function (name) {
+      var f = pick(name), t = taken.forms[name];
+      if (!f && open && open[name]) { open[name](); f = pick(name); }
+      if (!f) return;
+      if (t.mode && f.__mode && f.getAttribute("data-mode") !== t.mode) f.__mode(t.mode);
+      [].forEach.call(f.querySelectorAll("[data-f]"), function (c) {
+        var k = c.getAttribute("data-f");
+        if (!Object.prototype.hasOwnProperty.call(t.v, k)) return;
+        if (c.type === "checkbox") c.checked = t.v[k]; else c.value = t.v[k];
+      });
+    });
+    root.scrollTop = taken.scroll || 0;
+    if (taken.focus) {
+      // the cursor goes back where it was; a form's own "focus the first field" timer runs a moment later, so look again after it
+      var back = function (force) {
+        var f = pick(taken.focus.form), el = f && f.querySelector('[data-f="' + taken.focus.field + '"]');
+        if (el && (force || document.activeElement !== el)) { el.focus(); try { el.setSelectionRange(taken.focus.s, taken.focus.e); } catch (e) {} }
+      };
+      back(true); setTimeout(back, 150);
+    }
+  }
+};
+`;
