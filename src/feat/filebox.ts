@@ -9,6 +9,8 @@ import { CAP, PART, issue, grant, row, remove, stored, partKey, newToken } from 
 import { R2_STORAGE_STOP } from "../budget.ts";
 import { sh } from "../skills/types.ts";
 import { BJ, clip, fmtFull } from "../util.ts";
+import { RUNTIME, withDict } from "../i18n.ts";
+import type { Dict } from "../i18n.ts";
 
 export type BoxFile = { ref: string; name: string; size: number; mime: string; ts: number; expires: number; by: string };
 
@@ -316,6 +318,7 @@ export function newDrop(hub: Hub, conv: string, o: { by?: string; sender?: strin
 
 /** The chunking and retry loop of the upload page, as plain browser JavaScript (also evaluated by the tests). */
 export const UPLOAD_CORE = String.raw`
+function zfill(s, p) { return s.replace(/\{(\w+)\}/g, function (m, k) { return p[k]; }); }
 async function sendParts(o) {
   var n = Math.max(1, Math.ceil(o.size / o.part)), i = o.from || 0, tries = 0;
   while (i < n) {
@@ -323,8 +326,8 @@ async function sendParts(o) {
     var r = await o.put(i, i === n - 1, start, end).catch(function () { return { status: 0 }; });
     if (r.status >= 200 && r.status < 300) { i++; tries = 0; if (o.progress) o.progress(end); continue; }
     if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 409 && r.status !== 429 || r.status === 503 || r.status === 507)
-      throw new Error(r.error || ("服务器拒绝了这个文件（" + r.status + "）"));
-    if (++tries > o.tries) throw new Error("第 " + (i + 1) + "/" + n + " 段试了 " + o.tries + " 次都没传上去，网络可能断了，点重试接着传");
+      throw new Error(r.error || zfill("服务器拒绝了这个文件（{status}）", { status: r.status }));
+    if (++tries > o.tries) throw new Error(zfill("第 {i}/{n} 段试了 {tries} 次都没传上去，网络可能断了，点重试接着传", { i: i + 1, n: n, tries: o.tries }));
     await o.sleep(Math.min(20000, 1000 * Math.pow(2, tries - 1)));
     var s = await o.status().catch(function () { return null; });
     if (s && s.done && s.size === o.size) return true;
@@ -347,10 +350,67 @@ const secure = (h: Record<string, string>) => new Headers({
   "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", ...h,
 });
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: secure({ "Content-Type": "application/json; charset=utf-8" }) });
+/** English for every sentence these pages can show, including the ones the server only sends inside JSON (translated by the page with txs). */
+export const PAGE_EN: Dict = {
+  "界面语言": "Language",
+  "跟随系统": "Follow system",
+  "传文件给 Bot": "Send files to the Bot",
+  "你的名字（可以不填）": "Your name (optional)",
+  "点这里选文件": "Choose files",
+  "或者把文件拖进来，可以一次选多个": "or drag them in; you can pick several at once",
+  "重试没传完的": "Retry the unfinished uploads",
+  "还能传 {files}，一共 {total}，单个最大 {max}；链接 {until}（北京时间）前有效，文件保存 {days}。":
+    "You can still upload {files}, {total} in all and up to {max} each. This link works until {until}; files are kept for {days}.",
+  "{n} 个文件": ["{n} file", "{n} files"],
+  "{n} 天": ["{n} day", "{n} days"],
+  "链接失效了": "Link expired",
+  "这个上传链接已经过期或者用完了，让 Bot 再给一个。": "This upload link has expired or been used up. Ask the Bot for a new one.",
+  "文件不在了": "File not found",
+  "这个文件已经过期或者被删掉了。": "This file has expired or been deleted.",
+  "这个月的额度用完了": "This month's allowance is used up",
+  "存储的读取次数到了本月上限，下个周期恢复。": "Storage reads have reached this month's limit. They come back next cycle.",
+  // progress and results, written by the page
+  "出错了（{status}）": "Something went wrong ({status})",
+  "等待上传": "Waiting to upload",
+  "太大了，单个文件最多 {size}": "Too large: {size} per file at most",
+  "准备中": "Getting ready…",
+  "传好了，正在交给 Bot": "Uploaded, handing it to the Bot…",
+  "没传上去": "Upload failed",
+  "已交给 Bot，编号 {ref}": "Handed to the Bot as {ref}",
+  "没登记上": "Could not be registered",
+  "传好了，Bot 已经收到。可以回群里说一声要它做什么。": "Done, the Bot has them. Go back to the group and tell it what to do with them.",
+  // the upload core
+  "服务器拒绝了这个文件（{status}）": "The server refused this file ({status})",
+  "第 {i}/{n} 段试了 {tries} 次都没传上去，网络可能断了，点重试接着传": "Part {i} of {n} failed after {tries} tries. The network may be down; tap retry to carry on.",
+  // sentences that only arrive in the server's JSON
+  "上传链接已经过期，让 Bot 再给一个": "This upload link has expired. Ask the Bot for a new one.",
+  "只能从上传页面提交": "Uploads can only be sent from the upload page.",
+  "没有这个文件": "No such file",
+  "请求格式不对": "The request was malformed",
+  "文件大小不对": "The file size is not valid",
+  "这个链接最多传 {n} 个文件，已经传满了": ["This link takes {n} file at most, and it is full.", "This link takes {n} files at most, and it is full."],
+  "单个文件最大 {size}": "A file can be {size} at most",
+  "这个链接一共能传 {total}，还剩 {left}": "This link takes {total} in all; {left} left",
+  "文件箱放不下了，还剩 {left}": "The file box is full; {left} left",
+  "还没传完": "Not finished uploading",
+  "没有这个接口": "No such endpoint",
+  "收到的大小和文件不一样，可能没传完整": "The size received does not match the file; the upload may be incomplete",
+  "文件箱满了（总共 {total}），先删掉一些": "The file box is full ({total} in all). Delete some files first.",
+  "文件分段不对，没法存": "The file's parts do not add up, so it cannot be stored",
+};
+
+const RT = withDict(RUNTIME, PAGE_EN);
+// Marks the language once the page is built and wires the picker; "跟随系统" is the first option.
+const LANG_BAR = `<div class=lang><select id=lang data-ia="aria-label" aria-label="界面语言"><option value=auto data-i>跟随系统</option><option value=zh>中文</option><option value=en>English</option></select></div>`;
+const LANG_SETUP = `LANG.apply();var langSel=document.getElementById("lang");langSel.value=LANG.pref();langSel.onchange=function(){LANG.set(langSel.value)};LANG.on(function(){langSel.value=LANG.pref()});`;
+
+/** One page: the picker above the body and one script (runtime, picker, then the page's own `script`). */
 const page = (status: number, title: string, body: string, script = "") => new Response(
-  `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>
+  `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title data-i>${esc(title)}</title><style>
 *{box-sizing:border-box}body{margin:0;background:#f5f4f0;color:#222;font:16px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif}
 main{max-width:560px;margin:0 auto;padding:24px 16px 48px}h1{font-size:22px;margin:0 0 6px}.sub{color:#777;margin:0 0 16px;font-size:14px}
+.lang{text-align:right;margin:0 0 6px}.lang select{font:inherit;font-size:13px;color:#555;background:#fff;border:1px solid #ddd;border-radius:8px;padding:4px 8px;min-height:36px}
+.lang select:focus-visible,button:focus-visible,input:focus-visible,#zone:focus-within{outline:2px solid #2a7;outline-offset:2px}
 .note{background:#fff;border-radius:10px;padding:10px 12px;margin:0 0 14px;font-size:15px}
 label.n{display:block;font-size:14px;color:#666;margin:0 0 4px}input[type=text]{width:100%;font:inherit;padding:10px 12px;border:1px solid #ddd;border-radius:10px;margin:0 0 14px;background:#fff}
 #zone{display:block;border:2px dashed #bbb;border-radius:14px;padding:34px 12px;text-align:center;background:#fff;color:#555;cursor:pointer}
@@ -360,49 +420,60 @@ li .t{display:flex;justify-content:space-between;gap:8px;font-size:15px}li .t sp
 li .s{font-size:13px;color:#888}.bar{height:6px;background:#eee;border-radius:3px;overflow:hidden;margin:6px 0 2px}.bar i{display:block;height:100%;width:0;background:#2a7}
 li.err .s{color:#c33}li.ok .s{color:#2a7}button{font:inherit;padding:10px 18px;border:0;border-radius:10px;background:#222;color:#fff;margin-top:6px}
 #msg{font-size:15px;margin-top:10px}#msg.ok{color:#2a7}#msg.err{color:#c33}
-</style></head><body><main>${body}</main>${script}</body></html>`,
+</style></head><body><main>${LANG_BAR}${body}</main><script>${RT}
+${LANG_SETUP}
+${script}</script></body></html>`,
   { status, headers: secure({ "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'" }) });
-const gone = () => page(404, "链接失效了", "<h1>链接失效了</h1><p class=sub>这个上传链接已经过期或者用完了，让 Bot 再给一个。</p>");
+const gone = () => page(404, "链接失效了", "<h1 data-i>链接失效了</h1><p class=sub data-i>这个上传链接已经过期或者用完了，让 Bot 再给一个。</p>");
+
+// The sentence under the heading. Built here for the first (Chinese) paint and again by the page script in the chosen language.
+export const LIMITS_LINE = "还能传 {files}，一共 {total}，单个最大 {max}；链接 {until}（北京时间）前有效，文件保存 {days}。";
+const zfill = (s: string, p: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_m, k) => String(p[k]));
 
 function dropPage(t: string, d: Drop) {
   const usedBytes = d.files.reduce((a, f) => a + (f.bad ? 0 : f.size), 0), usedFiles = d.files.filter(f => !f.bad).length;
-  const cfg = { api: "/x/drop/" + t, part: PART, filesLeft: d.maxFiles - usedFiles, bytesLeft: d.maxBytes - usedBytes, fileMax: LIMITS.file, by: d.by };
-  const body = `<h1>传文件给 Bot</h1><p class=sub>还能传 ${cfg.filesLeft} 个文件，一共 ${human(Math.max(0, cfg.bytesLeft))}，单个最大 ${human(LIMITS.file)}；链接 ${esc(fmtFull(d.exp, BJ))}（北京时间）前有效，文件保存 ${d.days} 天。</p>
-${d.note ? `<p class=note>${esc(d.note)}</p>` : ""}<label class=n for=by>你的名字（可以不填）</label><input type=text id=by maxlength=20 value="${esc(d.by)}">
-<label id=zone><b>点这里选文件</b>或者把文件拖进来，可以一次选多个<input type=file id=pick multiple hidden></label>
-<ul id=list></ul><div id=msg></div><button id=again hidden>重试没传完的</button>`;
-  const script = `<script>${UPLOAD_CORE}
+  const until = fmtFull(d.exp, BJ);
+  const cfg = { api: "/x/drop/" + t, part: PART, filesLeft: d.maxFiles - usedFiles, bytesLeft: d.maxBytes - usedBytes, fileMax: LIMITS.file, by: d.by, exp: d.exp, until, days: d.days };
+  const line = zfill(LIMITS_LINE, { files: cfg.filesLeft + " 个文件", total: human(Math.max(0, cfg.bytesLeft)), max: human(LIMITS.file), until, days: d.days + " 天" });
+  const body = `<h1 data-i>传文件给 Bot</h1><p class=sub id=lim>${esc(line)}</p>
+${d.note ? `<p class=note>${esc(d.note)}</p>` : ""}<label class=n for=by data-i>你的名字（可以不填）</label><input type=text id=by maxlength=20 value="${esc(d.by)}">
+<label id=zone><b data-i>点这里选文件</b><span data-i>或者把文件拖进来，可以一次选多个</span><input type=file id=pick multiple hidden></label>
+<ul id=list></ul><div id=msg></div><button id=again data-i hidden>重试没传完的</button>`;
+  const script = `${UPLOAD_CORE}
 var C=${JSON.stringify(cfg).replace(/</g, "\\u003c")},items=[],busy=false;
 function $(id){return document.getElementById(id)}
 function size(n){return n>=1073741824?(n/1073741824).toFixed(2)+" GB":n>=1048576?(n/1048576).toFixed(1)+" MB":Math.max(1,Math.round(n/1024))+" KB"}
-function post(path,body){return fetch(C.api+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){if(!r.ok||j.ok===false)throw new Error(j.error||("出错了（"+r.status+"）"));return j})})}
+function say(el,zh,p){el.__m=[zh,p];el.textContent=p?tx(zh,p):txs(zh)}
+function until(){return LANG.cur()==="en"?new Date(C.exp).toLocaleString("en",{year:"numeric",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",timeZoneName:"short"}):C.until}
+function limits(){$("lim").textContent=tx(${JSON.stringify(LIMITS_LINE)},{files:tx("{n} 个文件",{n:C.filesLeft}),total:size(Math.max(0,C.bytesLeft)),max:size(C.fileMax),until:until(),days:tx("{n} 天",{n:C.days})})}
+function post(path,body){return fetch(C.api+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){if(!r.ok||j.ok===false)throw new Error(j.error||zfill("出错了（{status}）",{status:r.status}));return j})})}
 function xhrPut(url,file,it){return function(i,last,start,end){return new Promise(function(res){var x=new XMLHttpRequest();x.open("PUT",url+"?part="+i+"&last="+(last?1:0));
 x.upload.onprogress=function(e){show(it,start+e.loaded)};x.onload=function(){var j={};try{j=JSON.parse(x.responseText)}catch(e){}res({status:x.status,error:j.error})};x.onerror=x.ontimeout=function(){res({status:0})};x.send(file.slice(start,end))})}}
-function show(it,done){it.bar.style.width=(it.file.size?Math.min(100,done/it.file.size*100):100)+"%";it.s.textContent=size(done)+" / "+size(it.file.size)}
-function add(files){for(var k=0;k<files.length;k++){var f=files[k],li=document.createElement("li");li.innerHTML='<div class=t><span></span><span></span></div><div class=bar><i></i></div><div class=s>等待上传</div>';
+function show(it,done){it.s.__m=null;it.bar.style.width=(it.file.size?Math.min(100,done/it.file.size*100):100)+"%";it.s.textContent=size(done)+" / "+size(it.file.size)}
+function add(files){for(var k=0;k<files.length;k++){var f=files[k],li=document.createElement("li");li.innerHTML='<div class=t><span></span><span></span></div><div class=bar><i></i></div><div class=s></div>';
 li.querySelector(".t span").textContent=f.name;li.querySelectorAll(".t span")[1].textContent=size(f.size);
-var it={file:f,li:li,bar:li.querySelector("i"),s:li.querySelector(".s"),state:"wait"};
-if(f.size>C.fileMax){it.state="bad";li.className="err";it.s.textContent="太大了，单个文件最多 "+size(C.fileMax)}
+var it={file:f,li:li,bar:li.querySelector("i"),s:li.querySelector(".s"),state:"wait"};say(it.s,"等待上传");
+if(f.size>C.fileMax){it.state="bad";li.className="err";say(it.s,"太大了，单个文件最多 {size}",{size:size(C.fileMax)})}
 items.push(it);$("list").appendChild(li)}run()}
-async function one(it){it.li.className="";it.s.textContent="准备中";
+async function one(it){it.li.className="";say(it.s,"准备中");
 if(!it.f){var st=await post("/start",{name:it.file.name,size:it.file.size,type:it.file.type});it.f=st.f;it.url=st.put}
 var s=await fetch(C.api+"/status?f="+it.f).then(function(r){return r.json()}).catch(function(){return null});
 if(!(s&&s.done&&s.size===it.file.size))await sendParts({size:it.file.size,part:C.part,tries:6,from:s&&!s.done?s.parts||0:0,put:xhrPut(it.url,it.file,it),
 status:function(){return fetch(C.api+"/status?f="+it.f).then(function(r){return r.json()})},sleep:function(ms){return new Promise(function(r){setTimeout(r,ms)})},progress:function(n){show(it,n)}});
-it.state="up";show(it,it.file.size);it.s.textContent="传好了，正在交给 Bot"}
-async function run(){if(busy)return;busy=true;$("again").hidden=true;var m=$("msg");m.className="";m.textContent="";
+it.state="up";show(it,it.file.size);say(it.s,"传好了，正在交给 Bot")}
+async function run(){if(busy)return;busy=true;$("again").hidden=true;var m=$("msg");m.className="";say(m,"");
 for(var k=0;k<items.length;k++){var it=items[k];if(it.state!=="wait"&&it.state!=="fail")continue;
-try{await one(it)}catch(e){it.state="fail";it.li.className="err";it.s.textContent=e.message||"没传上去"}}
+try{await one(it)}catch(e){it.state="fail";it.li.className="err";say(it.s,e.message||"没传上去")}}
 var up=items.filter(function(it){return it.state==="up"});
 if(up.length){try{var r=await post("/done",{by:$("by").value.trim(),files:up.map(function(it){return it.f})});
-up.forEach(function(it){var g=(r.files||[]).filter(function(x){return x.f===it.f})[0];it.state=g&&g.ref?"done":"fail";it.li.className=g&&g.ref?"ok":"err";it.s.textContent=g&&g.ref?"已交给 Bot，编号 "+g.ref:(g&&g.error)||"没登记上"});
-m.className="ok";m.textContent=(r.files||[]).some(function(x){return x.ref})?"传好了，Bot 已经收到。可以回群里说一声要它做什么。":""}catch(e){m.className="err";m.textContent=e.message}}
+up.forEach(function(it){var g=(r.files||[]).filter(function(x){return x.f===it.f})[0];it.state=g&&g.ref?"done":"fail";it.li.className=g&&g.ref?"ok":"err";if(g&&g.ref)say(it.s,"已交给 Bot，编号 {ref}",{ref:g.ref});else say(it.s,(g&&g.error)||"没登记上")});
+m.className="ok";say(m,(r.files||[]).some(function(x){return x.ref})?"传好了，Bot 已经收到。可以回群里说一声要它做什么。":"")}catch(e){m.className="err";say(m,e.message)}}
 if(items.some(function(it){return it.state==="fail"}))$("again").hidden=false;busy=false}
 $("pick").onchange=function(){add(this.files);this.value=""};$("again").onclick=run;
 var z=$("zone");["dragenter","dragover"].forEach(function(e){z.addEventListener(e,function(v){v.preventDefault();z.className="on"})});
 ["dragleave","drop"].forEach(function(e){z.addEventListener(e,function(v){v.preventDefault();z.className=""})});
 z.addEventListener("drop",function(v){add(v.dataTransfer.files)});
-</script>`;
+limits();LANG.on(function(){limits();items.forEach(function(it){var a=it.s.__m;if(a)say(it.s,a[0],a[1])});var a=$("msg").__m;if(a)say($("msg"),a[0],a[1])});`;
   return page(200, "传文件给 Bot", body, script);
 }
 
@@ -479,7 +550,7 @@ async function serveBox(hub: Hub, req: Request, t: string, now = Date.now()) {
   const r = rows(hub, 'SELECT id, conv, name, size, mime, key, ts, expires, "by" AS "by", note FROM boxfile WHERE key=?', g.prefix + g.name)[0];
   const f = r && Number(r.expires) > now ? fileOf(r) : null;
   const x = f && row(hub, f.key);
-  if (!f || !x?.done) return page(404, "文件不在了", "<h1>文件不在了</h1><p class=sub>这个文件已经过期或者被删掉了。</p>");
+  if (!f || !x?.done) return page(404, "文件不在了", "<h1 data-i>文件不在了</h1><p class=sub data-i>这个文件已经过期或者被删掉了。</p>");
   const inline = showsInline(f.mime) && new URL(req.url).searchParams.get("dl") !== "1";
   const etag = '"' + f.ref + "-" + f.size.toString(36) + '"';
   const head: Record<string, string> = {
@@ -498,7 +569,7 @@ async function serveBox(hub: Hub, req: Request, t: string, now = Date.now()) {
   const status = range ? 206 : 200;
   if (req.method === "HEAD" || !len) return new Response(null, { status, headers: secure(head) });
   const ps = pieces(start, end);
-  if (!hub.plan.fits("r2_reads", ps.length)) return page(503, "这个月的额度用完了", "<h1>这个月的额度用完了</h1><p class=sub>存储的读取次数到了本月上限，下个周期恢复。</p>");
+  if (!hub.plan.fits("r2_reads", ps.length)) return page(503, "这个月的额度用完了", "<h1 data-i>这个月的额度用完了</h1><p class=sub data-i>存储的读取次数到了本月上限，下个周期恢复。</p>");
   hub.plan.add("r2_reads", ps.length);
   const F = (globalThis as any).FixedLengthStream;
   const { readable, writable } = (F ? new F(len) : new TransformStream()) as TransformStream;

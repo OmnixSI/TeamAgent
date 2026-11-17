@@ -5,6 +5,8 @@
 import type { Feature } from "./types.ts";
 import type { Hub } from "../hub.ts";
 import type { Tool } from "../core.ts";
+import { RUNTIME, withDict } from "../i18n.ts";
+import type { Dict } from "../i18n.ts";
 
 export type Person = { conv: string; uid: string; name: string };
 const COOKIE = "tabd";
@@ -64,6 +66,12 @@ export function bases(hub: Hub): string[] {
   return cn && cn !== main ? [main, cn] : [main];
 }
 
+/** English for the page a dead link lands on; one sentence, so it follows the stored or system language and has no picker. */
+export const PAGE_EN: Dict = {
+  "看板": "Board",
+  "这个看板链接已经失效了。在群里对 Bot 说“给我看板链接”再要一个。": "This board link is no longer valid. Ask the Bot in the group for a new one by saying “give me the board link”.",
+};
+
 const feature: Feature = {
   name: "access",
   schema: SCHEMA,
@@ -118,7 +126,7 @@ const feature: Feature = {
     const m = /^\/x\/board\/k\/([a-f0-9]{40})\/?$/.exec(url.pathname);
     if (!m) return null;
     const ok = await checkAccess(hub, m[1]);
-    const page = (s: number, t: string) => new Response("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>看板</title><body style='font:16px/1.7 system-ui;margin:15vh auto;max-width:28em;padding:0 20px'><p>" + t, { status: s, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    const page = (s: number, t: string) => new Response("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title data-i>看板</title><body style='font:16px/1.7 system-ui;margin:15vh auto;max-width:28em;padding:0 20px'><p data-i>" + t + "</p><script>" + withDict(RUNTIME, PAGE_EN) + "\nLANG.apply();</script>", { status: s, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
     if (!ok) return page(403, "这个看板链接已经失效了。在群里对 Bot 说“给我看板链接”再要一个。");
     return new Response(null, { status: 302, headers: { Location: "/x/board", "Set-Cookie": setCookie(m[1]), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
   },
