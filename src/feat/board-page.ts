@@ -1708,6 +1708,19 @@ function packText(j) {
   if (t.result) out.push("", tx("【已经交付的】"), t.result);
   return out.join("\n");
 }
+function packTasks() {
+  var list = TS.all.filter(function (x) { return x.id > 0 && (x.status === "open" || x.status === "doing"); }).sort(byRank);
+  if (!list.length) return tx("目前没有未完成的任务。");
+  var when = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 16).replace("T", " ");
+  return [tx("以下是群里任务看板的未完成清单（生成时间 {t}，北京时间）", { t: when })].concat(list.map(function (t) {
+    var line = "- #" + t.id + " " + t.title + tx("（{s}）", { s: tx(SL[t.status]) });
+    line += " · " + tx("负责人：{s}", { s: t.owner ? whoName(t.owner) : t.claimed_by ? whoName(t.claimed_by) : tx("没人接") });
+    if (t.due) line += " · " + tx("截止：{s}", { s: t.due });
+    if (t.blocked_by && t.blocked_by.length) line += " · " + tx("先做完：{s}", { s: t.blocked_by.map(function (b) { return "#" + b.id; }).join(tx("、")) });
+    if (t.priority === 1) line += " · " + tx("急");
+    return line;
+  })).join("\n");
+}
 // Long text folds to a few lines; the button opens it in place.
 function foldable(el, text) {
   if (text.length < 500 && text.split("\n").length < 10) return [el, null];
@@ -1930,6 +1943,8 @@ function taskPanel(j) {
       }, function (e) { how.disabled = false; fail(e); });
     });
     ai.appendChild(how); ai.appendChild(out);
+    ai.appendChild(h("p", { text: tx("不想接 MCP 也行：复制一份任务清单，直接贴给 DeepSeek 之类不支持 MCP 的客户端。") }));
+    ai.appendChild(h("div", { class: "row" }, copyBtn(packTasks, tx("复制任务清单"))));
     body.appendChild(ai);
   }
   drawerRestore();

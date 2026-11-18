@@ -211,6 +211,6 @@ codex mcp add teamagent --url <地址>/x/mcp/<令牌>                           
 | `list_files` `get_file` `repo_status` | 看 Bot 存的文件和仓库体检 |
 | `notify_group` | 让 Bot 在群里多说一句（有每日上限） |
 
-通常的流程：`list_tasks` → `get_task` → `claim_task` → 在本地做 → `report_progress` → `attach_material` → `complete_task`。看板任务页的“交给本地 AI”会给出一句可以直接贴给 AI 的话。
+通常的流程：`list_tasks` → `get_task` → `claim_task` → 在本地做 → `report_progress` → `attach_material` → `complete_task`。看板任务页的“交给本地 AI”会给出一句可以直接贴给 AI 的话；不想接 MCP 的客户端（比如 DeepSeek）可以点旁边的“复制任务清单”，拿到未完成任务的一行一件 Markdown 清单直接贴过去。
 
 技术上是无状态的 HTTP：只接受 POST，不发会话号；协议版本 2026-07-28，也接受更早的三个版本的握手。每人每天最多调用 500 次（`mcp_calls_daily`）、让 Bot 在群里说 30 句（`mcp_notify_daily`）。
